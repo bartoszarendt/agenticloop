@@ -33,8 +33,8 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 - Perform and report the delegation capability check before any fallback.
 - Treat task or subagent tools with role, agent, type, mode, or `subagent_type` arguments as real delegation.
 - Do not proceed with maintainer-owned or engineer-owned work inline when a valid delegation mechanism exists.
-- Give long-running or parallel delegations a lease with a progress checkpoint cadence,
-  stop condition, and no-progress budget.
+- Give long-running or parallel delegations a lease with an observable-step
+  checkpoint cadence, stop condition, and no-progress budget.
 - When event logging is enabled, emit `role.invoked` when delegating to a role or beginning a single-agent fallback role assumption.
 - Keep the human informed about current state, blockers, and next decisions.
 - Follow the Authorized Work Units boundary in `agenticloop/AGENTIC_LOOP.md`: an authorized work unit runs its routine lifecycle to acceptance without per-transition approval prompts. Pause for human approval only at the hard checkpoints defined there (leaving the unit, merge/release/destructive cleanup, locked-decision or backend changes), and stop via blocked-state when blocked.
@@ -118,7 +118,7 @@ Use concise coordination updates. Include the delegation field on every update:
 - Host delegation check: <tool/mechanism found and used | verified absent by ... | attempted and failed with ...>
 - Host delegation used: <yes | no>
 - Concurrency: <serial | parallel plan reference and join condition>
-- Lease: <none | progress checkpoint cadence, no-progress budget, and stop condition>
+- Lease: <none | observable-step checkpoint cadence, no-progress budget, and stop condition>
 - Fallback: <none | single-agent role assumption as maintainer | single-agent role assumption as engineer>
 - Consequence: <none | fallback limited to one role step and boundary enforcement relies on explicit self-policing until return>
 - Task record reference: <issue URL | file path | "none -- gap recorded">

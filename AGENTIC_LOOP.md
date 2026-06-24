@@ -211,17 +211,19 @@ safe to merge independently, do not model it as part of a parallel batch.
 ### Delegation Liveness
 
 Every delegation prompt has a stop condition. Long-running or parallel
-delegations must also have a lease: a host-enforced duration or milestone, a
-progress checkpoint cadence, and a no-progress budget. The delegated role returns status instead
-of continuing indefinitely when the lease expires, the no-progress budget is
-exhausted, the branch or worktree is wrong, a collision is discovered, or the
-stop condition is reached.
+delegations must also have a lease: a host-enforced duration or milestone when
+relevant, an observable-step checkpoint cadence, and a no-progress budget. The
+delegated role returns status instead of continuing indefinitely when the lease
+expires, the no-progress budget is exhausted, the branch or worktree is wrong, a
+collision is discovered, or the stop condition is reached.
 
 The progress checkpoint cadence is a return-to-orchestrator cadence, not an
 async heartbeat, unless the host explicitly surfaces running-subagent status.
 Wall-clock duration is cooperative unless the host enforces it; prefer concrete
-milestones and no-progress budgets for model-followed leases. A lease is not a
-hard kill switch for a runaway subagent.
+observable-step counts, milestones, and no-progress budgets for model-followed
+leases. An observable step is a tool call, backend operation, artifact update,
+verification check, status return, or blocker record; private reasoning is not a
+step. A lease is not a hard kill switch for a runaway subagent.
 
 If the host cannot stream, cancel, or otherwise surface subagent status while a
 role is running, do not start long-running parallel delegation. Use bounded
@@ -271,8 +273,15 @@ Bound it with a shared attempt budget.
 The default budget is 3. An attempt counts against the budget when it is
 equivalent to a previous one -- the same command, check, fix, delegation, or
 report against the same target -- and yields no new evidence or change in task
-state. The count resets on real progress: new evidence, a changed task record,
-a different hypothesis under test, or a materially different action.
+state. A restated intended next action that is not performed also counts as an
+attempt: deliberation that never becomes an action is the same loop as a
+repeated action that never changes state.
+
+Progress is what resets the count: an observable new fact, a durable state
+change, a backend update, an artifact change, a status return, or a blocker
+record. Pure reasoning, restating intent, or re-verifying the same known fact is
+not progress. A `blocked`, `needs_context`, or `complete` status return is
+progress, because it changes loop state even when no artifact changed.
 
 When the budget is exhausted, stop repeating. Record `needs_context` if the task
 record can be amended, or `blocked` if a human decision is required, and report
@@ -282,7 +291,14 @@ This default of 3 governs repeated fix attempts in [[debugging-before-fixes]]
 and a sustained-and-disputed review item in [[review-and-accept]]. Some guards
 are deliberately tighter than the default: the empty-result command rule above,
 the recorded-setup-gap rule, and the "maintainer is needed" stop in the
-orchestrator do not get repeated attempts at all.
+orchestrator do not get repeated attempts at all. The self-loop guard is also
+tighter -- if a role states the same intended next action twice without
+performing it, it stops deliberating on the second restatement and either
+performs the action or records `blocked` category `no-progress`.
+
+After producing an artifact that satisfies the current evidence, do not re-decide
+or re-verify it unless new contradictory evidence appears. Take the next external
+action or return status.
 
 ## Review Round Checkpoint
 

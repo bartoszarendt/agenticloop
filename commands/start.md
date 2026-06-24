@@ -26,9 +26,9 @@ group approval gates.
 
 Agentic Loop is serial by default. Do not run parallel maintainer or engineer
 delegations unless the orchestrator records a concurrency plan and join
-condition. Long-running or parallel role work must include a lease: milestone or
-duration, progress checkpoint cadence, no-progress budget, and status-return
-stop condition.
+condition. Long-running or parallel role work must include a lease:
+observable-step checkpoint cadence, no-progress budget, status-return stop
+condition, and any relevant milestone or duration.
 
 Create or refine the durable task record before any implementation.
 

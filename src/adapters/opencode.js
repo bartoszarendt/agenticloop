@@ -49,7 +49,7 @@ function buildPrompt(roleName, roleSourceFile, requiredSkills, roleBody, skillsS
   if (roleName === 'orchestrator') {
     prompt += ' Agentic Loop is serial by default; do not start parallel role work unless a recorded concurrency plan, lease, and join condition prove the lanes do not collide.';
   } else {
-    prompt += ' Honor any delegation lease from the orchestrator and return status when the lease, stop condition, wrong branch/worktree, or no-progress budget requires it.';
+    prompt += ' Honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, wrong branch/worktree, or no-progress budget requires it.';
   }
   const skillLines = (requiredSkills ?? []).map(
     skillName => `- ${skillName}: ${skillsSrc}/${skillName}/SKILL.md`

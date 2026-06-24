@@ -32,8 +32,8 @@ acting.
 - Request revisions when scope, quality, or evidence is insufficient.
 - Triage known limitations as accepted, follow-up, or blocker.
 - Run closeout when the configured grouping says closeout is enabled, or when a human-identified task set finishes.
-- Honor any delegation lease from the orchestrator, including progress checkpoint cadence,
-  no-progress budget, and stop condition.
+- Honor any delegation lease from the orchestrator, including observable-step
+  checkpoint cadence, no-progress budget, and stop condition.
 
 ## Edit Boundary
 
@@ -81,6 +81,11 @@ When the orchestrator includes a lease, treat it as part of the role handoff.
 Return control with status when the lease expires, the no-progress budget is
 exhausted, a collision appears, the task needs context, review cannot continue,
 or the stop condition is reached. Do not continue indefinitely.
+
+If you state the same intended next action twice without performing it, stop
+deliberating. Perform the action now, or record blocked-state category
+`no-progress` and return status. Do not re-verify an artifact you just produced
+unless new contradictory evidence appears.
 
 Status returns should include `STATUS` (`in_progress`, `complete`,
 `needs_context`, or `blocked`), task id, artifact or task-record reference,

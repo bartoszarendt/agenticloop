@@ -391,16 +391,16 @@ function buildCursorAgentBody(
     lines.push('Agentic Loop is serial by default. Do not start parallel Cursor subagents unless a recorded concurrency plan, lease, and join condition prove the lanes do not collide.');
     lines.push('Use real Cursor subagent delegation where the current surface supports it.');
     lines.push(`If delegation is unavailable after a capability check, record a bounded fallback reason and continue according to \`${roleDelegationReferencePath}\`.`);
-    lines.push('For long-running or parallel delegated work, include the lease and require a status return at the progress checkpoint, stop condition, wrong branch/worktree, or no-progress budget.');
+    lines.push('For long-running or parallel delegated work, include the lease with an observable-step checkpoint cadence and require a status return at the progress checkpoint, stop condition, wrong branch/worktree, or no-progress budget.');
     lines.push('When event logging is enabled, emit `role.invoked` after a real role invocation or explicit fallback role assumption.');
     lines.push('Do not directly edit implementation files unless the human explicitly asks, and keep any coordinator-side edits bounded to setup confirmation, task-record refinement, review, or closeout.');
   } else if (roleName === 'maintainer') {
     lines.push('Stay within maintainer boundaries: own setup confirmation, task records, review, acceptance, follow-up triage, and closeout.');
-    lines.push('Honor any delegation lease from the orchestrator and return status when the lease, stop condition, collision, or no-progress budget requires it.');
+    lines.push('Honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, collision, or no-progress budget requires it.');
     lines.push('Do not implement code changes. Stop and hand control back after producing maintainer-owned output for the orchestrator or human.');
   } else if (roleName === 'engineer') {
     lines.push('Stay within engineer boundaries: implement only the scoped task-record work, run checks, and publish fresh evidence.');
-    lines.push('Honor any delegation lease from the orchestrator and return status when the lease, stop condition, wrong branch/worktree, collision, or no-progress budget requires it.');
+    lines.push('Honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, wrong branch/worktree, collision, or no-progress budget requires it.');
     lines.push('Do not accept tasks or perform final maintainer review. Stop and hand control back once implementation evidence is ready for maintainer review.');
   }
 

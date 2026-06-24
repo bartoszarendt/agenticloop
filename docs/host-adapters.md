@@ -103,6 +103,19 @@ record of how much an adapter is trusted.
 - `placeholder` - reserved name with no generator yet. Avoid referencing it in
   target-owned config until the generator exists.
 
+## Loop-Guard Capabilities
+
+Prompt-level liveness rules reduce loop risk, but host runtime controls are the
+model-independent guard. Prefer host adapters and operating modes that can
+surface running role status, stream subagent output, cancel a runaway role, and
+enforce max steps, max tokens, or timeout limits.
+
+When a host cannot provide cancellation or running-subagent status, treat
+long-running and parallel delegation as unsupported. Use bounded serial
+delegation instead, and require each role prompt to include an observable-step
+checkpoint cadence, no-progress budget, and status-return stop
+condition.
+
 ## Per-Host Role Settings
 
 Model identifiers and aliases are host/provider specific. They do not live in

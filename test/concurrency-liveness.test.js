@@ -9,7 +9,9 @@
  *   - the GitHub merge-barrier wording stays consistent across the three
  *     canonical docs that repeat it;
  *   - the durable `## Concurrency Plan` task-record section stays registered;
- *   - the migrated lease terminology does not regress to "progress interval".
+ *   - the migrated lease terminology does not regress to "progress interval";
+ *   - self-loop and observable-step lease hardening stays present in canonical
+ *     docs and generated worker surfaces.
  *
  * This is the mechanical guard tracked as Phase U / U-07: the concurrency and
  * liveness contract lives in several places at once, so a snapshot-style check
@@ -103,6 +105,35 @@ describe('generated worker surfaces honor leases and return status', () => {
   }
 });
 
+describe('self-loop guard is preserved across worker surfaces', () => {
+  for (const host of HOSTS) {
+    for (const role of ['maintainer', 'engineer']) {
+      it(`${host.name} ${role} carries the self-loop no-progress guard`, () => {
+        const text = surfaces.get(`${host.name}:${role}`);
+        assert.match(text, /same intended next action twice/i, `${host.name} ${role} missing repeated-intent guard`);
+        assert.match(text, /blocked-state category(?:\\n|\s)+`no-progress`/i, `${host.name} ${role} missing no-progress escalation`);
+        assert.match(text, /Do not re-verify an artifact you just produced/i, `${host.name} ${role} missing re-verify guard`);
+      });
+    }
+  }
+});
+
+describe('canonical no-progress guard is documented', () => {
+  it('AGENTIC_LOOP.md defines repeated-intent attempts, status progress, and act-over-reverify', () => {
+    const text = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf-8').replace(/\s+/g, ' ');
+    assert.match(text, /restated intended next action/i);
+    assert.match(text, /same intended next action twice/i);
+    assert.match(text, /`blocked`, `needs_context`, or `complete` status return is progress/i);
+    assert.match(text, /do not re-decide or re-verify it unless new contradictory evidence appears/i);
+  });
+
+  it('blocked-state defines no-progress as a durable block category', () => {
+    const text = readFileSync(join(REPO_ROOT, 'skills', 'blocked-state', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
+    assert.match(text, /exhausted attempt budget \/ self-loop with no progress/i);
+    assert.match(text, /\| `no-progress` \| The attempt budget or self-loop guard tripped/i);
+  });
+});
+
 describe('generated engineer surfaces guard branch/worktree before continuing', () => {
   for (const host of HOSTS) {
     it(`${host.name} engineer returns on a wrong branch or worktree`, () => {
@@ -161,5 +192,40 @@ describe('lease terminology does not regress', () => {
     const text = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf-8');
     assert.match(text, /progress checkpoint cadence/i);
     assert.doesNotMatch(text, /progress interval/i);
+  });
+
+  it('canonical delegation docs require observable-step checkpoint cadence', () => {
+    const docs = [
+      'AGENTIC_LOOP.md',
+      'agents/orchestrator.md',
+      'skills/role-delegation/SKILL.md',
+      'commands/start.md',
+    ];
+    for (const doc of docs) {
+      const text = readFileSync(join(REPO_ROOT, doc), 'utf-8');
+      assert.match(text, /observable-step checkpoint cadence/i, `${doc} missing observable-step lease wording`);
+    }
+
+    const processDoc = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf-8').replace(/\s+/g, ' ');
+    assert.match(processDoc, /private reasoning is not a step/i);
+
+    const delegationSkill = readFileSync(join(REPO_ROOT, 'skills', 'role-delegation', 'SKILL.md'), 'utf-8');
+    assert.match(delegationSkill, /return-after-N-observable-steps/i);
+  });
+
+  it('generated orchestrator surfaces carry observable-step lease wording', () => {
+    for (const host of HOSTS) {
+      const text = surfaces.get(`${host.name}:orchestrator`);
+      assert.match(text, /observable-step checkpoint cadence/i, `${host.name} orchestrator missing observable-step lease wording`);
+    }
+  });
+
+  it('host-adapter docs state runtime loop-guard capabilities', () => {
+    const text = readFileSync(join(REPO_ROOT, 'docs', 'host-adapters.md'), 'utf-8').replace(/\s+/g, ' ');
+    assert.match(text, /Loop-Guard Capabilities/);
+    assert.match(text, /surface running role status/i);
+    assert.match(text, /cancel a runaway role/i);
+    assert.match(text, /max steps, max tokens, or timeout limits/i);
+    assert.match(text, /bounded serial delegation/i);
   });
 });

@@ -487,17 +487,17 @@ function buildCodexDeveloperInstructions(
     lines.push('- Spawn maintainer and engineer custom agents using a single plain-message prompt payload only.');
     lines.push('- Do not mix a plain message payload with structured items in the same spawn request.');
     lines.push('- If the first spawn attempt fails with a schema error about message/items, retry once using plain-message-only.');
-    lines.push('- For long-running or parallel delegated work, include the lease and require a status return at the progress checkpoint, stop condition, wrong branch/worktree, or no-progress budget.');
+    lines.push('- For long-running or parallel delegated work, include the lease with an observable-step checkpoint cadence and require a status return at the progress checkpoint, stop condition, wrong branch/worktree, or no-progress budget.');
     lines.push(`- If custom-agent delegation is unavailable after that retry, record a bounded fallback reason and continue according to ${internalReferencePhrase(roleDelegationReferencePath)}.`);
     lines.push('When event logging is enabled, resolve the command using the Codex event logging override. If a working command exists, emit `role.invoked` after a real role invocation or explicit fallback role assumption. If no working event logging command is available, record a truthful process gap and continue.');
     lines.push('Do not directly edit implementation files unless the human explicitly asks.');
   } else if (roleName === 'maintainer') {
     lines.push('Stay within maintainer boundaries: own setup confirmation, task records, review, acceptance, follow-up triage, and closeout.');
-    lines.push('Honor any delegation lease from the orchestrator and return status when the lease, stop condition, collision, or no-progress budget requires it.');
+    lines.push('Honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, collision, or no-progress budget requires it.');
     lines.push('Do not implement code changes. Stop and hand control back after producing maintainer-owned output for the orchestrator or human.');
   } else if (roleName === 'engineer') {
     lines.push('Stay within engineer boundaries: implement only the scoped task-record work, run checks, and publish fresh evidence.');
-    lines.push('Honor any delegation lease from the orchestrator and return status when the lease, stop condition, wrong branch/worktree, collision, or no-progress budget requires it.');
+    lines.push('Honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, wrong branch/worktree, collision, or no-progress budget requires it.');
     lines.push('Do not accept tasks or perform final maintainer review. Stop and hand control back once implementation evidence is ready for maintainer review.');
   }
 

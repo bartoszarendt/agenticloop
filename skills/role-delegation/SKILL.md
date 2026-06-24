@@ -191,20 +191,20 @@ Out of scope:      <what the role must not do>
 Expected output:   <what the role should produce>
 Stop condition:    <when the role must stop and return to orchestrator or human>
 Concurrency:       serial, or <parallel batch id plus non-collision basis>
-Lease:             <max duration or milestone, progress checkpoint cadence, no-progress budget>
+Lease:             <observable-step checkpoint cadence, no-progress budget, and any relevant max duration or milestone>
 ```
 
 Do not omit scope, out of scope, expected output, or stop condition. An incomplete delegation
 prompt produces incomplete role output.
 
-For long-running or parallel work, the lease is required. The delegated role
-must return status instead of continuing indefinitely when the lease expires,
-the no-progress budget is exhausted, the branch or worktree is wrong, a
-collision appears, or the stop condition is reached. If the host cannot stream,
-cancel, or surface subagent status, use bounded serial delegation. Status
-returns should state `STATUS` (`in_progress`, `complete`, `needs_context`, or
-`blocked`), task id, branch or worktree when relevant, files touched, latest
-evidence, next step, and stop reason.
+For long-running or parallel work, the lease is required. Without host-enforced
+wall-clock cancellation, include a return-after-N-observable-steps checkpoint.
+Return status when the lease expires, no-progress budget is exhausted,
+branch/worktree is wrong, a collision appears, or the stop condition is reached.
+If the host cannot stream, cancel, or surface subagent status, use bounded
+serial delegation. Status returns include `STATUS` (`in_progress`, `complete`,
+`needs_context`, or `blocked`), task id, branch/worktree when relevant, files
+touched, latest evidence, next step, and stop reason.
 
 ## GitHub Backend Delegation
 
@@ -344,7 +344,7 @@ Every orchestrator update must include:
 - Host delegation check: <tool/mechanism found and used | verified absent by ... | attempted and failed with ...>
 - Host delegation used: <yes | no>
 - Concurrency: <serial | parallel plan reference and join condition>
-- Lease: <none | progress checkpoint cadence, no-progress budget, and stop condition>
+- Lease: <none | observable-step checkpoint cadence, no-progress budget, and stop condition>
 - Fallback: <none | single-agent role assumption as maintainer | single-agent role assumption as engineer>
 - Consequence: <none | fallback limited to one role step and boundary enforcement relies on explicit self-policing until return>
 - Task record reference: <issue URL | file path | "none -- gap recorded">
@@ -373,7 +373,7 @@ If fallback role assumption was used, say so explicitly. Do not omit the delegat
 - Maintainer or engineer work appears inline in an orchestrator message.
 - Parallel subagents were started without a recorded concurrency plan and join condition.
 - Parallel write lanes share a branch, worktree, implementation artifact, task record, or mutable files without an explicit serial join.
-- A long-running or parallel delegated role has no lease, progress checkpoint cadence, or stop condition.
+- A long-running or parallel delegated role has no lease, observable-step checkpoint cadence, no-progress budget, or stop condition.
 - Task record exists only as a local file when `task_backend: github` is set.
 - GitHub-backed implementation is delegated without branch, commit, push, and PR expectations.
 - Maintainer review is delegated as an issue-comment review instead of a PR diff review.
