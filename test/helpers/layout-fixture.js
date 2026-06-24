@@ -88,9 +88,17 @@ export function seedToolkitSource(repoRoot, targetDir) {
   }
 }
 
-export function seedTargetDocs(repoRoot, targetDir) {
-  for (const filename of ['AGENTS.md', 'IMPLEMENTATION_PLAN.md', 'README.md']) {
-    copyFileSync(join(repoRoot, filename), join(targetDir, filename));
+export function seedTargetDocs(_repoRoot, targetDir) {
+  // Self-contained stubs: fixtures only need these target docs to exist by
+  // name, not the toolkit's own root docs. Decoupled so relocating the
+  // toolkit's own IMPLEMENTATION_PLAN.md (now under .dev/) cannot break tests.
+  const docs = {
+    'AGENTS.md': '# Agents\n\nProject rules.\n',
+    'IMPLEMENTATION_PLAN.md': '# Implementation Plan\n\n## Phase 1\n\nWork items.\n',
+    'README.md': '# Project\n\nOverview.\n',
+  };
+  for (const [filename, content] of Object.entries(docs)) {
+    writeFileSync(join(targetDir, filename), content, 'utf-8');
   }
 }
 

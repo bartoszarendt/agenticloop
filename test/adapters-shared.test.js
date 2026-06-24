@@ -19,6 +19,7 @@ import {
   resolveRoleModel,
   buildRoleRecord,
 } from '../src/adapters/shared.js';
+import { seedTargetLayout } from './helpers/layout-fixture.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -47,33 +48,51 @@ function minimalConfig(overrides = {}) {
 }
 
 describe('collectInstructionPaths', () => {
+  // Seed a self-contained installed layout so the test does not depend on the
+  // toolkit's own root docs (IMPLEMENTATION_PLAN.md now lives under .dev/).
+  function seededRoot() {
+    const root = mkdtempSync(join(tmpdir(), 'al-shared-test-'));
+    seedTargetLayout(REPO_ROOT, root);
+    return root;
+  }
+
   it('returns canonical documents, agents, backend references, and role-delegation skill', () => {
-    const cfg = minimalConfig();
-    const paths = collectInstructionPaths(cfg, REPO_ROOT);
-    for (const required of [
-      'AGENTS.md',
-      'IMPLEMENTATION_PLAN.md',
-      'README.md',
-      'agenticloop/AGENTIC_LOOP.md',
-      'agenticloop/agents/orchestrator.md',
-      'agenticloop/agents/maintainer.md',
-      'agenticloop/agents/engineer.md',
-      'agenticloop/backends/README.md',
-      'agenticloop/backends/files.md',
-      'agenticloop/backends/github.md',
-      'agenticloop/skills/role-delegation/SKILL.md',
-    ]) {
-      assert.ok(paths.includes(required), `expected ${required} in ${JSON.stringify(paths)}`);
+    const root = seededRoot();
+    try {
+      const cfg = minimalConfig();
+      const paths = collectInstructionPaths(cfg, root);
+      for (const required of [
+        'AGENTS.md',
+        'IMPLEMENTATION_PLAN.md',
+        'README.md',
+        'agenticloop/AGENTIC_LOOP.md',
+        'agenticloop/agents/orchestrator.md',
+        'agenticloop/agents/maintainer.md',
+        'agenticloop/agents/engineer.md',
+        'agenticloop/backends/README.md',
+        'agenticloop/backends/files.md',
+        'agenticloop/backends/github.md',
+        'agenticloop/skills/role-delegation/SKILL.md',
+      ]) {
+        assert.ok(paths.includes(required), `expected ${required} in ${JSON.stringify(paths)}`);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
   it('deduplicates repeated entries', () => {
-    const cfg = minimalConfig();
-    const paths = collectInstructionPaths(cfg, REPO_ROOT);
-    const seen = new Set();
-    for (const p of paths) {
-      assert.ok(!seen.has(p), `path ${p} should appear only once`);
-      seen.add(p);
+    const root = seededRoot();
+    try {
+      const cfg = minimalConfig();
+      const paths = collectInstructionPaths(cfg, root);
+      const seen = new Set();
+      for (const p of paths) {
+        assert.ok(!seen.has(p), `path ${p} should appear only once`);
+        seen.add(p);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
