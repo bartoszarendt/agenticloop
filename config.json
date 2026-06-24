@@ -1,0 +1,219 @@
+{
+  "documentRoles": {
+    "rules": {
+      "purpose": "primary",
+      "candidates": [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "GEMINI.md"
+      ]
+    },
+    "plan": {
+      "purpose": "task-source",
+      "candidates": [
+        "IMPLEMENTATION_PLAN.md",
+        "PLAN.md",
+        "ROADMAP.md",
+        "docs/roadmap.md"
+      ]
+    },
+    "overview": {
+      "purpose": "primary",
+      "candidates": [
+        "README.md",
+        "docs/overview.md"
+      ]
+    },
+    "process": {
+      "purpose": "primary",
+      "candidates": [
+        "agenticloop/AGENTIC_LOOP.md"
+      ]
+    },
+    "spec": {
+      "purpose": "task-source",
+      "candidates": [
+        "SPEC.md",
+        "SPECS.md",
+        "PRD.md",
+        "REQUIREMENTS.md",
+        "docs/spec.md",
+        "docs/specs/",
+        "docs/prd/"
+      ]
+    },
+    "design": {
+      "purpose": "task-source",
+      "candidates": [
+        "DESIGN.md",
+        "ARCHITECTURE.md",
+        "ARCHITECTURE_PLAN.md",
+        "ARCHITECTURE_DESIGN.md",
+        "docs/architecture.md",
+        "docs/adr/"
+      ]
+    },
+    "context": {
+      "purpose": "task-source",
+      "candidates": [
+        "CONTEXT.md",
+        "docs/context.md"
+      ]
+    },
+    "history": {
+      "purpose": "reference",
+      "candidates": [
+        "CHANGELOG.md",
+        "RELEASE-NOTES.md",
+        "MIGRATION.md"
+      ]
+    }
+  },
+  "documents": {
+    "rules": "AGENTS.md",
+    "overview": "README.md",
+    "process": "agenticloop/AGENTIC_LOOP.md"
+  },
+  "naming": {
+    "taskIdRegex": "[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\\d+",
+    "taskTableColumns": [
+      "Task",
+      "Description"
+    ]
+  },
+  "groupingProfiles": {
+    "flat": {
+      "groupCloseout": false,
+      "githubLabelTemplate": "group:{groupId}"
+    },
+    "phase": {
+      "groupingTerm": "Phase",
+      "groupCloseout": true,
+      "groupHeadingRegex": "^##\\s+(?:\\S+\\s+)?Phase\\s+(?<groupId>\\d+(?:\\.\\d+)?)\\b",
+      "groupSlugRules": "Decimal-only group identifiers are zero-padded to two digits (for example 1 becomes 01). All other group identifiers have non-alphanumeric characters stripped.",
+      "githubLabelTemplate": "phase:{groupId}"
+    },
+    "milestone": {
+      "groupingTerm": "Milestone",
+      "groupCloseout": true,
+      "githubLabelTemplate": "milestone:{groupId}"
+    },
+    "epic": {
+      "groupingTerm": "Epic",
+      "groupCloseout": true,
+      "githubLabelTemplate": "epic:{groupId}"
+    },
+    "custom": {
+      "githubLabelTemplate": "group:{groupId}"
+    }
+  },
+  "agents": {
+    "sourceDirectory": "agenticloop/agents"
+  },
+  "skills": {
+    "sourceDirectory": "agenticloop/skills"
+  },
+  "backends": {
+    "sourceDirectory": "agenticloop/backends",
+    "github": {
+      "projection": "agenticloop/backends/github.md",
+      "titlePrefixRegex": "^\\s*([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)\\b",
+      "taskLabelTemplate": "task:{taskId}",
+      "labels": {
+        "agentReady": "agent-ready",
+        "blocked": "blocked",
+        "approved": "approved",
+        "typeImpl": "type:impl",
+        "typeChangeRequest": "type:change-request"
+      }
+    },
+    "files": {
+      "projection": "agenticloop/backends/files.md",
+      "taskDirectory": ".agenticloop/tasks"
+    }
+  },
+  "roles": {
+    "orchestrator": {
+      "sourceFile": "agenticloop/agents/orchestrator.md",
+      "description": "Coordinates an interactive supervised implementation loop for a target project. Delegates work and keeps the human informed; does not edit or review directly.",
+      "responsibilities": "Reads the current task state and any selected source documents such as the plan when the project has one, identifies whether a selected work item is already task-sized or needs maintainer decomposition, delegates implementation to engineer, delegates planning and review to maintainer, keeps the human informed.",
+      "canEditImplementationFiles": false,
+      "canEditDocs": false,
+      "requiredSkills": [
+        "role-delegation",
+        "blocked-state"
+      ]
+    },
+    "maintainer": {
+      "sourceFile": "agenticloop/agents/maintainer.md",
+      "description": "Writes task records, reviews diffs, owns acceptance, triages follow-ups, and runs closeout when the project uses grouping.",
+      "responsibilities": "Analyzes the project plan and repository state, right-sizes source work items into independently verifiable task records, creates task records, reviews implementation summaries and diffs, requests revisions when needed, accepts tasks when complete, runs closeout when configured, and creates follow-up task records.",
+      "canEditImplementationFiles": false,
+      "canEditDocs": true,
+      "requiredSkills": [
+        "task-record-contract",
+        "review-and-accept",
+        "task-closeout",
+        "blocked-state",
+        "change-request-gate",
+        "ponytail"
+      ]
+    },
+    "engineer": {
+      "sourceFile": "agenticloop/agents/engineer.md",
+      "description": "Implements scoped task records, runs checks, records implementation artifacts, and posts completion summaries.",
+      "responsibilities": "Implements only the current task record scope, keeps changes small and reviewable, runs required checks, records implementation artifacts in the configured backend, opens pull requests only when task_backend: github is set, posts implementation summaries, addresses review feedback until accepted.",
+      "canEditImplementationFiles": true,
+      "canEditDocs": false,
+      "requiredSkills": [
+        "task-record-contract",
+        "tdd-implementation",
+        "ponytail",
+        "verification-evidence",
+        "debugging-before-fixes",
+        "blocked-state",
+        "github-attribution"
+      ]
+    }
+  },
+  "adapters": {
+    "opencode": {
+      "status": "supported",
+      "roleSettings": {}
+    },
+    "codex": {
+      "status": "experimental",
+      "roleSettings": {},
+      "plugin": {
+        "enabled": false
+      }
+    },
+    "claude-code": {
+      "status": "supported",
+      "roleSettings": {
+        "maintainer": {
+          "permissionMode": "acceptEdits"
+        },
+        "engineer": {
+          "permissionMode": "acceptEdits"
+        }
+      },
+      "permissions": {
+        "profile": "agenticloop",
+        "scope": "local",
+        "deny": []
+      }
+    },
+    "copilot": {
+      "status": "experimental",
+      "roleSettings": {}
+    },
+    "cursor": {
+      "status": "experimental",
+      "roleSettings": {},
+      "plugin": {
+        "enabled": false
+      }
+    }
+  }
+}

@@ -1,0 +1,114 @@
+---
+name: decision-capture
+description: Use when recording, updating, accepting, or superseding a durable project decision that constrains future work. Covers tracked Markdown decision records under .agenticloop/decisions/, maintainer ownership, proposed vs accepted state, source-linked discoverability, supersession, and decision.recorded events.
+metadata:
+  area: decision-records
+  side_effects: writes-files
+  credentials: none
+  runs_scripts: none
+---
+
+# Decision capture
+
+Decision records are the small docs-first layer for durable project decisions.
+They are broader than the narrow ADR threshold. If a decision constrains future
+work and later agents would benefit from seeing it, it can earn a decision
+record even when it is not especially surprising or hard to reverse.
+
+## When to Use
+
+Use this skill when a project decision needs a tracked Markdown record because
+it constrains future work. Common scopes include:
+
+- process,
+- architecture,
+- backend choice,
+- role boundaries,
+- quality rules,
+- security posture,
+- release rules,
+- product direction,
+- accepted project conventions.
+
+Strong ADR-style signals such as hard to reverse, surprising, or tradeoff-heavy
+still matter, but they are not the only trigger.
+
+## When Not to Use
+
+Do not create a decision record for:
+
+- ordinary task notes,
+- implementation summaries,
+- raw meeting notes,
+- raw chat transcripts,
+- temporary debugging observations,
+- one-off local experiments that do not constrain later work.
+
+## Maintainer Ownership
+
+The orchestrator may detect a candidate decision and route it here, but the
+maintainer owns writing, updating, accepting, rejecting, or superseding the
+tracked record.
+
+## Decision-Worthiness Test
+
+Create or update a decision record when all of the following are true:
+
+1. the decision is durable enough to matter beyond one task,
+2. it constrains future implementation, review, setup, or release work,
+3. later agents or maintainers would likely make the wrong choice without it.
+
+If the note is only evidence for one task, keep it in the task record or
+implementation artifact instead.
+
+## Process
+
+1. Check whether an accepted record already covers the decision. If yes and the
+   meaning must change, create a new record and mark the old one superseded.
+2. Create one decision record per durable decision under
+   `.agenticloop/decisions/<slug>.md`. Use `agenticloop/memory/decision-record.md`
+   as the record shape. Keep the record short.
+3. Set status to `proposed`, `accepted`, `rejected`, or `superseded`.
+4. Add or update a link to the decision record in the nearest durable source:
+   - Prefer the current task record when the decision is task-local.
+   - Prefer `.agenticloop/project.md`, `IMPLEMENTATION_PLAN.md`,
+     architecture/design docs, or the relevant source doc when the decision
+     changes project behavior.
+5. Validate discoverability: the decision record must be linked from at least
+   one durable source. Do not create or maintain a decision index.
+6. If `.agenticloop/project.md` has `event_logging: enabled`, resolve the
+   event logging command before writing the event: use a non-empty
+   `event_logging_command`, or run `npx agenticloop --help` once and use
+   `npx agenticloop` only if it succeeds. Do not attempt event logging when
+   `event_logging` is disabled, and do not block the workflow if no working
+   command is available.
+
+## Proposed vs Accepted
+
+- Agents may create `proposed` records when they detect a durable decision that
+  should be reviewed.
+- `accepted` requires explicit human confirmation or an approved
+  `type:change-request`.
+- `rejected` is for decisions that were considered and explicitly declined.
+- `superseded` is for older accepted decisions replaced by a newer record.
+
+## Supersession Rule
+
+Do not silently rewrite an accepted decision to change its meaning. Write a new
+record, update the old record to `superseded`, and link the relationship in
+the record frontmatter. Update or add links in the durable source that
+referenced the superseded record.
+
+## Change-Request Gate
+
+If the work changes an accepted locked process, architecture, backend, or other
+project decision, use [[change-request-gate]] before implementation. Approval
+does not remove the need to record or supersede the decision.
+
+## Evidence
+
+The tracked Markdown files under `.agenticloop/decisions/` are the source of
+truth. The event log is only an audit signal.
+
+Do not store raw transcripts, raw meeting dumps, prompt logs, or tool output in
+decision files.

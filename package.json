@@ -1,0 +1,69 @@
+{
+  "name": "agenticloop",
+  "version": "0.1.0",
+  "description": "Markdown-first workflow toolkit for AI coding agents",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "npm@10.8.2",
+  "bin": {
+    "agenticloop": "./bin/agenticloop.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bartoszarendt/agenticloop.git"
+  },
+  "homepage": "https://github.com/bartoszarendt/agenticloop#readme",
+  "bugs": {
+    "url": "https://github.com/bartoszarendt/agenticloop/issues"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "agentic",
+    "workflow",
+    "skills",
+    "markdown",
+    "opencode",
+    "codex",
+    "claude-code",
+    "copilot",
+    "cursor"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:dot": "node --test --test-reporter=dot \"test/**/*.test.js\""
+  },
+  "files": [
+    "bin/",
+    "src/",
+    ".claude-plugin/",
+    "AGENTIC_LOOP.md",
+    "agents/",
+    "backends/",
+    "skills/",
+    "commands/",
+    "memory/",
+    "config.json",
+    "agenticloop.template.json",
+    "manifest.json",
+    "docs/getting-started.md",
+    "docs/downstream-adoption.md",
+    "docs/host-adapters.md",
+    "docs/glossary.md",
+    "docs/opencode-setup.md",
+    "docs/codex-setup.md",
+    "docs/claude-code-setup.md",
+    "docs/copilot-setup.md",
+    "docs/cursor-setup.md",
+    "docs/skill-anatomy.md",
+    "docs/workflow-examples.md",
+    "docs/registry-horizon.md",
+    "LICENSE"
+  ]
+}

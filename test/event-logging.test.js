@@ -1,0 +1,754 @@
+import { after, before, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
+import {
+  auditTaskEventLog,
+  appendEventLog,
+  buildEvent,
+  loadEvents,
+  reportTaskEventLog,
+  resolveEventLogPath,
+  STRICT_AUDIT_EVENT_TYPES,
+  validateEvent,
+  validateEventLogFile,
+  validateEventLogs,
+} from '../src/event-logging.js';
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+let tmpBase;
+
+before(() => {
+  tmpBase = mkdtempSync(join(tmpdir(), 'al-event-logging-test-'));
+});
+
+after(() => {
+  rmSync(tmpBase, { recursive: true, force: true });
+});
+
+function makeTarget(name) {
+  return mkdtempSync(join(tmpBase, `${name}-`));
+}
+
+function eventLogPath(target, fileName) {
+  return join(target, '.agenticloop', 'logs', fileName);
+}
+
+function writeProjectMap(target, { eventLogging = 'disabled', taskBackend = 'files' } = {}) {
+  mkdirSync(join(target, '.agenticloop'), { recursive: true });
+  writeFileSync(
+    join(target, '.agenticloop', 'project.md'),
+    [
+      '---',
+      'setup_status: unconfirmed',
+      'setup_confirmed_at: ""',
+      'setup_confirmed_by: ""',
+      `task_backend: ${taskBackend}`,
+      `event_logging: ${eventLogging}`,
+      'event_logging_command: ""',
+      'task_id_pattern: "T-<number>"',
+      'task_id_regex: "^T-\\d{3,}$"',
+      'task_file_template: ".agenticloop/tasks/{taskId}.md"',
+      'grouping_profile: flat',
+      '---',
+      '# Project Map',
+    ].join('\n'),
+    'utf-8'
+  );
+}
+
+function writeTaskRecord(target, taskId = 'T-001') {
+  mkdirSync(join(target, '.agenticloop', 'tasks'), { recursive: true });
+  writeFileSync(join(target, '.agenticloop', 'tasks', `${taskId}.md`), `# ${taskId}\n`, 'utf-8');
+}
+
+function appendAuditEvents(target, taskId, eventTypes = STRICT_AUDIT_EVENT_TYPES) {
+  const definitions = {
+    'role.invoked': {
+      eventType: 'role.invoked',
+      role: 'orchestrator',
+      summary: 'Delegated engineer',
+    },
+    'task.started': {
+      eventType: 'task.started',
+      role: 'engineer',
+      summary: 'Started scoped implementation',
+    },
+    'check.run': {
+      eventType: 'check.run',
+      role: 'engineer',
+      summary: 'npm test passed',
+      outcome: 'success',
+    },
+    'review.result': {
+      eventType: 'review.result',
+      role: 'maintainer',
+      summary: 'Accepted implementation',
+      outcome: 'accepted',
+    },
+    'task.closed': {
+      eventType: 'task.closed',
+      role: 'maintainer',
+      summary: 'Closed task',
+      outcome: 'success',
+    },
+  };
+
+  for (const eventType of eventTypes) {
+    appendEventLog({
+      target,
+      event: buildEvent({
+        target,
+        task: taskId,
+        ...definitions[eventType],
+      }),
+    });
+  }
+}
+
+function appendFixtureEvent(target, taskId, definition) {
+  appendEventLog({
+    target,
+    event: buildEvent({
+      target,
+      task: taskId,
+      backend: definition.backend,
+      occurredAt: definition.occurredAt,
+      eventType: definition.eventType,
+      role: definition.role,
+      summary: definition.summary,
+      outcome: definition.outcome,
+      refs: definition.refs,
+      data: definition.data,
+    }),
+  });
+}
+
+describe('event logging module', () => {
+  it('buildEvent populates required fields and defaults', () => {
+    const event = buildEvent(
+      {
+        eventType: 'task.started',
+        summary: 'Started implementation task',
+      },
+      new Date('2026-06-17T10:11:12.000Z')
+    );
+
+    assert.equal(event.schema_version, 1);
+    assert.match(event.event_id, UUID_PATTERN);
+    assert.equal(event.occurred_at, '2026-06-17T10:11:12.000Z');
+    assert.match(event.trace_id, UUID_PATTERN);
+    assert.equal(event.parent_event_id, null);
+    assert.equal(event.task_id, null);
+    assert.equal(event.backend, 'unknown');
+    assert.equal(event.host, 'unknown');
+    assert.equal(event.role, 'unknown');
+    assert.equal(event.event_type, 'task.started');
+    assert.equal(event.summary, 'Started implementation task');
+    assert.equal(event.outcome, 'unknown');
+    assert.deepEqual(event.refs, []);
+    assert.deepEqual(event.data, {});
+  });
+
+  it('appendEventLog writes .agenticloop/logs/T-001.jsonl by default', () => {
+    const target = makeTarget('append-task-scoped');
+    const event = buildEvent({ task: 'T-001', eventType: 'task.started', summary: 'Started task record work' });
+
+    const filePath = appendEventLog({ target, event });
+
+    assert.equal(resolveEventLogPath(target, undefined, 'T-001').path, filePath);
+    assert.equal(filePath, eventLogPath(target, 'T-001.jsonl'));
+    assert.ok(existsSync(filePath));
+    const events = loadEvents(filePath);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].task_id, 'T-001');
+  });
+
+  it('appendEventLog fails without a task for default output', () => {
+    const target = makeTarget('append-missing-task');
+    const event = buildEvent({ eventType: 'task.created', summary: 'Created task record' });
+
+    assert.throws(
+      () => appendEventLog({ target, event }),
+      /--task is required for default event logging output/
+    );
+  });
+
+  it('explicit output allows no-task events', () => {
+    const target = makeTarget('append-explicit-output');
+    const output = eventLogPath(target, 'manual.jsonl');
+    const event = buildEvent({ eventType: 'decision.recorded', summary: 'Recorded setup decision' });
+
+    const filePath = appendEventLog({ target, output, event });
+
+    assert.equal(filePath, output);
+    assert.ok(existsSync(filePath));
+    const events = loadEvents(filePath);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].task_id, null);
+  });
+
+  it('derives the same trace id for the same target and task', () => {
+    const target = makeTarget('same-task-trace');
+
+    const first = buildEvent({
+      target,
+      task: 'T-001',
+      eventType: 'task.started',
+      summary: 'Started scoped work',
+    });
+    const second = buildEvent({
+      target,
+      task: 'T-001',
+      eventType: 'check.run',
+      summary: 'Ran focused checks',
+      outcome: 'success',
+    });
+
+    assert.match(first.trace_id, UUID_PATTERN);
+    assert.equal(first.trace_id, second.trace_id);
+  });
+
+  it('derives different trace ids for different tasks in the same target', () => {
+    const target = makeTarget('different-task-trace');
+
+    const first = buildEvent({
+      target,
+      task: 'T-001',
+      eventType: 'task.started',
+      summary: 'Started first task',
+    });
+    const second = buildEvent({
+      target,
+      task: 'T-002',
+      eventType: 'task.started',
+      summary: 'Started second task',
+    });
+
+    assert.notEqual(first.trace_id, second.trace_id);
+  });
+
+  it('keeps an explicit trace id override', () => {
+    const explicitTraceId = '123e4567-e89b-12d3-a456-426614174000';
+    const event = buildEvent({
+      target: makeTarget('explicit-trace'),
+      task: 'T-001',
+      eventType: 'task.started',
+      summary: 'Started scoped work',
+      traceId: explicitTraceId,
+    });
+
+    assert.equal(event.trace_id, explicitTraceId);
+  });
+
+  it('keeps random trace ids when no task id is present', () => {
+    const first = buildEvent({ eventType: 'task.started', summary: 'Started scoped work' });
+    const second = buildEvent({ eventType: 'task.started', summary: 'Started scoped work' });
+
+    assert.notEqual(first.trace_id, second.trace_id);
+  });
+
+  it('repeat writes append multiple JSONL lines', () => {
+    const target = makeTarget('append-repeat');
+    const filePath = eventLogPath(target, 'T-001.jsonl');
+
+    appendEventLog({
+      target,
+      event: buildEvent({ task: 'T-001', eventType: 'task.created', summary: 'Created task' }),
+    });
+    appendEventLog({
+      target,
+      event: buildEvent({ task: 'T-001', eventType: 'task.started', summary: 'Started task' }),
+    });
+
+    const lines = readFileSync(filePath, 'utf-8').trim().split(/\r?\n/);
+    assert.equal(lines.length, 2);
+    const events = loadEvents(filePath);
+    assert.deepEqual(events.map(event => event.event_type), ['task.created', 'task.started']);
+  });
+
+  it('invalid event type fails validation', () => {
+    const result = validateEvent(buildEvent({ eventType: 'not.a.real.event', summary: 'Bad event' }));
+
+    assert.ok(result.errors.some(error => error.includes('event_type must be one of')));
+  });
+
+  it('invalid role and outcome fail validation', () => {
+    const result = validateEvent(buildEvent({
+      eventType: 'task.updated',
+      summary: 'Updated task record',
+      role: 'reviewer',
+      outcome: 'great',
+    }));
+
+    assert.ok(result.errors.some(error => error.includes('role must be one of')));
+    assert.ok(result.errors.some(error => error.includes('outcome must be one of')));
+  });
+
+  it('enforces review.result outcome compatibility', () => {
+    const missingOutcome = validateEvent(buildEvent({
+      eventType: 'review.result',
+      summary: 'Recorded maintainer decision',
+    }));
+    const accepted = validateEvent(buildEvent({
+      eventType: 'review.result',
+      summary: 'Accepted implementation',
+      outcome: 'accepted',
+    }));
+
+    assert.ok(missingOutcome.errors.includes("event_type 'review.result' requires outcome accepted or needs_revision"));
+    assert.deepEqual(accepted.errors, []);
+  });
+
+  it('enforces allowed outcomes for other event types', () => {
+    const invalidCreated = validateEvent(buildEvent({
+      eventType: 'task.created',
+      summary: 'Created task record',
+      outcome: 'accepted',
+    }));
+
+    assert.ok(invalidCreated.errors.includes("event_type 'task.created' requires outcome unknown or success"));
+
+    for (const outcome of ['success', 'failure', 'blocked']) {
+      const result = validateEvent(buildEvent({
+        eventType: 'check.run',
+        summary: `Recorded ${outcome} check run`,
+        outcome,
+      }));
+
+      assert.deepEqual(result.errors, [], `expected check.run ${outcome} to pass`);
+    }
+  });
+
+  it('warns instead of failing for short transcript-like summaries', () => {
+    const result = validateEvent(buildEvent({
+      eventType: 'task.updated',
+      summary: 'system: scoped summary\nuser: confirm updated task record',
+    }));
+
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.warnings.includes('summary looks like a transcript or raw tool dump'));
+  });
+
+  it('still fails transcript-like data payloads', () => {
+    const repeatedTranscript = `${'transcript excerpt\n```text\nscoped detail\n```\n'.repeat(120)}final note`;
+    const result = validateEvent(buildEvent({
+      eventType: 'decision.recorded',
+      summary: 'Recorded scoped decision',
+      data: {
+        excerpt: repeatedTranscript,
+      },
+    }));
+
+    assert.ok(result.errors.includes('data looks like a transcript or raw tool dump'));
+  });
+
+  it('privacy-blocked fields fail validation', () => {
+    const event = buildEvent({
+      eventType: 'decision.recorded',
+      summary: 'Recorded backend decision',
+      data: {
+        messages: ['raw transcript content'],
+      },
+    });
+    event.prompt = 'raw prompt text';
+
+    const result = validateEvent(event);
+
+    assert.ok(result.errors.some(error => error.includes("banned top-level key 'prompt'")));
+    assert.ok(result.errors.some(error => error.includes("data contains banned privacy-sensitive key 'data.messages'")));
+  });
+
+  it('warns when no explicit task backend is configured and the local task file is missing', () => {
+    const target = makeTarget('missing-task-default-backend');
+
+    const result = validateEvent(
+      buildEvent({
+        task: 'T-001',
+        eventType: 'task.started',
+        summary: 'Started scoped work',
+      }),
+      { target }
+    );
+
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.warnings.some(warning => warning.includes("has no local files task record")));
+  });
+
+  it('does not require a local task file when an unconfigured target event references a GitHub task', () => {
+    const target = makeTarget('github-ref-default-backend');
+
+    const result = validateEvent(
+      buildEvent({
+        task: 'T-001',
+        eventType: 'task.started',
+        role: 'engineer',
+        summary: 'Started scoped work',
+        refs: ['github:issue:42'],
+      }),
+      { target }
+    );
+
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.warnings.some(warning => warning.includes("has no local files task record")), false);
+  });
+
+  it('warns (not errors) for missing local task files when the files backend is explicit', () => {
+    const target = makeTarget('missing-task-files-backend');
+    writeProjectMap(target, { taskBackend: 'files' });
+
+    const result = validateEvent(
+      buildEvent({
+        task: 'T-001',
+        backend: 'files',
+        eventType: 'task.started',
+        role: 'engineer',
+        summary: 'Started scoped work',
+      }),
+      { target }
+    );
+
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.warnings.some(w => w.includes("has no local files task record")));
+  });
+
+  it('does not warn when the github backend is explicit and no local task file exists', () => {
+    const target = makeTarget('missing-task-github-backend');
+    writeProjectMap(target, { taskBackend: 'github' });
+
+    const result = validateEvent(
+      buildEvent({
+        task: 'T-001',
+        backend: 'github',
+        eventType: 'task.started',
+        role: 'engineer',
+        summary: 'Started scoped work',
+      }),
+      { target }
+    );
+
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.warnings.some(warning => warning.includes("has no local files task record")), false);
+  });
+
+  it('still validates event shape normally on the github backend', () => {
+    const target = makeTarget('github-backend-shape-validation');
+    writeProjectMap(target, { taskBackend: 'github' });
+
+    const result = validateEvent(
+      buildEvent({
+        task: 'T-001',
+        backend: 'github',
+        eventType: 'check.run',
+        role: 'engineer',
+        summary: 'Ran verification command',
+      }),
+      { target }
+    );
+
+    assert.ok(result.errors.includes("event_type 'check.run' requires outcome success, failure, or blocked"));
+    assert.equal(result.warnings.some(warning => warning.includes("has no local files task record")), false);
+  });
+
+  it('rejects unsafe task ids before resolving a default event log path', () => {
+    const target = makeTarget('unsafe-task-id');
+
+    assert.throws(
+      () => resolveEventLogPath(target, undefined, '../escape'),
+      /not safe for event log filenames/
+    );
+  });
+
+  it('validateEventLogs validates every JSONL file in the default log directory', () => {
+    const target = makeTarget('validate-directory');
+    const taskPath = eventLogPath(target, 'T-001.jsonl');
+    const manualPath = eventLogPath(target, 'manual.jsonl');
+
+    mkdirSync(join(target, '.agenticloop', 'logs'), { recursive: true });
+    mkdirSync(join(target, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(join(target, '.agenticloop', 'tasks', 'T-001.md'), '# T-001\n', 'utf-8');
+    writeFileSync(taskPath, `${JSON.stringify(buildEvent({ task: 'T-001', eventType: 'task.updated', summary: 'Updated task record' }))}\n`, 'utf-8');
+    writeFileSync(manualPath, 'not json\n', 'utf-8');
+
+    const result = validateEventLogs(target);
+
+    assert.equal(result.exists, true);
+    assert.equal(result.fileCount, 2);
+    assert.equal(result.eventCount, 1);
+    assert.ok(result.errors.some(error => error.includes('.agenticloop/logs/manual.jsonl line 1: invalid JSON')));
+  });
+
+  it('malformed JSONL fails validation with event log wording', () => {
+    const target = makeTarget('malformed-event-log');
+    const filePath = eventLogPath(target, 'manual.jsonl');
+    mkdirSync(join(target, '.agenticloop', 'logs'), { recursive: true });
+    writeFileSync(filePath, '{"schema_version":1}\nnot json\n', 'utf-8');
+
+    const result = validateEventLogFile(filePath, { target });
+
+    assert.ok(result.errors.some(error => error.includes('.agenticloop/logs/manual.jsonl line 2: invalid JSON')));
+  });
+
+  it('auditTaskEventLog passes when required event types are present', () => {
+    const target = makeTarget('audit-pass');
+    writeProjectMap(target, { eventLogging: 'enabled' });
+    writeTaskRecord(target, 'T-001');
+    appendAuditEvents(target, 'T-001');
+
+    const result = auditTaskEventLog({ target, taskId: 'T-001' });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.skipped, false);
+    assert.equal(result.eventCount, STRICT_AUDIT_EVENT_TYPES.length);
+    assert.deepEqual(result.missingEventTypes, []);
+  });
+
+  it('auditTaskEventLog fails when logging is enabled and no log exists for the task', () => {
+    const target = makeTarget('audit-missing-log');
+    writeProjectMap(target, { eventLogging: 'enabled' });
+    writeTaskRecord(target, 'T-001');
+
+    const result = auditTaskEventLog({ target, taskId: 'T-001' });
+
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(error => error.includes('Missing task event log')));
+  });
+
+  it('auditTaskEventLog fails when a required event type is missing', () => {
+    const target = makeTarget('audit-missing-type');
+    writeProjectMap(target, { eventLogging: 'enabled' });
+    writeTaskRecord(target, 'T-001');
+    appendAuditEvents(
+      target,
+      'T-001',
+      STRICT_AUDIT_EVENT_TYPES.filter(eventType => eventType !== 'task.closed')
+    );
+
+    const result = auditTaskEventLog({ target, taskId: 'T-001' });
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.missingEventTypes, ['task.closed']);
+    assert.ok(result.errors.some(error => error.includes('Missing required event types: task.closed')));
+  });
+
+  it('auditTaskEventLog reports disabled logging without failure by default', () => {
+    const target = makeTarget('audit-disabled-default');
+    writeProjectMap(target, { eventLogging: 'disabled' });
+
+    const result = auditTaskEventLog({ target, taskId: 'T-001' });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.skipped, true);
+    assert.equal(result.eventLogging, 'disabled');
+  });
+
+  it('auditTaskEventLog with explicit require still checks a disabled project log', () => {
+    const target = makeTarget('audit-disabled-explicit');
+    writeProjectMap(target, { eventLogging: 'disabled' });
+    writeTaskRecord(target, 'T-001');
+    appendAuditEvents(target, 'T-001', ['role.invoked']);
+
+    const result = auditTaskEventLog({
+      target,
+      taskId: 'T-001',
+      requiredEventTypes: ['role.invoked'],
+      explicitRequire: true,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.skipped, false);
+    assert.equal(result.enabled, false);
+    assert.equal(result.eventCount, 1);
+  });
+
+  it('reportTaskEventLog summarizes a complete trace with checks, reviews, delegation, and refs', () => {
+    const target = makeTarget('report-complete-trace');
+    writeProjectMap(target, { taskBackend: 'github', eventLogging: 'enabled' });
+
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:00:00.000Z',
+      eventType: 'role.invoked',
+      role: 'orchestrator',
+      summary: 'Delegated engineer implementation',
+      refs: ['github:issue:42', 'branch:T-001-feature'],
+      data: {
+        target_role: 'engineer',
+        delegation_mode: 'host_subagent',
+        fallback: false,
+        adapter: 'opencode',
+        model: 'gpt-5.4',
+        reason: 'Implementation ready',
+      },
+    });
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:01:00.000Z',
+      eventType: 'task.started',
+      role: 'engineer',
+      summary: 'Started scoped implementation',
+      refs: ['github:issue:42'],
+      data: {},
+    });
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:02:00.000Z',
+      eventType: 'check.run',
+      role: 'engineer',
+      summary: 'npm test passed',
+      outcome: 'success',
+      refs: ['command:npm test', 'github:pr:9'],
+      data: { command: 'npm test', exit_code: 0, passed: 128, failed: 0, skipped: 2, duration_ms: 15000, attempt: 1 },
+    });
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:03:00.000Z',
+      eventType: 'check.run',
+      role: 'engineer',
+      summary: 'npm run lint failed',
+      outcome: 'failure',
+      refs: ['command:npm run lint', 'github:pr:9'],
+      data: { command: 'npm run lint', exit_code: 1, passed: 0, failed: 3, skipped: 0, duration_ms: 8000, attempt: 1 },
+    });
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:04:00.000Z',
+      eventType: 'review.started',
+      role: 'maintainer',
+      summary: 'Started maintainer review',
+      refs: ['github:pr:9'],
+      data: { review_round: 1, artifact_revision: 'abc123', pr_head: 'abc123' },
+    });
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:05:00.000Z',
+      eventType: 'review.result',
+      role: 'maintainer',
+      summary: 'Requested revision on the first pass',
+      outcome: 'needs_revision',
+      refs: ['github:pr:9'],
+      data: { review_round: 1, artifact_revision: 'abc123', pr_head: 'abc123' },
+    });
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:06:00.000Z',
+      eventType: 'role.invoked',
+      role: 'orchestrator',
+      summary: 'Started fallback maintainer review pass',
+      refs: ['github:pr:9'],
+      data: {
+        target_role: 'maintainer',
+        delegation_mode: 'single_agent_fallback',
+        fallback: true,
+        adapter: 'opencode',
+        reason: 'Review tool unavailable',
+      },
+    });
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:07:00.000Z',
+      eventType: 'check.run',
+      role: 'engineer',
+      summary: 'Smoke check blocked on staging secret',
+      outcome: 'blocked',
+      refs: ['command:npm run smoke', 'github:pr:9'],
+      data: { command: 'npm run smoke', exit_code: 1, passed: 0, failed: 0, skipped: 1, duration_ms: 5000, attempt: 2 },
+    });
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:10:00.000Z',
+      eventType: 'review.result',
+      role: 'maintainer',
+      summary: 'Accepted implementation',
+      outcome: 'accepted',
+      refs: ['github:pr:9', 'commit:def456'],
+      data: { review_round: 2, artifact_revision: 'def456', pr_head: 'def456' },
+    });
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:12:00.000Z',
+      eventType: 'task.closed',
+      role: 'maintainer',
+      summary: 'Closed task after accepted review',
+      outcome: 'success',
+      refs: ['github:issue:42', 'github:pr:9'],
+      data: {},
+    });
+
+    const report = reportTaskEventLog({ target, taskId: 'T-001' });
+
+    assert.equal(report.eventCount, 10);
+    assert.equal(report.firstEventTimestamp, '2026-06-17T10:00:00.000Z');
+    assert.equal(report.lastEventTimestamp, '2026-06-17T10:12:00.000Z');
+    assert.equal(report.traceDuration, '12m');
+    assert.deepEqual(report.strictAudit.missingEventTypes, []);
+    assert.equal(report.checkRunCounts.success, 1);
+    assert.equal(report.checkRunCounts.failure, 1);
+    assert.equal(report.checkRunCounts.blocked, 1);
+    assert.deepEqual(
+      report.failedOrBlockedChecks.map(check => ({ outcome: check.outcome, summary: check.summary })),
+      [
+        { outcome: 'failure', summary: 'npm run lint failed' },
+        { outcome: 'blocked', summary: 'Smoke check blocked on staging secret' },
+      ]
+    );
+    assert.deepEqual(report.reviewResultCounts, { accepted: 1, needs_revision: 1 });
+    assert.deepEqual(report.reviewRounds, ['1', '2']);
+    assert.deepEqual(report.roleInvoked.targetRoleCounts, [
+      { value: 'engineer', count: 1 },
+      { value: 'maintainer', count: 1 },
+    ]);
+    assert.deepEqual(report.roleInvoked.delegationModeCounts, [
+      { value: 'host_subagent', count: 1 },
+      { value: 'single_agent_fallback', count: 1 },
+    ]);
+    assert.equal(report.roleInvoked.fallbackCount, 1);
+    assert.deepEqual(report.refsSummary.slice(0, 3), [
+      { ref: 'github:pr:9', count: 8 },
+      { ref: 'github:issue:42', count: 3 },
+      { ref: 'branch:T-001-feature', count: 1 },
+    ]);
+  });
+
+  it('reportTaskEventLog identifies missing strict-audit events from existing minimal logs', () => {
+    const target = makeTarget('report-missing-strict-events');
+    writeProjectMap(target, { eventLogging: 'enabled' });
+    writeTaskRecord(target, 'T-001');
+    appendFixtureEvent(target, 'T-001', {
+      occurredAt: '2026-06-17T11:00:00.000Z',
+      eventType: 'task.started',
+      role: 'engineer',
+      summary: 'Started scoped implementation',
+      refs: [],
+      data: {},
+    });
+    appendFixtureEvent(target, 'T-001', {
+      occurredAt: '2026-06-17T11:05:00.000Z',
+      eventType: 'review.result',
+      role: 'maintainer',
+      summary: 'Accepted implementation',
+      outcome: 'accepted',
+      refs: [],
+      data: {},
+    });
+
+    const report = reportTaskEventLog({ target, taskId: 'T-001' });
+
+    assert.deepEqual(report.strictAudit.presentEventTypes, ['task.started', 'review.result']);
+    assert.deepEqual(report.strictAudit.missingEventTypes, ['role.invoked', 'check.run', 'task.closed']);
+    assert.deepEqual(report.reviewRounds, []);
+    assert.equal(report.roleInvoked.fallbackCount, 0);
+  });
+
+  it('reportTaskEventLog fails for a missing task log', () => {
+    const target = makeTarget('report-missing-log');
+
+    assert.throws(
+      () => reportTaskEventLog({ target, taskId: 'T-404' }),
+      /Missing task event log: \.agenticloop\/logs\/T-404\.jsonl/
+    );
+  });
+});

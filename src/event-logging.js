@@ -1,0 +1,939 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { TextDecoder } from 'node:util';
+
+import { loadAgenticLoopConfig } from './json.js';
+import { isValidTaskId, loadProjectMap } from './project-map.js';
+import { resolveTaskBackend } from './task-backend.js';
+
+export const EVENT_SCHEMA_VERSION = 1;
+export const DEFAULT_LOG_DIR = join('.agenticloop', 'logs');
+export const STRICT_AUDIT_EVENT_TYPES = [
+  'role.invoked',
+  'task.started',
+  'check.run',
+  'review.result',
+  'task.closed',
+];
+
+export const VALID_EVENT_TYPES = new Set([
+  'task.created',
+  'task.updated',
+  'task.started',
+  'role.invoked',
+  'decision.recorded',
+  'check.run',
+  'artifact.linked',
+  'review.started',
+  'review.result',
+  'blocked',
+  'needs_context',
+  'task.closed',
+  'summary.published',
+]);
+
+export const VALID_EVENT_BACKENDS = new Set(['files', 'github', 'unknown']);
+export const VALID_EVENT_ROLES = new Set(['orchestrator', 'maintainer', 'engineer', 'human', 'unknown']);
+export const VALID_EVENT_OUTCOMES = new Set([
+  'success',
+  'failure',
+  'blocked',
+  'needs_context',
+  'accepted',
+  'needs_revision',
+  'unknown',
+]);
+
+const VALID_EVENT_OUTCOMES_BY_TYPE = new Map([
+  ['task.created', ['unknown', 'success']],
+  ['task.updated', ['unknown', 'success']],
+  ['task.started', ['unknown', 'success']],
+  ['role.invoked', ['unknown', 'success']],
+  ['decision.recorded', ['unknown', 'success']],
+  ['check.run', ['success', 'failure', 'blocked']],
+  ['artifact.linked', ['unknown', 'success']],
+  ['review.started', ['unknown', 'success']],
+  ['review.result', ['accepted', 'needs_revision']],
+  ['blocked', ['blocked']],
+  ['needs_context', ['needs_context']],
+  ['task.closed', ['success', 'failure', 'unknown']],
+  ['summary.published', ['success', 'failure', 'unknown']],
+]);
+
+const VALID_TOP_LEVEL_KEYS = new Set([
+  'schema_version',
+  'event_id',
+  'occurred_at',
+  'trace_id',
+  'parent_event_id',
+  'task_id',
+  'backend',
+  'host',
+  'role',
+  'event_type',
+  'summary',
+  'outcome',
+  'refs',
+  'data',
+]);
+
+const BANNED_PRIVACY_KEYS = new Set([
+  'prompt',
+  'response',
+  'messages',
+  'transcript',
+  'tool_output',
+  'raw_output',
+]);
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ISO_8601_UTC_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
+const SUMMARY_WARN_LENGTH = 300;
+const SUMMARY_HARD_LIMIT = 4000;
+const DATA_HARD_LIMIT = 16000;
+const TRANSCRIPT_MARKER_PATTERN = /(?:^|\n)\s*(?:system|user|assistant|tool)\s*:/gim;
+const JSONL_DECODER = new TextDecoder('utf-8', { fatal: true });
+const UNSAFE_TASK_ID_CHAR_PATTERN = /[\\/:*?"<>|\x00-\x1f]/;
+const TRAILING_DOT_OR_SPACE_PATTERN = /[. ]$/;
+const WINDOWS_RESERVED_BASENAME_PATTERN = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+const DEFAULT_LOG_DIR_DISPLAY = DEFAULT_LOG_DIR.replaceAll('\\', '/');
+
+function isPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function asTrimmedString(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeNullableString(value) {
+  const trimmed = asTrimmedString(value);
+  return trimmed || null;
+}
+
+function normalizeNullableSummaryValue(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : null;
+  }
+  if (typeof value === 'boolean') return String(value);
+  return normalizeNullableString(value);
+}
+
+function normalizeRefs(value) {
+  if (Array.isArray(value)) {
+    return value.map(entry => asTrimmedString(entry)).filter(Boolean);
+  }
+  const trimmed = asTrimmedString(value);
+  return trimmed ? [trimmed] : [];
+}
+
+function normalizeData(value) {
+  if (value === undefined || value === null) return {};
+  return value;
+}
+
+function normalizeTimestamp(explicitOccurredAt, now) {
+  if (explicitOccurredAt !== undefined && explicitOccurredAt !== null) {
+    const explicit = asTrimmedString(explicitOccurredAt);
+    return explicit || String(explicitOccurredAt);
+  }
+
+  if (typeof now === 'string') {
+    const parsed = new Date(now);
+    return Number.isNaN(parsed.valueOf()) ? now : parsed.toISOString();
+  }
+
+  if (now instanceof Date) {
+    return now.toISOString();
+  }
+
+  return new Date().toISOString();
+}
+
+function uuidFromBytes(bytes) {
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+function formatRequiredOutcomes(eventType, allowedOutcomes) {
+  if (allowedOutcomes.length === 1) {
+    return `event_type '${eventType}' requires outcome ${allowedOutcomes[0]}`;
+  }
+
+  if (allowedOutcomes.length === 2) {
+    return `event_type '${eventType}' requires outcome ${allowedOutcomes[0]} or ${allowedOutcomes[1]}`;
+  }
+
+  return `event_type '${eventType}' requires outcome ${allowedOutcomes
+    .slice(0, -1)
+    .join(', ')}, or ${allowedOutcomes.at(-1)}`;
+}
+
+function jsonSize(value) {
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function looksLikeTranscriptDump(text) {
+  if (typeof text !== 'string') return false;
+  const markers = text.match(TRANSCRIPT_MARKER_PATTERN) ?? [];
+  if (markers.length >= 2) return true;
+  if (text.length >= 2000 && text.includes('```')) return true;
+  if (text.length >= 2000 && /\b(?:prompt|assistant response|tool output|transcript)\b/i.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+function resolveTraceSeed(input, taskId) {
+  if (!taskId) return null;
+
+  const explicitTraceSeed = normalizeNullableString(input.trace_seed ?? input.traceSeed);
+  if (explicitTraceSeed) return explicitTraceSeed;
+
+  const target = normalizeNullableString(input.target);
+  const traceTarget = target ? resolve(target) : process.cwd();
+  return `agenticloop:event-trace:v1:${traceTarget}:${taskId}`;
+}
+
+export function deriveTraceId(seed) {
+  const bytes = Buffer.from(createHash('sha256').update(seed).digest().subarray(0, 16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  return uuidFromBytes(bytes);
+}
+
+function resolveTraceId(input, taskId) {
+  const explicitTraceId = normalizeNullableString(input.trace_id ?? input.traceId);
+  if (explicitTraceId) return explicitTraceId;
+
+  const traceSeed = resolveTraceSeed(input, taskId);
+  if (traceSeed) return deriveTraceId(traceSeed);
+
+  return randomUUID();
+}
+
+function isValidUuid(value) {
+  return typeof value === 'string' && UUID_PATTERN.test(value);
+}
+
+function isValidOccurredAt(value) {
+  if (typeof value !== 'string' || !ISO_8601_UTC_PATTERN.test(value)) return false;
+  return !Number.isNaN(new Date(value).valueOf());
+}
+
+function isWithinDirectory(root, target) {
+  const rel = relative(root, target);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function normalizeEventLogTaskId(taskId) {
+  return normalizeNullableString(taskId);
+}
+
+function unsafeTaskIdError(taskId) {
+  const normalizedTaskId = normalizeEventLogTaskId(taskId);
+  if (!normalizedTaskId) return null;
+
+  if (
+    normalizedTaskId === '.' ||
+    normalizedTaskId === '..' ||
+    normalizedTaskId.includes('..') ||
+    UNSAFE_TASK_ID_CHAR_PATTERN.test(normalizedTaskId) ||
+    TRAILING_DOT_OR_SPACE_PATTERN.test(normalizedTaskId) ||
+    WINDOWS_RESERVED_BASENAME_PATTERN.test(normalizedTaskId)
+  ) {
+    return (
+      `task_id '${normalizedTaskId}' is not safe for event log filenames; ` +
+      "use a simple id without path separators, traversal, ':', trailing dots/spaces, or reserved filename characters"
+    );
+  }
+
+  return null;
+}
+
+function eventLogFileName(taskId) {
+  const normalizedTaskId = normalizeEventLogTaskId(taskId);
+  if (!normalizedTaskId) {
+    throw new Error('--task is required for default event logging output');
+  }
+
+  const taskIdError = unsafeTaskIdError(normalizedTaskId);
+  if (taskIdError) throw new Error(taskIdError);
+  return `${normalizedTaskId}.jsonl`;
+}
+
+function formatEventLogPathForDisplay(filePath, target) {
+  if (!target) return filePath.replaceAll('\\', '/');
+
+  const resolvedTarget = resolve(target);
+  return isWithinDirectory(resolvedTarget, filePath)
+    ? relative(resolvedTarget, filePath).replaceAll('\\', '/')
+    : filePath.replaceAll('\\', '/');
+}
+
+function contextualizeEventLogMessage(filePath, target, message) {
+  const displayPath = formatEventLogPathForDisplay(filePath, target);
+  const lineMatch = /^Line (\d+):\s*(.*)$/.exec(message);
+  if (lineMatch) {
+    return `${displayPath} line ${lineMatch[1]}: ${lineMatch[2]}`;
+  }
+  return `${displayPath}: ${message}`;
+}
+
+function taskFilePath(repoRoot, taskId) {
+  const projectMapResult = loadProjectMap(repoRoot);
+  if (projectMapResult?.config?.task_file_template) {
+    return join(repoRoot, projectMapResult.config.task_file_template.replaceAll('{taskId}', taskId));
+  }
+
+  try {
+    const config = loadAgenticLoopConfig(join(repoRoot, 'agenticloop.json'));
+    const taskDirectory = config.backends?.files?.taskDirectory ?? '.agenticloop/tasks';
+    return join(repoRoot, taskDirectory, `${taskId}.md`);
+  } catch {
+    return join(repoRoot, '.agenticloop', 'tasks', `${taskId}.md`);
+  }
+}
+
+function normalizeAuditRequiredEventTypes(requiredEventTypes) {
+  const rawValues = Array.isArray(requiredEventTypes)
+    ? requiredEventTypes
+    : requiredEventTypes === undefined || requiredEventTypes === null
+      ? STRICT_AUDIT_EVENT_TYPES
+      : [requiredEventTypes];
+
+  const normalized = [...new Set(rawValues.map(value => asTrimmedString(value)).filter(Boolean))];
+  const invalid = normalized.filter(eventType => !VALID_EVENT_TYPES.has(eventType));
+  if (invalid.length > 0) {
+    throw new Error(`Unknown required event type(s): ${invalid.join(', ')}`);
+  }
+
+  return normalized;
+}
+
+function isExplicitTaskBackendSource(source) {
+  return source === 'project.md' || source === 'agenticloop.json';
+}
+
+function incrementCount(map, key, amount = 1) {
+  if (!key) return;
+  const normalizedKey = String(key);
+  map.set(normalizedKey, (map.get(normalizedKey) ?? 0) + amount);
+}
+
+function sortCountEntries(map) {
+  return [...map.entries()]
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+}
+
+function compareSummaryValues(a, b) {
+  const aNumber = Number(a);
+  const bNumber = Number(b);
+  if (Number.isFinite(aNumber) && Number.isFinite(bNumber)) {
+    return aNumber - bNumber;
+  }
+  return String(a).localeCompare(String(b));
+}
+
+function formatDurationMilliseconds(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs < 0) return 'unknown';
+  if (durationMs === 0) return '0s';
+  if (durationMs < 1000) return `${durationMs}ms`;
+
+  let remainingSeconds = Math.floor(durationMs / 1000);
+  const units = [
+    ['d', 24 * 60 * 60],
+    ['h', 60 * 60],
+    ['m', 60],
+    ['s', 1],
+  ];
+  const parts = [];
+
+  for (const [label, size] of units) {
+    if (remainingSeconds < size) continue;
+    const value = Math.floor(remainingSeconds / size);
+    parts.push(`${value}${label}`);
+    remainingSeconds -= value * size;
+  }
+
+  return parts.join(' ');
+}
+
+function findPrivacyKeyPaths(value, currentPath = 'data') {
+  const matches = [];
+
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => {
+      matches.push(...findPrivacyKeyPaths(entry, `${currentPath}[${index}]`));
+    });
+    return matches;
+  }
+
+  if (!isPlainObject(value)) return matches;
+
+  for (const [key, entry] of Object.entries(value)) {
+    const nextPath = `${currentPath}.${key}`;
+    if (BANNED_PRIVACY_KEYS.has(key)) matches.push(nextPath);
+    matches.push(...findPrivacyKeyPaths(entry, nextPath));
+  }
+
+  return matches;
+}
+
+function hasGithubTaskReference(event) {
+  if (event?.backend === 'github') return true;
+  if (!Array.isArray(event?.refs)) return false;
+
+  return event.refs.some(ref => {
+    const normalizedRef = asTrimmedString(ref);
+    return /^github:(?:issue|pr):\d+$/i.test(normalizedRef);
+  });
+}
+
+function validateTaskReference(event, repoRoot) {
+  const errors = [];
+  const warnings = [];
+
+  if (!repoRoot || !event?.task_id) return { errors, warnings };
+
+  const projectMapResult = loadProjectMap(repoRoot);
+  if (projectMapResult?.config?.task_id_regex && !isValidTaskId(event.task_id, projectMapResult.config.task_id_regex)) {
+    warnings.push(
+      `task_id '${event.task_id}' does not match project.md task_id_regex '${projectMapResult.config.task_id_regex}'`
+    );
+  }
+
+  const taskPath = taskFilePath(repoRoot, event.task_id);
+  if (existsSync(taskPath)) return { errors, warnings };
+
+  const relativeTaskPath = relative(repoRoot, taskPath).replace(/\\/g, '/');
+  const backendResolution = resolveTaskBackend(repoRoot, { projectMapResult });
+  const explicitBackend = isExplicitTaskBackendSource(backendResolution.source);
+  const explicitlyFiles = explicitBackend && backendResolution.backend === 'files';
+  const explicitlyGithub = explicitBackend && backendResolution.backend === 'github';
+
+  const message = `task_id '${event.task_id}' has no local files task record at ${relativeTaskPath}`;
+  if (explicitlyGithub) return { errors, warnings };
+  if (!explicitBackend && hasGithubTaskReference(event)) return { errors, warnings };
+  warnings.push(message);
+
+  return { errors, warnings };
+}
+
+function parseEventLogEntries(filePath) {
+  const buffer = readFileSync(filePath);
+  const text = JSONL_DECODER.decode(buffer);
+  const rawLines = text.split(/\r?\n/);
+  if (rawLines[rawLines.length - 1] === '') rawLines.pop();
+
+  const errors = [];
+  const entries = [];
+
+  rawLines.forEach((line, index) => {
+    const lineNumber = index + 1;
+    if (line.trim() === '') {
+      errors.push(`Line ${lineNumber}: blank lines are not allowed in the event log`);
+      return;
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch (error) {
+      errors.push(`Line ${lineNumber}: invalid JSON (${error.message})`);
+      return;
+    }
+
+    if (!isPlainObject(parsed)) {
+      errors.push(`Line ${lineNumber}: event log entries must be JSON objects`);
+      return;
+    }
+
+    entries.push({ lineNumber, event: parsed });
+  });
+
+  return { entries, errors };
+}
+
+export function resolveEventLogPath(target, output, taskId = null) {
+  const defaultLogDir = resolveLogDirectory(target);
+  const resolvedPath = output
+    ? (isAbsolute(output) ? output : resolve(output))
+    : join(defaultLogDir, eventLogFileName(taskId));
+  const warnings = [];
+
+  if (output) {
+    if (!isWithinDirectory(defaultLogDir, resolvedPath)) {
+      warnings.push(
+        `Event log output is outside target ${DEFAULT_LOG_DIR_DISPLAY}/: ${resolvedPath}. ` +
+          'Use overrides only for tests or an explicit local exception.'
+      );
+    }
+  }
+
+  return { path: resolvedPath, warnings };
+}
+
+export function resolveLogDirectory(target) {
+  const resolvedTarget = target ? resolve(target) : process.cwd();
+  return join(resolvedTarget, DEFAULT_LOG_DIR);
+}
+
+export function listEventLogFiles(target) {
+  const directory = resolveLogDirectory(target);
+  if (!existsSync(directory)) {
+    return { directory, files: [] };
+  }
+
+  const files = readdirSync(directory, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith('.jsonl'))
+    .map(entry => join(directory, entry.name))
+    .sort((a, b) => a.localeCompare(b));
+
+  return { directory, files };
+}
+
+export function buildEvent(input = {}, now = new Date()) {
+  const taskId = normalizeNullableString(input.task_id ?? input.taskId ?? input.task);
+
+  return {
+    schema_version: EVENT_SCHEMA_VERSION,
+    event_id: normalizeNullableString(input.event_id ?? input.eventId) ?? randomUUID(),
+    occurred_at: normalizeTimestamp(input.occurred_at ?? input.occurredAt, now),
+    trace_id: resolveTraceId(input, taskId),
+    parent_event_id: normalizeNullableString(input.parent_event_id ?? input.parentEventId),
+    task_id: taskId,
+    backend: asTrimmedString(input.backend) || 'unknown',
+    host: asTrimmedString(input.host) || 'unknown',
+    role: asTrimmedString(input.role) || 'unknown',
+    event_type: asTrimmedString(input.event_type ?? input.eventType),
+    summary: asTrimmedString(input.summary),
+    outcome: asTrimmedString(input.outcome) || 'unknown',
+    refs: normalizeRefs(input.refs ?? input.ref),
+    data: normalizeData(input.data),
+  };
+}
+
+export function validateEvent(event, options = {}) {
+  const errors = [];
+  const warnings = [];
+
+  if (!isPlainObject(event)) {
+    return {
+      errors: ['Event must be a JSON object'],
+      warnings,
+    };
+  }
+
+  for (const key of Object.keys(event)) {
+    if (VALID_TOP_LEVEL_KEYS.has(key)) continue;
+    if (BANNED_PRIVACY_KEYS.has(key)) {
+      errors.push(`Event contains banned top-level key '${key}'`);
+    } else {
+      errors.push(`Event contains unsupported top-level key '${key}'`);
+    }
+  }
+
+  if (event.schema_version !== EVENT_SCHEMA_VERSION) {
+    errors.push(`schema_version must be ${EVENT_SCHEMA_VERSION}`);
+  }
+
+  if (!isValidUuid(event.event_id)) {
+    errors.push('event_id must be a UUID string');
+  }
+
+  if (!isValidOccurredAt(event.occurred_at)) {
+    errors.push('occurred_at must be an ISO-8601 UTC timestamp');
+  }
+
+  if (!isValidUuid(event.trace_id)) {
+    errors.push('trace_id must be a UUID string');
+  }
+
+  if (event.parent_event_id !== null && !isValidUuid(event.parent_event_id)) {
+    errors.push('parent_event_id must be a UUID string or null');
+  }
+
+  if (event.task_id !== null && !asTrimmedString(event.task_id)) {
+    errors.push('task_id must be a non-empty string or null');
+  }
+
+  const taskIdError = unsafeTaskIdError(event.task_id);
+  if (taskIdError) {
+    errors.push(taskIdError);
+  }
+
+  if (!VALID_EVENT_BACKENDS.has(event.backend)) {
+    errors.push(`backend must be one of: ${[...VALID_EVENT_BACKENDS].join(', ')}`);
+  }
+
+  if (!asTrimmedString(event.host)) {
+    errors.push('host must be a non-empty string');
+  }
+
+  if (!VALID_EVENT_ROLES.has(event.role)) {
+    errors.push(`role must be one of: ${[...VALID_EVENT_ROLES].join(', ')}`);
+  }
+
+  if (!VALID_EVENT_TYPES.has(event.event_type)) {
+    errors.push(`event_type must be one of: ${[...VALID_EVENT_TYPES].join(', ')}`);
+  }
+
+  if (!asTrimmedString(event.summary)) {
+    errors.push('summary is required');
+  } else {
+    if (event.summary.length > SUMMARY_WARN_LENGTH) {
+      warnings.push(`summary is longer than ${SUMMARY_WARN_LENGTH} characters; keep workflow-gate events concise`);
+    }
+    if (event.summary.length > SUMMARY_HARD_LIMIT) {
+      errors.push('summary is too large for a durable workflow event');
+    } else if (looksLikeTranscriptDump(event.summary)) {
+      warnings.push('summary looks like a transcript or raw tool dump');
+    }
+  }
+
+  if (!VALID_EVENT_OUTCOMES.has(event.outcome)) {
+    errors.push(`outcome must be one of: ${[...VALID_EVENT_OUTCOMES].join(', ')}`);
+  } else if (VALID_EVENT_TYPES.has(event.event_type)) {
+    const allowedOutcomes = VALID_EVENT_OUTCOMES_BY_TYPE.get(event.event_type);
+    if (allowedOutcomes && !allowedOutcomes.includes(event.outcome)) {
+      errors.push(formatRequiredOutcomes(event.event_type, allowedOutcomes));
+    }
+  }
+
+  if (!Array.isArray(event.refs)) {
+    errors.push('refs must be an array of strings');
+  } else if (event.refs.some(ref => !asTrimmedString(ref))) {
+    errors.push('refs must contain only non-empty strings');
+  }
+
+  if (!isPlainObject(event.data)) {
+    errors.push('data must be a JSON object');
+  } else {
+    const privacyKeyPaths = findPrivacyKeyPaths(event.data);
+    for (const keyPath of privacyKeyPaths) {
+      errors.push(`data contains banned privacy-sensitive key '${keyPath}'`);
+    }
+
+    const dataSize = jsonSize(event.data);
+    if (!Number.isFinite(dataSize)) {
+      errors.push('data must be JSON-serializable');
+    } else if (dataSize > DATA_HARD_LIMIT) {
+      errors.push('data is too large for a durable workflow event');
+    } else if (dataSize > 4000 && looksLikeTranscriptDump(JSON.stringify(event.data, null, 2))) {
+      errors.push('data looks like a transcript or raw tool dump');
+    }
+  }
+
+  if (!taskIdError) {
+    const taskReference = validateTaskReference(event, options.target ? resolve(options.target) : null);
+    errors.push(...taskReference.errors);
+    warnings.push(...taskReference.warnings);
+  }
+
+  return { errors, warnings };
+}
+
+export function appendEventLog({ target, output, event, path }) {
+  const eventLogPath = path ?? resolveEventLogPath(target, output, event?.task_id).path;
+  mkdirSync(dirname(eventLogPath), { recursive: true });
+  appendFileSync(eventLogPath, `${JSON.stringify(event)}\n`, 'utf-8');
+  return eventLogPath;
+}
+
+export function loadEvents(filePath) {
+  const { entries, errors } = parseEventLogEntries(filePath);
+  if (errors.length > 0) {
+    throw new Error(errors.join('; '));
+  }
+  return entries.map(entry => entry.event);
+}
+
+function validateEventLogFileInternal(filePath, options = {}) {
+  const errors = [];
+  const warnings = [];
+
+  if (!existsSync(filePath)) {
+    return { exists: false, eventCount: 0, errors, warnings };
+  }
+
+  const target = options.target ? resolve(options.target) : null;
+  if (target && !options.skipPathWarning) {
+    const defaultLogDir = join(target, DEFAULT_LOG_DIR);
+    if (!isWithinDirectory(defaultLogDir, filePath)) {
+      warnings.push(
+        `Event log path is outside target ${DEFAULT_LOG_DIR_DISPLAY}/: ${filePath}. ` +
+          'Use overrides only for tests or an explicit local exception.'
+      );
+    }
+  }
+
+  let parsed;
+  try {
+    parsed = parseEventLogEntries(filePath);
+  } catch (error) {
+    errors.push(`Event log is not valid UTF-8: ${error.message}`);
+    return { exists: true, eventCount: 0, errors, warnings };
+  }
+
+  errors.push(...parsed.errors);
+
+  for (const entry of parsed.entries) {
+    const result = validateEvent(entry.event, { target });
+    for (const error of result.errors) {
+      errors.push(`Line ${entry.lineNumber}: ${error}`);
+    }
+    for (const warning of result.warnings) {
+      warnings.push(`Line ${entry.lineNumber}: ${warning}`);
+    }
+  }
+
+  return {
+    exists: true,
+    eventCount: parsed.entries.length,
+    errors,
+    warnings,
+  };
+}
+
+export function validateEventLogFile(filePath, options = {}) {
+  const target = options.target ? resolve(options.target) : null;
+  const result = validateEventLogFileInternal(filePath, { ...options, target, skipPathWarning: true });
+
+  if (!result.exists) {
+    return { ...result, errors: [], warnings: [] };
+  }
+
+  return {
+    ...result,
+    errors: result.errors.map(error => contextualizeEventLogMessage(filePath, target, error)),
+    warnings: result.warnings.map(warning => contextualizeEventLogMessage(filePath, target, warning)),
+  };
+}
+
+export function validateEventLogs(target) {
+  const { directory, files } = listEventLogFiles(target);
+  if (files.length === 0) {
+    return {
+      exists: false,
+      directory,
+      files: [],
+      fileCount: 0,
+      eventCount: 0,
+      errors: [],
+      warnings: [],
+    };
+  }
+
+  const errors = [];
+  const warnings = [];
+  let eventCount = 0;
+
+  for (const filePath of files) {
+    const result = validateEventLogFile(filePath, { target });
+    eventCount += result.eventCount;
+    errors.push(...result.errors);
+    warnings.push(...result.warnings);
+  }
+
+  return {
+    exists: true,
+    directory,
+    files,
+    fileCount: files.length,
+    eventCount,
+    errors,
+    warnings,
+  };
+}
+
+export function auditTaskEventLog({ target, taskId, requiredEventTypes, explicitRequire = false } = {}) {
+  const resolvedTarget = target ? resolve(target) : process.cwd();
+  const normalizedTaskId = normalizeNullableString(taskId);
+  if (!normalizedTaskId) {
+    throw new Error('taskId is required for event log audit');
+  }
+
+  const normalizedRequiredEventTypes = normalizeAuditRequiredEventTypes(requiredEventTypes);
+  const eventLogging = loadProjectMap(resolvedTarget)?.config?.event_logging ?? 'disabled';
+  const eventLogPath = resolveEventLogPath(resolvedTarget, undefined, normalizedTaskId).path;
+  const displayPath = formatEventLogPathForDisplay(eventLogPath, resolvedTarget);
+  const result = {
+    taskId: normalizedTaskId,
+    eventLogging,
+    enabled: eventLogging === 'enabled',
+    explicitRequire: Boolean(explicitRequire),
+    requiredEventTypes: normalizedRequiredEventTypes,
+    path: eventLogPath,
+    displayPath,
+    exists: false,
+    eventCount: 0,
+    missingEventTypes: [],
+    errors: [],
+    warnings: [],
+    skipped: false,
+    ok: true,
+  };
+
+  if (!result.enabled && !result.explicitRequire) {
+    result.skipped = true;
+    return result;
+  }
+
+  const validation = validateEventLogFile(eventLogPath, { target: resolvedTarget });
+  result.exists = validation.exists;
+  result.eventCount = validation.eventCount;
+  result.errors.push(...validation.errors);
+  result.warnings.push(...validation.warnings);
+
+  if (!validation.exists) {
+    result.errors.push(`Missing task event log: ${displayPath}`);
+    result.ok = false;
+    return result;
+  }
+
+  if (validation.eventCount === 0) {
+    result.errors.push(`Task event log has zero events: ${displayPath}`);
+    result.ok = false;
+    return result;
+  }
+
+  if (result.errors.length === 0) {
+    const recordedEventTypes = new Set(loadEvents(eventLogPath).map(event => event.event_type));
+    result.missingEventTypes = normalizedRequiredEventTypes.filter(
+      eventType => !recordedEventTypes.has(eventType)
+    );
+    if (result.missingEventTypes.length > 0) {
+      result.errors.push(`Missing required event types: ${result.missingEventTypes.join(', ')}`);
+    }
+  }
+
+  result.ok = result.errors.length === 0;
+  return result;
+}
+
+export function reportTaskEventLog({ target, taskId } = {}) {
+  const resolvedTarget = target ? resolve(target) : process.cwd();
+  const normalizedTaskId = normalizeNullableString(taskId);
+  if (!normalizedTaskId) {
+    throw new Error('taskId is required for event log report');
+  }
+
+  const eventLogPath = resolveEventLogPath(resolvedTarget, undefined, normalizedTaskId).path;
+  const displayPath = formatEventLogPathForDisplay(eventLogPath, resolvedTarget);
+  const validation = validateEventLogFile(eventLogPath, { target: resolvedTarget });
+  if (!validation.exists) {
+    throw new Error(`Missing task event log: ${displayPath}`);
+  }
+  if (validation.errors.length > 0) {
+    throw new Error(validation.errors.join('; '));
+  }
+
+  const events = loadEvents(eventLogPath);
+  const recordedEventTypes = new Set(events.map(event => event.event_type));
+  const strictAudit = {
+    requiredEventTypes: [...STRICT_AUDIT_EVENT_TYPES],
+    presentEventTypes: STRICT_AUDIT_EVENT_TYPES.filter(eventType => recordedEventTypes.has(eventType)),
+    missingEventTypes: STRICT_AUDIT_EVENT_TYPES.filter(eventType => !recordedEventTypes.has(eventType)),
+  };
+
+  const checkRunCounts = { success: 0, failure: 0, blocked: 0 };
+  const failedOrBlockedChecks = [];
+  const reviewResultCounts = { accepted: 0, needs_revision: 0 };
+  const reviewRoundValues = new Set();
+  const targetRoleCounts = new Map();
+  const delegationModeCounts = new Map();
+  const refsSummary = new Map();
+  let fallbackCount = 0;
+  let firstTimestampMs = Number.POSITIVE_INFINITY;
+  let lastTimestampMs = Number.NEGATIVE_INFINITY;
+  let firstEventTimestamp = null;
+  let lastEventTimestamp = null;
+
+  for (const event of events) {
+    const timestampMs = new Date(event.occurred_at).valueOf();
+    if (timestampMs < firstTimestampMs) {
+      firstTimestampMs = timestampMs;
+      firstEventTimestamp = event.occurred_at;
+    }
+    if (timestampMs > lastTimestampMs) {
+      lastTimestampMs = timestampMs;
+      lastEventTimestamp = event.occurred_at;
+    }
+
+    for (const ref of event.refs) {
+      incrementCount(refsSummary, ref);
+    }
+
+    const reviewRound = normalizeNullableSummaryValue(event.data?.review_round);
+    if (reviewRound) reviewRoundValues.add(reviewRound);
+
+    if (event.event_type === 'check.run') {
+      if (event.outcome === 'success' || event.outcome === 'failure' || event.outcome === 'blocked') {
+        checkRunCounts[event.outcome] += 1;
+      }
+      if (event.outcome === 'failure' || event.outcome === 'blocked') {
+        failedOrBlockedChecks.push({
+          occurred_at: event.occurred_at,
+          outcome: event.outcome,
+          summary: event.summary,
+          refs: [...event.refs],
+          command: normalizeNullableString(event.data?.command),
+        });
+      }
+      continue;
+    }
+
+    if (event.event_type === 'review.result') {
+      if (event.outcome === 'accepted' || event.outcome === 'needs_revision') {
+        reviewResultCounts[event.outcome] += 1;
+      }
+      continue;
+    }
+
+    if (event.event_type === 'role.invoked') {
+      const targetRole = normalizeNullableString(event.data?.target_role);
+      if (targetRole) incrementCount(targetRoleCounts, targetRole);
+
+      const delegationMode = normalizeNullableString(event.data?.delegation_mode);
+      if (delegationMode) incrementCount(delegationModeCounts, delegationMode);
+
+      if (event.data?.fallback === true) {
+        fallbackCount += 1;
+      }
+    }
+  }
+
+  const traceDurationMs = events.length > 0 ? Math.max(0, lastTimestampMs - firstTimestampMs) : 0;
+
+  return {
+    taskId: normalizedTaskId,
+    path: eventLogPath,
+    displayPath,
+    eventCount: events.length,
+    firstEventTimestamp,
+    lastEventTimestamp,
+    traceDurationMs,
+    traceDuration: formatDurationMilliseconds(traceDurationMs),
+    strictAudit,
+    checkRunCounts,
+    failedOrBlockedChecks,
+    reviewResultCounts,
+    reviewRounds: [...reviewRoundValues].sort(compareSummaryValues),
+    roleInvoked: {
+      total: events.filter(event => event.event_type === 'role.invoked').length,
+      targetRoleCounts: sortCountEntries(targetRoleCounts),
+      delegationModeCounts: sortCountEntries(delegationModeCounts),
+      fallbackCount,
+    },
+    refsSummary: sortCountEntries(refsSummary).map(entry => ({ ref: entry.value, count: entry.count })),
+    warnings: [...validation.warnings],
+  };
+}

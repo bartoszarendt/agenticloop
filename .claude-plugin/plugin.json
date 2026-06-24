@@ -1,0 +1,27 @@
+{
+  "name": "agenticloop",
+  "description": "Agentic Loop workflow toolkit: supervised orchestrator/maintainer/engineer roles plus markdown-first skills for planning, TDD, review, and closeout.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Bartosz Arendt"
+  },
+  "homepage": "https://github.com/bartoszarendt/agenticloop#readme",
+  "repository": "https://github.com/bartoszarendt/agenticloop",
+  "license": "MIT",
+  "keywords": [
+    "ai",
+    "agent",
+    "agentic",
+    "workflow",
+    "skills"
+  ],
+  "skills": "./.claude-plugin/",
+  "agents": [
+    "./agents/orchestrator.md",
+    "./agents/maintainer.md",
+    "./agents/engineer.md"
+  ],
+  "commands": [
+    "./commands/start.md"
+  ]
+}

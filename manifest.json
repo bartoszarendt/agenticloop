@@ -1,0 +1,59 @@
+{
+  "layoutVersion": 3,
+  "toolkitOwned": {
+    "sourceRoot": "agenticloop",
+    "sourcePaths": [
+      "agenticloop/AGENTIC_LOOP.md",
+      "agenticloop/agents",
+      "agenticloop/backends",
+      "agenticloop/skills",
+      "agenticloop/commands",
+      "agenticloop/memory",
+      "agenticloop/config.json",
+      "agenticloop/agenticloop.template.json",
+      "agenticloop/manifest.json"
+    ]
+  },
+  "targetOwned": {
+    "stateRoot": ".agenticloop",
+    "statePaths": [
+      ".agenticloop/project.md",
+      ".agenticloop/tasks",
+      ".agenticloop/decisions",
+      ".agenticloop/logs",
+      ".agenticloop/tmp"
+    ]
+  },
+  "generatedShims": [
+    ".opencode",
+    ".codex",
+    ".agents",
+    ".claude",
+    ".github",
+    "plugins/agenticloop"
+  ],
+  "legacyRootPaths": [
+    "AGENTIC_LOOP.md",
+    "agents",
+    "backends",
+    "skills",
+    "commands",
+    "agenticloop.base.json"
+  ],
+  "v2ToolkitOwnedPaths": [
+    "agenticloop/base.json",
+    "agenticloop/templates"
+  ],
+  "detection": {
+    "activeWhen": "agenticloop/manifest.json exists and layoutVersion equals 3"
+  },
+  "legacyMigration": {
+    "ownershipSignals": [
+      "exact content match",
+      "generated marker",
+      "manifest ownership",
+      "checksum"
+    ],
+    "preserveOnCollision": true
+  }
+}

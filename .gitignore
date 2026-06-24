@@ -1,0 +1,30 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.benchmarks/
+node_modules/
+.opencode/
+.claude/
+.codex/
+# Generated host adapter output for the toolkit itself.
+# Target projects generate their own adapter output under their chosen
+# output directory; for toolkit verification, generate under .agenticloop/tmp/
+# or keep the legacy root tmp/ path only for compatibility.
+opencode.jsonc
+.agenticloop/tmp/
+tmp/
+!memory/scaffold/tmp/
+!memory/scaffold/tmp/.gitkeep
+*.log
+*.jsonl
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Internal working docs — local only.
+.dev/

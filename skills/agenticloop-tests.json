@@ -1,0 +1,242 @@
+{
+  "skills": {
+    "blocked-state": {
+      "shouldTrigger": [
+        "Record a blocked marker because the task hit a wall and needs a durable resumable pause.",
+        "Apply the needs_context status and a block category for this review deadlock.",
+        "The merge conflict means we must record a blocked state with a category.",
+        "Use blocked-state to record a durable needs_context task-file status update that says what was checked, what answer is needed, and who can answer."
+      ],
+      "shouldNotTrigger": [
+        "Refactor the helper function to reduce duplication.",
+        "Add a unit test for the new parser."
+      ],
+      "nearMiss": [
+        "The task is contradictory and no human decision is available; record a blocked state with a category."
+      ],
+      "nearMissTarget": "debugging-before-fixes"
+    },
+    "change-request-gate": {
+      "shouldTrigger": [
+        "This is a type:change-request that changes a locked architecture decision and needs the approval gate.",
+        "Hold this task blocked until the docs-first approval gate passes.",
+        "A locked repository decision change must be reviewed before implementation.",
+        "Record type: change-request in frontmatter and set approved: true only after the human approves the docs-first change."
+      ],
+      "shouldNotTrigger": [
+        "Run the linter and fix the reported issues.",
+        "Post the implementation summary under the task issue."
+      ],
+      "nearMiss": [
+        "This type:change-request changes a locked process decision; hold it at the docs-first approval gate instead of treating it as an ordinary blocked task."
+      ],
+      "nearMissTarget": "blocked-state"
+    },
+    "decision-capture": {
+      "shouldTrigger": [
+        "Record the durable project decision in .agenticloop/decisions/ because it constrains future work.",
+        "Accept and supersede the old decision record after the new project convention is approved.",
+        "Capture the accepted backend convention in a tracked Markdown decision record and link it from the nearest durable source."
+      ],
+      "shouldNotTrigger": [
+        "Append ordinary task notes to the implementation record.",
+        "Write the implementation summary for the completed task.",
+        "Store the raw meeting notes in the repository.",
+        "Keep this temporary debugging observation for later."
+      ],
+      "nearMiss": [
+        "Create a tracked decision record under .agenticloop/decisions/ for the durable project convention instead of opening an ordinary implementation task record."
+      ],
+      "nearMissTarget": "task-record-contract"
+    },
+    "debugging-before-fixes": {
+      "shouldTrigger": [
+        "A required check fails; investigate the root cause before applying any fix.",
+        "The runtime behavior surprises us; build a feedback loop before patching.",
+        "Before fixing, reproduce the failure, trace the bad value, and confirm the root cause."
+      ],
+      "shouldNotTrigger": [
+        "Accept the pull request after reviewing the evidence.",
+        "Run grouped closeout and post the status marker after all tasks are complete."
+      ],
+      "nearMiss": [
+        "A test is failing; build a reproduction loop before touching the code."
+      ],
+      "nearMissTarget": "verification-evidence"
+    },
+    "frontend-design-quality": {
+      "shouldTrigger": [
+        "Build a landing page for a SaaS product with a clean modern frontend design.",
+        "Design the UI layout, typography, and color system for this dashboard so it does not look templated.",
+        "Improve the visual design and styling of this React component and audit its accessibility."
+      ],
+      "shouldNotTrigger": [
+        "Create the durable task record with scope and acceptance criteria before implementation.",
+        "Run the failing test first, then write the smallest production change to pass it."
+      ],
+      "nearMiss": [
+        "Review this landing page UI for visual design quality, layout consistency, and accessibility before it ships."
+      ],
+      "nearMissTarget": "review-and-accept"
+    },
+    "github-attribution": {
+      "shouldTrigger": [
+        "End this agent-authored GitHub issue comment with the [[agent: engineer]] trailer.",
+        "Add the Task and Agent commit trailers to the agent-authored commit message.",
+        "When posting a GitHub PR body, include the cooperative attribution marker."
+      ],
+      "shouldNotTrigger": [
+        "Choose the model for the maintainer subagent.",
+        "Define the acceptance criteria for the task record."
+      ],
+      "nearMiss": [
+        "When posting the GitHub issue body, append the cooperative attribution trailer naming the authoring role."
+      ],
+      "nearMissTarget": "task-record-contract"
+    },
+    "loop-retrospective": {
+      "shouldTrigger": [
+        "Turn repeated agent-process friction from this grouped closeout into skill updates.",
+        "Three tasks had missing evidence; convert the pattern into a durable improvement.",
+        "Run a retrospective on the loop after closeout."
+      ],
+      "shouldNotTrigger": [
+        "Create the GitHub issue for the next task.",
+        "Open a pull request with the implementation."
+      ],
+      "nearMiss": [
+        "After the grouped work ships, convert repeated missing-evidence patterns into skill improvements."
+      ],
+      "nearMissTarget": "task-closeout"
+    },
+    "ponytail": {
+      "shouldTrigger": [
+        "Use ponytail for this engineer task and take the shortest path that satisfies the task record.",
+        "Maintainer, use lazy mode and identify the minimal acceptable scope without dropping acceptance criteria.",
+        "Apply YAGNI here: do less, avoid boilerplate, and use the simplest solution that still passes required checks."
+      ],
+      "shouldNotTrigger": [
+        "Implement the new behavior by writing a failing test before production code.",
+        "Review the implementation artifact against the task record and decide accepted versus needs_revision.",
+        "Before claiming done, attach fresh command output from the final state."
+      ],
+      "nearMiss": [
+        "Use ponytail and apply YAGNI: implement the new behavior with the smallest useful slice, but start with a failing test and keep RED evidence."
+      ],
+      "nearMissTarget": "tdd-implementation"
+    },
+    "task-closeout": {
+      "shouldTrigger": [
+        "Every task in the configured group is accepted and integrated; run closeout before the next grouped batch.",
+        "Confirm every inline summary is complete and post the closeout status marker.",
+        "The maintainer must run closeout after all tasks in this group are complete."
+      ],
+      "shouldNotTrigger": [
+        "Assign the next task to the engineer.",
+        "Debug why the new test is failing."
+      ],
+      "nearMiss": [
+        "All tasks are accepted and integrated; verify the task summaries before the next grouped batch."
+      ],
+      "nearMissTarget": "loop-retrospective"
+    },
+    "review-and-accept": {
+      "shouldTrigger": [
+        "The maintainer reviews the implementation artifact and decides accepted vs needs_revision.",
+        "Post the review marker after checking the task record and the diff.",
+        "Review the pull request against the task record and triage known limitations.",
+        "Review the files-backed implementation artifact against the task file and update review_status."
+      ],
+      "shouldNotTrigger": [
+        "Scaffold the initial project overlay.",
+        "Bootstrap the GitHub labels for the repository."
+      ],
+      "nearMiss": [
+        "The maintainer must review the artifact and decide accepted or needs_revision."
+      ],
+      "nearMissTarget": "verification-evidence"
+    },
+    "role-delegation": {
+      "shouldTrigger": [
+        "Orchestrator, create a task record handoff to the maintainer subagent.",
+        "The orchestrator starts or resumes the task loop, hands off implementation, routes review, and ensures real host delegation happens to the maintainer and engineer subagents.",
+        "Ensure real host delegation happens when the orchestrator starts or resumes the loop.",
+        "Authorized to advance: orchestrator, resume the loop and delegate the next handoff to the maintainer and engineer subagents.",
+        "The orchestrator must delegate the files-backed implementation to the engineer and route review back to the maintainer under the backend delegation rules."
+      ],
+      "shouldNotTrigger": [
+        "Write the acceptance criteria for this task.",
+        "Run pytest and attach the output.",
+        "Check the current repository status and report what you find.",
+        "Explain why the previous command loop happened without advancing the task.",
+        "List pending artifacts and stop after the status report."
+      ],
+      "nearMiss": [
+        "The orchestrator hands off the task-record handoff to the maintainer subagent."
+      ],
+      "nearMissTarget": "task-record-contract"
+    },
+    "task-record-contract": {
+      "shouldTrigger": [
+        "Create the durable task record for the implementation task with scope and acceptance criteria.",
+        "Update the GitHub issue with the required task sections and no placeholders.",
+        "The maintainer must write the task record before implementation starts.",
+        "Create the local task file with task-file frontmatter, scope, acceptance criteria, and no placeholders."
+      ],
+      "shouldNotTrigger": [
+        "Generate the OpenCode markdown adapter agents.",
+        "Mark the task blocked because the API is down."
+      ],
+      "nearMiss": [
+        "After implementation, update the task record with the completion summary and implementation artifact linkage."
+      ],
+      "nearMissTarget": "review-and-accept"
+    },
+    "tdd-implementation": {
+      "shouldTrigger": [
+        "Implement the new behavior by writing a failing test before production code.",
+        "Follow RED-GREEN-REFACTOR by writing a failing test before production code.",
+        "Before writing production code, add a test that fails for the missing feature."
+      ],
+      "shouldNotTrigger": [
+        "Post the grouped closeout marker.",
+        "Resolve the merge conflict by hand."
+      ],
+      "nearMiss": [
+        "Use the RED-GREEN-REFACTOR implementation cycle for the new behavior; this is not a root-cause debugging task."
+      ],
+      "nearMissTarget": "debugging-before-fixes"
+    },
+    "verification-evidence": {
+      "shouldTrigger": [
+        "Before claiming the task is done, attach fresh command output from the final state.",
+        "Verify the bug is fixed by re-running the original reproduction and reading the output.",
+        "Do not accept a passing claim without fresh evidence from the required checks."
+      ],
+      "shouldNotTrigger": [
+        "Draft the architecture decision record.",
+        "Generate the Claude Code adapter artifacts."
+      ],
+      "nearMiss": [
+        "Before claiming the service works, run the smoke command and read the full output."
+      ],
+      "nearMissTarget": "review-and-accept"
+    },
+    "setup-agenticloop": {
+      "shouldTrigger": [
+        "Set up Agentic Loop for the first time in this project and discover which source docs are present.",
+        "The source document names are non-standard; use the setup skill to write confirmed overrides to project.md.",
+        "Run the one-time setup to detect candidate project docs and record overrides in .agenticloop/project.md.",
+        "The project map is unconfirmed; run setup-agenticloop to confirm defaults and write setup_status before the first task."
+      ],
+      "shouldNotTrigger": [
+        "Run closeout after all tasks are accepted.",
+        "Post the implementation summary under the task record."
+      ],
+      "nearMiss": [
+        "Scan for candidate source documents once and ask for confirmation before writing any overrides."
+      ],
+      "nearMissTarget": "task-record-contract"
+    }
+  }
+}
