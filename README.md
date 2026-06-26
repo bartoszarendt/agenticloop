@@ -1,12 +1,12 @@
 # Agentic Loop
 
-> Markdown-first loop engineering toolkit for AI coding agents.
+> A Markdown-first workflow toolkit that gives AI coding agents a repeatable engineering loop instead of a loose chat session.
 
-Agentic Loop helps AI coding agents work through a supervised engineering loop instead of a loose chat session. It turns a vague request into a durable task record, scoped implementation, fresh verification evidence, review, revision, acceptance, and optional closeout.
+AI coding agents are useful, but they are unreliable at sustained software work. They drift scope, skip verification, repeat failing approaches, and lose context between sessions. The problem is not that the models are not smart enough. The problem is that they lack process: a clear task contract, role boundaries, verification rules, and durable project memory.
 
-It installs as a lightweight overlay in an existing project. Your project keeps its own `README.md`, `AGENTS.md`, implementation plan, architecture docs, and conventions. Agentic Loop adds the workflow scaffolding agents need to follow them consistently.
+Agentic Loop adds that layer. It installs as a lightweight overlay in an existing project -- your `README.md`, `AGENTS.md`, implementation plan, and architecture docs stay untouched. It gives agents the scaffolding they need to stay in scope, produce evidence, and respect review gates.
 
-![Status: pre-release](https://img.shields.io/badge/status-pre--release-orange)
+![Version: 0.1.0](https://img.shields.io/badge/version-0.1.0-blue)
 ![Node.js >=20](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -14,22 +14,31 @@ It installs as a lightweight overlay in an existing project. Your project keeps 
 [![npm version](https://img.shields.io/npm/v/agenticloop.svg)](https://www.npmjs.com/package/agenticloop)
 -->
 
-## Why Agentic Loop exists
+## Why this exists
 
-AI coding agents are powerful, but sustained software delivery still breaks down in predictable ways:
+After watching AI coding agents work on real projects, a few failure patterns keep showing up:
 
-- **Scope drift**: the agent expands the task or bundles unrelated changes.
-- **Evidence-free completion**: the agent says work is done without fresh checks.
-- **Unbounded retries**: the agent repeats the same failing approach.
-- **Role confusion**: the same agent plans, implements, and reviews its own work.
-- **Lost context**: useful decisions vanish when the chat session ends.
-- **Host lock-in**: workflow knowledge gets trapped in one agent host's format.
+- **Scope drift**: the agent expands the task or bundles unrelated changes because nothing tells it where the boundary is.
+- **Evidence-free completion**: the agent claims work is done without running fresh checks against the final state.
+- **Unbounded retries**: the agent repeats the same failing approach because there is no rule that says stop and escalate.
+- **Role confusion**: the same agent plans, implements, and reviews its own work -- which is the equivalent of grading your own exam.
+- **Lost context**: useful decisions disappear when the chat session ends because nothing durable was written down.
+- **Host lock-in**: workflow instructions get written in one agent host's format and are useless in another.
 
-Agentic Loop treats these as process failures, not intelligence failures.
+These are process failures. The models are capable enough. What is missing is a portable engineering loop that gives agents clear task records, role boundaries, verification rules, and durable project memory -- and that works across hosts without duplicating everything.
 
-The missing piece is not another prompt library or another autonomous runtime. The missing piece is a portable engineering loop that gives agents clear task records, role boundaries, verification rules, and durable project memory.
+## Who this is for
 
-## What Agentic Loop gives your agent
+This toolkit makes sense if you already use AI coding agents for real software work and you want more reliable outcomes. Specifically:
+
+- You use OpenCode, Claude Code, Codex, Copilot, or Cursor for non-trivial development tasks.
+- You want the agent to stay in scope, produce evidence, and stop at review gates instead of silently finishing work and moving on.
+- You are comfortable with Markdown and a small CLI overlay in your project.
+- You want to route expensive model reasoning to the places where it actually changes the outcome -- review, acceptance, quality gates -- and use cheaper models for coordination.
+
+It probably does not make sense if you only use agents for one-shot questions or throwaway scripts, if you want a fully autonomous pipeline with no human in the loop, or if you are looking for a hosted SaaS platform rather than project-local tooling.
+
+## What it gives your agent
 
 | Capability | What it does |
 |---|---|
@@ -200,17 +209,9 @@ See [docs/host-adapters.md](docs/host-adapters.md) for the full adapter matrix a
 
 ## Cost-quality routing by role
 
-Agentic Loop is not only about automation. It is about getting better work from agents while spending model budget where it matters.
+Different roles need different intelligence. The orchestrator reads docs and routes work -- a cheap fast model can do that. The maintainer defines scope, reviews implementation, and decides acceptance -- that needs the strongest reasoning you can justify. The engineer implements scoped changes with tests and evidence -- a capable coding model, not necessarily the most expensive one.
 
-Each logical role has a different job:
-
-| Role | What it optimizes for | Practical model strategy |
-|---|---|---|
-| **Orchestrator** | Coordination, repo orientation, delegation, status, and human handoff. | Use a cheaper fast model if it can follow the loop and route work reliably. |
-| **Maintainer** | Task quality, scope control, review, acceptance, follow-up triage, and closeout. | Use the strongest model you can justify. This role has the highest leverage on correctness and quality. |
-| **Engineer** | Scoped implementation, tests, fixes, and evidence. | Use a capable coding model; it does not always need to be the most expensive reviewer-grade model. |
-
-This lets teams route expensive reasoning to the places where it changes the outcome: task definition, review, acceptance, and quality gates. The orchestrator can often run on a cheaper model, while the maintainer acts as the high-judgment quality layer and the engineer uses a strong coding model.
+This is not just about saving money. It is about putting expensive reasoning where it changes the outcome and not burning it on coordination work.
 
 Adapter-local role settings live under `adapters.<host>.roleSettings.<role>` in `agenticloop.json`. OpenCode and Codex support role-specific reasoning effort. Claude Code supports role-specific model and permission mode. Copilot and Cursor currently support role-specific model selection.
 
@@ -273,52 +274,46 @@ Agentic Loop supports two task-record backends.
 
 The active backend is selected in `.agenticloop/project.md`.
 
-## What Agentic Loop is not
+## What it is not
 
-Agentic Loop is intentionally narrow.
+Agentic Loop is intentionally narrow. It is not:
 
-It is **not**:
-
-- a deterministic autonomous controller;
-- a scheduler or self-running pipeline;
-- an agent runtime or SDK;
+- a deterministic autonomous controller or self-running pipeline;
+- an agent runtime, SDK, or framework;
 - a replacement for your existing project docs;
-- a marketplace or registry;
-- a telemetry collector;
-- a raw transcript store;
+- a marketplace, registry, or centralized trust service;
+- a telemetry collector or raw transcript store;
 - a way to bypass human approval for merge, release, destructive cleanup, or locked project decisions.
 
 The human stays in the loop for authorization boundaries. The agent handles routine workflow steps inside an authorized work unit.
 
-## Key design principles
+## Design principles
 
-### Markdown as the product surface
+These are the choices that shape the toolkit. They are not aspirational -- they are reflected in what is built and what was intentionally left out.
 
-The core product is Markdown: methodology, roles, skills, backend projections, memory templates, and setup docs. The CLI helps install, validate, update, and generate adapters, but the process itself is readable and auditable.
+### Markdown is the product surface
 
-### Overlay adoption
+The methodology, roles, skills, backend projections, and templates are all Markdown. The CLI handles install, validation, updates, and adapter generation, but the process itself is readable and auditable without tooling.
 
-Agentic Loop installs beside your existing project docs. It does not overwrite your project plan, architecture docs, or repository rules.
+### Overlay, not replacement
+
+Agentic Loop installs beside your existing project docs. It does not overwrite your plan, architecture docs, or repository rules. Your project stays yours.
 
 ### Files first
 
-Local Markdown task records are the default. GitHub is useful, but not required.
+Local Markdown task records are the default. GitHub issues and PRs are an optional projection. You should not need a GitHub account to run a disciplined agent workflow.
 
 ### Evidence over claims
 
-A task is not complete because the agent says it is complete. Completion requires fresh verification evidence from the final state.
+A task is not complete because the agent says so. Completion requires fresh verification evidence from the final state -- test output, lint results, build status, changed file lists. The evidence lives in the task record, not in chat.
 
 ### Supervised, not autonomous
 
-Agentic Loop lets an agent advance through routine lifecycle steps inside an authorized work unit, but it stops for human direction before leaving scope, merging, releasing, publishing externally, destructive cleanup, or changing locked decisions.
+The agent can advance through routine lifecycle steps inside an authorized work unit. It stops for human direction before leaving scope, merging, releasing, publishing, destructive cleanup, or changing locked decisions. The human owns the authorization boundaries.
 
 ### Portable across hosts
 
-One canonical Markdown source generates host-native shims. You should not maintain separate workflow instructions for every agent host.
-
-### Role-specific model economics
-
-Different roles need different intelligence profiles. Agentic Loop lets you use cheaper coordination where possible, stronger review where quality depends on judgment, and capable coding models for implementation. The result is not just more automation; it is a higher-quality supervised workflow with better cost control.
+One canonical Markdown source generates host-native shims for OpenCode, Claude Code, Codex, Copilot, and Cursor. You do not maintain separate workflow instructions for each host.
 
 ## CLI reference
 
@@ -388,32 +383,15 @@ updates. Canonical toolkit assets (agents, skills, backends) always live under
 
 ## Status
 
-Agentic Loop is currently pre-release.
+Version 0.1.0. The methodology, files backend, Node CLI, validation, overlay management, and OpenCode/Claude Code adapters are stable and ready for use.
 
-Supported today:
-
-- Markdown-first methodology
-- files backend
-- optional GitHub backend
-- Node CLI
-- validation
-- overlay install/update/remove
-- OpenCode adapter
-- Claude Code adapter
-
-Experimental:
+Experimental (generated output is in place, but not yet validated in a live host session):
 
 - Codex adapter
 - GitHub Copilot adapter
 - Cursor adapter
 
-Deferred:
-
-- registry
-- marketplace
-- centralized trust service
-- deterministic autonomous controller
-- hosted SaaS runtime
+Registry, marketplace, and centralized services are intentionally deferred -- see [docs/registry-horizon.md](docs/registry-horizon.md) for the reasoning and the evidence gates that would need to pass before revisiting.
 
 ## Development
 
