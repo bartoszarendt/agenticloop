@@ -52,7 +52,7 @@ Apply this skill when the orchestrator:
 | Decide whether a source work item is one task or a task set | maintainer |
 | Set up or confirm project map | maintainer |
 | Create or refine task records | maintainer |
-| Plan scope, acceptance criteria | maintainer |
+| Plan scope, acceptance criteria, proof pressure when needed | maintainer |
 | Implement scoped work | engineer |
 | Revise after review feedback | engineer |
 | Review implementation artifacts | maintainer |
@@ -61,20 +61,25 @@ Apply this skill when the orchestrator:
 
 The orchestrator does not create task records, implement, review, or accept.
 
+## Slice sizing
+
+Default: one independently verifiable task, the smallest useful slice. For a
+human-authorized larger bounded run, prefer the largest safe useful slice that
+remains bounded, reversible, and independently verifiable as one task. Broad
+authorization is not permission to create one oversized task record; task sets
+still decompose into ordinary task records.
+
 ## Host Delegation Mechanism
 
 Real delegation means the host starts a separate role, task, or subagent execution and the
 invocation accepts a role, agent, type, mode, or `subagent_type` argument. Prose describing what a
 role would do is not delegation.
 
-Host delegation includes any mechanism with that shape, for example:
-
-- `task(subagent_type="maintainer")`,
-- `task(subagent_type="engineer")`,
-- an OpenCode Task-tool subagent invocation,
-- explicit `@maintainer` or `@engineer` invocation.
-
-OpenCode examples are examples, not the definition.
+Host delegation examples include a task or subagent call that names the
+maintainer or engineer role, an explicit named-agent invocation that creates a
+separate role session, or a host handoff that returns a separate role artifact.
+Adapter docs may name concrete syntax. The canonical rule is separate role
+execution, not prose.
 
 ## Delegation Capability Check
 
@@ -87,11 +92,6 @@ any real delegation mechanism for the requested role.
 - If delegation is available but the concrete attempt fails, record the failed mechanism and the
   failure reason before considering fallback.
 - Include the capability check result in the orchestrator's delegation output.
-
-For OpenCode:
-
-- use Task-tool subagent invocation, or
-- use explicit `@maintainer` or `@engineer` invocation to create a visible subagent session.
 
 ## Concurrency Policy
 
@@ -145,11 +145,9 @@ npx agenticloop event-logging role.invoked --task T-001 --role orchestrator --su
 
 ## Single-Agent Fallback
 
-Single-agent fallback is legal only after the delegation capability check shows that no real host
-delegation exists for the requested role, or after a concrete delegation attempt fails.
-
-If fallback is allowed, the current agent may explicitly assume the requested role for one bounded
-role step only when the host and human allow it.
+Single-agent fallback is legal only after the delegation capability check shows no real host
+delegation exists for the requested role, or after a concrete delegation attempt fails. If allowed,
+the current agent may explicitly assume the requested role for one bounded role step only.
 
 When using this fallback:
 
@@ -161,11 +159,7 @@ When using this fallback:
 - emit `role.invoked` when event logging is enabled,
 - do not claim host delegation happened.
 
-This fallback must be an explicit role assumption, not prose about what the
-other role would do.
-
-If neither host delegation nor single-agent role assumption is allowed by the
-host or human, use [[blocked-state]] with category `contract` and stop.
+If neither host delegation nor single-agent role assumption is allowed, use [[blocked-state]] with category `contract` and stop.
 
 ## Review Round Checkpoint
 
@@ -177,7 +171,7 @@ undirected fourth revision.
 
 ## Delegation Prompt Shape
 
-When invoking a role, the orchestrator prompt must include:
+When invoking a role, orchestrator prompts must include:
 
 ```text
 Role:              maintainer | engineer
@@ -356,43 +350,29 @@ If fallback role assumption was used, say so explicitly. Do not omit the delegat
 
 ## Red Flags
 
-- Orchestrator output describes what a role "will do" without invoking it.
-- Orchestrator narrates what maintainer or engineer would do instead of using host delegation or an explicit fallback role assumption.
-- Single-agent fallback used without a recorded delegation capability check.
-- A host task or subagent tool exists for maintainer or engineer but was not used.
-- Delegation output says unknown after the agent has already started role work.
-- Maintainer or engineer work appears inline in an orchestrator message.
-- Parallel subagents were started without a recorded concurrency plan and join condition.
-- Parallel file-mutating write lanes share a checkout, branch, worktree, implementation artifact, task record, or mutable files.
-- Parallel write lanes use branch-only isolation in one shared checkout.
-- Copied-file temporary directory is used as a pseudo-worktree.
-- Parallel maintainer or orchestrator lanes update the same issue, PR, task record, closeout marker, event log, label/status stream, or group state.
+- Role work is narrated instead of invoked, fallback lacks a capability check, delegation output
+  stays unknown after work starts, or maintainer/engineer work appears inline in orchestrator output.
+- An available host task, subagent, or named-agent mechanism for maintainer or engineer is skipped
+  without a recorded failure.
+- Parallel role work starts without a concurrency plan, lease, stop condition, and join condition;
+  write lanes share checkout, branch, worktree, artifact, task record, or mutable files; or a copied
+  directory is used as a pseudo-worktree.
+- Parallel coordination lanes mutate the same issue, PR, task record, closeout marker, event log,
+  label/status stream, or group state.
 - Orchestrator waits indefinitely for a lane whose expected artifact is missing at join.
-- A long-running or parallel delegated role has no lease, observable-step checkpoint cadence, no-progress budget, or stop condition.
-- Task record exists only as a local file when `task_backend: github` is set.
-- GitHub-backed implementation is delegated without branch, commit, push, and PR expectations.
-- Maintainer review is delegated as an issue-comment review instead of a PR diff review.
-- Orchestrator treats an accepted issue comment as task completion before the PR is reviewed.
-- Agent-authored task work is committed directly to the default or integration branch.
-- Files-backed task record is left in `draft` when implementation or review delegation starts.
-- Files-backed implementation delegation does not require `implementation_artifact` to be updated.
-- Files-backed implementation summary exists only in chat and not in the task file.
-- Files-backed implementation summary was silently rewritten without a dated correction entry.
-- Files-backed task record is untracked at review time and no local-only exception was recorded.
-- Files-backed review delegation leaves `review_status` unset or stale after review.
+- GitHub-backed work uses a local-only task record, direct default-branch commits, missing
+  branch/commit/push/PR expectations, issue-comment review instead of PR diff review, or an accepted
+  issue comment as task completion.
+- GitHub docs, configuration, workflow, or infrastructure changes bypass the branch/PR path because
+  they are "not code"; a task branch is merged twice; or a parallel-batch PR merges before all lanes
+  return, review completes, cross-branch risk is checked, and human merge order is approved.
+- Files-backed work starts from a draft task record, lacks `implementation_artifact` or an inline
+  task-file summary, silently rewrites evidence without a dated correction, leaves the task record
+  untracked without exception, or leaves `review_status` unset or stale.
 - A fourth revision is routed on one task without running the Review Round Checkpoint.
-- Docs, configuration, workflow, or infrastructure changes are treated as exempt from the
-  GitHub branch and PR path merely because they are "not code."
-- A task branch is merged again after the linked pull request was already merged for the same
-  work.
-- A pull request from a GitHub-backed parallel batch is merged before every lane returned,
-  maintainer review completed, cross-branch conflict and ordering risk was checked, and the
-  human approved merge order.
-- Human checkpoint was skipped before implementation or merge.
-- Human approval was requested for a routine step inside an authorized work unit, such as
-  asking whether to proceed to maintainer review once the implementation artifact is ready.
-- Human approved merge but agent started a new task first.
-- Sequential actions were presented as numbered alternatives.
-- Agent interpreted a numeric choice without restating the chosen action.
+- A human checkpoint is skipped before implementation or merge, requested for a routine in-scope
+  step, or ignored after merge approval while the agent starts a new task first.
+- Sequential actions are presented as numbered alternatives, or a numeric choice is acted on without
+  restating the chosen action.
 - Backend used differs from `task_backend` in `.agenticloop/project.md` without an explicit exception.
 - Delegation prompt is missing scope, out of scope, or stop condition.

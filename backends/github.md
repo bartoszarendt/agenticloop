@@ -65,6 +65,12 @@ The issue body must contain the full task-record contract from
 Template` and a non-placeholder `## Reviewer Checklist`. Labels indicate state
 but do not substitute for complete issue content.
 
+`## Expected Files or Areas` is the task's current human-readable scope map. A
+future structured scope map (for example, frontmatter `expected_files` or
+`allowed_paths` with repo-relative glob semantics) would be required before
+mechanical changed-file validation can run. Until that structured field exists,
+reviewers enforce unexpected files through `## Deviations`.
+
 Apply the configured task label and, when the project uses grouping, the
 configured grouping label. Use `agent-ready` only after the maintainer confirms
 the record is complete enough for implementation.
@@ -296,6 +302,12 @@ no-PR exception applies). There is no separate summary artifact. Use
 `agenticloop/memory/work-unit-summary.md` with `summary_unit: task` as the
 canonical shape, and include the optional `## Trace` section when workflow-gate
 events exist. This is a summary, not a raw transcript.
+
+`## Evidence` should list concise verdict lines and relevant output excerpts for
+every required check on the final state. The agent must still read the full
+command output before claiming success. Use event-log `refs` and small `data`
+for structured facts; do not create a separate parseable receipt block. Output
+refs remain a deferred future policy; do not create or rely on them now.
 
 When `.agenticloop/project.md` has `event_logging: enabled`, the local
 `.agenticloop/logs/<TASK-ID>.jsonl` event log may help confirm workflow gates

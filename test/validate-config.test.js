@@ -709,6 +709,40 @@ describe('Task-record placeholder rejection', () => {
     assert.ok(errors.some(e => e.includes('Reviewer Checklist') && e.includes('empty')));
   });
 
+  it('errors on empty Proof Pressure section when present', () => {
+    const d = makeTarget('task-empty-proof-pressure');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    const body = taskRecord({ taskId: 'T-030' });
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-030.md'),
+      `${body}\n\n## Proof Pressure\n`
+    );
+    const { errors } = validateConfig(d);
+    assert.ok(errors.some(e => e.includes('Proof Pressure') && e.includes('empty')));
+  });
+
+  it('does not error on Proof Pressure when section is absent', () => {
+    const d = makeTarget('task-no-proof-pressure');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(join(d, '.agenticloop', 'tasks', 'T-031.md'), taskRecord({ taskId: 'T-031' }));
+    const { errors } = validateConfig(d);
+    const taskErrors = errors.filter(e => e.includes('T-031.md'));
+    assert.ok(!taskErrors.some(e => e.includes('Proof Pressure')));
+  });
+
+  it('does not error on Proof Pressure with concrete fields', () => {
+    const d = makeTarget('task-proof-pressure-filled');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    const body = taskRecord({ taskId: 'T-032' });
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-032.md'),
+      `${body}\n\n## Proof Pressure\n- **Completion Oracle**: the check command prints success.\n- **Final Proof Required**: npm test passes with new regression test.\n- **Likely Misfire**: test passes but ignores edge case.\n`
+    );
+    const { errors } = validateConfig(d);
+    const taskErrors = errors.filter(e => e.includes('T-032.md'));
+    assert.ok(!taskErrors.some(e => e.includes('Proof Pressure')));
+  });
+
   it('passes when task record is valid', () => {
     const d = makeTarget('task-valid');
     mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });

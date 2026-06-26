@@ -157,6 +157,7 @@ export const TASK_REQUIRED_SECTION_HEADINGS = Object.freeze([
 ]);
 
 export const TASK_OPTIONAL_SECTION_HEADINGS = Object.freeze([
+  '## Proof Pressure',
   '## Concurrency Plan',
   '## Grouping',
   '## Source Reference',

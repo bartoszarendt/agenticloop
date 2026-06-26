@@ -114,8 +114,12 @@ Check:
 - Task record state is not still `draft`. A draft task record cannot be accepted.
 - `## Completion Summary Template` and `## Reviewer Checklist` sections are concrete, not
   placeholder text. See [[task-record-contract]] for the forbidden phrases.
+- If `## Proof Pressure` is present, the fields are concrete and the implementation summary
+  addresses the completion oracle, final proof, and likely misfire.
 - Implementation summary is present in the durable task record (GitHub issue or task file),
   not only in a local document or a chat message.
+- Evidence is concise: verdict lines and relevant excerpts, not full terminal dumps. The agent
+  is still required to have read the full command output before claiming success.
 - Neutral rule: the implementation artifact is linked to the backend that
   `.agenticloop/project.md` configures (default: `files`), and review is performed against that
   artifact rather than against chat prose.
@@ -150,7 +154,7 @@ Check:
   Classify unexplained action mismatches as `needs_revision` unless the implementation
   summary explicitly triages them as accepted scope corrections.
 - Every acceptance criterion is demonstrably met.
-- Required checks were run on the final state with verbatim output, per [[verification-evidence]].
+- Required checks were run on the final state with concise verdict lines or relevant excerpts, per [[verification-evidence]].
 - New behavior has RED-to-GREEN or equivalent evidence, per [[tdd-implementation]].
 - Bugfixes state the confirmed root cause or explicitly explain why no root cause could be isolated, per [[debugging-before-fixes]].
 - No locked process or architecture decision changed without [[change-request-gate]].
@@ -159,6 +163,7 @@ Do not accept if:
 
 - task record status is still `draft`,
 - implementation summary is missing from the durable task record,
+- `## Proof Pressure` is present but missing concrete fields or missing final-proof/misfire evidence,
 - backend reference is missing or wrong (for example no task file artifact for files-backed work,
   or no GitHub issue or linked PR when `task_backend: github` is set for a normal implementation task),
 - a normal GitHub-backed implementation PR lacks a recognized closing keyword for the task issue,

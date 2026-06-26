@@ -41,6 +41,32 @@ describe('template contract validation', () => {
     }
   });
 
+  it('validates optional proof-pressure section in task record template', () => {
+    const target = mkdtempSync(join(tmpdir(), 'al-template-proof-pressure-'));
+    try {
+      seedToolkitSource(REPO_ROOT, target);
+      const result = validateCanonicalTemplates(target);
+      const proofPressureWarnings = result.warnings.filter(e =>
+        e.includes('Proof Pressure')
+      );
+      assert.equal(
+        proofPressureWarnings.length,
+        0,
+        `task-record.md should include optional '## Proof Pressure' section, got warnings: ${JSON.stringify(proofPressureWarnings)}`
+      );
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('recognizes proof pressure as an optional task-record section in layout constants', async () => {
+    const layout = await import('../src/layout.js');
+    assert.ok(
+      layout.TASK_OPTIONAL_SECTION_HEADINGS.includes('## Proof Pressure'),
+      'TASK_OPTIONAL_SECTION_HEADINGS must include ## Proof Pressure'
+    );
+  });
+
   it('requires memory/decision-record.md as a canonical template', () => {
     assert.ok(
       REQUIRED_TEMPLATE_RELATIVE_PATHS.some(p => p.includes('decision-record.md')),
@@ -71,6 +97,24 @@ describe('template contract validation', () => {
       0,
       `REQUIRED_TEMPLATE_RELATIVE_PATHS must not include removed template files: ${separateTemplates.join(', ')}`
     );
+  });
+
+  it('validates ordered headings in the task record template', () => {
+    const target = mkdtempSync(join(tmpdir(), 'al-template-task-record-'));
+    try {
+      seedToolkitSource(REPO_ROOT, target);
+      const result = validateCanonicalTemplates(target);
+      const headingErrors = result.errors.filter(e =>
+        e.includes('task-record.md') && e.includes('missing required heading')
+      );
+      assert.equal(
+        headingErrors.length,
+        0,
+        `task-record.md should pass heading validation, got errors: ${JSON.stringify(headingErrors)}`
+      );
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
   });
 
   it('validates ordered headings in the unified work-unit summary template', () => {
@@ -211,6 +255,102 @@ describe('decision-index stale-reference check', () => {
       violations.length,
       0,
       `stale decision-index references found in active surfaces:\n${violations.join('\n')}`
+    );
+  });
+});
+
+describe('phase-s stale-reference check', () => {
+  const STALE_PATTERNS = [
+    /state\.yaml/,
+    /\.agenticloop\/runs\b/,
+    /receipts\.jsonl/,
+    /\bnode_id\b/,
+    /trace memory/i,
+    /output-ref[:/]/i,
+    /\.agenticloop\/output-refs\b/,
+    /sqlite/i,
+    /lancedb/i,
+    /vector.index/i,
+    /sidecar/i,
+    /postinstall/i,
+  ];
+
+  const EXCLUDED_FILES = new Set([
+    // IMPLEMENTATION_PLAN.md lives under .dev/ and .dev is not in ACTIVE_SURFACE_DIRS,
+    // so it does not need to be listed here.
+    'test/template-contract.test.js',
+  ]);
+
+  const ACTIVE_SURFACE_DIRS = [
+    'AGENTIC_LOOP.md',
+    'README.md',
+    'docs',
+    'agents',
+    'skills',
+    'backends',
+    'memory',
+    'src',
+    'config.json',
+    'manifest.json',
+    'agenticloop.template.json',
+  ];
+
+  function collectActiveFiles(base, relDir = '') {
+    const results = [];
+    const dir = relDir ? join(base, relDir) : base;
+    let entries;
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return results;
+    }
+    for (const entry of entries) {
+      const fullPath = join(dir, entry);
+      const relPath = relDir ? `${relDir}/${entry}` : entry;
+      const stat = statSync(fullPath);
+      if (stat.isDirectory()) {
+        results.push(...collectActiveFiles(base, relPath));
+      } else if (
+        entry.endsWith('.md') ||
+        entry.endsWith('.js') ||
+        entry.endsWith('.json') ||
+        entry.endsWith('.toml')
+      ) {
+        results.push({ relPath, fullPath });
+      }
+    }
+    return results;
+  }
+
+  it('rejects phase-s deferred infrastructure references in active surfaces', () => {
+    const violations = [];
+    for (const surface of ACTIVE_SURFACE_DIRS) {
+      const fullPath = join(REPO_ROOT, surface);
+      let files;
+      try {
+        const stat = statSync(fullPath);
+        if (stat.isFile()) {
+          files = [{ relPath: surface, fullPath }];
+        } else {
+          files = collectActiveFiles(REPO_ROOT, surface);
+        }
+      } catch {
+        continue;
+      }
+      for (const file of files) {
+        if (EXCLUDED_FILES.has(file.relPath)) continue;
+        const content = readFileSync(file.fullPath, 'utf-8');
+        for (const pattern of STALE_PATTERNS) {
+          if (pattern.test(content)) {
+            violations.push(`${file.relPath} matches ${pattern}`);
+          }
+        }
+      }
+    }
+    assert.equal(
+      violations.length,
+      0,
+      `phase-s deferred infrastructure references found in active surfaces:\n${violations.join('\n')}`
     );
   });
 });

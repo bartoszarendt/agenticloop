@@ -51,6 +51,10 @@ target projects do not need toolkit-root `docs/` files at runtime.
   and publishes evidence.
 - **Required checks**: exact commands or manual checks that must be run before a
   task can be accepted.
+- **Proof pressure**: the optional task-record practice of naming a completion
+  oracle, final proof required, and likely misfire to keep work aligned with the
+  owner's outcome. Proof pressure complements acceptance criteria; it does not
+  replace them.
 - **Needs context**: a task state used when the task record is ambiguous or
   incomplete and can be corrected by the maintainer.
 - **Blocked task**: a durable paused state requiring human action or external
@@ -162,6 +166,14 @@ Authorizing a phase, group, milestone, epic, or task set does not collapse that
 unit into one task record. Before implementation starts, decompose it into
 right-sized implementation task records unless the maintainer can show that the
 whole unit is one independently verifiable task.
+
+Right-sized means one independently verifiable task at a time by default, the
+smallest useful implementation slice. When a human authorizes a larger bounded
+run, prefer the largest safe useful slice that remains bounded, reversible, and
+independently verifiable as one task. A phase, group, milestone, epic, or task
+set authorization is not permission to create one oversized task record; task
+sets still decompose into ordinary task records using the configured backend
+and task ID convention.
 
 When a human authorizes a work unit to run, continue, or finish, Agentic Loop
 performs the routine lifecycle steps that unit needs under the configured
@@ -439,6 +451,13 @@ Those project skills may be used for domain-specific procedures, but Agentic
 Loop skills remain authoritative for task records, evidence, review,
 blocked-state handling, and closeout.
 
+`Proof Pressure` is optional. For ambiguous or long-running work, the maintainer
+may require a concrete `Completion Oracle`, `Final Proof Required`, and `Likely
+Misfire`. These fields help the engineer stay aligned with the owner's outcome
+and help the reviewer verify that local success is real success. They complement
+acceptance criteria; they do not replace scope, out-of-scope boundaries, or
+required checks.
+
 ## Task Backends
 
 The active task backend defines where task records live. Read `task_backend`
@@ -671,16 +690,32 @@ For each task:
 1. Confirm the task record is complete.
 2. Identify expected files, commands, and risks.
 3. For behavior changes, create a failing test or failing check first.
-4. Implement the smallest useful slice.
+4. Implement the smallest useful slice by default.
 5. Run the focused check.
 6. Run the required checks.
 7. Publish the implementation summary with evidence in the backend's canonical
    location.
 8. Request review.
 
+The default sizing is one independently verifiable task at a time, the smallest
+useful implementation slice. When a human authorizes a larger bounded run,
+prefer the largest safe useful slice that remains bounded, reversible, and
+independently verifiable as one task. Authorizing a phase, group, milestone, or
+task set is not permission to create one oversized task record; broad work items
+still decompose into ordinary task records.
+
 Implementation summaries use `agenticloop/memory/work-unit-summary.md` with
 `summary_unit: task`. `Evidence` must include fresh output from the final state.
 Claims without evidence are not enough.
+
+The evidence contract covers changed files and artifacts under `## Artifacts`,
+commands, statuses, and concise final-state output under `## Evidence`,
+unexpected scope changes under `## Deviations`, blockers, risks, and process
+friction under `## Process Observations` or `## Known Gaps`, follow-up task ids
+under `## Follow-Ups`, and optional event-log-derived facts under `## Trace`.
+Prefer concise verdict lines and relevant output excerpts over full terminal
+dumps, while still reading full command output before claiming success. Output
+refs remain a deferred future policy; do not create or rely on them now.
 
 ## Scratch and Temporary Files
 

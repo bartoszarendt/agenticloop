@@ -16,10 +16,16 @@ State what was completed and how the outcome satisfies the task scope.
 ## Artifacts
 List the files changed, branches, commits, PRs, or other implementation artifacts
 and why each one mattered.
-
 ## Evidence
+
 List every required check with fresh output from the final state. Include RED
-evidence for new behavior when applicable.
+evidence for new behavior when applicable. Prefer concise verdict lines and the
+relevant excerpts that prove the claim; do not paste full terminal dumps. The
+agent must still read the full command output before claiming success. Use
+event-log `refs` and small `data` for structured facts; do not create a separate
+parseable receipt block. Output refs remain a deferred future policy; do not
+create or rely on them now. When the task record has a ## Proof Pressure section,
+record the final-proof and likely-misfire evidence here.
 
 ## Deviations
 Explain every meaningful scope or plan deviation from the task record or group

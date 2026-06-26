@@ -31,6 +31,18 @@ Name nearby work that must not be bundled into this task.
 ## Required Checks
 - Exact command(s) the engineer must run on the final state.
 
+## Proof Pressure
+
+Optional. Maintainer may require this section for ambiguous or long-running work.
+If present, each field must be concrete.
+
+- **Completion Oracle**: standing observable signal used during work to keep the
+  task aligned with the owner's outcome.
+- **Final Proof Required**: evidence required before closeout/review can claim
+  completion.
+- **Likely Misfire**: how the agent could satisfy local criteria while missing
+  the owner's real intent.
+
 ## Expected Files or Areas
 - Name the files, modules, commands, docs, and tests likely to change.
 
@@ -58,6 +70,7 @@ here so the engineer knows what evidence to publish.
 - [ ] Task scope matches the source documents reviewed for this task.
 - [ ] Unexpected files are justified in `## Deviations From Plan`.
 - [ ] Required checks were rerun on the final state with fresh output.
+- [ ] If `## Proof Pressure` is present, completion oracle, final proof, and likely misfire were checked.
 - [ ] The durable task record includes the current implementation summary.
 - [ ] The implementation artifact is linked to the task record.
 - [ ] If parallel delegation was used, the concurrency plan was followed and the join condition was met.

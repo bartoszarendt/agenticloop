@@ -68,6 +68,12 @@ inline task summary with `summary_unit: task`, using
 optional `## Trace` section when workflow-gate events exist. This is a summary,
 not a raw transcript.
 
+`## Evidence` should list concise verdict lines and relevant output excerpts for
+every required check on the final state. The agent must still read the full
+command output before claiming success. Use event-log `refs` and small `data`
+for structured facts; do not create a separate parseable receipt block. Output
+refs remain a deferred future policy; do not create or rely on them now.
+
 Closeout does not write a separate summary file. When a human-identified task
 set or configured group finishes, closeout verifies the inline task summaries
 are complete and records a status marker (see [[task-closeout]]).
@@ -126,6 +132,12 @@ Use Markdown frontmatter for mechanical state and body sections for
 human-readable detail. Use `agenticloop/memory/task-record.md` as the
 canonical shape. It includes the required `## Completion Summary Template` and
 `## Reviewer Checklist` sections that every durable task record must carry.
+
+`## Expected Files or Areas` is the task's current human-readable scope map. A
+future structured scope map (for example, frontmatter `expected_files` or
+`allowed_paths` with repo-relative glob semantics) would be required before
+mechanical changed-file validation can run. Until that structured field exists,
+reviewers enforce unexpected files through `## Deviations`.
 
 Optional frontmatter conventions:
 

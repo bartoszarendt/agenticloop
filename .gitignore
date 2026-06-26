@@ -28,3 +28,4 @@ Thumbs.db
 
 # Internal working docs — local only.
 .dev/
+.mcp.json

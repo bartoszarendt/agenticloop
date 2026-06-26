@@ -320,6 +320,10 @@ function validateTaskRecord(content, filename) {
     errors.push(`Task record '${filename}' has empty '## Reviewer Checklist' section`);
   }
 
+  if (content.includes('## Proof Pressure') && !sectionBody(content, '## Proof Pressure')) {
+    errors.push(`Task record '${filename}' has empty '## Proof Pressure' section`);
+  }
+
   return errors;
 }
 

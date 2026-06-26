@@ -24,6 +24,17 @@ Before any "done", "fixed", "passing", "green", or "complete" claim:
 
 Skipping a step and claiming anyway is a blocking defect.
 
+## Evidence style
+
+Prefer concise verdict lines and the relevant excerpts that prove the claim over
+pasting full terminal dumps. The agent must still read the full command output
+before claiming success; the summary that is attached can be compact. Use the
+existing inline work-unit summary sections (`## Artifacts`, `## Evidence`, `##
+Deviations`, `## Process Observations`, `## Known Gaps`, `## Follow-Ups`, and
+optional `## Trace`) and event-log `refs`/`data` for structured facts. Do not
+create a second parseable receipt block. Output refs remain a deferred policy;
+do not create or rely on them now.
+
 ## Required evidence
 
 | Claim | Required evidence | Not sufficient |

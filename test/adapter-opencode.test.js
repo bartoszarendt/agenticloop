@@ -86,6 +86,7 @@ describe('renderOpencodeAgentMarkdown', () => {
     assert.match(body, /\.agenticloop\/project\.md/);
     assert.match(body, /agenticloop\/skills\/role-delegation\/SKILL\.md/);
     assert.match(body, /agenticloop\/skills\/blocked-state\/SKILL\.md/);
+    assert.match(body, /In OpenCode, use the Task tool or explicit @maintainer \/ @engineer invocation when available/);
   });
 
   it('renders subagent frontmatter without orchestrator permissions', () => {

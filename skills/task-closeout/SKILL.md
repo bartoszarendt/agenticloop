@@ -39,6 +39,7 @@ Review:
 - for GitHub-backed normal implementation tasks, the task issue state and the
   merged PR closing relationship,
 - acceptance criteria and required checks,
+- proof pressure fields when present and the evidence that satisfies them,
 - known limitations and follow-up recommendations,
 - documentation changes,
 - blocked or needs_context events from [[blocked-state]],

@@ -42,8 +42,31 @@ event log.
 ## Required sections
 
 Use `agenticloop/memory/task-record.md` as the canonical task-record shape.
-It defines the ordered required sections and the optional `Grouping`, `Source
-Reference`, `Applicable Project Skills`, and `Concurrency Plan` sections.
+It defines the ordered required sections and the optional `Proof Pressure`,
+`Grouping`, `Source Reference`, `Applicable Project Skills`, and `Concurrency
+Plan` sections.
+
+## Proof pressure
+
+The optional `## Proof Pressure` section helps keep long-running or ambiguous
+work aligned with the owner's real intent. The maintainer may require it when a
+task is large, vague, or easy to satisfy locally while missing the actual goal.
+If present, every field must be concrete.
+
+- **Completion Oracle**: the standing observable signal the engineer checks
+  during work to confirm the task is still aimed at the owner's outcome. Example:
+  "The new CLI command prints the expected summary row and exits 0 on the
+  fixture input."
+- **Final Proof Required**: the exact evidence closeout/review needs before it
+  can claim completion. Example: "A passing `npm test` run plus a diff showing
+  the parser rejects the previously accepted invalid input."
+- **Likely Misfire**: a concrete scenario where the agent could meet acceptance
+  criteria and pass checks while still failing the owner's intent. Example:
+  "The command accepts the fixture but silently drops fields for all other
+  inputs."
+
+Proof pressure complements acceptance criteria; it does not replace scope,
+out-of-scope boundaries, or required checks.
 
 ## Right-sizing before task creation
 
@@ -51,6 +74,14 @@ Before creating or refining a task record from a source plan item, decide whethe
 the item is one implementation task or a task set. A human may authorize a whole
 phase, group, milestone, epic, or broad work item, but that authorization does
 not make the whole unit one task record.
+
+The default sizing is one independently verifiable task at a time, the smallest
+useful implementation slice. When a human authorizes a larger bounded run,
+prefer the largest safe useful slice that remains bounded, reversible, and
+independently verifiable as one task. Phase, group, milestone, or epic
+authorization is not permission to create one oversized task record; task sets
+still decompose into ordinary task records using the configured backend and task
+ID convention.
 
 A work item must be decomposed into multiple task records when any of these are
 true:
@@ -88,10 +119,12 @@ The following are forbidden in any durable task record:
 - `to be filled during review`
 - empty `## Completion Summary Template` body
 - empty `## Reviewer Checklist` body
+- empty or placeholder `## Proof Pressure` field when that section is present
 
 Scope, acceptance criteria, required checks, the completion summary template, and the reviewer
 checklist must all be concrete at task creation time. A placeholder in any of these sections is
-a task-record defect, not a detail to fill in later.
+a task-record defect, not a detail to fill in later. If `## Proof Pressure` is present, its
+fields must also be concrete.
 
 If the maintainer cannot fill a concrete completion template or reviewer checklist at creation
 time, it must post `needs_context` using [[blocked-state]] instead of creating a vague record.
@@ -104,8 +137,8 @@ what to produce. Use `agenticloop/memory/work-unit-summary.md` with `summary_uni
 for the canonical summary shape.
 
 Each section must contain at least a one-line description of what is expected, not a generic
-placeholder. Example: "Tests and Checks Run: fresh output of `python -m pytest tests/ -q` on
-the final state, must show all tests passing." Copying section headings without content is a
+placeholder. Example: "Tests and Checks Run: final-state `python -m pytest tests/ -q` verdict
+with counts, must show all tests passing." Copying section headings without content is a
 placeholder violation.
 
 ## Reviewer checklist
@@ -115,7 +148,8 @@ The maintainer writes checklist items specific to this task. Minimum required it
 
 - [ ] Task scope verified against source documents listed in "Source Documents Reviewed".
 - [ ] Out-of-scope files: any files touched outside "Expected Files or Areas" are justified.
-- [ ] Required checks run with verbatim fresh output on the final state.
+- [ ] Required checks run on the final state with concise verdict lines or relevant excerpts.
+- [ ] If `## Proof Pressure` is present, completion oracle, final proof, and likely misfire were checked.
 - [ ] Durable task record updated (GitHub issue or task file) with implementation summary.
 - [ ] Implementation artifact linked to the task record.
 - [ ] Parallel delegation, if used, followed the recorded concurrency plan and join condition.
@@ -131,7 +165,9 @@ must be reviewed for whether task-specific items were omitted.
 
 ## Expected files or areas
 
-The expected files or areas section is the task's scope map. It names the files, modules, commands, tests, and docs the engineer is expected to inspect or touch.
+The expected files or areas section is the task's human-readable scope map. It names the files, modules, commands, tests, and docs the engineer is expected to inspect or touch.
+
+A future structured scope map (for example, frontmatter `expected_files` or `allowed_paths` with repo-relative glob semantics) would be required before mechanical changed-file validation can run. Until that structured field exists, reviewers enforce unexpected files through `## Deviations From Plan`.
 
 If implementation changes an unexpected file, the implementation summary must explain why. Review treats unexplained unexpected files as a scope issue under [[review-and-accept]].
 Bundling an incidental toolkit, dependency, or asset-refresh change into a task that does not require it is the same scope violation. If a refresh is genuinely needed, it is its own task and its own artifact.
@@ -204,7 +240,7 @@ After implementation, the engineer publishes one current implementation summary 
 `agenticloop/memory/work-unit-summary.md` with `summary_unit: task`. Every accepted
 or closed task must have this filled inline summary; it is not optional.
 
-`Evidence` includes fresh output for every required check on the final state, plus RED evidence for new behavior when applicable. See [[verification-evidence]] and [[tdd-implementation]].
+`Evidence` includes fresh final-state command evidence for every required check, plus RED evidence for new behavior when applicable. See [[verification-evidence]] and [[tdd-implementation]].
 
 For files-backed work, publish or refresh the one current implementation summary in the task
 file (`.agenticloop/tasks/<TASK-ID>.md`) and keep `implementation_artifact` current in

@@ -14,11 +14,12 @@ acting.
 ## Responsibilities
 
 - Read the task record before editing.
-- Confirm scope, out of scope, acceptance criteria, required checks, and expected files or areas.
+- Confirm scope, out of scope, acceptance criteria, required checks, proof pressure when present, and expected files or areas.
 - Use host-visible target-project skills when they apply to domain-specific work, while keeping Agentic Loop skills as the workflow authority.
 - Use TDD or another explicit verification loop for behavior changes.
-- Implement the smallest useful slice.
+- Implement the smallest useful slice by default. When the task record or human authorization explicitly describes a larger bounded run, prefer the largest safe useful slice that remains bounded, reversible, and independently verifiable as one task.
 - Run focused checks and required checks on the final state.
+- When `## Proof Pressure` is present, check the completion oracle during work and include the final proof and misfire-avoidance evidence in the implementation summary.
 - When event logging is enabled, emit implementation-start, verification, blocked, and needs-context workflow-gate events.
 - Publish an implementation summary with fresh evidence.
 - For files-backed work, keep the current implementation summary accurate but append a dated
@@ -115,8 +116,9 @@ Use the resolved command for engineer-owned gates:
 required or cited verification command, and `blocked` or `needs_context` when
 work cannot continue. Include `--task <TASK-ID>`, `--role engineer`, required
 outcomes, and a short summary. Do not attempt event logging when
-`event_logging` is disabled. Keep full command output in the durable task
-artifact, not the event log. When enabled, completed implementation work must
+`event_logging` is disabled. Keep command evidence in the durable task artifact,
+not the event log; use concise verdict lines and relevant excerpts instead of
+full dumps. When enabled, completed implementation work must
 not end with zero engineer gate events; record a concise missed-event process
 gap instead of fabricating a normal event sequence after the fact.
 
