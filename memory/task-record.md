@@ -39,9 +39,13 @@ Name nearby work that must not be bundled into this task.
 
 ## Concurrency Plan
 Optional. Required only when the orchestrator allows parallel delegation for
-this task or task batch. Name each lane, role, read/write mode, branch or
-worktree, implementation artifact, allowed files or areas, shared collision
-risks, lease checkpoint cadence, stop condition, and join condition.
+this task or task batch. Name each lane id, lane type (read-only,
+implementation, or coordination/review), role, read/write mode, owned backend
+objects, worktree path and branch for file-mutating write lanes, implementation
+or workflow artifact, allowed files or areas, shared collision risks (including
+shared generated files, lockfiles, schemas, APIs, external state, labels,
+comments, status markers, closeout state, event logs, and group state), lease
+checkpoint cadence, stop condition, and join condition.
 
 ## Completion Summary Template
 

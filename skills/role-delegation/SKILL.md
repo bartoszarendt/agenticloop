@@ -95,19 +95,28 @@ For OpenCode:
 
 ## Concurrency Policy
 
-Delegation is serial by default. Multiple subagents do not permit parallel
-loops.
+Delegation is serial by default. Concurrency safety is governed by mutation,
+not by role. See `agenticloop/AGENTIC_LOOP.md` for lane definitions, backend
+rules, and join behavior.
 
-Parallel delegation is legal only after the orchestrator records the
-concurrency plan required by `agenticloop/AGENTIC_LOOP.md`: lanes, roles,
-read/write mode, branches or worktrees, allowed files or areas, possible shared
-resources, liveness checkpoint cadence, stop condition, and join condition. If any
-collision criterion is unknown, run serially.
+Parallel delegation requires a recorded concurrency plan: lane id, lane type,
+role, read/write mode, owned backend objects, worktree path and branch for
+file-mutating write lanes, artifact, allowed files/areas, shared collision
+risks, liveness cadence, stop condition, and join condition. If any collision
+criterion is unknown, run serially.
 
-For GitHub-backed parallel implementation, each task uses its own branch and
-pull request. No batch pull request may merge until every lane has returned,
-maintainer review is complete, cross-branch risk is checked, and the human
-approves merge order.
+File-mutating write lanes in Git repos require a separate `git worktree` and
+branch per lane. GitHub implementation lanes also require own issue and PR. No
+batch PR may merge until every lane has returned, maintainer review is
+complete, cross-branch risk is checked, and the human approves merge order.
+Parallel coordination/review lanes must own distinct backend objects with no
+shared mutable state. Files-backed non-Git parallel write lanes are not
+allowed.
+
+Invalid patterns: write lanes sharing a checkout, branch-only isolation in a
+shared checkout, copied-file pseudo-worktrees, GitHub implementation without
+own worktree/branch/issue/PR, parallel lanes updating the same issue/PR/task
+record/closeout/event-log/label stream/group state.
 
 ## Event Logging
 
@@ -124,25 +133,14 @@ a summary that states the fallback explicitly.
 
 Do not emit `role.invoked` for hypothetical routing prose. Record only real role execution.
 
-Recommended `role.invoked` data fields:
+Recommended `role.invoked` data fields: `target_role`, `delegation_mode`
+(`host_subagent`, `explicit_agent_invocation`, or `single_agent_fallback`),
+`fallback` (boolean), `adapter`, `model` (only when known), `reason`.
 
-- `target_role`
-- `delegation_mode`: `host_subagent`, `explicit_agent_invocation`, or `single_agent_fallback`
-- `fallback`: boolean
-- `adapter`
-- `model` only when explicitly known from adapter config
-- `reason`
-
-Example host delegation event:
+Example:
 
 ```text
-npx agenticloop event-logging role.invoked --task T-001 --role orchestrator --summary "Delegated engineer implementation" --ref "github:issue:42" --data-json '{"target_role":"engineer","delegation_mode":"host_subagent","fallback":false,"adapter":"opencode","model":"<model-id>","reason":"Task record is ready for implementation"}'
-```
-
-Example fallback event:
-
-```text
-npx agenticloop event-logging role.invoked --task T-001 --role orchestrator --summary "Started fallback maintainer review pass" --ref "task-file:.agenticloop/tasks/T-001.md" --data-json '{"target_role":"maintainer","delegation_mode":"single_agent_fallback","fallback":true,"adapter":"opencode","reason":"Host review delegation is unavailable after an explicit capability check"}'
+npx agenticloop event-logging role.invoked --task T-001 --role orchestrator --summary "Delegated engineer implementation" --ref "github:issue:42" --data-json '{"target_role":"engineer","delegation_mode":"host_subagent","fallback":false}'
 ```
 
 ## Single-Agent Fallback
@@ -236,21 +234,14 @@ Maintainer review delegation must include:
   agent-authored marker already records the same outcome for the current PR head,
 - post the review marker only after checking the PR artifact.
 
-An issue comment with implementation evidence is not the implementation artifact for normal
-GitHub-backed code or documentation changes. It is supporting evidence for the pull request.
-The task is not terminally complete until the PR is reviewed, accepted, and merged or otherwise
-closed through an explicit backend exception.
+An issue comment with evidence is supporting evidence, not the implementation
+artifact. The task is not complete until the PR is reviewed, accepted, and
+merged or closed through an explicit backend exception.
 
-For automated work, the pull request path applies to docs, configuration, workflow, and
-infrastructure changes as well as runtime code. Human-authored repository maintenance may
-remain outside Agentic Loop when the human intentionally handles it, but automated roles must
-not use that as permission to commit task work directly to the default or integration branch.
-A no-PR exception for agent-authored GitHub-backed work must be human-approved and recorded in
-the task record before implementation starts.
-
-A task branch has one terminal merge path. If its pull request has already been merged by
-merge commit, squash, or rebase, do not merge the same task branch again as a second path for
-the same work. Stop for human direction if the branch state is unclear.
+The pull request path applies to all automated work including docs,
+configuration, and infrastructure. A no-PR exception must be human-approved and
+recorded before implementation. A task branch has one terminal merge path; do
+not merge it again after the PR is already merged.
 
 ## Files Backend Delegation
 
@@ -372,7 +363,11 @@ If fallback role assumption was used, say so explicitly. Do not omit the delegat
 - Delegation output says unknown after the agent has already started role work.
 - Maintainer or engineer work appears inline in an orchestrator message.
 - Parallel subagents were started without a recorded concurrency plan and join condition.
-- Parallel write lanes share a branch, worktree, implementation artifact, task record, or mutable files without an explicit serial join.
+- Parallel file-mutating write lanes share a checkout, branch, worktree, implementation artifact, task record, or mutable files.
+- Parallel write lanes use branch-only isolation in one shared checkout.
+- Copied-file temporary directory is used as a pseudo-worktree.
+- Parallel maintainer or orchestrator lanes update the same issue, PR, task record, closeout marker, event log, label/status stream, or group state.
+- Orchestrator waits indefinitely for a lane whose expected artifact is missing at join.
 - A long-running or parallel delegated role has no lease, observable-step checkpoint cadence, no-progress budget, or stop condition.
 - Task record exists only as a local file when `task_backend: github` is set.
 - GitHub-backed implementation is delegated without branch, commit, push, and PR expectations.

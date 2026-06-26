@@ -139,10 +139,14 @@ Bundling an incidental toolkit, dependency, or asset-refresh change into a task 
 ## Concurrency plan
 
 Add `## Concurrency Plan` when the orchestrator authorizes parallel delegation.
-The plan names each lane, role, read/write mode, branch or worktree,
-implementation artifact, allowed files or areas, shared collision risks, lease
-checkpoint cadence, stop condition, and join condition. If no parallel
-delegation is planned, omit the section or state that work is serial.
+The plan names each lane id, lane type (read-only, implementation, or
+coordination/review), role, read/write mode, owned backend objects, worktree
+path and branch for file-mutating write lanes, implementation or workflow
+artifact, allowed files or areas, shared collision risks (including shared
+generated files, lockfiles, schemas, APIs, external state, labels, comments,
+status markers, closeout state, event logs, and group state), lease checkpoint
+cadence, stop condition, and join condition. If no parallel delegation is
+planned, omit the section or state that work is serial.
 
 ## Bug tasks
 

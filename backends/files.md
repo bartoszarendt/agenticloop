@@ -17,6 +17,44 @@ task automation, unless the project explicitly switches to the GitHub backend.
 The files backend is not an autonomous runner. It is a storage projection for
 the same Agentic Loop roles, skills, and review gates.
 
+## Parallel Write Lanes
+
+Concurrency safety is governed by mutation, not by role. Files-backed task
+records, event logs, and scratch files are local mutable state that can collide
+across parallel lanes just like implementation files. See the lane definitions
+and backend-specific rules in `agenticloop/AGENTIC_LOOP.md`.
+
+**Read-only parallel discovery** is allowed when bounded by fixed artifacts and
+no lane mutates repository files or task records.
+
+**Write lanes in a Git repository.** Each parallel write lane -- whether it
+mutates implementation files, task records, or other tracked state -- requires:
+
+- its own `git worktree`,
+- its own local branch,
+- its own `.agenticloop/tasks/<TASK-ID>.md` task file or explicitly owned
+  workflow file(s),
+- its implementation or workflow artifact recorded as `branch:<name>` plus
+  `commit:<sha>` or `range:<base>..<head>` in the task file (patch is a
+  fallback, not the preferred form),
+- disjoint expected files or areas,
+- a lease,
+- a join condition.
+
+A branch alone is not sufficient when multiple agents share one checkout.
+Copying selected touched files into a temporary folder is not valid isolation.
+
+Integration of parallel files-backed lanes is serial: review and merge happen
+one lane at a time after all lanes return.
+
+**Non-Git targets.** Parallel write lanes are not allowed when the target is
+not a Git repository. Run all write work serially. Read-only parallel discovery
+is still allowed.
+
+**Join behavior.** Missing local commit or range at join time is a failed or
+blocked lane. Missing expected task-record update or workflow artifact is
+likewise a failure. The orchestrator must not wait indefinitely.
+
 ## Summary and Trace
 
 Task summaries live inline in the task file. There is no separate

@@ -182,31 +182,130 @@ delegated role step for a task, and one mutable implementation artifact in one
 worktree at a time. Do not launch parallel maintainer or engineer sessions just
 because the host supports multiple subagents.
 
+Concurrency safety is governed by mutation, not by role. A maintainer lane that
+updates task records, GitHub issues, review comments, labels, or event logs can
+collide with another lane just as easily as two engineer lanes if they share a
+checkout, task record, GitHub issue/PR/comment stream, label set, event log,
+branch, generated file, lockfile, schema, API surface, or other durable state.
+
+#### Lane Types
+
+- **Read-only lane**: inspects fixed artifacts and returns findings. No VCS
+  isolation is required.
+- **Write lane**: may mutate repository files, task records, GitHub issues, PRs,
+  labels, comments, local event logs, branches, generated artifacts, or other
+  durable workflow or project state.
+- **Implementation lane**: a write lane that changes target project files.
+  Normally belongs to engineer.
+- **Coordination/review lane**: a write lane that changes task records, GitHub
+  issue/PR metadata, review comments, labels, closeout summaries, event logs,
+  or other workflow state. Normally belongs to maintainer or orchestrator.
+
 Parallel delegation is allowed only after the orchestrator records a
 concurrency plan in the task record or coordination output. The plan must name:
 
-- task ids or work items,
+- lane id and lane type,
 - role invoked for each lane,
 - read-only or write mode for each lane,
-- branch, worktree, and implementation artifact for each write lane,
+- owned backend objects for each lane,
+- worktree path and branch for each write lane that mutates repository files,
+- implementation or workflow artifact for each write lane,
 - allowed files or areas for each lane,
 - shared files, generated files, lockfiles, schemas, APIs, and external state
   that could collide,
 - liveness checkpoint cadence and stop condition for each delegated lane,
 - join condition before review, acceptance, merge, or closeout.
 
-Safe parallel work is limited to read-only discovery against fixed artifacts, or
-multiple implementation tasks with separate branches or worktrees, disjoint
-allowed files or areas, no shared generated files or lockfiles, no schema or API
-ordering dependency, no shared external state, and no overlapping task-record
-updates. If any collision criterion is unknown, run serially.
+Safe parallel work is limited to:
 
-For a GitHub-backed parallel implementation batch, each task uses its own branch
-and pull request. The batch has a merge barrier: no pull request in the batch is
-merged into the default or integration branch until every parallel lane has
-returned, maintainer review is complete, cross-branch conflict and ordering risk
-has been checked, and the human approves the merge order. If a pull request is
-safe to merge independently, do not model it as part of a parallel batch.
+- **Read-only discovery** against fixed artifacts. No VCS isolation is required
+  when no lane writes to the repository.
+- **Parallel write lanes** with real VCS isolation and disjoint ownership. Every
+  write lane that mutates repository files requires its own `git worktree` and
+  its own branch. A branch alone is not sufficient when multiple agents share
+  one checkout, because unstaged changes, uncommitted edits, and index state in
+  a shared working tree are invisible to other lanes and create silent
+  collisions. Copying selected touched files into a temporary folder is not
+  valid isolation and must not be used as a substitute for a real worktree.
+
+Additionally, parallel write lanes must have disjoint allowed files or areas, no
+shared generated files or lockfiles, no schema or API ordering dependency, no
+shared external state, and no overlapping task-record or backend-object updates.
+If any collision criterion is unknown, run serially.
+
+Before mutating repository files in a parallel write lane, the delegated role
+must verify the assigned worktree path and branch, and check
+`git status --short --untracked-files=all` for clean or expected state. If the
+worktree or branch is wrong, dirty unexpectedly, or a collision appears, the
+role must return status or a blocker instead of continuing.
+
+### Backend-Specific Parallel Write Rules
+
+**GitHub backend (`task_backend: github`) -- implementation lanes.** Each
+parallel implementation lane requires:
+
+- its own `git worktree`,
+- its own task branch,
+- its own GitHub issue (task record),
+- its own pull request,
+- disjoint expected files or areas,
+- no shared generated files, lockfiles, schema, API, or external-state
+  collision,
+- a lease with observable-step checkpoint cadence, stop condition, and
+  no-progress budget,
+- a join condition before review, acceptance, merge, or closeout,
+- a merge barrier (see below).
+
+**GitHub backend -- coordination/review lanes.** Parallel maintainer or
+orchestrator lanes that mutate GitHub backend state (issues, PRs, labels,
+review comments, status markers, closeout markers, event logs) may run only
+when each lane owns distinct backend objects -- for example, distinct issues or
+distinct PR review targets -- and the concurrency plan proves that no shared
+labels, comments, status markers, closeout state, event logs, or group state
+collide. If lanes must touch the same issue, PR, or label set, run them
+serially.
+
+**GitHub merge barrier.** No pull request in a parallel batch is merged into the
+default or integration branch until every parallel lane has returned, maintainer
+review is complete, cross-branch conflict and ordering risk has been checked, and
+the human approves the merge order. If a pull request is safe to merge
+independently, do not model it as part of a parallel batch.
+
+**Files backend (`task_backend: files`) in a Git repository.** Each parallel
+write lane requires:
+
+- its own `git worktree`,
+- its own local branch,
+- its own `.agenticloop/tasks/<TASK-ID>.md` task file or explicitly owned
+  workflow file(s),
+- its implementation or workflow artifact recorded as `branch:<name>` plus
+  `commit:<sha>` or `range:<base>..<head>` in the task file (patch is a
+  fallback, not the preferred form),
+- disjoint expected files or areas,
+- a lease,
+- a join condition.
+
+Integration of parallel files-backed lanes is serial: review and merge happen
+one lane at a time after all lanes return.
+
+**Files backend without Git.** Parallel write lanes are not allowed. Run all
+write work serially. Read-only parallel discovery is still allowed when bounded
+by fixed artifacts.
+
+### Join Behavior
+
+The orchestrator must not wait indefinitely for a lane that cannot produce its
+expected artifact. At join time, missing expected artifacts are classified as
+failed or blocked lanes, not pending lanes:
+
+- GitHub implementation lane: missing pushed branch or missing PR.
+- Files implementation lane: missing local commit or range.
+- Coordination/review lane: missing expected task-record update, review marker,
+  or status marker.
+
+A lane that cannot produce its artifact must return status or a blocker. The
+orchestrator records the failure, classifies the join outcome, and reports it
+to the human instead of spinning.
 
 ### Delegation Liveness
 

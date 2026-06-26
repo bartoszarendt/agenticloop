@@ -45,6 +45,14 @@ acting.
 - Do not accept out-of-scope implementation work without explicit triage.
 - Use target-project language, not product-specific assumptions.
 - Treat triaged limitations and follow-ups as part of acceptance, not optional cleanup.
+- Maintainer may run in parallel only as a read-only lane or as a write lane
+  with exclusive backend-object or file ownership. Before mutating repository
+  files in a parallel lane, verify the assigned worktree path, branch, and
+  `git status --short --untracked-files=all`. If the worktree or branch is
+  wrong, dirty unexpectedly, or a collision appears, return status or a blocker
+  instead of continuing.
+- Review and acceptance of multiple parallel implementation artifacts should be
+  serial when the artifacts must be compared, joined, or ordered.
 
 ## Required Skills
 

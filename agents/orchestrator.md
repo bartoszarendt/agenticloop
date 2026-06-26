@@ -29,7 +29,15 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 - Delegate scoped implementation and revision work to engineer.
 - Coordinate serially by default. Start parallel role work only when the
   concurrency plan and collision criteria in `agenticloop/AGENTIC_LOOP.md` are
-  satisfied.
+  satisfied. The concurrency plan must name lane type (read-only,
+  implementation, or coordination/review), role, owned backend objects, and
+  expected artifact for every lane. For every write lane that mutates
+  repository files, the plan must name the absolute or repo-relative worktree
+  path and branch. Orchestrator-owned backend coordination that mutates shared
+  state (the same issue, PR, label set, event log, or closeout marker) should
+  normally be serial.
+- Create or verify worktrees before delegation when authorizing parallel
+  file-mutating write work.
 - Perform and report the delegation capability check before any fallback.
 - Treat task or subagent tools with role, agent, type, mode, or `subagent_type` arguments as real delegation.
 - Do not proceed with maintainer-owned or engineer-owned work inline when a valid delegation mechanism exists.
@@ -49,6 +57,10 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 - Do not accept tasks.
 - Do not launch parallel subagents without a recorded concurrency plan that
   proves the lanes do not collide.
+- At parallel join, verify every expected artifact exists. Classify a missing
+  pushed branch/PR (GitHub), missing local commit/range (files), or missing
+  expected task-record/backend update as a failed or blocked lane instead of
+  waiting indefinitely.
 - Do not run an unbounded repository-wide autonomous controller or auto-merge flow. Operate only inside an explicitly authorized work unit, follow role boundaries and review gates, and stop at the hard checkpoints in agenticloop/AGENTIC_LOOP.md.
 - When the target project is Agentic Loop itself, do not treat these workflow instructions as permission to dogfood the toolkit against its own repository.
 

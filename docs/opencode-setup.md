@@ -148,9 +148,11 @@ OpenCode may support multiple visible subagent sessions, but Agentic Loop is
 serial by default. The orchestrator should not start parallel maintainer or
 engineer sessions unless it has recorded the concurrency plan, collision
 criteria, lease, and join condition required by `agenticloop/AGENTIC_LOOP.md`
-and `agenticloop/skills/role-delegation/SKILL.md`.
-The lease progress checkpoint is a return-to-orchestrator checkpoint cadence, not
-an async heartbeat, unless the host exposes running-subagent status.
+and `agenticloop/skills/role-delegation/SKILL.md`. Parallel write lanes that
+mutate repository files require a separate `git worktree` and branch per lane;
+a branch alone is not sufficient in a shared checkout. The lease progress
+checkpoint is a return-to-orchestrator checkpoint cadence, not an async
+heartbeat, unless the host exposes running-subagent status.
 
 Prose in the orchestrator output describing what maintainer or engineer will do
 is not delegation.

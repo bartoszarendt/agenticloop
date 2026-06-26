@@ -168,13 +168,36 @@ merge commit, squash, or rebase, do not also merge the same task branch into the
 default branch as a second path for the same work. If the branch state is
 unclear, stop for human direction instead of creating a criss-cross history.
 
-For a parallel implementation batch, each task uses a separate branch and pull
-request. Do not merge any pull request from the batch into the default or
-integration branch until every parallel lane has returned, maintainer review is
-complete for every implementation artifact, cross-branch conflict and ordering
-risk has been checked, and the human approves the merge order. If a pull
+### Parallel Write Lanes
+
+Concurrency safety is governed by mutation, not by role. See the lane
+definitions and backend-specific rules in `agenticloop/AGENTIC_LOOP.md`.
+
+**Implementation lanes.** Each parallel implementation lane requires its own
+`git worktree`, its own task branch, its own GitHub issue, its own pull request,
+disjoint expected files or areas, and no shared generated files, lockfiles,
+schema, API, or external-state collision. A branch alone is not sufficient when
+multiple agents share one checkout. Copying selected touched files into a
+temporary folder is not valid isolation.
+
+**Coordination/review lanes.** Parallel maintainer or orchestrator lanes that
+mutate GitHub backend state -- issues, PRs, labels, review comments, status
+markers, closeout markers, or event logs -- may run only when each lane owns
+distinct backend objects (for example, distinct issues or distinct PR review
+targets) and the concurrency plan proves that no shared labels, comments, status
+markers, closeout state, event logs, or group state collide. If lanes must touch
+the same issue, PR, or label set, run them serially.
+
+**Merge barrier.** Do not merge any pull request from a parallel batch into the
+default or integration branch until every parallel lane has returned, maintainer
+review is complete for every implementation artifact, cross-branch conflict and
+ordering risk has been checked, and the human approves the merge order. If a pull
 request can safely merge without waiting for the other lanes, treat it as an
 ordinary independent task instead of part of a parallel batch.
+
+**Join behavior.** Missing pushed branch or missing PR at join time is a
+failed or blocked lane, not a pending lane. The orchestrator must not wait
+indefinitely.
 
 ### Record Review Status
 

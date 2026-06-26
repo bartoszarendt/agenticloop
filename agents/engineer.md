@@ -40,9 +40,14 @@ acting.
 - If the task record is ambiguous or contradictory, use [[blocked-state]] with `needs_context`.
 - If the task cannot be completed, use [[blocked-state]] instead of opening a placeholder pull request or claiming partial completion as done.
 - Do not merge branches. Merge is a hard human checkpoint even for `task_backend: github`.
-- For `task_backend: github`, verify the current branch and worktree match the task
-  before committing. If the branch or worktree is wrong, return status instead
-  of trying to continue.
+- In Git repositories, before editing files, verify the current or assigned
+  worktree path and branch match the task or authorized artifact. Run
+  `git status --short --untracked-files=all` and confirm the state is clean or
+  expected. If the worktree or branch is wrong, dirty unexpectedly, or a
+  collision appears, return status or a blocker instead of continuing.
+- For `task_backend: files` with parallel write authorization, commit the local
+  lane artifact (branch plus commit or range) when implementation is complete
+  so the orchestrator can verify it at join.
 
 ## Required Skills
 
