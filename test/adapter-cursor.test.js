@@ -153,6 +153,7 @@ describe('generateCursorArtifacts', () => {
     assert.ok(orchestratorAgent.includes('The orchestrator coordinates Agentic Loop for a target project.'));
     assert.match(orchestratorAgent, /\.cursor\/skills\/agenticloop\/references\/skills\/role-delegation\/reference\.md/);
     assert.match(orchestratorAgent, /Use real Cursor subagent delegation/);
+    assert.match(orchestratorAgent, /target project state \(project\.md, tasks\/, decisions\/, improvements\/\)/);
   });
 
   it('writes optional plugin packaging behind adapters.cursor.plugin.enabled', () => {

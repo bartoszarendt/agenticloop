@@ -904,6 +904,21 @@ describe('Task-record placeholder rejection', () => {
     assert.deepEqual(taskErrors, []);
   });
 
+  it('accepts a task record containing the optional ## Outcome section with all outcome fields', () => {
+    const d = makeTarget('task-outcome-optional');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    const body = taskRecord({ taskId: 'T-040' });
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-040.md'),
+      `${body}\n\n## Outcome\n\n- **review_rounds**: 2\n- **review_result**: accepted_with_followups\n- **blocked**: false\n- **block_category**: none\n- **required_checks_all_passed**: true\n- **scope_drift_detected**: false\n- **stale_evidence_detected**: false\n- **human_intervention_required**: false\n`
+    );
+    const { errors, warnings } = validateConfig(d);
+    const taskErrors = errors.filter(e => e.includes('T-040.md'));
+    const taskWarnings = warnings.filter(w => w.includes('T-040.md') && w.includes('## Outcome'));
+    assert.deepEqual(taskErrors, [], `expected no errors for ## Outcome section, got: ${JSON.stringify(taskErrors)}`);
+    assert.deepEqual(taskWarnings, [], `expected no warnings for ## Outcome section, got: ${JSON.stringify(taskWarnings)}`);
+  });
+
   it('errors when a required task-record section is missing', () => {
     const d = makeTarget('task-missing-section');
     mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });

@@ -276,6 +276,7 @@ describe('generateCodexArtifacts', () => {
     assert.match(toml, /npx agenticloop --help/);
     assert.match(toml, /If no working event logging command is available, record a truthful process gap and continue\./);
     assert.match(toml, /role\.invoked/);
+    assert.match(toml, /target project state \(project\.md, tasks\/, decisions\/, improvements\/\)/);
     assert.equal(
       (toml.match(/Codex event logging override:/g) ?? []).length,
       1,

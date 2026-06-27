@@ -72,6 +72,15 @@ describe('generateOpencodeAgentRecords', () => {
     assert.match(agents.engineer.prompt, /do not call the host Skill tool for them/);
   });
 
+  it('includes the improvements/ target state in the path convention', () => {
+    const fx = makeFixture();
+    const alConfig = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+
+    const agents = generateOpencodeAgentRecords(alConfig, fx);
+
+    assert.match(agents.orchestrator.prompt, /target project state \(project\.md, tasks\/, decisions\/, improvements\/\)/);
+  });
+
   it('rewrites inline skill markers to canonical SKILL.md paths in the role body', () => {
     const fx = makeFixture();
     const alConfig = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));

@@ -13,6 +13,11 @@ requires_change_request: true
 
 # I-YYYY-MM-DD-001: Short Proposal Title
 
+`target_surface` must use the allowlist validated by the toolkit
+(`skill-trigger`, `skill-procedure`, `reviewer-checklist`, `task-template`,
+`event-logging-guidance`, `adapter-guidance`, `role-definition`,
+`core-methodology`, `permission-policy`, `decision-record`).
+
 ## Failure pattern
 The recurring pattern observed across multiple tasks.
 

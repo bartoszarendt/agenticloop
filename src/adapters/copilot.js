@@ -356,7 +356,7 @@ function buildCopilotAgentBody(
   lines.push(`Canonical role source: \`${roleSourceFile}\`.`);
   lines.push('Read `.agenticloop/project.md` before acting for setup status, task backend, document selections, naming, grouping, and event logging.');
   lines.push(`Follow \`${PROCESS_DOC_RELATIVE_PATH}\` as the workflow methodology.`);
-  lines.push('Path convention: toolkit source (agents/, skills/, backends/) lives under agenticloop/ (no leading dot); target project state (project.md, tasks/, decisions/) lives under .agenticloop/ (leading dot). .agenticloop/agents, .agenticloop/skills, and .agenticloop/backends are invalid paths.');
+  lines.push('Path convention: toolkit source (agents/, skills/, backends/) lives under agenticloop/ (no leading dot); target project state (project.md, tasks/, decisions/, improvements/) lives under .agenticloop/ (leading dot). .agenticloop/agents, .agenticloop/skills, and .agenticloop/backends are invalid paths.');
 
   const skillLines = formatRequiredSkillLines(requiredSkills, skillReferenceMap);
   if (skillLines.length > 0) {

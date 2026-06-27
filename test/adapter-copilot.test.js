@@ -177,6 +177,16 @@ describe('generateCopilotArtifacts', () => {
     assert.match(orchestratorText, /^agents:\n  - "al-maintainer"\n  - "al-engineer"$/m);
   });
 
+  it('includes the improvements/ path convention in generated agents', () => {
+    const fx = makeFixture();
+    const cfg = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+    const out = mkdtempSync(join(tmpDir, 'out-'));
+    generateCopilotArtifacts(cfg, fx, out);
+
+    const orchestratorAgent = readFileSync(join(out, '.github', 'agents', 'orchestrator.agent.md'), 'utf-8');
+    assert.match(orchestratorAgent, /target project state \(project\.md, tasks\/, decisions\/, improvements\/\)/);
+  });
+
   it('renders model frontmatter for Copilot agents and omits reasoningEffort fields', () => {
     const fx = makeFixture();
     const cfg = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));

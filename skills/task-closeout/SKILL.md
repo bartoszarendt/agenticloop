@@ -47,7 +47,10 @@ Review:
 - optional local event log entries emitted at workflow gates when event logging is enabled.
 
 When closing a task, the maintainer may fill the optional `## Outcome` section
-with the structured fields; it is not required and does not gate closeout.
+with the structured fields; it is not required and does not gate closeout. The
+`review_result` field in `## Outcome` is the final closeout classification for
+the task record, distinct from the per-review `review.result` field used in
+event-log entries.
 
 Do not copy raw agent exchanges into docs. Use task records, implementation artifacts, command output, and reviewed comments as sources of truth.
 

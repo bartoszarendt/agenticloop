@@ -56,7 +56,7 @@ function buildPrompt(roleName, roleSourceFile, requiredSkills, roleBody, skillsS
   let prompt = `You are the ${capitalize(roleName)} for the target project. `;
   prompt += `Follow ${roleSourceFile} as the canonical role contract. `;
   prompt += `Follow the selected project documents from .agenticloop/project.md and ${PROCESS_DOC_RELATIVE_PATH} as the Agentic Loop methodology.`;
-  prompt += ' Path convention: toolkit source (agents/, skills/, backends/) lives under agenticloop/ (no leading dot); target project state (project.md, tasks/, decisions/) lives under .agenticloop/ (leading dot). .agenticloop/agents, .agenticloop/skills, and .agenticloop/backends are invalid paths.';
+  prompt += ' Path convention: toolkit source (agents/, skills/, backends/) lives under agenticloop/ (no leading dot); target project state (project.md, tasks/, decisions/, improvements/) lives under .agenticloop/ (leading dot). .agenticloop/agents, .agenticloop/skills, and .agenticloop/backends are invalid paths.';
   if (roleName === 'orchestrator') {
     prompt += ' Agentic Loop is serial by default; do not start parallel role work unless a recorded concurrency plan, lease, and join condition prove the lanes do not collide.';
     prompt += ' In OpenCode, use the Task tool or explicit @maintainer / @engineer invocation when available; inline fallback is allowed only after the delegation capability check in role-delegation.';

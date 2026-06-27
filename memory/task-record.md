@@ -88,6 +88,10 @@ here so the engineer knows what evidence to publish.
 Optional. Maintainer-filled at closeout. Records structured signal for later
 loop-improvement pattern mining. Omit for routine tasks.
 
+`review_result` here is the final closeout classification for the task record;
+it is different from the per-review event-log field `review.result` emitted
+during review events.
+
 - **review_rounds**: integer count of review iterations.
 - **review_result**: `accepted` | `accepted_with_followups` | `rejected`.
 - **blocked**: `true` | `false`.
