@@ -182,7 +182,7 @@ Commands:
   remove                Remove Agentic Loop assets from a target directory.
   validate              Validate skills, config, links, and host setup.
   doctor                Show setup checklist, adapter state, and next commands.
-  event-logging         Append, validate, audit, or report optional durable workflow event logs.
+  event-logging         Write events (bare event type), validate, audit, or report optional durable workflow event logs.
   event                 Compatibility alias for event-logging.
   configure models      Set per-host role model settings in agenticloop.json.
   status                Show configured adapters, generated artifacts, and next steps.
@@ -631,6 +631,35 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
     console.error(`${commandLabel} requires an event type, 'validate', 'audit', or 'report'`);
     usage();
     process.exitCode = 1;
+    return;
+  }
+
+  if (sub === '--help' || sub === '-h') {
+    console.log(`${commandLabel} [event_type|validate|audit|report] [options]`);
+    console.log();
+    console.log('Subcommands:');
+    console.log('  validate              Validate event log files.');
+    console.log('  audit                 Audit task event logs for required events.');
+    console.log('  report                Generate a report from task event logs.');
+    console.log();
+    console.log('Write path (bare event type):');
+    console.log(`  ${commandLabel} <event_type> --summary "..." [options]`);
+    console.log();
+    console.log('  event_type is a positional — one of:');
+    for (const t of VALID_EVENT_TYPES) console.log(`    ${t}`);
+    console.log();
+    console.log('Write options:');
+    console.log('  --summary <text>      Required. Event description.');
+    console.log('  --outcome <outcome>   Event outcome.');
+    console.log('  --role <role>         Role associated with the event.');
+    console.log('  --backend <backend>   Storage backend (files, github).');
+    console.log('  --task <id>           Task identifier.');
+    console.log('  --trace-id <id>       Trace identifier.');
+    console.log('  --parent-event-id <id> Parent event identifier.');
+    console.log('  --refs <a,b,...>      Comma-separated list of references.');
+    console.log('  --data-json <json>    JSON event data payload.');
+    console.log();
+    process.exitCode = 0;
     return;
   }
 
