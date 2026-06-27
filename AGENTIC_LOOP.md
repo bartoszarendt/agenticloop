@@ -137,6 +137,24 @@ The `context` document role is for target-owned domain context, product
 vocabulary, or task-start context. It is not required for Agentic Loop's own
 glossary.
 
+## Context Read Discipline
+
+Agents read only the closed context set named for a task. The default context
+set is:
+
+- `.agenticloop/project.md` for backend, naming, grouping, and selected source documents,
+- the current task record,
+- the selected source documents listed in `.agenticloop/project.md` or the task record,
+- decision records explicitly linked from those sources,
+- the backend projection doc in `agenticloop/backends/` that matches `task_backend`.
+
+Do not expand the context set unless the task record, project map, or a human
+explicitly names an additional file. Do not scan the whole repository at runtime
+to "find relevant files". Do not treat `.agenticloop/logs/` as ambient context;
+read logs only through explicit event-log audit or report commands, or when a
+task-scoped need is stated in the task record or by the human. Do not treat
+`.agenticloop/tmp/` as source context; it is scratch space only.
+
 ## First-Run Bootstrap
 
 At the start of the first non-trivial Agentic Loop task, read

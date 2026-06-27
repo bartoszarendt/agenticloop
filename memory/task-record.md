@@ -4,6 +4,11 @@ status: agent-ready
 backend: files
 implementation_artifact:
 review_status:
+# Structured scope map: repo-relative glob patterns for mechanical changed-file
+# validation. Examples: ["src/example.js", "test/example.test.js", "docs/"].
+# Leave empty or omit to rely on the human-readable `## Expected Files or Areas`
+# section and reviewer enforcement through `## Deviations From Plan`.
+allowed_paths: []
 ---
 
 # T-001 - Short Task Title

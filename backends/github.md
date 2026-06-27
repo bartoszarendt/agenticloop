@@ -65,11 +65,19 @@ The issue body must contain the full task-record contract from
 Template` and a non-placeholder `## Reviewer Checklist`. Labels indicate state
 but do not substitute for complete issue content.
 
-`## Expected Files or Areas` is the task's current human-readable scope map. A
-future structured scope map (for example, frontmatter `expected_files` or
-`allowed_paths` with repo-relative glob semantics) would be required before
-mechanical changed-file validation can run. Until that structured field exists,
-reviewers enforce unexpected files through `## Deviations`.
+`## Expected Files or Areas` is the task's current human-readable scope map. The
+optional frontmatter field `allowed_paths` is the structured scope map: a YAML
+list of repo-relative glob-like path patterns. Forward slashes are canonical;
+absolute paths and `..` traversal are not allowed. Directory entries ending in
+`/` match everything beneath that directory. Simple glob support covers `*`,
+`**`, and `?`. The compatibility alias `expected_files` is accepted when
+`allowed_paths` is absent.
+
+When `allowed_paths` is present, `agenticloop validate` performs a warn-only
+mechanical check that changed files in the working tree match at least one
+allowed pattern. Out-of-scope changed files surface as warnings; reviewers still
+enforce unexpected files through `## Deviations`. The structured field
+complements the human-readable section; it does not replace it.
 
 Apply the configured task label and, when the project uses grouping, the
 configured grouping label. Use `agent-ready` only after the maintainer confirms

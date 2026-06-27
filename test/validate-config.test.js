@@ -192,6 +192,134 @@ function writeBackendProjection(dir, backend) {
   writeFileSync(join(dir, 'agenticloop', 'backends', `${backend}.md`), `# ${backend}\n`);
 }
 
+function gitStatusRunner(changedFiles = []) {
+  return (command, args) => {
+    const argsStr = args.join(' ');
+
+    if (command === 'git' && argsStr === 'status --short --untracked-files=all') {
+      const stdout = changedFiles
+        .map(file => ` M ${file}`)
+        .join('\n') + (changedFiles.length ? '\n' : '');
+      return { status: 0, stdout, stderr: '' };
+    }
+
+    if (command === 'git' && argsStr === 'config --get remote.origin.url') {
+      return { status: 1, stdout: '', stderr: 'no remote configured' };
+    }
+
+    if (command === 'gh') {
+      const error = new Error('spawn gh ENOENT');
+      error.code = 'ENOENT';
+      return { status: null, stdout: '', stderr: '', error };
+    }
+
+    return {
+      status: 1,
+      stdout: '',
+      stderr: `unexpected command: ${command} ${argsStr}`,
+    };
+  };
+}
+
+function makeFilesFirstTarget(name) {
+  const d = mkdtempSync(join(tmpDir, name));
+  seedTargetLayout(REPO_ROOT, d);
+  // Remove adapter config so the target is genuinely files-first/project.md only.
+  rmSync(join(d, 'agenticloop.json'), { force: true });
+  rmSync(join(d, '.opencode'), { recursive: true, force: true });
+  writeProjectMap(d, [
+    'setup_status: unconfirmed',
+    'setup_confirmed_at: ""',
+    'setup_confirmed_by: ""',
+    'task_backend: files',
+    'task_id_pattern: "T-<number>"',
+    'task_file_template: ".agenticloop/tasks/{taskId}.md"',
+    'grouping_profile: flat',
+  ]);
+  writeBackendProjection(d, 'files');
+  return d;
+}
+
+function taskRecordWithScope({
+  taskId = 'T-001',
+  allowedPaths = null,
+  expectedFiles = null,
+} = {}) {
+  const scopeLines = [];
+  if (allowedPaths !== null) {
+    scopeLines.push('allowed_paths:');
+    for (const p of allowedPaths) scopeLines.push(`  - ${p}`);
+  } else if (expectedFiles !== null) {
+    scopeLines.push('expected_files:');
+    for (const p of expectedFiles) scopeLines.push(`  - ${p}`);
+  }
+  const scopeFm = scopeLines.join('\n');
+  return [
+    '---',
+    `task_id: ${taskId}`,
+    'status: agent-ready',
+    'backend: files',
+    'implementation_artifact:',
+    'review_status:',
+    scopeFm,
+    '---',
+    `# ${taskId} - Sample`,
+    '## Task',
+    'Implement the feature.',
+    '## Source Documents Reviewed',
+    'AGENTS.md',
+    '## Current State',
+    'Current.',
+    '## Scope',
+    'Add X.',
+    '## Out of Scope',
+    'Unrelated.',
+    '## Acceptance Criteria',
+    'X works.',
+    '## Required Checks',
+    'npm test',
+    '## Expected Files or Areas',
+    'src/example.js',
+    '## Implementation Notes',
+    'Notes.',
+    '## Completion Summary Template',
+    'Engineer must list files, checks, results, limitations, deviations, and follow-ups.',
+    '## Reviewer Checklist',
+    '- [ ] Scope matches task record\n- [ ] Evidence is fresh',
+  ].join('\n');
+}
+
+function taskRecordWithFrontmatter(frontmatterLines) {
+  return [
+    '---',
+    ...frontmatterLines,
+    '---',
+    '# T-001 - Sample',
+    '## Task',
+    'Implement the feature.',
+    '## Source Documents Reviewed',
+    'AGENTS.md',
+    '## Current State',
+    'Current.',
+    '## Scope',
+    'Add X.',
+    '## Out of Scope',
+    'Unrelated.',
+    '## Acceptance Criteria',
+    'X works.',
+    '## Required Checks',
+    'npm test',
+    '## Expected Files or Areas',
+    'src/example.js',
+    '## Implementation Notes',
+    'Notes.',
+    '## Completion Summary Template',
+    'Engineer must list files, checks, results, limitations, deviations, and follow-ups.',
+    '## Reviewer Checklist',
+    '- [ ] Scope matches task record\n- [ ] Evidence is fresh',
+  ].join('\n');
+}
+
 function writeCodexAdapterOutput(dir, options = {}) {
   const cfg = loadAgenticLoopConfig(join(dir, 'agenticloop.json'));
   if (options.pluginEnabled) {
@@ -2161,6 +2289,284 @@ describe('Files-first validation with project.md only', () => {
     assert.ok(
       errors.some(e => /active task backend 'github'/.test(e) && e.includes('agenticloop/backends/github.md')),
       `expected resolved-backend projection error, got: ${JSON.stringify(errors)}`
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Structured scope-map changed-file validation
+// ---------------------------------------------------------------------------
+
+describe('Structured scope-map changed-file validation', () => {
+  it('accepts a valid allowed_paths list', () => {
+    const d = makeFilesFirstTarget('scope-valid');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-001.md'),
+      taskRecordWithScope({ allowedPaths: ['src/example.js', 'test/example.test.js'] })
+    );
+
+    const { errors, warnings } = validateConfig(d, {
+      commandRunner: gitStatusRunner(['src/example.js']),
+    });
+    const scopeWarnings = warnings.filter(w => w.includes('allowed_paths') || w.includes('expected_files'));
+    assert.deepEqual(errors, []);
+    assert.deepEqual(scopeWarnings, []);
+  });
+
+  it('emits a warning when a changed file is outside allowed_paths', () => {
+    const d = makeFilesFirstTarget('scope-outside');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-001.md'),
+      taskRecordWithScope({ allowedPaths: ['src/example.js'] })
+    );
+
+    const { errors, warnings } = validateConfig(d, {
+      commandRunner: gitStatusRunner(['src/example.js', 'unrelated.md']),
+    });
+    assert.deepEqual(errors, []);
+    assert.ok(
+      warnings.some(w =>
+        w.includes('T-001.md') &&
+        w.includes('allowed_paths') &&
+        w.includes('unrelated.md') &&
+        w.includes('## Deviations')
+      ),
+      `expected out-of-scope warning, got: ${JSON.stringify(warnings)}`
+    );
+  });
+
+  it('does not emit a warning when changed files are inside exact paths, directories, or globs', () => {
+    const d = makeFilesFirstTarget('scope-matches');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-001.md'),
+      taskRecordWithScope({
+        allowedPaths: [
+          'src/exact.js',
+          'lib/',
+          'test/*.test.js',
+          'docs/**/*.md',
+        ],
+      })
+    );
+
+    const { errors, warnings } = validateConfig(d, {
+      commandRunner: gitStatusRunner([
+        'src/exact.js',
+        'lib/nested/file.js',
+        'test/foo.test.js',
+        'test/bar.test.js',
+        'docs/guide/intro.md',
+      ]),
+    });
+    const scopeWarnings = warnings.filter(w => w.includes('allowed_paths') || w.includes('expected_files'));
+    assert.deepEqual(errors, []);
+    assert.deepEqual(scopeWarnings, []);
+  });
+
+  it('rejects unsafe structured scope paths', () => {
+    const d = makeFilesFirstTarget('scope-unsafe');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-001.md'),
+      taskRecordWithScope({ allowedPaths: ['/etc/passwd', '../secrets.txt', 'src/ok.js'] })
+    );
+
+    const { errors } = validateConfig(d, {
+      commandRunner: gitStatusRunner([]),
+    });
+    assert.ok(
+      errors.some(e => e.includes('T-001.md') && e.includes('/etc/passwd')),
+      `expected absolute-path error, got: ${JSON.stringify(errors)}`
+    );
+    assert.ok(
+      errors.some(e => e.includes('T-001.md') && e.includes('../secrets.txt')),
+      `expected traversal error, got: ${JSON.stringify(errors)}`
+    );
+    assert.ok(
+      !errors.some(e => e.includes('src/ok.js')),
+      `safe pattern should not be reported as error: ${JSON.stringify(errors)}`
+    );
+  });
+
+  it('accepts expected_files as an alias when allowed_paths is absent', () => {
+    const d = makeFilesFirstTarget('scope-alias');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-001.md'),
+      taskRecordWithScope({ expectedFiles: ['src/example.js'] })
+    );
+
+    const { errors, warnings } = validateConfig(d, {
+      commandRunner: gitStatusRunner(['src/example.js']),
+    });
+    const scopeWarnings = warnings.filter(w => w.includes('allowed_paths') || w.includes('expected_files'));
+    assert.deepEqual(errors, []);
+    assert.deepEqual(scopeWarnings, []);
+  });
+
+  it('warns on out-of-scope files using expected_files alias', () => {
+    const d = makeFilesFirstTarget('scope-alias-warning');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-001.md'),
+      taskRecordWithScope({ expectedFiles: ['src/example.js'] })
+    );
+
+    const { errors, warnings } = validateConfig(d, {
+      commandRunner: gitStatusRunner(['other.js']),
+    });
+    assert.deepEqual(errors, []);
+    assert.ok(
+      warnings.some(w => w.includes('T-001.md') && w.includes('expected_files') && w.includes('other.js')),
+      `expected expected_files warning, got: ${JSON.stringify(warnings)}`
+    );
+  });
+
+  it('does not require the structured scope field on existing task records', () => {
+    const d = makeFilesFirstTarget('scope-optional');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(join(d, '.agenticloop', 'tasks', 'T-001.md'), taskRecord({ taskId: 'T-001' }));
+
+    const { errors, warnings } = validateConfig(d, {
+      commandRunner: gitStatusRunner(['unrelated.md']),
+    });
+    const scopeWarnings = warnings.filter(w => w.includes('allowed_paths') || w.includes('expected_files'));
+    assert.deepEqual(errors, []);
+    assert.deepEqual(scopeWarnings, []);
+  });
+
+  it('does not warn about .agenticloop/tmp/ contents as out-of-scope changed files', () => {
+    const d = makeFilesFirstTarget('scope-tmp-excluded');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-001.md'),
+      taskRecordWithScope({ allowedPaths: ['src/'] })
+    );
+
+    const { errors, warnings } = validateConfig(d, {
+      commandRunner: gitStatusRunner(['src/example.js', '.agenticloop/tmp/scratch.md']),
+    });
+    assert.deepEqual(errors, []);
+    assert.ok(
+      !warnings.some(w => w.includes('.agenticloop/tmp/scratch.md')),
+      `tmp file should not be reported as out of scope: ${JSON.stringify(warnings)}`
+    );
+  });
+
+  it('warns when git status cannot be read and a structured scope field is present', () => {
+    const d = makeFilesFirstTarget('scope-git-missing');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-001.md'),
+      taskRecordWithScope({ allowedPaths: ['src/'] })
+    );
+
+    const failingRunner = (command, args) => {
+      if (command === 'git' && args.join(' ') === 'status --short --untracked-files=all') {
+        return { status: 1, stdout: '', stderr: 'not a git repository' };
+      }
+      return gitStatusRunner([])(command, args);
+    };
+
+    const { errors, warnings } = validateConfig(d, { commandRunner: failingRunner });
+    assert.deepEqual(errors, []);
+    assert.ok(
+      warnings.some(w =>
+        w.includes('T-001.md') &&
+        w.includes('allowed_paths') &&
+        w.includes('changed-file validation was skipped')
+      ),
+      `expected skipped-validation warning, got: ${JSON.stringify(warnings)}`
+    );
+  });
+
+  it('accepts inline array allowed_paths syntax', () => {
+    const d = makeFilesFirstTarget('scope-inline-array');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-001.md'),
+      taskRecordWithFrontmatter([
+        'task_id: T-001',
+        'status: agent-ready',
+        'backend: files',
+        'implementation_artifact:',
+        'review_status:',
+        'allowed_paths: ["src/example.js", "test/example.test.js"]',
+      ])
+    );
+
+    const { errors, warnings } = validateConfig(d, {
+      commandRunner: gitStatusRunner(['src/example.js']),
+    });
+    const scopeWarnings = warnings.filter(w => w.includes('allowed_paths') || w.includes('expected_files'));
+    assert.deepEqual(errors, []);
+    assert.deepEqual(scopeWarnings, []);
+  });
+
+  it('rejects scalar allowed_paths as malformed', () => {
+    const d = makeFilesFirstTarget('scope-scalar');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-001.md'),
+      taskRecordWithFrontmatter([
+        'task_id: T-001',
+        'status: agent-ready',
+        'backend: files',
+        'implementation_artifact:',
+        'review_status:',
+        'allowed_paths: src/',
+      ])
+    );
+
+    const { errors } = validateConfig(d, {
+      commandRunner: gitStatusRunner(['other.js']),
+    });
+    assert.ok(
+      errors.some(e => e.includes('T-001.md') && e.includes('allowed_paths') && e.includes('YAML list')),
+      `expected scalar-list error, got: ${JSON.stringify(errors)}`
+    );
+  });
+
+  it('rejects Windows absolute paths in structured scope field', () => {
+    const d = makeFilesFirstTarget('scope-windows-absolute');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-001.md'),
+      taskRecordWithFrontmatter([
+        'task_id: T-001',
+        'status: agent-ready',
+        'backend: files',
+        'implementation_artifact:',
+        'review_status:',
+        'allowed_paths:',
+        '  - C:/secret.txt',
+        '  - C:\\secret.txt',
+        '  - src/ok.js',
+      ])
+    );
+
+    const { errors } = validateConfig(d, {
+      commandRunner: gitStatusRunner([]),
+    });
+    const unsafeErrors = errors.filter(e => e.includes('unsafe or malformed pattern'));
+    assert.ok(
+      unsafeErrors.length >= 2,
+      `expected two unsafe-pattern errors, got: ${JSON.stringify(errors)}`
+    );
+    assert.ok(
+      errors.some(e => e.includes('C:/secret.txt')),
+      `expected C:/secret.txt error, got: ${JSON.stringify(errors)}`
+    );
+    assert.ok(
+      errors.some(e => /C:\\+secret\.txt/.test(e)),
+      `expected C:\\secret.txt error, got: ${JSON.stringify(errors)}`
+    );
+    assert.ok(
+      !errors.some(e => e.includes('src/ok.js')),
+      `safe pattern should not be reported as error: ${JSON.stringify(errors)}`
     );
   });
 });

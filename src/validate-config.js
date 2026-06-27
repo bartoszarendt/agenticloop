@@ -216,15 +216,76 @@ function rawFrontmatterBlock(content) {
   return match?.[1] ?? '';
 }
 
-function readYamlListField(frontmatterText, fieldName) {
-  const lines = frontmatterText.split(/\r?\n/);
-  const fieldHeader = new RegExp(`^${escapeRegExp(fieldName)}:\\s*$`);
+function splitInlineArray(text) {
   const values = [];
-  let found = false;
+  let current = '';
+  let inSingle = false;
+  let inDouble = false;
+  let escape = false;
+
+  for (const c of text) {
+    if (escape) {
+      current += c;
+      escape = false;
+      continue;
+    }
+    if (c === '\\') {
+      current += c;
+      escape = true;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      current += c;
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      current += c;
+      continue;
+    }
+    if (c === ',' && !inSingle && !inDouble) {
+      values.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += c;
+  }
+
+  const trimmed = current.trim();
+  if (trimmed) values.push(trimmed);
+  return values.map(parseYamlScalarString);
+}
+
+function readYamlField(frontmatterText, fieldName) {
+  const lines = frontmatterText.split(/\r?\n/);
+  const fieldHeader = new RegExp(`^${escapeRegExp(fieldName)}:\\s*(.*)$`);
 
   for (let i = 0; i < lines.length; i++) {
-    if (!fieldHeader.test(lines[i].trim())) continue;
-    found = true;
+    const match = lines[i].match(fieldHeader);
+    if (!match) continue;
+
+    const rest = match[1].trim();
+
+    if (rest.startsWith('[')) {
+      let buffer = rest;
+      let j = i;
+      while (!buffer.includes(']') && j < lines.length - 1) {
+        j++;
+        buffer += '\n' + lines[j];
+      }
+      const closeIdx = buffer.indexOf(']');
+      if (closeIdx === -1) {
+        return { found: true, value: buffer.trim() };
+      }
+      return { found: true, value: splitInlineArray(buffer.slice(1, closeIdx)) };
+    }
+
+    if (rest !== '') {
+      return { found: true, value: parseYamlScalarString(rest) };
+    }
+
+    const values = [];
     for (let j = i + 1; j < lines.length; j++) {
       const line = lines[j];
       if (!line.trim()) continue;
@@ -233,10 +294,17 @@ function readYamlListField(frontmatterText, fieldName) {
       if (!itemMatch) break;
       values.push(parseYamlScalarString(itemMatch[1]));
     }
-    break;
+    return { found: true, value: values };
   }
 
-  return found ? values : null;
+  return { found: false, value: null };
+}
+
+function readYamlListField(frontmatterText, fieldName) {
+  const { found, value } = readYamlField(frontmatterText, fieldName);
+  if (!found) return null;
+  if (Array.isArray(value)) return value;
+  return null;
 }
 
 // Broad detection of an agent-claimed PR or merge action inside a files-backed
@@ -327,8 +395,144 @@ function validateTaskRecord(content, filename) {
   return errors;
 }
 
+// ---------------------------------------------------------------------------
+// Structured scope-map / changed-file validation
+// ---------------------------------------------------------------------------
+
+const SCOPE_MAP_FIELD_NAMES = ['allowed_paths', 'expected_files'];
+
+function isSafeScopePattern(pattern) {
+  if (typeof pattern !== 'string') return false;
+  const normalized = normalizePath(pattern);
+  if (!normalized) return false;
+  if (normalized.startsWith('/')) return false;
+  if (normalized.includes('..')) return false;
+  if (/^[A-Za-z]:\//.test(normalized)) return false;
+  return true;
+}
+
+function readStructuredScopePatterns(frontmatterText, filename, errors) {
+  let fieldName = SCOPE_MAP_FIELD_NAMES[0];
+  let result = readYamlField(frontmatterText, fieldName);
+  if (!result.found) {
+    fieldName = SCOPE_MAP_FIELD_NAMES[1];
+    result = readYamlField(frontmatterText, fieldName);
+  }
+  if (!result.found) {
+    return null;
+  }
+
+  if (!Array.isArray(result.value)) {
+    errors.push(
+      `Task record '${filename}' structured scope field '${fieldName}' must be a YAML list`
+    );
+    return null;
+  }
+
+  const patterns = [];
+  for (const rawPattern of result.value) {
+    if (!isSafeScopePattern(rawPattern)) {
+      errors.push(
+        `Task record '${filename}' structured scope field '${fieldName}' contains unsafe or malformed pattern: ${JSON.stringify(rawPattern)}`
+      );
+      continue;
+    }
+    patterns.push(normalizePath(rawPattern));
+  }
+
+  return { fieldName, patterns };
+}
+
+function globPatternToRegExp(pattern) {
+  let regex = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    const next = pattern[i + 1];
+    if (c === '*' && next === '*') {
+      regex += '.*';
+      i++;
+    } else if (c === '*') {
+      regex += '[^/]*';
+    } else if (c === '?') {
+      regex += '[^/]';
+    } else if (/[.+^${}()|[\]\\]/.test(c)) {
+      regex += `\\${c}`;
+    } else {
+      regex += c;
+    }
+  }
+  return new RegExp(`^${regex}$`);
+}
+
+function fileMatchesScopePattern(file, pattern) {
+  if (pattern.endsWith('/')) {
+    return file.startsWith(pattern) || file === pattern.slice(0, -1);
+  }
+  return globPatternToRegExp(pattern).test(file);
+}
+
+function isFileInScope(file, patterns) {
+  return patterns.some(pattern => fileMatchesScopePattern(file, pattern));
+}
+
+function collectChangedFiles(repoRoot, commandRunner) {
+  const result = runCommand(commandRunner, repoRoot, 'git', [
+    'status',
+    '--short',
+    '--untracked-files=all',
+  ]);
+
+  if (result.status !== 0) {
+    return {
+      files: [],
+      error: commandMessage(result) || 'git status failed',
+    };
+  }
+
+  const files = [];
+  const seen = new Set();
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    // Short format: XY path or XY origin -> destination (renamed/copied)
+    const match = line.match(/^.. (.+?)(?: -> (.+))?$/);
+    if (!match) continue;
+    const left = normalizePath(match[1]);
+    const right = match[2] ? normalizePath(match[2]) : null;
+
+    for (const file of [left, right].filter(Boolean)) {
+      if (seen.has(file)) continue;
+      seen.add(file);
+      // Do not scan .agenticloop/tmp/ contents as changed-file evidence.
+      if (file.startsWith('.agenticloop/tmp/')) continue;
+      files.push(file);
+    }
+  }
+
+  return { files, error: null };
+}
+
+function validateChangedFilesAgainstScope(repoRoot, commandRunner, filename, scope, warnings) {
+  const { files, error } = collectChangedFiles(repoRoot, commandRunner);
+  if (error) {
+    warnings.push(
+      `Task record '${filename}' has structured scope field '${scope.fieldName}' but changed-file validation was skipped because git status could not be read: ${error}`
+    );
+    return;
+  }
+
+  const outOfScope = files.filter(file => !isFileInScope(file, scope.patterns));
+  if (outOfScope.length > 0) {
+    const examples = uniqueExamples(outOfScope, 3).join(', ');
+    warnings.push(
+      `Task record '${filename}' structured scope field '${scope.fieldName}' does not cover changed file(s): ${examples}. ` +
+      `Reviewers still enforce unexpected files via '## Deviations'.`
+    );
+  }
+}
+
 function validateFilesTaskRecord(content, filename, options = {}) {
   const errors = [];
+  const warnings = options.warnings ?? [];
   const [frontmatter] = parseFrontmatter(content);
   const activeTaskBackend = options.activeTaskBackend ?? 'files';
   const projectMapConfig = options.projectMapConfig ?? PROJECT_MAP_DEFAULTS;
@@ -419,6 +623,17 @@ function validateFilesTaskRecord(content, filename, options = {}) {
     errors.push(
       `Task record '${filename}' claims an agent opened, created, or merged a pull request or branch ` +
       `while active backend is 'files'; PR/merge behavior requires task_backend: github`
+    );
+  }
+
+  const scope = readStructuredScopePatterns(rawFrontmatterBlock(content), filename, errors);
+  if (scope && scope.patterns.length > 0 && options.repoRoot && options.commandRunner) {
+    validateChangedFilesAgainstScope(
+      options.repoRoot,
+      options.commandRunner,
+      filename,
+      scope,
+      warnings
     );
   }
 
@@ -765,9 +980,10 @@ export function validateConfig(repoRoot, options = {}) {
     );
     validateTmpAndGitignore(repoRoot, errors, warnings);
     validateNoDottedToolkitPaths(repoRoot, warnings);
-    validateTaskRecords(repoRoot, '.agenticloop/tasks', errors, {
+    validateTaskRecords(repoRoot, '.agenticloop/tasks', errors, warnings, {
       activeTaskBackend: 'files',
       projectMapConfig: PROJECT_MAP_DEFAULTS,
+      commandRunner,
     });
     return { errors, warnings };
   }
@@ -824,9 +1040,10 @@ export function validateConfig(repoRoot, options = {}) {
   } else if (jsonConfig) {
     taskDir = jsonConfig.backends?.files?.taskDirectory ?? '.agenticloop/tasks';
   }
-  validateTaskRecords(repoRoot, taskDir, errors, {
+  validateTaskRecords(repoRoot, taskDir, errors, warnings, {
     activeTaskBackend: taskBackendResolution.backend,
     projectMapConfig: projectMapResult?.config ?? PROJECT_MAP_DEFAULTS,
+    commandRunner,
   });
 
   return { errors, warnings };
@@ -893,7 +1110,7 @@ function validateTmpAndGitignore(repoRoot, errors, warnings) {
   }
 }
 
-function validateTaskRecords(repoRoot, taskDirRel, errors, options = {}) {
+function validateTaskRecords(repoRoot, taskDirRel, errors, warnings, options = {}) {
   const taskDir = join(repoRoot, taskDirRel);
   if (existsSync(taskDir) && statSync(taskDir).isDirectory()) {
     for (const f of readdirSync(taskDir).filter(n => n.endsWith('.md'))) {
@@ -901,7 +1118,12 @@ function validateTaskRecords(repoRoot, taskDirRel, errors, options = {}) {
       for (const err of validateTaskRecord(content, f)) {
         errors.push(err);
       }
-      for (const err of validateFilesTaskRecord(content, f, options)) {
+      for (const err of validateFilesTaskRecord(content, f, {
+        ...options,
+        repoRoot,
+        commandRunner: options.commandRunner,
+        warnings,
+      })) {
         errors.push(err);
       }
     }

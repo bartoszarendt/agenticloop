@@ -167,7 +167,9 @@ must be reviewed for whether task-specific items were omitted.
 
 The expected files or areas section is the task's human-readable scope map. It names the files, modules, commands, tests, and docs the engineer is expected to inspect or touch.
 
-A future structured scope map (for example, frontmatter `expected_files` or `allowed_paths` with repo-relative glob semantics) would be required before mechanical changed-file validation can run. Until that structured field exists, reviewers enforce unexpected files through `## Deviations From Plan`.
+The optional frontmatter field `allowed_paths` is the structured scope map. It accepts a YAML list of repo-relative glob-like path patterns. Forward slashes are canonical. Absolute paths and `..` traversal are not allowed. Directory entries may end with `/` and mean everything beneath that directory. Exact file paths match that file. Simple glob support is enough for now: `*`, `**`, and `?`. The compatibility alias `expected_files` is accepted when `allowed_paths` is absent.
+
+When `allowed_paths` is present, `agenticloop validate` performs a warn-only mechanical check that changed files in the working tree match at least one allowed pattern. Out-of-scope changed files surface as warnings; reviewers still enforce unexpected files through `## Deviations From Plan`. The structured field does not replace the human-readable `## Expected Files or Areas` section.
 
 If implementation changes an unexpected file, the implementation summary must explain why. Review treats unexplained unexpected files as a scope issue under [[review-and-accept]].
 Bundling an incidental toolkit, dependency, or asset-refresh change into a task that does not require it is the same scope violation. If a refresh is genuinely needed, it is its own task and its own artifact.

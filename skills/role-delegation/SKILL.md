@@ -177,7 +177,7 @@ When invoking a role, orchestrator prompts must include:
 Role:              maintainer | engineer
 Task ID:           <task-id from project task convention, or "pending decomposition" before task records exist>
 Backend:           <task_backend from .agenticloop/project.md; default is 'files'>
-Source docs:       <list of files the role must read before acting>
+Source docs:       <closed list of files the role must read before acting; no expansion without explicit exception>
 Scope:             <what the role should do>
 Out of scope:      <what the role must not do>
 Expected output:   <what the role should produce>
@@ -188,6 +188,19 @@ Lease:             <observable-step checkpoint cadence, no-progress budget, and 
 
 Do not omit scope, out of scope, expected output, or stop condition. An incomplete delegation
 prompt produces incomplete role output.
+
+## Context Read Discipline
+
+Treat `Source docs` as the closed context set. A delegated role may also read
+the named task record, `.agenticloop/project.md` for backend or document
+selection, the matching `agenticloop/backends/` projection, and files explicitly
+named by the human or task record. Do not scan the repository for "related"
+files. Do not read `.agenticloop/logs/` as ambient context; use task-scoped
+event-log audit/report or an explicit task need. `.agenticloop/tmp/` is scratch,
+not source. This limits source/context expansion, not task execution tools: use
+search or call graphs, git, tests, and host context-management tools
+when they are scoped to the delegated task and do not broaden the task contract.
+Missing context returns `needs_context` or `blocked`.
 
 For long-running or parallel work, the lease is required. Without host-enforced
 wall-clock cancellation, include a return-after-N-observable-steps checkpoint.
