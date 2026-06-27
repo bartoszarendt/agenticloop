@@ -40,8 +40,19 @@ function quoteYamlScalar(value) {
   return JSON.stringify(String(value ?? ''));
 }
 
+export function normalizeSkillsSourceDir(skillsSourceDir) {
+  return (skillsSourceDir ?? SKILLS_SOURCE_DIRECTORY).replace(/\\/g, '/').replace(/\/$/, '');
+}
+
+export function rewriteOpencodeSkillReferences(text, skillsSrc) {
+  if (!text) return text;
+  return text.replace(/\[\[([A-Za-z0-9_.-]+)\]\]/g, (_full, name) =>
+    `\`${skillsSrc}/${name}/SKILL.md\``
+  );
+}
+
 function buildPrompt(roleName, roleSourceFile, requiredSkills, roleBody, skillsSourceDir) {
-  const skillsSrc = (skillsSourceDir ?? SKILLS_SOURCE_DIRECTORY).replace(/\\/g, '/').replace(/\/$/, '');
+  const skillsSrc = normalizeSkillsSourceDir(skillsSourceDir);
   let prompt = `You are the ${capitalize(roleName)} for the target project. `;
   prompt += `Follow ${roleSourceFile} as the canonical role contract. `;
   prompt += `Follow the selected project documents from .agenticloop/project.md and ${PROCESS_DOC_RELATIVE_PATH} as the Agentic Loop methodology.`;
@@ -56,11 +67,11 @@ function buildPrompt(roleName, roleSourceFile, requiredSkills, roleBody, skillsS
     skillName => `- ${skillName}: ${skillsSrc}/${skillName}/SKILL.md`
   );
   if (skillLines.length > 0) {
-    prompt += '\n\nAgentic Loop internal procedures: when a trigger applies, read and follow the corresponding canonical file before acting:';
+    prompt += '\n\nAgentic Loop internal procedures: when a trigger applies, read and follow the corresponding canonical file before acting. These are file paths to open with your file-reading tool, not host skills -- do not call the host Skill tool for them, it will not find them:';
     prompt += `\n${skillLines.join('\n')}`;
   }
   if (roleBody) {
-    prompt += `\n\n${roleBody}`;
+    prompt += `\n\n${rewriteOpencodeSkillReferences(roleBody, skillsSrc)}`;
   }
   return prompt;
 }

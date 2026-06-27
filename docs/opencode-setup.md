@@ -106,9 +106,12 @@ Agentic Loop internal procedures: when a trigger applies, read and follow the co
 ```
 
 The listed procedures come from each role's `requiredSkills`, and the path uses
-the configured `skills.sourceDirectory` (default `agenticloop/skills`). This keeps OpenCode
-pointed at the same canonical `agenticloop/skills/<name>/SKILL.md` source the other hosts
-render, without copying per-procedure skills into a host directory.
+configured `skills.sourceDirectory` (default `agenticloop/skills`). Any inline
+`[[skill-name]]` markers in the canonical role body are also rewritten to the
+same `agenticloop/skills/<skill-name>/SKILL.md` file-path references. This keeps
+OpenCode pointed at the same canonical `agenticloop/skills/<name>/SKILL.md`
+source the other hosts render, without copying per-procedure skills into a host
+directory.
 
 ## Running OpenCode Against a Separate Target Project
 

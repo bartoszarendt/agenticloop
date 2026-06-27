@@ -62,6 +62,36 @@ describe('generateOpencodeAgentRecords', () => {
     assert.match(agents.orchestrator.prompt, /process\/skills\/role-delegation\/SKILL\.md/);
     assert.match(agents.orchestrator.prompt, /process\/skills\/blocked-state\/SKILL\.md/);
   });
+
+  it('tells agents internal procedures are file paths, not host Skill tool invocations', () => {
+    const fx = makeFixture();
+    const alConfig = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+
+    const agents = generateOpencodeAgentRecords(alConfig, fx);
+
+    assert.match(agents.engineer.prompt, /do not call the host Skill tool for them/);
+  });
+
+  it('rewrites inline skill markers to canonical SKILL.md paths in the role body', () => {
+    const fx = makeFixture();
+    const alConfig = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+
+    const agents = generateOpencodeAgentRecords(alConfig, fx);
+
+    assert.doesNotMatch(agents.engineer.prompt, /\[\[[a-z0-9-]+\]\]/);
+    assert.match(agents.engineer.prompt, /agenticloop\/skills\/tdd-implementation\/SKILL\.md/);
+  });
+
+  it('uses the configured skills source directory when rewriting inline skill markers', () => {
+    const fx = makeFixture();
+    const alConfig = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+    alConfig.skills = { sourceDirectory: 'process/skills' };
+
+    const agents = generateOpencodeAgentRecords(alConfig, fx);
+
+    assert.match(agents.engineer.prompt, /process\/skills\/blocked-state\/SKILL\.md/);
+    assert.doesNotMatch(agents.engineer.prompt, /\[\[blocked-state\]\]/);
+  });
 });
 
 describe('renderOpencodeAgentMarkdown', () => {

@@ -50,8 +50,10 @@ import {
   generateOpencodeAgentRecords,
   OPENCODE_COMMAND_RELATIVE_PATH,
   OPENCODE_ROLE_NAMES,
+  normalizeSkillsSourceDir,
   resolveOpencodeAgentPath,
   resolveOpencodeCommandPath,
+  rewriteOpencodeSkillReferences,
 } from './adapters/opencode.js';
 import {
   COPILOT_PUBLIC_SKILL_NAME,
@@ -1502,7 +1504,8 @@ function validateOpencodeAgent(roleName, expectedAgent, config, repoRoot, errors
     }
   }
 
-  if (expectedAgent?.promptBody && !body.includes(expectedAgent.promptBody)) {
+  const skillsSrc = normalizeSkillsSourceDir(config.skills?.sourceDirectory);
+  if (expectedAgent?.promptBody && !body.includes(rewriteOpencodeSkillReferences(expectedAgent.promptBody, skillsSrc))) {
     errors.push(`${displayPath}: prompt body must append the canonical role body from ${expectedAgent.sourceFile}`);
   }
 
