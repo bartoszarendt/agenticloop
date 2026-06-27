@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 Path convention: toolkit source (`AGENTIC_LOOP.md`, `agents/`, `skills/`,
 `backends/`) lives under `agenticloop/` (no leading dot). Target project state
-(`project.md`, `tasks/`, `decisions/`) lives under `.agenticloop/` (leading
+(`project.md`, `tasks/`, `decisions/`, `improvements/`) lives under `.agenticloop/` (leading
 dot). `.agenticloop/agents`, `.agenticloop/skills`, and
 `.agenticloop/backends` are invalid paths -- canonical assets are always
 under `agenticloop/` without the dot.

@@ -23,6 +23,33 @@ export const PROJECT_SCAFFOLD_RELATIVE_PATH = 'agenticloop/memory/scaffold/proje
 export const DECISION_RECORD_TEMPLATE_RELATIVE_PATH = 'agenticloop/memory/decision-record.md';
 export const TASK_RECORD_TEMPLATE_RELATIVE_PATH = 'agenticloop/memory/task-record.md';
 export const WORK_UNIT_SUMMARY_TEMPLATE_RELATIVE_PATH = 'agenticloop/memory/work-unit-summary.md';
+export const IMPROVEMENT_PROPOSAL_TEMPLATE_RELATIVE_PATH = 'agenticloop/memory/improvement-proposal.md';
+
+export const IMPROVEMENT_PROPOSAL_STATUSES = Object.freeze(['proposed', 'accepted', 'rejected', 'superseded', 'implemented']);
+export const IMPROVEMENT_PROPOSAL_RISK_LEVELS = Object.freeze(['low', 'medium', 'high']);
+export const IMPROVEMENT_PROPOSAL_TARGET_SURFACES = Object.freeze([
+  'skill-trigger',
+  'skill-procedure',
+  'reviewer-checklist',
+  'task-template',
+  'event-logging-guidance',
+  'adapter-guidance',
+  'role-definition',
+  'core-methodology',
+  'permission-policy',
+  'decision-record',
+]);
+export const IMPROVEMENT_PROPOSAL_SECTION_HEADINGS = Object.freeze([
+  '## Failure pattern',
+  '## Evidence',
+  '## Inferred mechanism',
+  '## Proposed change',
+  '## Expected behavioral effect',
+  '## Regression risks',
+  '## Candidate patch',
+  '## Validation plan',
+  '## Rollback',
+]);
 
 // Legacy aliases for migration and compatibility tests
 export const IMPLEMENTATION_SUMMARY_TEMPLATE_RELATIVE_PATH = WORK_UNIT_SUMMARY_TEMPLATE_RELATIVE_PATH;
@@ -162,6 +189,7 @@ export const TASK_OPTIONAL_SECTION_HEADINGS = Object.freeze([
   '## Grouping',
   '## Source Reference',
   '## Applicable Project Skills',
+  '## Outcome',
 ]);
 
 export const WORK_UNIT_SUMMARY_SECTION_HEADINGS = Object.freeze([

@@ -83,6 +83,20 @@ here so the engineer knows what evidence to publish.
 - [ ] Known limitations are triaged as accepted, deferred, or follow-up work.
 - [ ] No secrets, generated caches, or runtime artifacts were committed.
 
+## Outcome
+
+Optional. Maintainer-filled at closeout. Records structured signal for later
+loop-improvement pattern mining. Omit for routine tasks.
+
+- **review_rounds**: integer count of review iterations.
+- **review_result**: `accepted` | `accepted_with_followups` | `rejected`.
+- **blocked**: `true` | `false`.
+- **block_category**: one of the `blocked-state` categories, or `none`.
+- **required_checks_all_passed**: `true` | `false`.
+- **scope_drift_detected**: `true` | `false`.
+- **stale_evidence_detected**: `true` | `false`.
+- **human_intervention_required**: `true` | `false`.
+
 ## Comments
 
 ## Revision Log

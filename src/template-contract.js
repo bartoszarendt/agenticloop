@@ -3,6 +3,11 @@ import { parseFrontmatter } from './frontmatter.js';
 import {
   BACKENDS_SOURCE_DIRECTORY,
   DECISION_RECORD_TEMPLATE_RELATIVE_PATH,
+  IMPROVEMENT_PROPOSAL_RISK_LEVELS,
+  IMPROVEMENT_PROPOSAL_SECTION_HEADINGS,
+  IMPROVEMENT_PROPOSAL_STATUSES,
+  IMPROVEMENT_PROPOSAL_TARGET_SURFACES,
+  IMPROVEMENT_PROPOSAL_TEMPLATE_RELATIVE_PATH,
   PROJECT_SCAFFOLD_RELATIVE_PATH,
   TASK_OPTIONAL_SECTION_HEADINGS,
   TASK_RECORD_TEMPLATE_RELATIVE_PATH,
@@ -27,6 +32,7 @@ export const REQUIRED_TEMPLATE_RELATIVE_PATHS = Object.freeze([
   TASK_RECORD_TEMPLATE_RELATIVE_PATH,
   WORK_UNIT_SUMMARY_TEMPLATE_RELATIVE_PATH,
   DECISION_RECORD_TEMPLATE_RELATIVE_PATH,
+  IMPROVEMENT_PROPOSAL_TEMPLATE_RELATIVE_PATH,
 ]);
 
 function renderHeadingBlock(headings) {
@@ -105,6 +111,67 @@ function validateWorkUnitSummaryFrontmatter(content, relPath) {
   return errors;
 }
 
+function validateImprovementProposalFrontmatter(content, relPath) {
+  const errors = [];
+  const [frontmatter] = parseFrontmatter(content);
+
+  if (frontmatter === null) {
+    return [`${relPath} missing YAML frontmatter`];
+  }
+
+  const improvementId = frontmatterString(frontmatter.improvement_id);
+  const date = frontmatterString(frontmatter.date);
+  const status = frontmatterString(frontmatter.status);
+  const riskLevel = frontmatterString(frontmatter.risk_level);
+  const targetSurface = frontmatterString(frontmatter.target_surface);
+  const requiresChangeRequest = frontmatter.requires_change_request;
+  const requiresChangeRequestTruthy = requiresChangeRequest === true || requiresChangeRequest === 'true';
+
+  if (!improvementId) {
+    errors.push(`${relPath} missing required frontmatter field 'improvement_id'`);
+  }
+
+  if (!date) {
+    errors.push(`${relPath} missing required frontmatter field 'date'`);
+  }
+
+  if (!status) {
+    errors.push(`${relPath} missing required frontmatter field 'status'`);
+  } else if (!IMPROVEMENT_PROPOSAL_STATUSES.includes(status)) {
+    errors.push(
+      `${relPath} frontmatter field 'status' must be one of: ${IMPROVEMENT_PROPOSAL_STATUSES.join(', ')}`
+    );
+  }
+
+  if (!riskLevel) {
+    errors.push(`${relPath} missing required frontmatter field 'risk_level'`);
+  } else if (!IMPROVEMENT_PROPOSAL_RISK_LEVELS.includes(riskLevel)) {
+    errors.push(
+      `${relPath} frontmatter field 'risk_level' must be one of: ${IMPROVEMENT_PROPOSAL_RISK_LEVELS.join(', ')}`
+    );
+  }
+
+  if (!targetSurface) {
+    errors.push(`${relPath} missing required frontmatter field 'target_surface'`);
+  } else if (!IMPROVEMENT_PROPOSAL_TARGET_SURFACES.includes(targetSurface)) {
+    errors.push(
+      `${relPath} frontmatter field 'target_surface' must be one of: ${IMPROVEMENT_PROPOSAL_TARGET_SURFACES.join(', ')}`
+    );
+  }
+
+  if (riskLevel === 'high' && !requiresChangeRequestTruthy) {
+    errors.push(
+      `${relPath} risk_level 'high' requires 'requires_change_request: true'`
+    );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(frontmatter, 'promotion_tier')) {
+    errors.push(`${relPath} must not contain 'promotion_tier' frontmatter field`);
+  }
+
+  return errors;
+}
+
 export function renderTaskRecordRequiredSectionBlock() {
   return renderHeadingBlock(TASK_REQUIRED_SECTION_HEADINGS);
 }
@@ -157,6 +224,21 @@ export function validateCanonicalTemplates(repoRoot, assetLayout = resolveToolki
     errors.push(...validateWorkUnitSummaryFrontmatter(text, workUnitTemplateLabel));
     errors.push(...validateOrderedHeadings(text, WORK_UNIT_SUMMARY_SECTION_HEADINGS, workUnitTemplateLabel));
     errors.push(...validateTraceBulletLabels(text, workUnitTemplateLabel));
+  }
+
+  const improvementProposalTemplatePath = resolveToolkitAssetPath(
+    repoRoot,
+    IMPROVEMENT_PROPOSAL_TEMPLATE_RELATIVE_PATH,
+    assetLayout
+  );
+  const improvementProposalTemplateLabel = describeToolkitAssetPath(
+    IMPROVEMENT_PROPOSAL_TEMPLATE_RELATIVE_PATH,
+    assetLayout
+  );
+  if (existsSync(improvementProposalTemplatePath)) {
+    const text = readFileSync(improvementProposalTemplatePath, 'utf-8');
+    errors.push(...validateImprovementProposalFrontmatter(text, improvementProposalTemplateLabel));
+    errors.push(...validateOrderedHeadings(text, IMPROVEMENT_PROPOSAL_SECTION_HEADINGS, improvementProposalTemplateLabel));
   }
 
   for (const relPath of TEMPLATE_CONSUMER_RELATIVE_PATHS) {

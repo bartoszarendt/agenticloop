@@ -128,6 +128,7 @@ target-project/
     project.md
     tasks/
     decisions/
+    improvements/
     logs/
     tmp/
 ```

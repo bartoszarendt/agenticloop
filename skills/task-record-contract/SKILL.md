@@ -43,8 +43,12 @@ event log.
 
 Use `agenticloop/memory/task-record.md` as the canonical task-record shape.
 It defines the ordered required sections and the optional `Proof Pressure`,
-`Grouping`, `Source Reference`, `Applicable Project Skills`, and `Concurrency
-Plan` sections.
+`Grouping`, `Source Reference`, `Applicable Project Skills`, `Concurrency
+Plan`, and `Outcome` sections.
+
+The `## Outcome` section is optional, maintainer-filled at closeout, reuses
+`block_category` from [[blocked-state]], and never replaces acceptance criteria
+or proof pressure.
 
 ## Proof pressure
 

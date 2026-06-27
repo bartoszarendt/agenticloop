@@ -359,6 +359,19 @@ describe('init - creates required directories', () => {
     assert.ok(!existsSync(join(d, '.agenticloop', 'phase-summaries')));
   });
 
+  it('does not create .agenticloop/improvements/ on fresh init', async () => {
+    const d = makeEmptyTarget();
+    await init({ target: d });
+    assert.ok(!existsSync(join(d, '.agenticloop', 'improvements')));
+  });
+
+  it('does not include an improvements/ directory in memory/scaffold/', () => {
+    assert.ok(
+      !existsSync(join(REPO_ROOT, 'memory', 'scaffold', 'improvements')),
+      'memory/scaffold/ must not contain an improvements/ directory'
+    );
+  });
+
   it('creates .agenticloop/tmp/', async () => {
     const d = makeEmptyTarget();
     await init({ target: d });

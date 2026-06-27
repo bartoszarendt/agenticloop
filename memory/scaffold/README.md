@@ -11,7 +11,7 @@ leading dot. Confusing them is the most common agent path mistake.
 | Directory | Leading dot | Owner | Contents |
 |---|---|---|---|
 | `agenticloop/` | no | toolkit (read-only) | `AGENTIC_LOOP.md`, `agents/`, `skills/`, `backends/`, `commands/`, `memory/`, `config.json` |
-| `.agenticloop/` | yes | target project (read/write) | `project.md`, `tasks/`, `decisions/`, `logs/`, `tmp/` |
+| `.agenticloop/` | yes | target project (read/write) | `project.md`, `tasks/`, `decisions/`, `improvements/`, `logs/`, `tmp/` |
 
 ## What Lives Here
 

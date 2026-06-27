@@ -15,6 +15,7 @@ memory/
     tmp/.gitkeep
   decision-record.md         Toolkit-owned record shape reference
   task-record.md             Toolkit-owned record shape reference
+  improvement-proposal.md    Toolkit-owned improvement-proposal shape reference
   work-unit-summary.md       Toolkit-owned inline task-summary shape reference
 ```
 
@@ -23,8 +24,8 @@ memory/
 | Layer | Location | Owner |
 |---|---|---|
 | **scaffold/** | Seed files for `.agenticloop/` | Toolkit (read-only source) |
-| **record shapes** | `task-record.md`, `work-unit-summary.md`, `decision-record.md` | Toolkit (installed to `agenticloop/memory/`) |
-| **live state** | `.agenticloop/project.md`, `.agenticloop/tasks/`, etc. | Target project |
+| **record shapes** | `task-record.md`, `work-unit-summary.md`, `decision-record.md`, `improvement-proposal.md` | Toolkit (installed to `agenticloop/memory/`) |
+| **live state** | `.agenticloop/project.md`, `.agenticloop/tasks/`, `.agenticloop/improvements/`, etc. | Target project |
 
 `init` copies scaffold seed files into `.agenticloop/` only when absent.
 Record-shape files are installed to `agenticloop/memory/` for reference but

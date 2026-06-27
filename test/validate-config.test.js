@@ -403,6 +403,30 @@ describe('Toolkit source repo validation', () => {
   });
 });
 
+describe('Improvement-proposal template validation through validateConfig', () => {
+  it('surfaces improvement-proposal template errors through the normal validation path', () => {
+    const d = mkdtempSync(join(tmpDir, 'cfg-ip-template-'));
+    seedToolkitSource(REPO_ROOT, d);
+    const templatePath = join(d, 'agenticloop', 'memory', 'improvement-proposal.md');
+    const templateText = readFileSync(templatePath, 'utf-8')
+      .replace('status: proposed', 'status: pending')
+      .replace('risk_level: medium', 'risk_level: high')
+      .replace('requires_change_request: true', 'requires_change_request: false');
+    writeFileSync(templatePath, templateText, 'utf-8');
+
+    const { errors } = validateConfig(d);
+
+    assert.ok(
+      errors.some(e => e.includes('improvement-proposal.md') && e.includes("'status'")),
+      `expected status error through validateConfig, got: ${JSON.stringify(errors)}`
+    );
+    assert.ok(
+      errors.some(e => e.includes('improvement-proposal.md') && e.includes("risk_level 'high' requires 'requires_change_request: true'")),
+      `expected high-risk change-request invariant error through validateConfig, got: ${JSON.stringify(errors)}`
+    );
+  });
+});
+
 describe('Layout validation', () => {
   it('reports stale v2 layout with migration guidance only, not v3 missing-path noise', () => {
     const d = mkdtempSync(join(tmpDir, 'layout-v2-'));

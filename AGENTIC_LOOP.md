@@ -88,7 +88,7 @@ before constructing any path.
 | Path | Leading dot | Owner | Read/write | Holds |
 | --- | --- | --- | --- | --- |
 | `agenticloop/` | no | toolkit | read-only | `AGENTIC_LOOP.md`, `agents/`, `skills/`, `backends/`, `commands/`, `memory/`, `config.json` |
-| `.agenticloop/` | yes | target project | read/write | `project.md`, `tasks/`, `decisions/`, `logs/`, `tmp/` |
+| `.agenticloop/` | yes | target project | read/write | `project.md`, `tasks/`, `decisions/`, `improvements/`, `logs/`, `tmp/` |
 
 The process doc is `agenticloop/AGENTIC_LOOP.md` (no dot) and the role files are
 `agenticloop/agents/<role>.md` (no dot). Project state such as
@@ -644,6 +644,8 @@ Valid default task IDs: `T-001`, `T-002`, `T-120`.
 .agenticloop/
   decisions/
     D-2026-06-17-001.md
+  improvements/
+    I-2026-06-17-001.md
   tasks/
     T-001.md
     T-002.md

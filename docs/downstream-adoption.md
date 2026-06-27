@@ -32,6 +32,7 @@ agenticloop/                     toolkit-owned canonical source
 .agenticloop/
   project.md                     project map (target-owned)
   decisions/                     decision records
+  improvements/                  improvement proposals (created on first proposal)
   logs/
     <TASK-ID>.jsonl              optional task-scoped durable event log
   tasks/                         local task record files (completion summaries inline)
@@ -49,6 +50,11 @@ not put model IDs here.
 `.agenticloop/decisions/` holds target-owned decision records for durable
 project decisions that constrain future work. Keep those records short and
 separate from task records, summaries, and raw transcripts.
+
+`.agenticloop/improvements/` holds target-owned improvement proposals. It is
+tracked Markdown alongside `.agenticloop/decisions/`, created on first proposal,
+and never scaffolded by init. Settle gitignore the same way decisions are
+handled (tracked, not ignored).
 
 `agenticloop.json` and `agenticloop/config.json` are adapter/tooling config.
 They are created only by `agenticloop init --adapter <host>` and are not part

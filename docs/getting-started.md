@@ -21,6 +21,7 @@ This creates:
 agenticloop/                   toolkit-owned canonical source
 .agenticloop/project.md        project map (starts unconfirmed; backend, naming, grouping, typed docs, optional backend evidence notes)
 .agenticloop/decisions/        decision records
+.agenticloop/improvements/     improvement proposals (created on first proposal)
 .agenticloop/tasks/            task record files (completion summaries live inline)
 .agenticloop/tmp/              gitignored scratch directory
 ```

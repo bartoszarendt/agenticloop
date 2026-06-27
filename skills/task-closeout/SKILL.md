@@ -46,6 +46,9 @@ Review:
 - repeated review failures,
 - optional local event log entries emitted at workflow gates when event logging is enabled.
 
+When closing a task, the maintainer may fill the optional `## Outcome` section
+with the structured fields; it is not required and does not gate closeout.
+
 Do not copy raw agent exchanges into docs. Use task records, implementation artifacts, command output, and reviewed comments as sources of truth.
 
 ### GitHub issue closure check

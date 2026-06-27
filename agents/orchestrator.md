@@ -13,7 +13,7 @@ acting.
 
 Path convention: toolkit assets (`AGENTIC_LOOP.md`, `agents/`, `skills/`,
 `backends/`) live under `agenticloop/` (no leading dot); target project state
-(`project.md`, `tasks/`, `decisions/`) lives under `.agenticloop/` (leading
+(`project.md`, `tasks/`, `decisions/`, `improvements/`) lives under `.agenticloop/` (leading
 dot). These two directories differ only by the dot — do not assume the process
 doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 `agenticloop/AGENTIC_LOOP.md`.
