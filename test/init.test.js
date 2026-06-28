@@ -433,6 +433,33 @@ describe('init - .gitignore handling', () => {
     assert.ok(gi.includes('tmp\n'), 'legacy tmp ignore should remain');
     assert.ok(gi.includes('.agenticloop/tmp/'), 'new scratch ignore should be added');
   });
+
+  it('gitignores the per-lane worktrees directory alongside the scratch dir', async () => {
+    const d = makeEmptyTarget();
+    await init({ target: d });
+    const gi = readFileSync(join(d, '.gitignore'), 'utf-8');
+    assert.ok(gi.includes('.agenticloop/tmp/'), 'scratch dir should be ignored');
+    assert.ok(gi.includes('.agenticloop/worktrees/'), 'worktrees dir should be ignored');
+  });
+
+  it('appends the worktrees ignore when only the scratch dir is already present', async () => {
+    const d = makeEmptyTarget();
+    writeFileSync(join(d, '.gitignore'), '.agenticloop/tmp/\n');
+    await init({ target: d });
+    const gi = readFileSync(join(d, '.gitignore'), 'utf-8');
+    const tmpMatches = gi.split('\n').filter(l => l.trim() === '.agenticloop/tmp/');
+    assert.equal(tmpMatches.length, 1, '.agenticloop/tmp/ should not be duplicated');
+    assert.ok(gi.includes('.agenticloop/worktrees/'), 'worktrees dir should be added');
+  });
+
+  it('does not duplicate the worktrees ignore when already present', async () => {
+    const d = makeEmptyTarget();
+    writeFileSync(join(d, '.gitignore'), '.agenticloop/tmp/\n.agenticloop/worktrees/\n');
+    await init({ target: d });
+    const gi = readFileSync(join(d, '.gitignore'), 'utf-8');
+    const matches = gi.split('\n').filter(l => l.trim() === '.agenticloop/worktrees/');
+    assert.equal(matches.length, 1, '.agenticloop/worktrees/ should appear exactly once');
+  });
 });
 
 // ---------------------------------------------------------------------------

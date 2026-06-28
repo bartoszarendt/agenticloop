@@ -192,7 +192,12 @@ definitions and backend-specific rules in `agenticloop/AGENTIC_LOOP.md`.
 disjoint expected files or areas, and no shared generated files, lockfiles,
 schema, API, or external-state collision. A branch alone is not sufficient when
 multiple agents share one checkout. Copying selected touched files into a
-temporary folder is not valid isolation.
+temporary folder is not valid isolation. Create each lane worktree at a
+repo-internal path (`git worktree add .agenticloop/worktrees/<task-id>
+<branch>`), never as a `../sibling` outside the repository root -- an external
+worktree falls outside the host's workspace sandbox and triggers an
+access-prompt that stalls autonomous runs. See Worktree placement in
+`agenticloop/AGENTIC_LOOP.md`.
 
 **Coordination/review lanes.** Parallel maintainer or orchestrator lanes that
 mutate GitHub backend state -- issues, PRs, labels, review comments, status

@@ -106,7 +106,11 @@ risks, liveness cadence, stop condition, and join condition. If any collision
 criterion is unknown, run serially.
 
 File-mutating write lanes in Git repos require a separate `git worktree` and
-branch per lane. GitHub implementation lanes also require own issue and PR. No
+branch per lane, created at a repo-internal path
+(`.agenticloop/worktrees/<task-id>`) rather than a `../sibling` outside the
+repository root, so the worktree stays inside the host's workspace sandbox and
+does not trigger an external-directory prompt mid-run. GitHub implementation
+lanes also require own issue and PR. No
 batch PR may merge until every lane has returned, maintainer review is
 complete, cross-branch risk is checked, and the human approves merge order.
 Parallel coordination/review lanes must own distinct backend objects with no
@@ -114,7 +118,9 @@ shared mutable state. Files-backed non-Git parallel write lanes are not
 allowed.
 
 Invalid patterns: write lanes sharing a checkout, branch-only isolation in a
-shared checkout, copied-file pseudo-worktrees, GitHub implementation without
+shared checkout, copied-file pseudo-worktrees, worktrees placed outside the
+repository root without the external path pre-authorized in the host's allowed
+directories, GitHub implementation without
 own worktree/branch/issue/PR, parallel lanes updating the same issue/PR/task
 record/closeout/event-log/label stream/group state.
 

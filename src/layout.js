@@ -169,6 +169,17 @@ export const LEGACY_SCRATCH_GITIGNORE_PATTERNS = Object.freeze([
   '/tmp/',
 ]);
 
+// Per-lane parallel worktrees live inside the repo root so they stay within the
+// host's workspace sandbox and never trigger an external-directory prompt.
+export const WORKTREES_DIRECTORY_RELATIVE_PATH = '.agenticloop/worktrees';
+
+export const WORKTREES_GITIGNORE_PATTERNS = Object.freeze([
+  '.agenticloop/worktrees',
+  '.agenticloop/worktrees/',
+  '/.agenticloop/worktrees',
+  '/.agenticloop/worktrees/',
+]);
+
 export const TASK_REQUIRED_SECTION_HEADINGS = Object.freeze([
   '## Task',
   '## Source Documents Reviewed',

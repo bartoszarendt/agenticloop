@@ -45,6 +45,8 @@ import {
   PACKAGE_SOURCE_RELATIVE_PATHS,
   SCRATCH_DIRECTORY_RELATIVE_PATH,
   SCRATCH_GITIGNORE_PATTERNS,
+  WORKTREES_DIRECTORY_RELATIVE_PATH,
+  WORKTREES_GITIGNORE_PATTERNS,
   TARGET_STATE_DIRECTORY,
   TARGET_CONFIG_TEMPLATE_RELATIVE_PATH,
   TOOLKIT_SOURCE_RELATIVE_PATHS,
@@ -197,24 +199,35 @@ function instantiateMemoryScaffold(target, skipped, created, errors) {
   );
 }
 
+// Agentic Loop-owned directories that must be gitignored in the target repo:
+// the scratch dir and the per-lane worktrees dir (kept inside the repo root so
+// parallel write lanes stay within the host's workspace sandbox).
+const MANAGED_GITIGNORE_ENTRIES = Object.freeze([
+  { dir: SCRATCH_DIRECTORY_RELATIVE_PATH, patterns: SCRATCH_GITIGNORE_PATTERNS },
+  { dir: WORKTREES_DIRECTORY_RELATIVE_PATH, patterns: WORKTREES_GITIGNORE_PATTERNS },
+]);
+
 function ensureScratchGitignored(targetDir) {
   const gitignorePath = join(targetDir, '.gitignore');
+  const existed = existsSync(gitignorePath);
+  let content = existed ? readFileSync(gitignorePath, 'utf-8') : '';
 
-  if (existsSync(gitignorePath)) {
-    const content = readFileSync(gitignorePath, 'utf-8');
+  const added = [];
+  for (const { dir, patterns } of MANAGED_GITIGNORE_ENTRIES) {
     const lines = content.split('\n').map(line => line.trim());
-    if (lines.some(line => SCRATCH_GITIGNORE_PATTERNS.includes(line))) {
-      return null;
-    }
-    const suffix = content.endsWith('\n')
-      ? `${SCRATCH_DIRECTORY_RELATIVE_PATH}/\n`
-      : `\n${SCRATCH_DIRECTORY_RELATIVE_PATH}/\n`;
-    appendFileSync(gitignorePath, suffix, 'utf-8');
-    return '.gitignore (.agenticloop/tmp/ appended)';
+    if (lines.some(line => patterns.includes(line))) continue;
+    const prefix = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
+    content += `${prefix}${dir}/\n`;
+    added.push(`${dir}/`);
   }
 
-  writeFileSync(gitignorePath, `${SCRATCH_DIRECTORY_RELATIVE_PATH}/\n`, 'utf-8');
-  return '.gitignore (created with .agenticloop/tmp/)';
+  if (added.length === 0) return null;
+
+  writeFileSync(gitignorePath, content, 'utf-8');
+  const summary = added.join(', ');
+  return existed
+    ? `.gitignore (${summary} appended)`
+    : `.gitignore (created with ${summary})`;
 }
 
 function selectedAdapterHosts(selectedAdapter) {

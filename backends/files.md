@@ -30,7 +30,11 @@ no lane mutates repository files or task records.
 **Write lanes in a Git repository.** Each parallel write lane -- whether it
 mutates implementation files, task records, or other tracked state -- requires:
 
-- its own `git worktree`,
+- its own `git worktree` at a repo-internal path (`git worktree add
+  .agenticloop/worktrees/<task-id> <branch>`), never a `../sibling` outside the
+  repository root -- an external worktree falls outside the host's workspace
+  sandbox and triggers an access-prompt that stalls autonomous runs (see
+  Worktree placement in `agenticloop/AGENTIC_LOOP.md`),
 - its own local branch,
 - its own `.agenticloop/tasks/<TASK-ID>.md` task file or explicitly owned
   workflow file(s),

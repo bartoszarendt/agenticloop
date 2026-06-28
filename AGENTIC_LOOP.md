@@ -258,6 +258,17 @@ Safe parallel work is limited to:
   collisions. Copying selected touched files into a temporary folder is not
   valid isolation and must not be used as a substitute for a real worktree.
 
+**Worktree placement.** Create each lane worktree at a repo-relative path inside
+the repository root -- `git worktree add .agenticloop/worktrees/<task-id>
+<branch>` -- never as a `../sibling` directory outside the root. A worktree
+outside the repository root falls outside the host's workspace sandbox and
+triggers an external-directory access prompt that stalls autonomous runs. Keep
+the worktree parent directory (`.agenticloop/worktrees/`) gitignored in the
+target repository so the nested worktree is not reported as untracked. If a
+target's recursive tooling (test runners, linters, bundlers) would scan the
+nested worktree, place worktrees outside the root only when the external path is
+pre-authorized in the host's allowed directories before delegation.
+
 Additionally, parallel write lanes must have disjoint allowed files or areas, no
 shared generated files or lockfiles, no schema or API ordering dependency, no
 shared external state, and no overlapping task-record or backend-object updates.
@@ -274,7 +285,7 @@ role must return status or a blocker instead of continuing.
 **GitHub backend (`task_backend: github`) -- implementation lanes.** Each
 parallel implementation lane requires:
 
-- its own `git worktree`,
+- its own `git worktree` at a repo-internal path (see Worktree placement),
 - its own task branch,
 - its own GitHub issue (task record),
 - its own pull request,
@@ -304,7 +315,7 @@ independently, do not model it as part of a parallel batch.
 **Files backend (`task_backend: files`) in a Git repository.** Each parallel
 write lane requires:
 
-- its own `git worktree`,
+- its own `git worktree` at a repo-internal path (see Worktree placement),
 - its own local branch,
 - its own `.agenticloop/tasks/<TASK-ID>.md` task file or explicitly owned
   workflow file(s),
