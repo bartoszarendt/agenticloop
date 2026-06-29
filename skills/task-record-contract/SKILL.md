@@ -157,7 +157,7 @@ The maintainer writes checklist items specific to this task. Minimum required it
 - [ ] Out-of-scope files: any files touched outside "Expected Files or Areas" are justified.
 - [ ] Required checks run on the final state with concise verdict lines or relevant excerpts.
 - [ ] If `## Proof Pressure` is present, completion oracle, final proof, and likely misfire were checked.
-- [ ] Durable task record updated (GitHub issue or task file) with implementation summary.
+- [ ] Backend canonical current-summary location updated with implementation summary: task file for files-backed work; PR body for normal GitHub-backed work; documented exception location for approved no-PR/no-edit cases.
 - [ ] Implementation artifact linked to the task record.
 - [ ] Parallel delegation, if used, followed the recorded concurrency plan and join condition.
 - [ ] GitHub-backed normal implementation tasks: PR body includes `Closes #<issue-number>`.

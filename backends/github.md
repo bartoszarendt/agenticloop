@@ -140,6 +140,11 @@ Publish implementation evidence in exactly one durable place. For a normal
 implementation task with a pull request, include the implementation summary in
 the pull request body. Include fresh command output from the final state.
 
+Maintainer review comments verify the artifact under review; they do not replace
+the engineer's PR-body implementation summary or evidence. If the PR body is
+missing required implementation evidence, the reviewer must request revision
+rather than supplying that evidence in the review comment.
+
 Do not post a separate issue or pull request comment that duplicates the
 current pull request body. If evidence must be corrected after the pull request
 exists, update the pull request body when possible. Use a separate issue or
@@ -393,4 +398,5 @@ Use the same temporary-file pattern with `gh issue comment` and
 `gh pr comment`.
 When using `gh ... --json`, extract the needed fields with `--jq` before
 quoting evidence. `Evidence Checked` should list commands, refs, and concise
-facts, not raw JSON payloads.
+facts, not raw JSON payloads. `Evidence Checked` records what the reviewer
+inspected. It is review evidence, not implementation evidence.

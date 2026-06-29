@@ -116,8 +116,11 @@ Check:
   placeholder text. See [[task-record-contract]] for the forbidden phrases.
 - If `## Proof Pressure` is present, the fields are concrete and the implementation summary
   addresses the completion oracle, final proof, and likely misfire.
-- Implementation summary is present in the durable task record (GitHub issue or task file),
-  not only in a local document or a chat message.
+- Implementation summary is present in the backend's canonical current-summary location: the
+  task file for files-backed work; the pull request body for normal GitHub-backed work; or the
+  documented exception location for an approved no-PR/no-edit backend exception. A local
+  document, chat message, issue comment, or review comment is not enough unless that exception
+  is recorded.
 - Evidence is concise: verdict lines and relevant excerpts, not full terminal dumps. The agent
   is still required to have read the full command output before claiming success.
 - Neutral rule: the implementation artifact is linked to the backend that
@@ -159,10 +162,18 @@ Check:
 - Bugfixes state the confirmed root cause or explicitly explain why no root cause could be isolated, per [[debugging-before-fixes]].
 - No locked process or architecture decision changed without [[change-request-gate]].
 
+The maintainer verifies the engineer's implementation summary and evidence; the maintainer does
+not author missing implementation evidence during acceptance. A reviewer-run command may support
+the review's `Evidence Checked`, but it does not satisfy missing or incomplete engineer evidence
+in the backend's canonical implementation-summary location.
+
 Do not accept if:
 
 - task record status is still `draft`,
-- implementation summary is missing from the durable task record,
+- implementation summary or required evidence is missing from the backend's canonical
+  current-summary location,
+- normal GitHub-backed work has missing or incomplete PR-body implementation summary/evidence,
+  even if the reviewer can reproduce checks locally,
 - `## Proof Pressure` is present but missing concrete fields or missing final-proof/misfire evidence,
 - backend reference is missing or wrong (for example no task file artifact for files-backed work,
   or no GitHub issue or linked PR when `task_backend: github` is set for a normal implementation task),
