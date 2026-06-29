@@ -17,20 +17,17 @@ orchestrator describes the work in prose.
 ## Advance Authorization
 
 Delegation is a state-changing action under the Advance Authorization Boundary in
-`agenticloop/AGENTIC_LOOP.md`. Delegate only when an explicit instruction or a standing
-authorization to advance is present and the authorization source can be named.
+`agenticloop/AGENTIC_LOOP.md`. Delegate only when an explicit instruction or standing
+authorization to advance is present and the source can be named.
 
-Authorization attaches to a work unit, not to each step. When a human authorizes
-a work unit to run, continue, or finish, the routine lifecycle steps inside it --
-including the delegations for implementation, review, and revision -- are covered
-without a per-transition approval prompt, per the Authorized Work Units boundary
-in `agenticloop/AGENTIC_LOOP.md`.
+Authorization attaches to a work unit, not each step. Routine lifecycle steps
+inside an authorized work unit -- including implementation, review, and revision
+delegations -- are covered without per-transition approval.
 
-Do not delegate merely because a bounded request reveals an available next step.
-Status checks, artifact inventories, history inspection, explanations,
-diagnostics, comparisons, and direct questions end when their requested answer
-has been reported. Report the next step as a possible next action and stop unless
-the human has authorized advancing the loop.
+Do not delegate merely because a bounded request reveals a next step. Status
+checks, inventories, history inspection, explanations, diagnostics, comparisons,
+and direct questions end once their answer is reported. Report the next step as a
+possible action and stop unless the human authorized advancing.
 
 ## When to Use
 
@@ -71,26 +68,24 @@ still decompose into ordinary task records.
 
 ## Host Delegation Mechanism
 
-Real delegation means the host starts a separate role, task, or subagent execution and the
-invocation accepts a role, agent, type, mode, or `subagent_type` argument. Prose describing what a
+Real delegation means the host starts a separate role, task, or subagent execution that
+accepts a role, agent, type, mode, or `subagent_type` argument. Prose describing what a
 role would do is not delegation.
 
-Host delegation examples include a task or subagent call that names the
-maintainer or engineer role, an explicit named-agent invocation that creates a
-separate role session, or a host handoff that returns a separate role artifact.
-Adapter docs may name concrete syntax. The canonical rule is separate role
-execution, not prose.
+Host delegation examples include a task or subagent call naming the maintainer or
+engineer role, an explicit named-agent invocation creating a separate role session,
+or a host handoff returning a separate role artifact. Adapter docs may name concrete
+syntax. The rule is separate role execution, not prose.
 
 ## Delegation Capability Check
 
 Before using single-agent fallback, the orchestrator must explicitly check whether the host exposes
 any real delegation mechanism for the requested role.
 
-- If a host task, subagent, role, agent, type, mode, or `subagent_type` mechanism exists for
-  maintainer or engineer, fallback is not allowed for that role.
+- If a host task, subagent, role, agent, type, mode, or `subagent_type` mechanism exists for a role,
+  fallback is not allowed for that role.
 - If delegation is absent, record how that was verified.
-- If delegation is available but the concrete attempt fails, record the failed mechanism and the
-  failure reason before considering fallback.
+- If a concrete attempt fails, record the failed mechanism and reason before fallback.
 - Include the capability check result in the orchestrator's delegation output.
 
 ## Concurrency Policy
@@ -151,17 +146,17 @@ npx agenticloop event-logging role.invoked --task T-001 --role orchestrator --su
 
 ## Single-Agent Fallback
 
-Single-agent fallback is legal only after the delegation capability check shows no real host
-delegation exists for the requested role, or after a concrete delegation attempt fails. If allowed,
-the current agent may explicitly assume the requested role for one bounded role step only.
+Single-agent fallback is legal only after the capability check shows no real host
+delegation exists, or a concrete attempt fails. If allowed, the current agent may
+assume the requested role for one bounded role step only.
 
-When using this fallback:
+When using fallback:
 
 - announce it in output,
 - record the capability-check result and fallback reason,
 - follow the assumed role's boundaries and required skills,
-- stop at the assumed role's normal stop condition,
-- bound the fallback to that one role step,
+- stop at the role's normal stop condition,
+- bound it to that one role step,
 - emit `role.invoked` when event logging is enabled,
 - do not claim host delegation happened.
 
@@ -184,6 +179,11 @@ Role:              maintainer | engineer
 Task ID:           <task-id from project task convention, or "pending decomposition" before task records exist>
 Backend:           <task_backend from .agenticloop/project.md; default is 'files'>
 Source docs:       <closed list of files the role must read before acting; no expansion without explicit exception>
+Operating facts:   <required for host_subagent and explicit_agent_invocation only; omit for single_agent_fallback>
+  Scratch directory:   <path>
+  Event logging:       <disabled | resolved command | unavailable with reason>
+  Payload mechanism:   <doc pointer (e.g. `agenticloop/backends/github.md` Command Safety) | none>
+  Adapter constraints: <host constraints | none>
 Scope:             <what the role should do>
 Out of scope:      <what the role must not do>
 Expected output:   <what the role should produce>
@@ -192,8 +192,8 @@ Concurrency:       serial, or <parallel batch id plus non-collision basis>
 Lease:             <observable-step checkpoint cadence, no-progress budget, and any relevant max duration or milestone>
 ```
 
-Do not omit scope, out of scope, expected output, or stop condition. An incomplete delegation
-prompt produces incomplete role output.
+Do not omit scope, out of scope, expected output, stop condition, or Operating facts for real delegation. An incomplete delegation prompt produces incomplete role output. Use explicit `none` for inapplicable fields. The payload mechanism is a doc pointer or `none`, never a copied command recipe.
+
 
 ## Context Read Discipline
 
@@ -208,6 +208,8 @@ search or call graphs, git, tests, and host context-management tools
 when they are scoped to the delegated task and do not broaden the task contract.
 Missing context returns `needs_context` or `blocked`.
 
+If an Operating fact is wrong, record the gap in the task record, review, or status return and continue from the canonical document. Do not silently re-probe the same fact in a loop.
+
 For long-running or parallel work, the lease is required. Without host-enforced
 wall-clock cancellation, include a return-after-N-observable-steps checkpoint.
 Return status when the lease expires, no-progress budget is exhausted,
@@ -219,21 +221,17 @@ touched, latest evidence, next step, and stop reason.
 
 ## GitHub Backend Delegation
 
-When `task_backend` is `github`, the orchestrator must make the pull request path explicit in
-delegation prompts.
+When `task_backend` is `github`, make the pull request path explicit in delegation prompts.
 
 Engineer implementation or revision delegation must include:
 
 - create or use a task branch,
-- verify the worktree is not on the default or integration branch before
-  committing agent-authored task work,
+- verify the worktree is not on the default or integration branch before committing,
 - commit the scoped changes with the configured task id in the message,
 - push the branch when publishing is authorized,
 - open or update a pull request linked to the task issue,
-- include `Closes #<issue-number>` in the pull request body for normal
-  GitHub-backed implementation tasks,
-- put the current implementation evidence in the pull request body and do not duplicate it
-  in a separate issue or PR comment,
+- include `Closes #<issue-number>` in the pull request body for normal tasks,
+- put the current implementation evidence in the pull request body without duplicating it in a separate issue or PR comment,
 - return the issue URL and PR URL to the orchestrator.
 
 Maintainer review delegation must include:
@@ -258,8 +256,7 @@ not merge it again after the PR is already merged.
 
 ## Files Backend Delegation
 
-When `task_backend` is `files`, the orchestrator must make the local task-file path and recorded
-implementation artifact explicit in delegation prompts.
+When `task_backend` is `files`, make the local task-file path and recorded implementation artifact explicit in delegation prompts.
 
 Engineer implementation or revision delegation must include:
 
@@ -267,10 +264,8 @@ Engineer implementation or revision delegation must include:
 - implement only the scoped change from that task file,
 - update `implementation_artifact` in task-file frontmatter,
 - publish or refresh the one current implementation summary with fresh verification evidence,
-- append a dated correction entry to `## Revision Log` or `## Comments` before refreshing
-  if earlier task-file claims, evidence, or artifact references changed,
-- ensure files-backed task-record updates are tracked (committed at workflow gates) or
-  report an explicit local-only exception,
+- append a dated correction entry before refreshing if prior claims, evidence, or artifact references changed,
+- ensure files-backed task-record updates are tracked (committed at workflow gates) or report an explicit local-only exception,
 - return the task file path and artifact reference to the orchestrator.
 
 Maintainer review delegation must include:
@@ -395,3 +390,4 @@ If fallback role assumption was used, say so explicitly. Do not omit the delegat
   restating the chosen action.
 - Backend used differs from `task_backend` in `.agenticloop/project.md` without an explicit exception.
 - Delegation prompt is missing scope, out of scope, or stop condition.
+- Real host delegation omits Operating facts, omits explicit `none`, or copies backend recipes instead of pointing to docs.

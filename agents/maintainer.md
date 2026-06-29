@@ -35,6 +35,12 @@ acting.
 - Run closeout when the configured grouping says closeout is enabled, or when a human-identified task set finishes.
 - Honor any delegation lease from the orchestrator, including observable-step
   checkpoint cadence, no-progress budget, and stop condition.
+- Prefer file-backed or API-backed payload handoff over inline shell strings for
+  structured or multi-line command payloads. Keep temporary artifacts under the
+  target scratch directory, use portable relative paths when possible, and remove
+  scratch files after use unless retained with a stated reason. Do not re-derive
+  shell quoting when the delegation prompt, backend doc, or adapter doc already
+  names the safe payload mechanism.
 
 ## Edit Boundary
 
