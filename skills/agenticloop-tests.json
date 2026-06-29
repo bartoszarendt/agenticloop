@@ -36,7 +36,10 @@
       "shouldTrigger": [
         "Record the durable project decision in .agenticloop/decisions/ because it constrains future work.",
         "Accept and supersede the old decision record after the new project convention is approved.",
-        "Capture the accepted backend convention in a tracked Markdown decision record and link it from the nearest durable source."
+        "Capture the accepted backend convention in a tracked Markdown decision record and link it from the nearest durable source.",
+        "Engineer hits npm test timeout and should create a proposed scope: verification decision from the check evidence.",
+        "A role discovers a durable project convention and creates a proposed decision record with provenance.",
+        "A proposed decision needs maintainer acceptance before becoming binding."
       ],
       "shouldNotTrigger": [
         "Append ordinary task notes to the implementation record.",

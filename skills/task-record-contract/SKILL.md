@@ -170,6 +170,23 @@ boundary, or project-specific constraint the engineer must satisfy.
 A reviewer checklist that is identical across multiple tasks or consists only of generic items
 must be reviewed for whether task-specific items were omitted.
 
+## Required Checks
+
+Required Checks name the proving command or check the engineer must run on the
+final state. The maintainer may reference a verification decision when a
+required check has a known non-obvious execution strategy.
+
+Example:
+
+- `npm test`; see `.agenticloop/decisions/D-YYYY-MM-DD-001.md` for execution strategy.
+
+Required Checks still name the proving command or check. Prefer accepted
+decisions for binding execution strategy. Proposed verification decisions may
+be referenced as current evidence-backed guidance when no accepted decision
+exists, but the task record should state that the linked decision is
+`proposed`. A decision link explains how to run it safely; it does not remove
+the requirement unless the task explicitly changes the check.
+
 ## Expected files or areas
 
 The expected files or areas section is the task's human-readable scope map. It names the files, modules, commands, tests, and docs the engineer is expected to inspect or touch.

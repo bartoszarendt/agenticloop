@@ -35,6 +35,7 @@ Name nearby work that must not be bundled into this task.
 
 ## Required Checks
 - Exact command(s) the engineer must run on the final state.
+- Include linked verification decisions when a check has a known non-obvious execution strategy.
 
 ## Proof Pressure
 

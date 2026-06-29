@@ -45,6 +45,36 @@ do not create or rely on them now.
 | Bug fixed | Original symptom re-run and now passing | "changed relevant code" |
 | Test guards behavior | Failing RED run from [[tdd-implementation]] | green-only run |
 
+## Long-running or timed-out checks
+
+Before running a required or cited check, inspect the task record and any
+delegation Operating facts for linked verification decisions. If a linked
+verification decision applies, follow its execution strategy unless it is stale
+or contradicted by current evidence.
+
+If a check times out or is unexpectedly expensive:
+
+- record the exact command,
+- the timeout used,
+- the observed duration if known,
+- the host timeout ceiling if known,
+- any partial relevant output,
+- whether the check was required,
+- and whether the next strategy should be background, focused, split, or CI.
+
+Do not rerun the same foreground command just to rediscover a known timeout. If
+the required check cannot be completed under the host limits, report the gap
+honestly under `## Known Gaps`, `## Process Observations`, `blocked`, or
+`needs_context` as appropriate. Treat a materially worse duration than a prior
+decision as a possible regression signal, not just a reason to raise the timeout.
+If the behavior constrains future tasks, the engineer may create a `proposed`
+verification decision directly when the evidence is current and
+decision-worthy. The proposed decision must cite the exact command,
+timeout/duration facts, host limit when known, selected execution strategy, and
+revisit trigger. If write ownership is unsafe (for example in an unclear
+parallel lane), record the candidate in Process Observations or status return
+for maintainer capture.
+
 ## Event Logging
 
 If `.agenticloop/project.md` has `event_logging: enabled`, resolve the event
@@ -66,6 +96,10 @@ Recommended `check.run` data fields:
 - `failed`
 - `skipped`
 - `duration_ms`
+- `timeout_ms`
+- `timed_out`
+- `host_timeout_limit_ms`
+- `execution_strategy`
 - `attempt`
 - `required`: true when the check is a required gate for this task.
 - `triaged_unrelated`: true when the failure is unrelated to the task change and

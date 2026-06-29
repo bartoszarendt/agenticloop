@@ -28,10 +28,34 @@ it constrains future work. Common scopes include:
 - security posture,
 - release rules,
 - product direction,
-- accepted project conventions.
+- accepted project conventions,
+- verification.
 
 Strong ADR-style signals such as hard to reverse, surprising, or tradeoff-heavy
 still matter, but they are not the only trigger.
+
+## Verification operating decisions
+
+Use decision records for durable verification conclusions that constrain future
+agents. Examples:
+
+- a full test suite exceeds the foreground host timeout and should be run as
+  background, split, focused, or CI;
+- a known expensive integration check needs a specific execution strategy;
+- a local check is not reliable and must be treated as advisory.
+
+Do not create a decision for one-off timing noise or ordinary task evidence.
+Engineers may create `proposed` `scope: verification` decisions when a
+timed-out, expensive, unreliable, or host-limited check constrains future work.
+The proposed decision must cite task evidence or `check.run` event data and
+state the future execution strategy. The record should include:
+
+- command or check name,
+- observed behavior summary,
+- chosen execution strategy,
+- consequences for future engineers or reviewers,
+- revisit trigger such as duration growth, host limit change, test layout
+  change, or CI divergence.
 
 ## When Not to Use
 
@@ -44,11 +68,36 @@ Do not create a decision record for:
 - temporary debugging observations,
 - one-off local experiments that do not constrain later work.
 
+## Who May Create Proposed Records
+
+Any role may create a new `status: proposed` decision record when it directly
+discovers evidence that satisfies the decision-worthiness test. The creating
+role must:
+
+- use `agenticloop/memory/decision-record.md` as the record shape,
+- set provenance fields (`proposed_at`, `proposed_by_role`, `proposed_by`,
+  and `source_refs`),
+- link the record from a durable source: the current task record,
+  implementation summary, `.agenticloop/project.md`, selected source document,
+  or nearest durable source; a status return may mention the link but is not
+  sufficient by itself,
+- keep it short and evidence-backed,
+- not mark it `accepted`.
+
 ## Maintainer Ownership
 
-The orchestrator may detect a candidate decision and route it here, but the
-maintainer owns writing, updating, accepting, rejecting, or superseding the
-tracked record.
+The maintainer owns:
+
+- accepting proposed decisions,
+- rejecting proposed decisions,
+- superseding decisions,
+- edits to accepted decisions,
+- resolving conflicting proposed records.
+
+Human confirmation or an approved `type:change-request` remains required for
+`accepted`. If an accepted decision needs to change, non-maintainer roles must
+create a new `proposed` decision or report the need; they must not silently edit
+the accepted record.
 
 ## Decision-Worthiness Test
 
@@ -61,6 +110,12 @@ Create or update a decision record when all of the following are true:
 If the note is only evidence for one task, keep it in the task record or
 implementation artifact instead.
 
+## Parallel Safety
+
+In parallel lanes, a role may create only a new uniquely named `proposed`
+decision file. A role must not edit an existing decision record unless the
+concurrency plan grants exclusive ownership.
+
 ## Process
 
 1. Check whether an accepted record already covers the decision. If yes and the
@@ -68,7 +123,9 @@ implementation artifact instead.
 2. Create one decision record per durable decision under
    `.agenticloop/decisions/<slug>.md`. Use `agenticloop/memory/decision-record.md`
    as the record shape. Keep the record short.
-3. Set status to `proposed`, `accepted`, `rejected`, or `superseded`.
+3. Set status according to authority: non-maintainer creators use `proposed`;
+   maintainer may set `accepted`, `rejected`, or `superseded` under the rules
+   below.
 4. Add or update a link to the decision record in the nearest durable source:
    - Prefer the current task record when the decision is task-local.
    - Prefer `.agenticloop/project.md`, `IMPLEMENTATION_PLAN.md`,

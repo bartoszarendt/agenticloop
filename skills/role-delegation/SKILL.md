@@ -10,14 +10,14 @@ metadata:
 
 # Role delegation
 
-The orchestrator coordinates; it does not implement, plan task records, or perform final review.
-Delegation is only complete when the designated role actually executes the work -- not when the
-orchestrator describes the work in prose.
+The orchestrator coordinates; it doesn't implement, plan task records, or perform final review.
+Delegation completes only when the designated role executes the work, not when the
+orchestrator describes it.
 
 ## Advance Authorization
 
-Delegation is a state-changing action under the Advance Authorization Boundary in
-`agenticloop/AGENTIC_LOOP.md`. Delegate only when an explicit instruction or standing
+Delegation is state-changing under the Advance Authorization Boundary in
+`agenticloop/AGENTIC_LOOP.md`. Delegate only when explicit instruction or standing
 authorization to advance is present and the source can be named.
 
 Authorization attaches to a work unit, not each step. Routine lifecycle steps
@@ -26,8 +26,8 @@ delegations -- are covered without per-transition approval.
 
 Do not delegate merely because a bounded request reveals a next step. Status
 checks, inventories, history inspection, explanations, diagnostics, comparisons,
-and direct questions end once their answer is reported. Report the next step as a
-possible action and stop unless the human authorized advancing.
+and direct questions end once answered. Report the next step as a possible action
+and stop unless the human authorized advancing.
 
 ## When to Use
 
@@ -61,21 +61,20 @@ The orchestrator does not create task records, implement, review, or accept.
 ## Slice sizing
 
 Default: one independently verifiable task, the smallest useful slice. For a
-human-authorized larger bounded run, prefer the largest safe useful slice that
+larger human-authorized bounded run, prefer the largest safe useful slice that
 remains bounded, reversible, and independently verifiable as one task. Broad
-authorization is not permission to create one oversized task record; task sets
-still decompose into ordinary task records.
+authorization isn't permission to create one oversized task record; task sets
+still decompose.
 
 ## Host Delegation Mechanism
 
 Real delegation means the host starts a separate role, task, or subagent execution that
-accepts a role, agent, type, mode, or `subagent_type` argument. Prose describing what a
-role would do is not delegation.
+accepts a role, agent, type, mode, or `subagent_type` argument. Prose describing a role's
+actions is not delegation.
 
-Host delegation examples include a task or subagent call naming the maintainer or
-engineer role, an explicit named-agent invocation creating a separate role session,
-or a host handoff returning a separate role artifact. Adapter docs may name concrete
-syntax. The rule is separate role execution, not prose.
+Examples: a task/subagent call naming maintainer or engineer, an explicit
+named-agent session, or a host handoff returning a separate role artifact.
+Adapter docs may name syntax. The rule is separate execution, not prose.
 
 ## Delegation Capability Check
 
@@ -122,15 +121,13 @@ record/closeout/event-log/label stream/group state.
 ## Event Logging
 
 If `.agenticloop/project.md` has `event_logging: enabled`, resolve the event
-logging command before writing the event: use a non-empty
-`event_logging_command`, or run `npx agenticloop --help` once and use
-`npx agenticloop` only if it succeeds. Do not attempt event logging when
-`event_logging` is disabled, and do not block the workflow if no working
-command is available.
+logging command before writing: use non-empty `event_logging_command`, or run
+`npx agenticloop --help` once and use `npx agenticloop` only if it succeeds.
+Don't log when `event_logging` is disabled, and don't block if no command works.
 
-After a maintainer or engineer role is actually invoked, emit `role.invoked`. If a bounded
-single-agent fallback role assumption begins instead of host delegation, emit the same event with
-a summary that states the fallback explicitly.
+After a maintainer or engineer is actually invoked, emit `role.invoked`. If
+bounded single-agent fallback begins instead, emit the same event with a summary
+that states the fallback.
 
 Do not emit `role.invoked` for hypothetical routing prose. Record only real role execution.
 
@@ -184,6 +181,7 @@ Operating facts:   <required for host_subagent and explicit_agent_invocation onl
   Event logging:       <disabled | resolved command | unavailable with reason>
   Payload mechanism:   <doc pointer (e.g. `agenticloop/backends/github.md` Command Safety) | none>
   Adapter constraints: <host constraints | none>
+  Verification decisions: accepted <links>; proposed <links>; or none
 Scope:             <what the role should do>
 Out of scope:      <what the role must not do>
 Expected output:   <what the role should produce>
@@ -210,6 +208,11 @@ Missing context returns `needs_context` or `blocked`.
 
 If an Operating fact is wrong, record the gap in the task record, review, or status return and continue from the canonical document. Do not silently re-probe the same fact in a loop.
 
+In Operating facts, list only relevant verification decisions or `none`.
+Distinguish `accepted` (binding) from `proposed` (hint, not binding unless
+accepted). If stale, record the gap; do not re-probe. Surface new `proposed`
+records to maintainer.
+
 For long-running or parallel work, the lease is required. Without host-enforced
 wall-clock cancellation, include a return-after-N-observable-steps checkpoint.
 Return status when the lease expires, no-progress budget is exhausted,
@@ -231,8 +234,8 @@ Engineer implementation or revision delegation must include:
 - push the branch when publishing is authorized,
 - open or update a pull request linked to the task issue,
 - include `Closes #<issue-number>` in the pull request body for normal tasks,
-- put the current implementation evidence in the pull request body without duplicating it in a separate issue or PR comment,
-- return the issue URL and PR URL to the orchestrator.
+- put current implementation evidence in the PR body; don't duplicate it in a separate issue or PR comment,
+- return the issue and PR URLs to the orchestrator.
 
 Maintainer review delegation must include:
 
@@ -351,8 +354,8 @@ Every orchestrator update must include:
 ## Next Human Decision
 ```
 
-If host delegation was not used, explain why and what that means for role boundary enforcement.
-If fallback role assumption was used, say so explicitly. Do not omit the delegation field.
+If host delegation wasn't used, explain why and what that means for role
+boundaries. If fallback was used, say so. Do not omit the delegation field.
 
 ## Before Handing Back
 

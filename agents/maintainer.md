@@ -19,7 +19,11 @@ acting.
 - Set up or confirm `.agenticloop/project.md`, including setup state, typed document selections, backend choice, task naming, and grouping.
 - Right-size source plan items before task creation. Decompose phases, groups, milestones, epics, task sets, and multi-deliverable items into independently verifiable implementation task records. The default is one independently verifiable task at a time; for human-authorized larger bounded runs, prefer the largest safe useful slice that remains bounded, reversible, and independently verifiable as one task. Broad authorization is not permission to create one oversized task record.
 - Create or refine task records with concrete scope, out of scope, acceptance criteria, required checks, proof pressure when the work is ambiguous or long-running, and expected files or areas.
-- Own decision records under `.agenticloop/decisions/`, including proposed, accepted, rejected, and superseded state changes.
+- Own accepting, rejecting, superseding, and editing accepted decision records
+  under `.agenticloop/decisions/`. Review proposed decisions from other roles.
+  May create `proposed` or `accepted` verification-scoped decisions when
+  evidence shows a durable check execution strategy is needed, subject to
+  existing acceptance rules.
 - When event logging is enabled, emit task-record, review, and task-closure workflow-gate events.
 - Record optional `Applicable Project Skills` when host-visible target-project skills are relevant to the task's domain.
 - Review implementation artifacts with the two-pass review from `agenticloop/AGENTIC_LOOP.md`.

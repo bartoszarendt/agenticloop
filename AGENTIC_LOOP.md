@@ -601,7 +601,8 @@ Recommended `refs` values:
 Recommended `data` conventions:
 
 - `check.run`: `command`, `exit_code`, `passed`, `failed`, `skipped`,
-  `duration_ms`, `attempt`, `required`, `triaged_unrelated`,
+  `duration_ms`, `timeout_ms`, `timed_out`, `host_timeout_limit_ms`,
+  `execution_strategy`, `attempt`, `required`, `triaged_unrelated`,
   `accepted_known_failure`
 - `role.invoked`: `target_role`, `delegation_mode`
   (`host_subagent`, `explicit_agent_invocation`, or `single_agent_fallback`),
@@ -622,6 +623,12 @@ A triaged unrelated or known failure must still be logged with its real outcome
 (usually `failure` or `blocked`), not rewritten as a clean `success`. The triage
 fields let reports distinguish an accepted imperfect check from an untriaged
 failure.
+
+`execution_strategy` values are small strings such as `foreground`,
+`background`, `focused`, `split`, or `ci`. Use `execution_strategy` to record
+how a check was run when the strategy is material to interpreting its outcome
+or duration. A timed-out or expensive check should be logged with its real
+outcome and the chosen strategy, not hidden as success.
 
 `data` must stay small, structured, and non-transcript. Do not copy prompts,
 responses, full tool output, token streams, per-turn telemetry, or raw host
@@ -659,19 +666,38 @@ Rules:
 - Record decisions that constrain future work, especially process,
   architecture, backend, role, quality, security, release, product direction,
   or accepted project conventions.
-- The orchestrator may detect candidate decisions, but the maintainer owns
-  writing and updating decision records.
+- Any role may create a new `status: proposed` decision record when it
+  directly discovers evidence that constrains future work. Proposed records
+  must include provenance fields (`proposed_at`, `proposed_by_role`,
+  `proposed_by`) and source references (`source_refs`).
+- Maintainer owns acceptance, rejection, supersession, and edits to accepted
+  decisions. Human confirmation or an approved `type:change-request` remains
+  required for `accepted`.
 - Decision status is one of `proposed`, `accepted`, `rejected`, or
   `superseded`.
-- An agent may create a `proposed` record. `accepted` requires explicit human
-  confirmation or an approved `type:change-request`.
 - Do not silently rewrite an `accepted` decision to change its meaning. Create
   a new record and mark the old one `superseded`.
-- After creating or updating the tracked Markdown decision, emit
-  `decision.recorded`. The event log is an audit signal, not the source of
-  truth.
+- Accepted decisions remain protected by the existing change-request rules.
+- A role working in a parallel lane may create a new uniquely named
+  `proposed` record, but must not edit an existing decision record unless the
+  concurrency plan grants exclusive ownership.
+- `decision.recorded` may be emitted by the role that created a `proposed`
+  decision record. Maintainer emits `decision.recorded` when resolving,
+  accepting, rejecting, or superseding a decision. The event log is an audit
+  signal, not the source of truth.
 - Changing an accepted locked process, architecture, backend, or project
   decision must use [[change-request-gate]] before implementation.
+
+Verification operating decisions are durable conclusions about how this target
+project should run non-obvious checks. Examples include using background
+execution for a full suite that exceeds a host foreground timeout, preferring a
+focused subset during iteration, or routing a check to CI when local execution
+is not reliable. Store these as `.agenticloop/decisions/` records with
+`scope: verification`. Do not store raw command dumps in the decision; cite task
+evidence, event logs, or command summaries. Raw timing output belongs in task
+evidence or event logs; the decision record stores the conclusion and future
+action. Proposed verification decisions may be created from evidence; accepted
+verification decisions still require the existing decision acceptance rules.
 
 ## Default Backend: Files
 

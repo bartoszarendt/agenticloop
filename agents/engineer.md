@@ -28,6 +28,11 @@ acting.
 - For GitHub-backed implementation PRs, publish the current summary once in
   the pull request body; do not duplicate it as a separate issue or PR comment.
 - Address review feedback or dispute it with evidence.
+- May create `status: proposed` verification-scoped decision records from
+  current task evidence when check behavior constrains future work. Link the
+  proposed decision from the implementation summary or status return. Do not
+  accept, reject, supersede, or edit accepted decisions. If parallel lane
+  ownership is unclear, report the candidate instead of writing.
 - Use the exact task id from the task record in branch names, pull request titles, labels, and commit trailers when `task_backend: github` is set.
 - Honor any delegation lease from the orchestrator, including observable-step
   checkpoint cadence, no-progress budget, and stop condition.
