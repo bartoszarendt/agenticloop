@@ -7,6 +7,7 @@
  *   agenticloop upgrade [--target <dir>] [--adapter <host>]
  *   agenticloop remove [--target <dir>] [--dry-run|--yes]
  *   agenticloop validate [--target <dir>]
+ *   agenticloop github-preflight --pr <number> [--issue <number>] [--repo <owner/name>] [--json]
  *   agenticloop event-logging <event_type> [--target <dir>] [--summary <text>] [--task <id>]
  *   agenticloop event-logging validate [--target <dir>] [--output <file>]
  *   agenticloop event-logging audit --task <id> [--target <dir>] [--require a,b,c]
@@ -71,6 +72,7 @@ import {
   validateEventLogs,
 } from './event-logging.js';
 import { runValidation } from './validate-runner.js';
+import { runPreflight, PreflightError } from './github-preflight.js';
 
 function toCamelCase(s) {
   return s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
@@ -194,6 +196,8 @@ Commands:
   upgrade               Compatibility alias for update.
   remove                Remove Agentic Loop assets from a target directory.
   validate              Validate skills, config, links, and host setup.
+  github-preflight      Pre-review gate: verify a GitHub PR body carries final-state
+                        evidence for every required check, tied to the current head.
   doctor                Show setup checklist, adapter state, and next commands.
   event-logging         Write events (bare event type), validate, audit, or report optional durable workflow event logs.
   event                 Compatibility alias for event-logging.
@@ -217,6 +221,12 @@ Options (setup):
   --target <dir>        Target directory (default: current directory).
   --adapter <host>      Preselect adapter: opencode, codex, claude-code, copilot, cursor, all.
   --yes                 Non-interactive mode: skip interactive prompts (requires --adapter).
+
+Options (github-preflight):
+  --pr <number>         Pull request number to check. Required.
+  --issue <number>      Linked task issue number (default: inferred from PR closing references).
+  --repo <owner/name>   Target repository (default: gh-resolved current repo).
+  --json                Emit machine-readable JSON instead of human-readable output.
 
 Options (doctor):
   --target <dir>        Directory to inspect (default: current directory).
@@ -635,6 +645,75 @@ async function cmdValidate(args) {
   if (result.totalErrors > 0) {
     process.exitCode = 1;
   }
+}
+
+async function cmdGithubPreflight(args) {
+  const { opts } = parseArgs(args);
+  const asJson = Boolean(opts.json);
+
+  if (!opts.pr) {
+    if (asJson) {
+      console.log(JSON.stringify({ ok: false, errors: ['--pr <number> is required'] }));
+    } else {
+      console.error('github-preflight requires --pr <number>');
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  let result;
+  try {
+    result = runPreflight({ pr: opts.pr, issue: opts.issue, repo: opts.repo });
+  } catch (error) {
+    if (error instanceof PreflightError) {
+      if (asJson) {
+        console.log(JSON.stringify({ ok: false, errors: [error.message] }));
+      } else {
+        console.error(`github-preflight failed: ${error.message}`);
+      }
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  }
+
+  if (asJson) {
+    console.log(JSON.stringify(result));
+    process.exitCode = result.ok ? 0 : 1;
+    return;
+  }
+
+  console.log();
+  console.log('agenticloop github-preflight');
+  console.log('='.repeat(50));
+  console.log(`  PR: #${result.pr}`);
+  console.log(`  issue: ${result.issue !== null ? `#${result.issue}` : 'none'}`);
+  console.log(`  current head: ${result.headRefOid || 'unknown'}`);
+  console.log(`  required checks: ${result.requiredChecks.length}`);
+  console.log(`  matched evidence: ${result.evidenceMatches.length}`);
+
+  if (result.statusSubstitutions.length > 0) {
+    console.log('  status-check substitutions:');
+    for (const sub of result.statusSubstitutions) {
+      console.log(`    - '${sub.check}' satisfied by status check '${sub.statusCheck}'`);
+    }
+  } else {
+    console.log('  status-check substitutions: none');
+  }
+
+  for (const warning of result.warnings) console.warn(`  WARN: ${warning}`);
+
+  if (result.ok) {
+    console.log('  preflight passed');
+    console.log();
+    process.exitCode = 0;
+    return;
+  }
+
+  console.log('  preflight FAILED:');
+  for (const error of result.errors) console.error(`    ERROR: ${error}`);
+  console.log();
+  process.exitCode = 1;
 }
 
 async function cmdEvent(args, commandLabel = 'event-logging') {
@@ -1154,6 +1233,9 @@ switch (command) {
     break;
   case 'validate':
     await cmdValidate(rest);
+    break;
+  case 'github-preflight':
+    await cmdGithubPreflight(rest);
     break;
   case 'doctor':
     await cmdDoctor(rest);

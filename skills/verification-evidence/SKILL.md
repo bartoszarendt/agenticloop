@@ -101,6 +101,8 @@ Recommended `check.run` data fields:
 - `host_timeout_limit_ms`
 - `execution_strategy`
 - `attempt`
+- `pr_head`: for GitHub-backed work, the PR head commit the check ran against,
+  so the check is bound to the reviewed revision.
 - `required`: true when the check is a required gate for this task.
 - `triaged_unrelated`: true when the failure is unrelated to the task change and
   accepted as such.
@@ -164,6 +166,14 @@ check evidence. A check result counts as final-state evidence only when the comm
 was run against the current head commit. If a commit lands after the cited run, the
 evidence is stale: rerun the check on the new head, or restate the claim as a known
 limitation, before requesting review.
+
+The PR-body `## Evidence` section must record the current head explicitly with a
+`Current PR head: <headRefOid>` marker, so the evidence is mechanically tied to
+the revision under review. For engineer-owned `check.run` events, include the
+`pr_head` field (or equivalent) so the recorded check is bound to the head it ran
+against. For GitHub-backed work, run `npx agenticloop github-preflight --pr
+<number>` before requesting review; it fails when the `## Evidence` section is
+missing, incomplete, or cites a head other than the current `headRefOid`.
 
 ### Files final state
 

@@ -154,6 +154,77 @@ When using a separate comment for mutable evidence, edit the latest
 agent-authored implementation evidence comment instead of adding an equivalent
 new comment.
 
+### Pre-Review Evidence Gate
+
+Before requesting maintainer review on a GitHub-backed implementation pull
+request, run the mechanical pre-review gate from the target repository root:
+
+```text
+npx agenticloop github-preflight --pr <number>
+```
+
+Options:
+
+- `--issue <number>` when the linked task issue cannot be inferred from the
+  pull request's closing issue references.
+- `--repo <owner/name>` to target a specific repository.
+- `--json` for machine-readable output.
+
+The gate uses `gh` and fails clearly when `gh` is missing, unauthenticated, or
+returns incomplete data. It fetches the pull request (`number`, `body`,
+`headRefOid`, `files`, `closingIssuesReferences`, `statusCheckRollup`) and the
+linked issue (`number`, `body`, `title`), then checks that:
+
+- the issue has a non-empty `## Required Checks` section;
+- the pull request body has a non-empty `## Evidence` section;
+- the pull request body carries a `Current PR head: <sha>` marker that matches
+  the current `headRefOid` (a stale or missing marker fails);
+- every required check has acceptable PR-body evidence, or an unambiguous
+  successful status check that matches it.
+
+This gate does not change `agenticloop validate`. Offline validation never
+makes GitHub network calls; the preflight is a separate, opt-in GitHub-backed
+command.
+
+Expected PR `## Evidence` shape:
+
+```md
+## Evidence
+Current PR head: <headRefOid>
+
+- Required check: `npm test`
+  Verdict: passed
+  Evidence: 128 passing, 0 failing (exit 0)
+- Required check: `npm run lint`
+  Verdict: passed
+  Evidence: no errors reported
+```
+
+Use the exact required-check text from the issue's `## Required Checks` so each
+entry maps to a required check. `Verdict` is one of `passed`, `failed`,
+`blocked`, or `not run`; `not run` is not final-state evidence. For command
+checks, give a command/verdict/output excerpt or rely on a matching successful
+status check. For manual checks, give a verdict and a concise evidence note;
+a successful CI status check never satisfies a manual check.
+
+Only checks written as a backtick command (for example `` `npm test` ``) are
+eligible for status-check substitution. A check written as prose is treated as
+a manual check and always requires explicit PR-body evidence.
+
+An empty `statusCheckRollup` means there is no CI substitute. Empty status
+checks are not evidence and never satisfy a missing check. A status check
+supports a required command only when it is attached to the current head,
+completed successfully (conclusion `SUCCESS`; `NEUTRAL`, `SKIPPED`, and
+in-progress runs do not count), and its name matches the required command
+exactly after normalization. A status check named `test` does not satisfy a
+required command `` `npm test -- focused-case` ``. When the match is not exact
+or more than one status check matches, supply explicit PR-body evidence instead.
+
+Because any push to the pull request branch changes `headRefOid`, it
+invalidates prior PR-body evidence. Rerun the required checks against the new
+head and update the `## Evidence` section (including the `Current PR head`
+marker) before requesting review again.
+
 ### Link Implementation Artifact
 
 Open one pull request per normal implementation task. Include the
@@ -344,8 +415,11 @@ canonical shape, and include the optional `## Trace` section when workflow-gate
 events exist. This is a summary, not a raw transcript.
 
 `## Evidence` should list concise verdict lines and relevant output excerpts for
-every required check on the final state. The agent must still read the full
-command output before claiming success. Use event-log `refs` and small `data`
+every required check on the final state, and include a `Current PR head: <sha>`
+marker tied to the current `headRefOid` so the evidence is verifiably fresh. The
+agent must still read the full command output before claiming success. Run
+`npx agenticloop github-preflight --pr <number>` to confirm this section maps to
+the issue's `## Required Checks` before requesting review. Use event-log `refs` and small `data`
 for structured facts; do not create a separate parseable receipt block. Output
 refs remain a deferred future policy; do not create or rely on them now.
 

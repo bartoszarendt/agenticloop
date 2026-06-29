@@ -229,6 +229,10 @@ Do not hand back for review until all hold:
 
 ### GitHub projection
 
+- Run or inspect the pre-review gate `npx agenticloop github-preflight --pr <pr>`
+  before acceptance. A failing preflight (missing, incomplete, or stale PR-body
+  evidence, a head mismatch, or a missing closing issue reference) is
+  `needs_revision`; do not author the missing evidence during review.
 - The current PR head commit matches the commit the implementation summary cites
   (`gh pr view <pr> --json headRefOid`). See [[verification-evidence]].
 - `Files Changed` in the implementation summary matches the actual PR file list

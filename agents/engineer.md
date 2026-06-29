@@ -27,6 +27,10 @@ acting.
   published claim, evidence block, check result, or artifact reference.
 - For GitHub-backed implementation PRs, publish the current summary once in
   the pull request body; do not duplicate it as a separate issue or PR comment.
+- For GitHub-backed work, before requesting review, run the pre-review gate
+  `npx agenticloop github-preflight --pr <number>` and fix the pull request body
+  (required-check evidence, `Current PR head` marker) until it passes. A failing
+  preflight is a revision defect, not a reviewer task.
 - Address review feedback or dispute it with evidence.
 - May create `status: proposed` verification-scoped decision records from
   current task evidence when check behavior constrains future work. Link the

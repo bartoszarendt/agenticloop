@@ -180,6 +180,15 @@ Example:
 
 - `npm test`; see `.agenticloop/decisions/D-YYYY-MM-DD-001.md` for execution strategy.
 
+Each Required Check must be concrete enough that an engineer's implementation
+evidence can map back to it one-to-one. For GitHub-backed work the pre-review
+gate (`npx agenticloop github-preflight --pr <number>`) matches each required
+check against a PR-body `## Evidence` entry keyed by the same text, so the
+required-check wording must be a specific command or a specific manual check,
+not a vague aspiration. Avoid bundling several distinct proofs into one bullet;
+a generic "tests pass" line cannot stand in for multiple distinct required
+checks.
+
 Required Checks still name the proving command or check. Prefer accepted
 decisions for binding execution strategy. Proposed verification decisions may
 be referenced as current evidence-backed guidance when no accepted decision
