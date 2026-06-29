@@ -159,6 +159,34 @@ describe('event CLI', () => {
     assert.match(result.stdout, /OK: 1 file\(s\), 1 event\(s\) validated/);
   });
 
+  it('treats task.started --outcome required as the default unknown outcome', () => {
+    const target = makeTarget('task-started-required-outcome');
+    assertOk(run(['init', '--target', target]));
+    writeValidTaskRecord(target, 'T-001');
+
+    const result = run([
+      'event',
+      'task.started',
+      '--target',
+      target,
+      '--task',
+      'T-001',
+      '--role',
+      'engineer',
+      '--outcome',
+      'required',
+      '--summary',
+      'Started scoped implementation',
+    ]);
+
+    assertOk(result);
+    assert.match(result.stderr, /--outcome required.*default outcome 'unknown'/);
+
+    const event = JSON.parse(readFileSync(eventLogPath(target, 'T-001.jsonl'), 'utf-8').trim());
+    assert.equal(event.event_type, 'task.started');
+    assert.equal(event.outcome, 'unknown');
+  });
+
   it('fails default event writes when --task is missing', () => {
     const target = makeTarget('missing-task-default-output');
 

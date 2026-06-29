@@ -125,11 +125,13 @@ use `npx agenticloop` only if that check succeeds when no command is configured.
 Use the resolved command for engineer-owned gates:
 `task.started` before implementation or revision work, `check.run` after each
 required or cited verification command, and `blocked` or `needs_context` when
-work cannot continue. Include `--task <TASK-ID>`, `--role engineer`, required
-outcomes, and a short summary. Do not attempt event logging when
-`event_logging` is disabled. Keep command evidence in the durable task artifact,
-not the event log; use concise verdict lines and relevant excerpts instead of
-full dumps. When enabled, completed implementation work must
+work cannot continue. Include `--task <TASK-ID>`, `--role engineer`, the
+required `--outcome` only for event types that require it, and a short summary.
+For `task.started`, omit `--outcome`; the CLI records `unknown` by default. Do
+not attempt event logging when `event_logging` is disabled. Keep command
+evidence in the durable task artifact, not the event log; use concise verdict
+lines and relevant excerpts instead of full dumps. When enabled, completed
+implementation work must
 not end with zero engineer gate events; record a concise missed-event process
 gap instead of fabricating a normal event sequence after the fact.
 

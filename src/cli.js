@@ -170,6 +170,19 @@ function inferCheckRunOutcome(data) {
   return null;
 }
 
+function normalizeEventOutcomeOption(eventType, outcome) {
+  if (eventType === 'task.started' && outcome === 'required') {
+    return {
+      outcome: undefined,
+      warnings: [
+        "`--outcome required` is not a task.started outcome; recording the default outcome 'unknown'",
+      ],
+    };
+  }
+
+  return { outcome, warnings: [] };
+}
+
 function usage() {
   console.log(`
 agenticloop <command> [options]
@@ -876,6 +889,8 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
   const defaultBackend = backendResolution.backend === 'files' || backendResolution.backend === 'github'
     ? backendResolution.backend
     : 'unknown';
+  const outcomeOption = normalizeEventOutcomeOption(sub, opts.outcome);
+  for (const warning of outcomeOption.warnings) console.warn(`  WARN: ${warning}`);
 
   const event = buildEvent({
     target,
@@ -883,7 +898,7 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
     task: opts.task,
     role: opts.role,
     summary: opts.summary,
-    outcome: opts.outcome ?? (sub === 'check.run' ? inferCheckRunOutcome(data) : undefined),
+    outcome: outcomeOption.outcome ?? (sub === 'check.run' ? inferCheckRunOutcome(data) : undefined),
     backend: opts.backend ?? defaultBackend,
     host: opts.host,
     traceId: opts.traceId,
