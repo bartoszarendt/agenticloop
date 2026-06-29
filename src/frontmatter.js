@@ -1,9 +1,15 @@
+// @ts-check
+
 /**
  * Minimal YAML-ish frontmatter parser for Markdown files.
  * Parses indentation-based nested mappings and quoted keys/values.
  * Returns [frontmatterDict | null, bodyString].
  */
 
+/**
+ * @param {string} raw
+ * @returns {{ indent: number, key: string, rawValue: string } | null}
+ */
 function parseKeyValueLine(raw) {
   const match = raw.match(/^(\s*)(?:"([^"]+)"|'([^']+)'|([^:#][^:]*?)):\s*(.*)$/);
   if (!match) return null;
@@ -14,6 +20,10 @@ function parseKeyValueLine(raw) {
   };
 }
 
+/**
+ * @param {string} rawValue
+ * @returns {{ value: string | Record<string, unknown>, isObject: boolean }}
+ */
 function parseScalar(rawValue) {
   const value = rawValue.trim();
   if (value === '') {
@@ -30,6 +40,10 @@ function parseScalar(rawValue) {
   return { value, isObject: false };
 }
 
+/**
+ * @param {string} content
+ * @returns {[Record<string, unknown> | null, string]}
+ */
 export function parseFrontmatter(content) {
   if (!content.startsWith('---')) {
     return [null, content];
@@ -43,7 +57,9 @@ export function parseFrontmatter(content) {
   const fmText = match[1];
   const body = match[2] ?? '';
 
+  /** @type {Record<string, unknown>} */
   const data = {};
+  /** @type {{ indent: number, value: Record<string, unknown> }[]} */
   const stack = [{ indent: -1, value: data }];
 
   for (const raw of fmText.split(/\r?\n/)) {
@@ -63,7 +79,7 @@ export function parseFrontmatter(content) {
     const parsedValue = parseScalar(rawValue);
     parent[key] = parsedValue.value;
     if (parsedValue.isObject) {
-      stack.push({ indent, value: parent[key] });
+      stack.push({ indent, value: /** @type {Record<string, unknown>} */ (parent[key]) });
     }
   }
 

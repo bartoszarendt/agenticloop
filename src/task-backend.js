@@ -1,3 +1,7 @@
+// @ts-check
+
+/** @typedef {import('./types.js').TaskBackendResolution} TaskBackendResolution */
+
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadJsonFile } from './json.js';
@@ -11,14 +15,28 @@ export const DEFAULT_BACKEND_PROJECTIONS = Object.freeze({
   files: `${BACKENDS_SOURCE_DIRECTORY}/files.md`,
 });
 
+/**
+ * @param {unknown} object
+ * @param {string} key
+ * @returns {boolean}
+ */
 function hasOwn(object, key) {
   return !!object && Object.prototype.hasOwnProperty.call(object, key);
 }
 
+/**
+ * @param {string} value
+ * @returns {boolean}
+ */
 export function isValidTaskBackend(value) {
   return VALID_TASK_BACKENDS.has(value);
 }
 
+/**
+ * @param {Record<string, any> | null | undefined} config
+ * @param {string | null | undefined} backend
+ * @returns {string | null}
+ */
 export function getTaskBackendProjection(config, backend) {
   if (!backend) return null;
 
@@ -27,9 +45,14 @@ export function getTaskBackendProjection(config, backend) {
     return projection.trim();
   }
 
-  return DEFAULT_BACKEND_PROJECTIONS[backend] ?? null;
+  return /** @type {Record<string, string>} */ (/** @type {unknown} */ (DEFAULT_BACKEND_PROJECTIONS))[backend] ?? null;
 }
 
+/**
+ * @param {string} repoRoot
+ * @param {Record<string, any>} [options]
+ * @returns {TaskBackendResolution}
+ */
 export function resolveTaskBackend(repoRoot, options = {}) {
   const projectMapPath = join(repoRoot, PROJECT_MAP_PATH);
   const jsonConfigPath = join(repoRoot, 'agenticloop.json');
@@ -41,6 +64,7 @@ export function resolveTaskBackend(repoRoot, options = {}) {
   let rawJsonConfig = hasOwn(options, 'rawJsonConfig')
     ? options.rawJsonConfig
     : null;
+  /** @type {Error | null} */
   let rawJsonConfigError = null;
 
   if (!hasOwn(options, 'projectMapResult') && existsSync(projectMapPath)) {
@@ -50,7 +74,7 @@ export function resolveTaskBackend(repoRoot, options = {}) {
   if (!hasOwn(options, 'rawJsonConfig') && existsSync(jsonConfigPath)) {
     try {
       rawJsonConfig = loadJsonFile(jsonConfigPath);
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
       rawJsonConfigError = error;
       warnings.push(`Failed to read agenticloop.json for legacy taskBackend fallback: ${error.message}`);
     }

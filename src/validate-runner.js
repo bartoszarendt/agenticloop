@@ -1,3 +1,5 @@
+// @ts-check
+
 /**
  * Shared full validation runner used by the CLI and guided setup.
  */
@@ -26,10 +28,20 @@ import {
   warningCount,
 } from './validate-skills.js';
 
+/**
+ * @param {{ write(s: string): void }} output
+ * @param {string} [line]
+ */
 function writeLine(output, line = '') {
   output.write(`${line}\n`);
 }
 
+/**
+ * @param {object} [options]
+ * @param {string | string[]} [options.adapters]
+ * @param {{ write(s: string): void }} [options.output]
+ * @returns {{ adapters: string[], output: { write(s: string): void } }}
+ */
 function formatValidationOptions(options = {}) {
   const {
     adapters = [],
@@ -48,7 +60,7 @@ function formatValidationOptions(options = {}) {
  * @param {string} target Absolute or cwd-relative target directory.
  * @param {object} [options]
  * @param {string[]} [options.adapters] Force adapter validation.
- * @param {NodeJS.WritableStream} [options.output] Output stream.
+ * @param {{ write(s: string): void }} [options.output] Output stream.
  * @returns {{
  *   totalErrors: number,
  *   totalWarnings: number,
@@ -68,6 +80,7 @@ export function runValidation(target, options = {}) {
 
   let skillsDir = resolveToolkitAssetPath(target, SKILLS_SOURCE_DIRECTORY, assetLayout);
   let skillsDirDisplay = describeToolkitAssetPath(SKILLS_SOURCE_DIRECTORY, assetLayout);
+  /** @type {Record<string, any> | null} */
   let alConfig = null;
 
   if (existsSync(alCfgPath)) {
@@ -81,7 +94,7 @@ export function runValidation(target, options = {}) {
   }
 
   const skillReport = validateSkills(skillsDir);
-  printReport(skillReport, skillsDir, target, output);
+  printReport(skillReport, skillsDir, target, /** @type {any} */ (output));
 
   let activationErrors = [];
   let activationWarnings = [];
@@ -90,7 +103,7 @@ export function runValidation(target, options = {}) {
     let corpus;
     try {
       corpus = loadJsonFile(corpusPath);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       activationErrors.push(`agenticloop-tests.json parse error: ${e.message}`);
     }
 
