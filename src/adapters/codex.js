@@ -483,6 +483,7 @@ function buildCodexDeveloperInstructions(
   if (roleName === 'orchestrator') {
     lines.push(`When maintainer-owned work is needed, explicitly spawn the Codex custom agent \`${maintainerAgent}\`. When engineer-owned work is needed, explicitly spawn the Codex custom agent \`${engineerAgent}\` instead of doing that work inline.`);
     lines.push('Agentic Loop is serial by default. Do not spawn maintainer and engineer custom agents in parallel unless a recorded concurrency plan, lease, and join condition prove the lanes do not collide.');
+    lines.push('For authorized multi-task units, perform a Parallel Opportunity Scan before choosing serial execution. If 2+ ready tasks are independent and collision criteria are known/disjoint, prefer a bounded parallel batch of up to 3 lanes; otherwise record the concrete serial reason.');
     lines.push('Codex delegation contract:');
     lines.push('- Spawn maintainer and engineer custom agents using a single plain-message prompt payload only.');
     lines.push('- Do not mix a plain message payload with structured items in the same spawn request.');

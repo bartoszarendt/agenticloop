@@ -187,6 +187,15 @@ unclear, stop for human direction instead of creating a criss-cross history.
 Concurrency safety is governed by mutation, not by role. See the lane
 definitions and backend-specific rules in `agenticloop/AGENTIC_LOOP.md`.
 
+For an authorized multi-task unit with 2 or more ready issues, the orchestrator
+runs the Parallel Opportunity Scan in `agenticloop/AGENTIC_LOOP.md` before
+defaulting to serial. A bounded parallel batch defaults to a maximum of 3
+implementation lanes. Review and integration (merge) remain serial after the
+join. Choosing serial execution after eligible candidates exist requires a
+recorded concrete reason (dependency edge, shared generated file or lockfile,
+schema/API ordering, shared external state, or a host that cannot bound or
+surface parallel lanes); "parallel is complex" is not a reason.
+
 **Implementation lanes.** Each parallel implementation lane requires its own
 `git worktree`, its own task branch, its own GitHub issue, its own pull request,
 disjoint expected files or areas, and no shared generated files, lockfiles,

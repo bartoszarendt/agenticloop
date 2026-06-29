@@ -24,6 +24,14 @@ records, event logs, and scratch files are local mutable state that can collide
 across parallel lanes just like implementation files. See the lane definitions
 and backend-specific rules in `agenticloop/AGENTIC_LOOP.md`.
 
+For an authorized multi-task unit with 2 or more ready task records, the
+orchestrator runs the Parallel Opportunity Scan in `agenticloop/AGENTIC_LOOP.md`
+before defaulting to serial. A bounded parallel batch defaults to a maximum of 3
+implementation lanes. Choosing serial execution after eligible candidates exist
+requires a recorded concrete reason (dependency edge, shared generated file or
+lockfile, schema/API ordering, shared external state, or a host that cannot
+bound or surface parallel lanes); "parallel is complex" is not a reason.
+
 **Read-only parallel discovery** is allowed when bounded by fixed artifacts and
 no lane mutates repository files or task records.
 

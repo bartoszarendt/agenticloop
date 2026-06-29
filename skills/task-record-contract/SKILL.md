@@ -210,6 +210,29 @@ status markers, closeout state, event logs, and group state), lease checkpoint
 cadence, stop condition, and join condition. If no parallel delegation is
 planned, omit the section or state that work is serial.
 
+## Parallel Safety
+
+Add `## Parallel Safety` when the task belongs to an authorized multi-task work
+unit. The maintainer fills it during decomposition so the orchestrator's Parallel
+Opportunity Scan (see `agenticloop/AGENTIC_LOOP.md`) can classify the task without
+re-deriving it. This section complements `## Expected Files or Areas` and the
+`allowed_paths` frontmatter; it does not replace either one.
+
+Fields:
+
+- **Owned paths**: the paths this task expects to own for writes.
+- **Shared or generated files**: bundler/codegen output, fixtures, snapshots that
+  other tasks might also touch.
+- **Schema/API/lockfile risk**: schema, API ordering, or lockfile collisions.
+- **Backend objects owned**: task file(s), GitHub issue/PR, labels, or other
+  records the lane mutates.
+- **Dependency edges**: other tasks in the unit that must finish first.
+- **Parallel eligibility**: `eligible`, `blocked`, or `unknown`.
+- **Reason**: the concrete basis for the eligibility verdict; when `unknown`,
+  name the missing information a bounded read-only discovery step would resolve.
+
+A standalone single task outside a multi-task unit may omit the section.
+
 ## Bug tasks
 
 Bug task records must include reproduction status:

@@ -37,6 +37,24 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   path and branch. Orchestrator-owned backend coordination that mutates shared
   state (the same issue, PR, label set, event log, or closeout marker) should
   normally be serial.
+- For an authorized multi-task unit, perform the Parallel Opportunity Scan in
+  `agenticloop/AGENTIC_LOOP.md` after task decomposition and before implementation
+  delegation. Serial-by-default is a safety floor, not a reason to skip the scan.
+  Classify each ready task (dependency edges, owned paths, backend objects,
+  shared/generated files, lockfiles, schemas/APIs, external state, coordination
+  surfaces, host parallel capability), then either:
+  - record a bounded parallel plan reference plus join condition (default maximum
+    3 implementation lanes), or
+  - record a concrete serial reason naming the specific blocker.
+- Use a maximum of 3 implementation lanes unless project config or an explicit
+  human instruction lowers or raises it. Do not choose serial solely because
+  parallel coordination has overhead or is complex; name a concrete collision or
+  host limitation instead. When 2 or more ready tasks are independent and
+  collision criteria are known and disjoint, prefer the bounded parallel batch.
+- When collision criteria are unknown and the unit has 2 or more ready
+  candidates, run a bounded read-only discovery step first, then decide parallel
+  batch or serial; if uncertainty remains, run serial and record what stayed
+  unknown.
 - Create or verify worktrees before delegation when authorizing parallel
   file-mutating write work.
 - Perform and report the delegation capability check before any fallback.
@@ -114,12 +132,13 @@ natural stop condition, per the Advance Authorization Boundary in
 4. Identify the current work item or ask the human which work item to run.
 5. If the work item is a phase, group, milestone, epic, task set, or otherwise multi-deliverable item, have maintainer decompose it into right-sized task records before implementation.
 6. Have maintainer create or refine the task record or task records.
-7. Have engineer implement one task record scope at a time and open a pull request when `task_backend: github` is set. Use parallel lanes only when the concurrency plan in `agenticloop/AGENTIC_LOOP.md` allows it.
-8. Have maintainer review each implementation artifact using the two-pass review process.
-9. Have engineer revise until accepted.
-10. Ask the human before merge or configured group transition.
+7. After maintainer creates or refines multiple task records for a multi-task unit, run the Parallel Opportunity Scan in `agenticloop/AGENTIC_LOOP.md`. Classify the ready tasks and either record a bounded parallel plan (up to 3 implementation lanes) plus join condition, or record a concrete serial reason.
+8. Have engineer implement the task records -- serially, or as a bounded parallel batch when the scan produced an eligible plan. Open a pull request per lane when `task_backend: github` is set. Use parallel lanes only when the concurrency plan in `agenticloop/AGENTIC_LOOP.md` allows it.
+9. Have maintainer review each implementation artifact using the two-pass review process. Review, integration, and merge stay serial after the join unless a specific case is shown safe.
+10. Have engineer revise until accepted.
+11. Ask the human before merge or configured group transition.
 
-Steps 5 through 9 are the authorized unit's routine lifecycle. Do not add a
+Steps 5 through 10 are the authorized unit's routine lifecycle. Do not add a
 per-transition approval prompt between them -- in particular, do not ask whether
 to proceed to maintainer review once the implementation artifact is ready. See
 the Authorized Work Units boundary in `agenticloop/AGENTIC_LOOP.md`.
@@ -134,7 +153,7 @@ Use concise coordination updates. Include the delegation field on every update:
 - Role invoked: <role name>
 - Host delegation check: <tool/mechanism found and used | verified absent by ... | attempted and failed with ...>
 - Host delegation used: <yes | no>
-- Concurrency: <serial | parallel plan reference and join condition>
+- Concurrency: <`serial -- reason: <concrete blocker>` | `parallel batch <id> -- lanes: <n>/3; join: <condition>`>
 - Lease: <none | observable-step checkpoint cadence, no-progress budget, and stop condition>
 - Fallback: <none | single-agent role assumption as maintainer | single-agent role assumption as engineer>
 - Consequence: <none | fallback limited to one role step and boundary enforcement relies on explicit self-policing until return>

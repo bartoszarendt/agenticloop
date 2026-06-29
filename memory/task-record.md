@@ -65,6 +65,20 @@ shared generated files, lockfiles, schemas, APIs, external state, labels,
 comments, status markers, closeout state, event logs, and group state), lease
 checkpoint cadence, stop condition, and join condition.
 
+## Parallel Safety
+
+Required when the task belongs to an authorized multi-task work unit, so the
+orchestrator's Parallel Opportunity Scan can classify the task. It complements
+`## Expected Files or Areas` and `allowed_paths`; it does not replace them.
+
+- Owned paths:
+- Shared or generated files:
+- Schema/API/lockfile risk:
+- Backend objects owned:
+- Dependency edges:
+- Parallel eligibility: eligible | blocked | unknown
+- Reason:
+
 ## Completion Summary Template
 
 Use `agenticloop/memory/work-unit-summary.md` as the canonical section shape

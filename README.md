@@ -86,6 +86,8 @@ Closeout (verify-and-mark gate)
 
 Every meaningful state change should produce a durable artifact. Nothing important should live only in chat.
 
+Agentic Loop builds on **prompt chaining** -- splitting a task into a sequence of prompts where one step's output feeds the next -- and hardens it for software delivery. Each step hands off a durable, reviewable artifact (a task record, verification evidence, a review result) instead of loose chat text, and the work moves through role boundaries and stop conditions rather than a straight line.
+
 ## Quick start
 
 ### Requirements

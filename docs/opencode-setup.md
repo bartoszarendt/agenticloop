@@ -148,10 +148,16 @@ subagent invocation and explicit `@maintainer` or `@engineer` invocation.
 5. The orchestrator waits for the subagent output before routing the next step.
 
 OpenCode may support multiple visible subagent sessions, but Agentic Loop is
-serial by default. The orchestrator should not start parallel maintainer or
+serial by default. For an authorized multi-task unit with 2 or more ready task
+records, the orchestrator performs a Parallel Opportunity Scan before defaulting
+to serial; bounded eligible batches may use up to 3 implementation lanes, and
+choosing serial after eligible candidates exist requires a recorded concrete
+reason. The orchestrator should not start parallel maintainer or
 engineer sessions unless it has recorded the concurrency plan, collision
 criteria, lease, and join condition required by `agenticloop/AGENTIC_LOOP.md`
-and `agenticloop/skills/role-delegation/SKILL.md`. Parallel write lanes that
+and `agenticloop/skills/role-delegation/SKILL.md`. Long-running parallelism has
+stronger observability requirements than short bounded join-based batches.
+Parallel write lanes that
 mutate repository files require a separate `git worktree` and branch per lane;
 a branch alone is not sufficient in a shared checkout. The lease progress
 checkpoint is a return-to-orchestrator checkpoint cadence, not an async

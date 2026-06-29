@@ -367,6 +367,7 @@ function buildCopilotAgentBody(
   if (roleName === 'orchestrator') {
     lines.push(`When maintainer-owned work is needed, delegate through the Copilot custom agent \`${maintainerAgent}\`. When engineer-owned work is needed, delegate through the Copilot custom agent \`${engineerAgent}\` instead of doing that work inline.`);
     lines.push('Agentic Loop is serial by default. Do not start parallel Copilot agents unless a recorded concurrency plan, lease, and join condition prove the lanes do not collide.');
+    lines.push('For authorized multi-task units, perform a Parallel Opportunity Scan before choosing serial execution. If 2+ ready tasks are independent and collision criteria are known/disjoint, prefer a bounded parallel batch of up to 3 lanes; otherwise record the concrete serial reason.');
     lines.push('Use real Copilot custom-agent, subagent, or handoff delegation where the current surface supports it.');
     lines.push(`If delegation is unavailable after a capability check, record a bounded fallback reason and continue according to \`${roleDelegationReferencePath}\`.`);
     lines.push('For long-running or parallel delegated work, include the lease with an observable-step checkpoint cadence and require a status return at the progress checkpoint, stop condition, wrong branch/worktree, or no-progress budget.');

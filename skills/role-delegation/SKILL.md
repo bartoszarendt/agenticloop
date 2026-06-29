@@ -21,13 +21,12 @@ Delegation is state-changing under the Advance Authorization Boundary in
 authorization to advance is present and the source can be named.
 
 Authorization attaches to a work unit, not each step. Routine lifecycle steps
-inside an authorized work unit -- including implementation, review, and revision
-delegations -- are covered without per-transition approval.
+inside it -- implementation, review, and revision delegations -- are covered
+without per-transition approval.
 
 Do not delegate merely because a bounded request reveals a next step. Status
-checks, inventories, history inspection, explanations, diagnostics, comparisons,
-and direct questions end once answered. Report the next step as a possible action
-and stop unless the human authorized advancing.
+checks, inventories, explanations, diagnostics, and direct questions end once
+answered; report the next step and stop unless the human authorized advancing.
 
 ## When to Use
 
@@ -61,20 +60,19 @@ The orchestrator does not create task records, implement, review, or accept.
 ## Slice sizing
 
 Default: one independently verifiable task, the smallest useful slice. For a
-larger human-authorized bounded run, prefer the largest safe useful slice that
-remains bounded, reversible, and independently verifiable as one task. Broad
-authorization isn't permission to create one oversized task record; task sets
-still decompose.
+larger authorized bounded run, prefer the largest safe slice that stays bounded,
+reversible, and independently verifiable. Broad authorization isn't permission to
+create one oversized record; task sets still decompose.
 
 ## Host Delegation Mechanism
 
-Real delegation means the host starts a separate role, task, or subagent execution that
-accepts a role, agent, type, mode, or `subagent_type` argument. Prose describing a role's
-actions is not delegation.
+Real delegation means the host starts a separate role, task, or subagent
+execution accepting a role, agent, type, mode, or `subagent_type` argument. Prose
+describing a role's actions is not delegation.
 
-Examples: a task/subagent call naming maintainer or engineer, an explicit
-named-agent session, or a host handoff returning a separate role artifact.
-Adapter docs may name syntax. The rule is separate execution, not prose.
+Examples: a task/subagent call naming maintainer or engineer, a named-agent
+session, or a host handoff returning a separate role artifact. The rule is
+separate execution, not prose.
 
 ## Delegation Capability Check
 
@@ -89,34 +87,36 @@ any real delegation mechanism for the requested role.
 
 ## Concurrency Policy
 
-Delegation is serial by default. Concurrency safety is governed by mutation,
-not by role. See `agenticloop/AGENTIC_LOOP.md` for lane definitions, backend
-rules, and join behavior.
+Delegation is serial by default. Mutation governs concurrency safety. See
+`agenticloop/AGENTIC_LOOP.md` for lane definitions and join behavior.
 
-Parallel delegation requires a recorded concurrency plan: lane id, lane type,
-role, read/write mode, owned backend objects, worktree path and branch for
-file-mutating write lanes, artifact, allowed files/areas, shared collision
-risks, liveness cadence, stop condition, and join condition. If any collision
-criterion is unknown, run serially.
+### Parallel Opportunity Scan
 
-File-mutating write lanes in Git repos require a separate `git worktree` and
-branch per lane, created at a repo-internal path
-(`.agenticloop/worktrees/<task-id>`) rather than a `../sibling` outside the
-repository root, so the worktree stays inside the host's workspace sandbox and
-does not trigger an external-directory prompt mid-run. GitHub implementation
-lanes also require own issue and PR. No
-batch PR may merge until every lane has returned, maintainer review is
-complete, cross-branch risk is checked, and the human approves merge order.
-Parallel coordination/review lanes must own distinct backend objects with no
-shared mutable state. Files-backed non-Git parallel write lanes are not
-allowed.
+Serial-by-default is a safety floor. A multi-task unit with 2+ ready tasks
+requires a scan first:
 
-Invalid patterns: write lanes sharing a checkout, branch-only isolation in a
-shared checkout, copied-file pseudo-worktrees, worktrees placed outside the
-repository root without the external path pre-authorized in the host's allowed
-directories, GitHub implementation without
-own worktree/branch/issue/PR, parallel lanes updating the same issue/PR/task
-record/closeout/event-log/label stream/group state.
+- **Trigger.** 2+ independent ready tasks with known, disjoint collision criteria
+  prefer a bounded parallel batch. Default maximum **3** lanes, unless config or a
+  human changes it.
+- **Serial justification.** Serial needs a concrete reason (dependency edge,
+  shared generated file/lockfile, schema/API ordering, shared external state, or
+  a host that cannot bound/surface lanes); "parallel is complex" does not count.
+- **Unknown -> read-only discovery -> decide.** Unknown criteria must not start
+  write lanes; run a bounded read-only discovery step first, then decide; if
+  uncertainty remains, run serial and record what stayed unknown.
+
+Review, integration, and merge stay serial after join unless shown safe.
+Parallel delegation requires a recorded concurrency plan: lane id/type, role,
+read/write mode, owned backend objects, worktree path/branch for file-mutating
+lanes, artifact, allowed files/areas, collision risks, liveness cadence, stop
+condition, and join condition.
+
+File-mutating write lanes need one `git worktree` and branch per lane at
+`.agenticloop/worktrees/<task-id>`, never a `../sibling`; GitHub lanes also need
+their own issue and PR. No batch PR merges until every lane has returned,
+maintainer review is complete, cross-branch risk is checked, and human approves
+merge order. Coordination/review lanes own distinct backend objects; files-backed
+non-Git parallel write lanes are not allowed.
 
 ## Event Logging
 
@@ -149,11 +149,9 @@ assume the requested role for one bounded role step only.
 
 When using fallback:
 
-- announce it in output,
-- record the capability-check result and fallback reason,
+- announce it in output and record the capability-check result and fallback reason,
 - follow the assumed role's boundaries and required skills,
-- stop at the role's normal stop condition,
-- bound it to that one role step,
+- stop at the role's normal stop condition, bounded to that one role step,
 - emit `role.invoked` when event logging is enabled,
 - do not claim host delegation happened.
 
@@ -161,9 +159,9 @@ If neither host delegation nor single-agent role assumption is allowed, use [[bl
 
 ## Review Round Checkpoint
 
-The orchestrator counts `needs_revision` rounds per task. Before routing a fourth
+The orchestrator counts `needs_revision` rounds per task. Before a fourth
 revision on the same task, run the Review Round Checkpoint in `agenticloop/AGENTIC_LOOP.md`:
-classify the churn cause, then route one targeted revision plan that names the cause
+classify the churn cause, then route one targeted revision plan naming the cause,
 or record `needs_context` or `blocked` with [[blocked-state]]. Do not route an
 undirected fourth revision.
 
@@ -186,11 +184,11 @@ Scope:             <what the role should do>
 Out of scope:      <what the role must not do>
 Expected output:   <what the role should produce>
 Stop condition:    <when the role must stop and return to orchestrator or human>
-Concurrency:       serial, or <parallel batch id plus non-collision basis>
+Concurrency:       `serial -- reason: <concrete blocker>`, or `parallel batch <id> -- lanes: <n>/3; join: <condition>`
 Lease:             <observable-step checkpoint cadence, no-progress budget, and any relevant max duration or milestone>
 ```
 
-Do not omit scope, out of scope, expected output, stop condition, or Operating facts for real delegation. An incomplete delegation prompt produces incomplete role output. Use explicit `none` for inapplicable fields. The payload mechanism is a doc pointer or `none`, never a copied command recipe.
+Do not omit scope, out of scope, expected output, stop condition, or Operating facts for real delegation. Use explicit `none` for inapplicable fields. The payload mechanism is a doc pointer or `none`, never a copied command recipe.
 
 
 ## Context Read Discipline
@@ -201,10 +199,10 @@ selection, the matching `agenticloop/backends/` projection, and files explicitly
 named by the human or task record. Do not scan the repository for "related"
 files. Do not read `.agenticloop/logs/` as ambient context; use task-scoped
 event-log audit/report or an explicit task need. `.agenticloop/tmp/` is scratch,
-not source. This limits source/context expansion, not task execution tools: use
-search or call graphs, git, tests, and host context-management tools
-when they are scoped to the delegated task and do not broaden the task contract.
-Missing context returns `needs_context` or `blocked`.
+not source. This limits source/context expansion, not task execution tools:
+search, call graphs, git, tests, and host context-management tools stay available
+when scoped to the delegated task. Missing context returns `needs_context` or
+`blocked`.
 
 If an Operating fact is wrong, record the gap in the task record, review, or status return and continue from the canonical document. Do not silently re-probe the same fact in a loop.
 
@@ -213,14 +211,16 @@ Distinguish `accepted` (binding) from `proposed` (hint, not binding unless
 accepted). If stale, record the gap; do not re-probe. Surface new `proposed`
 records to maintainer.
 
-For long-running or parallel work, the lease is required. Without host-enforced
-wall-clock cancellation, include a return-after-N-observable-steps checkpoint.
-Return status when the lease expires, no-progress budget is exhausted,
-branch/worktree is wrong, a collision appears, or the stop condition is reached.
-If the host cannot stream, cancel, or surface subagent status, use bounded
-serial delegation. Status returns include `STATUS` (`in_progress`, `complete`,
-`needs_context`, or `blocked`), task id, branch/worktree when relevant, files
-touched, latest evidence, next step, and stop reason.
+Long-running or parallel work requires a lease. Without host cancellation, use a
+return-after-N-observable-steps checkpoint. Return status when the lease expires,
+no-progress budget is exhausted, branch/worktree is wrong, a collision appears,
+or the stop condition is reached. If the host cannot stream, cancel, or surface
+subagent status, do not start long-running parallel delegation. Short bounded
+join-based batches may still run when every lane has artifact, stop condition,
+lease, no-progress budget, and join condition. If lane artifacts cannot be
+verified at join, use bounded serial delegation and record host limitation.
+Status returns include `STATUS`, task id, branch/worktree, files touched,
+evidence, next step, and stop reason.
 
 ## GitHub Backend Delegation
 
@@ -248,14 +248,14 @@ Maintainer review delegation must include:
   agent-authored marker already records the same outcome for the current PR head,
 - post the review marker only after checking the PR artifact.
 
-An issue comment with evidence is supporting evidence, not the implementation
-artifact. The task is not complete until the PR is reviewed, accepted, and
-merged or closed through an explicit backend exception.
+An issue comment with evidence is supporting evidence, not the artifact. The
+task is not complete until the PR is reviewed, accepted, and merged or closed
+through a backend exception.
 
-The pull request path applies to all automated work including docs,
-configuration, and infrastructure. A no-PR exception must be human-approved and
-recorded before implementation. A task branch has one terminal merge path; do
-not merge it again after the PR is already merged.
+The PR path applies to all automated work including docs, config, and
+infrastructure. A no-PR exception must be human-approved and recorded before
+implementation. A task branch has one terminal merge path; do not merge it again
+after the PR is merged.
 
 ## Files Backend Delegation
 
@@ -268,7 +268,7 @@ Engineer implementation or revision delegation must include:
 - update `implementation_artifact` in task-file frontmatter,
 - publish or refresh the one current implementation summary with fresh verification evidence,
 - append a dated correction entry before refreshing if prior claims, evidence, or artifact references changed,
-- ensure files-backed task-record updates are tracked (committed at workflow gates) or report an explicit local-only exception,
+- ensure files-backed task-record updates are tracked or report a local-only exception,
 - return the task file path and artifact reference to the orchestrator.
 
 Maintainer review delegation must include:
@@ -345,7 +345,7 @@ Every orchestrator update must include:
 - Role invoked: <role name>
 - Host delegation check: <tool/mechanism found and used | verified absent by ... | attempted and failed with ...>
 - Host delegation used: <yes | no>
-- Concurrency: <serial | parallel plan reference and join condition>
+- Concurrency: <`serial -- reason: <concrete blocker>` | `parallel batch <id> -- lanes: <n>/3; join: <condition>`>
 - Lease: <none | observable-step checkpoint cadence, no-progress budget, and stop condition>
 - Fallback: <none | single-agent role assumption as maintainer | single-agent role assumption as engineer>
 - Consequence: <none | fallback limited to one role step and boundary enforcement relies on explicit self-policing until return>
@@ -354,8 +354,8 @@ Every orchestrator update must include:
 ## Next Human Decision
 ```
 
-If host delegation wasn't used, explain why and what that means for role
-boundaries. If fallback was used, say so. Do not omit the delegation field.
+If host delegation wasn't used, explain why and the role-boundary impact. Do not
+omit the delegation field.
 
 ## Before Handing Back
 
@@ -371,7 +371,9 @@ boundaries. If fallback was used, say so. Do not omit the delegation field.
   stays unknown after work starts, or maintainer/engineer work appears inline in orchestrator output.
 - An available host task, subagent, or named-agent mechanism for maintainer or engineer is skipped
   without a recorded failure.
-- Parallel role work starts without a concurrency plan, lease, stop condition, and join condition;
+- A multi-task unit with 2+ ready tasks is delegated serially without the Parallel Opportunity
+  Scan, or serial is chosen with no concrete reason.
+- Parallel role work starts without a concurrency plan, lease, stop condition, or join condition;
   write lanes share checkout, branch, worktree, artifact, task record, or mutable files; or a copied
   directory is used as a pseudo-worktree.
 - Parallel coordination lanes mutate the same issue, PR, task record, closeout marker, event log,

@@ -218,6 +218,58 @@ collide with another lane just as easily as two engineer lanes if they share a
 checkout, task record, GitHub issue/PR/comment stream, label set, event log,
 branch, generated file, lockfile, schema, API surface, or other durable state.
 
+Serial-by-default is a safety floor, not a preference for serial execution. When
+a human authorizes a bounded multi-task unit, the orchestrator must actively look
+for safe bounded parallelism before defaulting to serial. The default is not
+"serial unless forced parallel"; it is "scan first, then choose."
+
+#### Parallel Opportunity Scan
+
+**Trigger.** Any authorized work unit (phase, group, milestone, epic, task set,
+or other bounded multi-task unit) that has 2 or more ready task records.
+
+Before selecting an execution order, the orchestrator must classify each ready
+task. Do not jump straight to serial delegation for a multi-task unit without
+this scan.
+
+For each ready task, classify:
+
+- **Dependency edges** -- which other tasks must finish first.
+- **Expected files or owned paths** -- the task's scope map (`Expected Files or
+  Areas` plus `allowed_paths`).
+- **Backend objects owned** -- task file(s), GitHub issue/PR, or other backend
+  records the lane mutates.
+- **Shared/generated files** -- bundlers, codegen output, fixtures, snapshots.
+- **Lockfiles** -- dependency manifests and lockfiles.
+- **Schemas/APIs** -- shared schema or API ordering dependencies.
+- **External state** -- databases, services, deployment targets, shared fixtures.
+- **Labels/comments/event logs/group state** -- shared coordination surfaces.
+- **Host parallel capability** -- whether the host can stream, cancel, or
+  surface subagent status, or enforce bounded leases.
+
+Decision after the scan:
+
+- If 2 or more tasks are independent (no dependency edge between them) and the
+  collision criteria are **known and disjoint**, prefer a bounded parallel batch
+  over serial execution.
+- **Default maximum parallel implementation lanes: 3.** Use fewer when fewer
+  independent ready tasks exist or the host cannot safely sustain three lanes.
+  Only exceed 3 when project config or an explicit human instruction raises the
+  limit.
+- Serial execution remains valid, but only with a concrete recorded reason --
+  for example a real dependency edge, a shared generated file or lockfile, a
+  schema/API ordering requirement, shared external state, or a host that cannot
+  surface or bound parallel lanes.
+- "Parallel coordination is complex" or "parallel has overhead" is **not** a
+  sufficient serial reason. Name a concrete collision or host limitation, or run
+  the bounded parallel batch.
+
+Review, integration, and merge remain serial after the join, unless a specific
+case is shown to be safe to parallelize. The hard safety rules below are not
+relaxed by the scan: every parallel write lane still requires its own
+worktree/branch, its own owned PR/issue or task file, a join condition, a lease,
+and (for GitHub batches) a merge barrier.
+
 #### Lane Types
 
 - **Read-only lane**: inspects fixed artifacts and returns findings. No VCS
@@ -272,7 +324,22 @@ pre-authorized in the host's allowed directories before delegation.
 Additionally, parallel write lanes must have disjoint allowed files or areas, no
 shared generated files or lockfiles, no schema or API ordering dependency, no
 shared external state, and no overlapping task-record or backend-object updates.
-If any collision criterion is unknown, run serially.
+
+**Unknown collision criteria.** Unknown collision criteria must not start write
+lanes -- never open parallel write lanes on guesswork. But unknown is not an
+automatic verdict of serial when the work unit has 2 or more ready candidates and
+the only blocker is missing information. In that case, run a bounded read-only
+discovery step first (inspect dependency edges, owned paths, shared/generated
+files, lockfiles, schemas, and external state for the candidate tasks). After
+discovery, decide one of:
+
+- a parallel batch with a recorded concurrency plan, when the criteria came back
+  known and disjoint, or
+- serial execution with a concrete disqualifying reason.
+
+If uncertainty remains after bounded discovery, run serial and record what stayed
+unknown. Do not loop discovery indefinitely; one bounded discovery pass then a
+decision.
 
 Before mutating repository files in a parallel write lane, the delegated role
 must verify the assigned worktree path and branch, and check
@@ -365,9 +432,22 @@ leases. An observable step is a tool call, backend operation, artifact update,
 verification check, status return, or blocker record; private reasoning is not a
 step. A lease is not a hard kill switch for a runaway subagent.
 
-If the host cannot stream, cancel, or otherwise surface subagent status while a
-role is running, do not start long-running parallel delegation. Use bounded
-serial delegation whose stop condition returns control to the orchestrator.
+Observability requirements scale with lane duration, and do not disqualify all
+parallelism by themselves:
+
+- **Long-running parallel delegation** requires live status and cancellation, or
+  strictly bounded leases. If the host cannot stream, cancel, or otherwise
+  surface subagent status while a role is running, do not start long-running
+  parallel delegation. Use bounded serial delegation whose stop condition returns
+  control to the orchestrator.
+- **Short bounded parallel batches** may run without live streaming when every
+  lane has a clear expected artifact, a stop condition, an observable-step lease,
+  a no-progress budget, and a join condition. A host that cannot stream live
+  status does not, on its own, forbid a short bounded join-based batch.
+
+If host limitations make even bounded join-based parallelism unverifiable -- the
+orchestrator cannot confirm lane artifacts at join -- run serial and record the
+host limitation as the concrete reason.
 
 Stop for human direction before:
 

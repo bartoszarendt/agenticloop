@@ -111,10 +111,24 @@ surface running role status, stream subagent output, cancel a runaway role, and
 enforce max steps, max tokens, or timeout limits.
 
 When a host cannot provide cancellation or running-subagent status, treat
-long-running and parallel delegation as unsupported. Use bounded serial
-delegation instead, and require each role prompt to include an observable-step
-checkpoint cadence, no-progress budget, and status-return stop
+long-running parallel delegation as unsupported. Short bounded parallel batches
+may still run on such a host when every lane has a clear expected artifact, a
+stop condition, an observable-step lease, a no-progress budget, and a join
+condition. If even bounded join-based parallelism is unverifiable, use bounded
+serial delegation instead, and require each role prompt to include an
+observable-step checkpoint cadence, no-progress budget, and status-return stop
 condition.
+
+## Concurrency Guidance
+
+Serial execution is the default safety floor, not a preference. For an authorized
+multi-task unit with 2 or more ready task records, the orchestrator performs a
+Parallel Opportunity Scan before defaulting to serial (see
+`agenticloop/AGENTIC_LOOP.md`). Bounded eligible batches may use up to 3
+implementation lanes by default; choosing serial after eligible candidates exist
+requires a recorded concrete reason. Long-running parallelism carries stronger
+observability requirements (live status/cancellation or strict bounded leases)
+than short bounded join-based batches.
 
 ## Per-Host Role Settings
 

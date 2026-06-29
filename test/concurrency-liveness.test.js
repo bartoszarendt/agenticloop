@@ -92,6 +92,64 @@ describe('generated orchestrator surfaces default to serial with a concurrency p
   }
 });
 
+describe('generated orchestrator surfaces require a Parallel Opportunity Scan with bounded batches', () => {
+  for (const host of HOSTS) {
+    it(`${host.name} orchestrator mentions the Parallel Opportunity Scan`, () => {
+      const text = surfaces.get(`${host.name}:orchestrator`);
+      assert.match(text, /parallel opportunity scan/i, `${host.name} orchestrator missing Parallel Opportunity Scan wording`);
+    });
+
+    it(`${host.name} orchestrator mentions bounded batches up to 3 lanes`, () => {
+      const text = surfaces.get(`${host.name}:orchestrator`);
+      assert.match(text, /up to 3 (?:implementation )?lanes/i, `${host.name} orchestrator missing up-to-3-lanes wording`);
+    });
+  }
+});
+
+describe('canonical Parallel Opportunity Scan policy is documented', () => {
+  it('AGENTIC_LOOP.md states the serial justification requirement', () => {
+    const text = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf-8').replace(/\s+/g, ' ');
+    assert.match(text, /only with a concrete recorded reason/i);
+    assert.match(text, /sufficient serial reason/i);
+    assert.match(text, /default maximum parallel implementation lanes: 3/i);
+  });
+
+  it('AGENTIC_LOOP.md documents unknown -> read-only discovery -> decide', () => {
+    const text = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf-8').replace(/\s+/g, ' ');
+    assert.match(text, /Unknown collision criteria must not start write lanes/i);
+    assert.match(text, /bounded read-only discovery step first/i);
+    assert.match(text, /After discovery, decide/i);
+    assert.match(text, /If uncertainty remains after bounded discovery, run serial/i);
+  });
+
+  it('role-delegation preserves the short bounded batch observability split', () => {
+    const text = readFileSync(join(REPO_ROOT, 'skills', 'role-delegation', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
+    assert.match(text, /do not start long-running parallel delegation/i);
+    assert.match(text, /Short bounded join-based batches may still run/i);
+    assert.match(text, /If lane artifacts cannot be verified at join, use bounded serial delegation/i);
+  });
+});
+
+describe('Parallel Safety task-record section is documented', () => {
+  it('the canonical task-record template contains the Parallel Safety section', () => {
+    const text = readFileSync(join(REPO_ROOT, 'memory', 'task-record.md'), 'utf-8');
+    assert.match(text, /## Parallel Safety/);
+    assert.match(text, /Parallel eligibility: eligible \| blocked \| unknown/);
+  });
+
+  it('the task-record-contract skill documents Parallel Safety', () => {
+    const text = readFileSync(join(REPO_ROOT, 'skills', 'task-record-contract', 'SKILL.md'), 'utf-8');
+    assert.match(text, /## Parallel Safety/);
+  });
+
+  it('layout registers "## Parallel Safety" as an optional task section', () => {
+    assert.ok(
+      TASK_OPTIONAL_SECTION_HEADINGS.includes('## Parallel Safety'),
+      'TASK_OPTIONAL_SECTION_HEADINGS must include "## Parallel Safety"'
+    );
+  });
+});
+
 describe('generated worker surfaces honor leases and return status', () => {
   for (const host of HOSTS) {
     for (const role of ['maintainer', 'engineer']) {
