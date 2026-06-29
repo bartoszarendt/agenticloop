@@ -67,6 +67,16 @@ Recommended `check.run` data fields:
 - `skipped`
 - `duration_ms`
 - `attempt`
+- `required`: true when the check is a required gate for this task.
+- `triaged_unrelated`: true when the failure is unrelated to the task change and
+  accepted as such.
+- `accepted_known_failure`: true when the failure is a pre-existing known
+  failure and accepted for this task.
+
+Log unrelated or known failures as `failure` or `blocked` with the matching
+triage flag set to `true`; do not hide them as clean `success`. A triaged
+check is still an imperfect check and must be reported separately from clean
+passes.
 
 Example success event:
 

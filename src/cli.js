@@ -747,6 +747,13 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
       return;
     }
 
+    if (result.durableClosure) {
+      const status = result.durableClosure.satisfied
+        ? 'yes'
+        : `no (${result.durableClosure.reason})`;
+      console.log(`  durable task.closed: ${status}`);
+    }
+
     if (!result.enabled && result.explicitRequire) {
       console.log('  Event logging is disabled in .agenticloop/project.md, but explicit --require requested an audit.');
     }
@@ -792,6 +799,10 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
     console.log(`  trace duration: ${result.traceDuration}`);
     console.log(`  strict audit present: ${formatSummaryList(result.strictAudit.presentEventTypes)}`);
     console.log(`  strict audit missing: ${formatSummaryList(result.strictAudit.missingEventTypes)}`);
+    const durableClosureStatus = result.strictAudit.durableClosure.satisfied
+      ? 'yes'
+      : `no (${result.strictAudit.durableClosure.reason})`;
+    console.log(`  durable task.closed: ${durableClosureStatus}`);
     console.log(
       `  check.run counts: success=${result.checkRunCounts.success}, failure=${result.checkRunCounts.failure}, blocked=${result.checkRunCounts.blocked}`
     );
@@ -803,6 +814,22 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
     console.log(`  delegation modes: ${formatCountSummary(result.roleInvoked.delegationModeCounts)}`);
     console.log(`  fallback count: ${result.roleInvoked.fallbackCount}`);
     console.log(`  refs summary: ${formatRefSummary(result.refsSummary)}`);
+
+    console.log('  accepted imperfect checks (not clean success):');
+    if (result.acceptedImperfectChecks.length === 0) {
+      console.log('    none');
+    } else {
+      for (const check of result.acceptedImperfectChecks) {
+        const details = [];
+        if (check.command) details.push(`command=${check.command}`);
+        const triage = [];
+        if (check.triaged_unrelated) triage.push('triaged_unrelated');
+        if (check.accepted_known_failure) triage.push('accepted_known_failure');
+        if (triage.length > 0) details.push(`triage=${triage.join(',')}`);
+        details.push(`refs=${check.refs.length > 0 ? check.refs.join(', ') : 'none'}`);
+        console.log(`    - ${check.outcome}: ${check.summary} (${details.join('; ')})`);
+      }
+    }
 
     console.log('  failed/blocked checks:');
     if (result.failedOrBlockedChecks.length === 0) {

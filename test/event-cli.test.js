@@ -902,6 +902,190 @@ describe('event CLI', () => {
     assert.match(result.stdout, /refs summary: .*github:pr:17=8/);
   });
 
+  it('event-logging audit prints a clear durable task.closed error', () => {
+    const target = makeTarget('audit-durable-closure-error');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'files' });
+    writeValidTaskRecord(target, 'T-001');
+    appendAuditFixtureEvents(target, 'T-001', ['role.invoked', 'task.started', 'check.run', 'review.result']);
+    assertOk(run([
+      'event-logging',
+      'task.closed',
+      '--target',
+      target,
+      '--task',
+      'T-001',
+      '--role',
+      'engineer',
+      '--summary',
+      'Engineer marked revision complete',
+      '--outcome',
+      'success',
+    ]));
+
+    const result = run(['event-logging', 'audit', '--target', target, '--task', 'T-001']);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Durable task\.closed not satisfied/);
+    assert.match(result.stderr, /role was engineer/);
+  });
+
+  it('event-logging report prints durable task.closed status', () => {
+    const passing = makeTarget('report-durable-closure-yes');
+    writeProjectMap(passing, { eventLogging: 'enabled', taskBackend: 'github' });
+    appendAuditFixtureEvents(passing, 'T-001', ['role.invoked', 'task.started', 'check.run', 'review.result']);
+    assertOk(run([
+      'event-logging',
+      'task.closed',
+      '--target',
+      passing,
+      '--task',
+      'T-001',
+      '--role',
+      'maintainer',
+      '--summary',
+      'Closed task',
+      '--outcome',
+      'success',
+      '--ref',
+      'github:issue:42',
+      '--ref',
+      'github:pr:17',
+    ]));
+
+    const passingResult = run(['event-logging', 'report', '--target', passing, '--task', 'T-001']);
+    assertOk(passingResult);
+    assert.match(passingResult.stdout, /durable task\.closed: yes/);
+
+    const failing = makeTarget('report-durable-closure-no');
+    writeProjectMap(failing, { eventLogging: 'enabled', taskBackend: 'github' });
+    appendAuditFixtureEvents(failing, 'T-002', ['role.invoked', 'task.started', 'check.run', 'review.result']);
+    assertOk(run([
+      'event-logging',
+      'task.closed',
+      '--target',
+      failing,
+      '--task',
+      'T-002',
+      '--role',
+      'maintainer',
+      '--summary',
+      'Closed task missing PR ref',
+      '--outcome',
+      'success',
+      '--ref',
+      'github:issue:42',
+    ]));
+
+    const failingResult = run(['event-logging', 'report', '--target', failing, '--task', 'T-002']);
+    assertOk(failingResult);
+    assert.match(failingResult.stdout, /durable task\.closed: no \(/);
+    assert.match(failingResult.stdout, /missing github:pr ref/);
+  });
+
+  it('event-logging report prints accepted imperfect checks separately', () => {
+    const target = makeTarget('report-accepted-imperfect-cli');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'files' });
+    writeValidTaskRecord(target, 'T-001');
+
+    assertOk(run([
+      'event-logging',
+      'role.invoked',
+      '--target',
+      target,
+      '--task',
+      'T-001',
+      '--role',
+      'orchestrator',
+      '--summary',
+      'Delegated engineer',
+    ]));
+    assertOk(run([
+      'event-logging',
+      'task.started',
+      '--target',
+      target,
+      '--task',
+      'T-001',
+      '--role',
+      'engineer',
+      '--summary',
+      'Started implementation',
+    ]));
+    assertOk(run([
+      'event-logging',
+      'check.run',
+      '--target',
+      target,
+      '--task',
+      'T-001',
+      '--role',
+      'engineer',
+      '--summary',
+      'Flaky unrelated test failed',
+      '--outcome',
+      'failure',
+      '--ref',
+      'command:npm test',
+      '--data-json',
+      JSON.stringify({ command: 'npm test', exit_code: 1, passed: 10, failed: 1, triaged_unrelated: true, required: true }),
+    ]));
+    assertOk(run([
+      'event-logging',
+      'check.run',
+      '--target',
+      target,
+      '--task',
+      'T-001',
+      '--role',
+      'engineer',
+      '--summary',
+      'Known pre-existing lint failure',
+      '--outcome',
+      'failure',
+      '--ref',
+      'command:npm run lint',
+      '--data-json',
+      JSON.stringify({ command: 'npm run lint', exit_code: 1, accepted_known_failure: true }),
+    ]));
+    assertOk(run([
+      'event-logging',
+      'review.result',
+      '--target',
+      target,
+      '--task',
+      'T-001',
+      '--role',
+      'maintainer',
+      '--summary',
+      'Accepted implementation',
+      '--outcome',
+      'accepted',
+    ]));
+    assertOk(run([
+      'event-logging',
+      'task.closed',
+      '--target',
+      target,
+      '--task',
+      'T-001',
+      '--role',
+      'maintainer',
+      '--summary',
+      'Closed task',
+      '--outcome',
+      'success',
+    ]));
+
+    const result = run(['event-logging', 'report', '--target', target, '--task', 'T-001']);
+
+    assertOk(result);
+    assert.match(result.stdout, /accepted imperfect checks \(not clean success\):/);
+    assert.match(result.stdout, /triaged_unrelated/);
+    assert.match(result.stdout, /accepted_known_failure/);
+    assert.doesNotMatch(result.stdout, /failed\/blocked checks:[\s\S]*Flaky unrelated test failed/);
+    assert.doesNotMatch(result.stdout, /failed\/blocked checks:[\s\S]*Known pre-existing lint failure/);
+  });
+
   it('event-logging report fails when the task log is missing', () => {
     const target = makeTarget('report-missing-log');
 

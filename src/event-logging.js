@@ -397,6 +397,67 @@ function hasGithubTaskReference(event) {
   });
 }
 
+function splitRefStrings(refs) {
+  const result = [];
+  if (!Array.isArray(refs)) return result;
+
+  for (const ref of refs) {
+    const str = asTrimmedString(ref);
+    if (!str) continue;
+    for (const part of str.split(',')) {
+      const trimmed = part.trim();
+      if (trimmed) result.push(trimmed);
+    }
+  }
+
+  return result;
+}
+
+function hasGithubIssueAndPrRefs(event) {
+  const refs = splitRefStrings(event?.refs);
+  const hasIssue = refs.some(ref => /^github:issue:\d+$/i.test(ref));
+  const hasPr = refs.some(ref => /^github:pr:\d+$/i.test(ref));
+  return { hasIssue, hasPr, refs };
+}
+
+function hasValidClosureException(event) {
+  const exception = event?.data?.closure_exception;
+  if (exception === undefined || exception === null) return false;
+  if (typeof exception === 'string') return asTrimmedString(exception).length > 0;
+  if (isPlainObject(exception)) {
+    return asTrimmedString(exception.reason).length > 0;
+  }
+  return false;
+}
+
+function isGithubBackedTask(repoRoot, options = {}) {
+  const backendResolution = resolveTaskBackend(repoRoot, options);
+  return backendResolution.backend === 'github';
+}
+
+function isDurableTaskClosedEvent(event, repoRoot, options = {}) {
+  if (event?.event_type !== 'task.closed') return false;
+  if (event.outcome !== 'success') return false;
+  if (!['maintainer', 'orchestrator'].includes(event.role)) return false;
+
+  if (!isGithubBackedTask(repoRoot, options)) return true;
+
+  const { hasIssue, hasPr } = hasGithubIssueAndPrRefs(event);
+  if (hasIssue && hasPr) return true;
+  if (hasValidClosureException(event)) return true;
+
+  return false;
+}
+
+function findLastTaskClosedEvent(events) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i]?.event_type === 'task.closed') {
+      return events[i];
+    }
+  }
+  return null;
+}
+
 function validateTaskReference(event, repoRoot) {
   const errors = [];
   const warnings = [];
@@ -754,6 +815,40 @@ export function validateEventLogs(target) {
   };
 }
 
+function evaluateDurableClosure(events, repoRoot, options = {}) {
+  const lastClosure = findLastTaskClosedEvent(events);
+  if (!lastClosure) {
+    return { satisfied: false, reason: 'no task.closed event recorded' };
+  }
+
+  if (isDurableTaskClosedEvent(lastClosure, repoRoot, options)) {
+    return { satisfied: true };
+  }
+
+  const reasons = [];
+  if (lastClosure.outcome !== 'success') {
+    reasons.push(`outcome was ${lastClosure.outcome}`);
+  }
+  if (!['maintainer', 'orchestrator'].includes(lastClosure.role)) {
+    reasons.push(`role was ${lastClosure.role}`);
+  }
+  if (isGithubBackedTask(repoRoot, options)) {
+    const { hasIssue, hasPr } = hasGithubIssueAndPrRefs(lastClosure);
+    if (!hasIssue && !hasPr) {
+      reasons.push('missing github:issue and github:pr refs');
+    } else if (!hasIssue) {
+      reasons.push('missing github:issue ref');
+    } else if (!hasPr) {
+      reasons.push('missing github:pr ref');
+    }
+    if (!hasValidClosureException(lastClosure)) {
+      reasons.push('no closure_exception');
+    }
+  }
+
+  return { satisfied: false, reason: reasons.join(', ') || 'not a durable closure event' };
+}
+
 export function auditTaskEventLog({ target, taskId, requiredEventTypes, explicitRequire = false } = {}) {
   const resolvedTarget = target ? resolve(target) : process.cwd();
   const normalizedTaskId = normalizeNullableString(taskId);
@@ -762,9 +857,11 @@ export function auditTaskEventLog({ target, taskId, requiredEventTypes, explicit
   }
 
   const normalizedRequiredEventTypes = normalizeAuditRequiredEventTypes(requiredEventTypes);
-  const eventLogging = loadProjectMap(resolvedTarget)?.config?.event_logging ?? 'disabled';
+  const projectMapResult = loadProjectMap(resolvedTarget);
+  const eventLogging = projectMapResult?.config?.event_logging ?? 'disabled';
   const eventLogPath = resolveEventLogPath(resolvedTarget, undefined, normalizedTaskId).path;
   const displayPath = formatEventLogPathForDisplay(eventLogPath, resolvedTarget);
+  const requiresTaskClosed = normalizedRequiredEventTypes.includes('task.closed');
   const result = {
     taskId: normalizedTaskId,
     eventLogging,
@@ -776,6 +873,7 @@ export function auditTaskEventLog({ target, taskId, requiredEventTypes, explicit
     exists: false,
     eventCount: 0,
     missingEventTypes: [],
+    durableClosure: requiresTaskClosed ? { satisfied: false, reason: 'not evaluated' } : undefined,
     errors: [],
     warnings: [],
     skipped: false,
@@ -806,12 +904,21 @@ export function auditTaskEventLog({ target, taskId, requiredEventTypes, explicit
   }
 
   if (result.errors.length === 0) {
-    const recordedEventTypes = new Set(loadEvents(eventLogPath).map(event => event.event_type));
+    const events = loadEvents(eventLogPath);
+    const recordedEventTypes = new Set(events.map(event => event.event_type));
     result.missingEventTypes = normalizedRequiredEventTypes.filter(
       eventType => !recordedEventTypes.has(eventType)
     );
     if (result.missingEventTypes.length > 0) {
       result.errors.push(`Missing required event types: ${result.missingEventTypes.join(', ')}`);
+    }
+
+    if (requiresTaskClosed && result.missingEventTypes.length === 0) {
+      const durableClosure = evaluateDurableClosure(events, resolvedTarget, { projectMapResult });
+      result.durableClosure = durableClosure;
+      if (!durableClosure.satisfied) {
+        result.errors.push(`Durable task.closed not satisfied: ${durableClosure.reason}`);
+      }
     }
   }
 
@@ -842,10 +949,12 @@ export function reportTaskEventLog({ target, taskId } = {}) {
     requiredEventTypes: [...STRICT_AUDIT_EVENT_TYPES],
     presentEventTypes: STRICT_AUDIT_EVENT_TYPES.filter(eventType => recordedEventTypes.has(eventType)),
     missingEventTypes: STRICT_AUDIT_EVENT_TYPES.filter(eventType => !recordedEventTypes.has(eventType)),
+    durableClosure: evaluateDurableClosure(events, resolvedTarget),
   };
 
   const checkRunCounts = { success: 0, failure: 0, blocked: 0 };
   const failedOrBlockedChecks = [];
+  const acceptedImperfectChecks = [];
   const reviewResultCounts = { accepted: 0, needs_revision: 0 };
   const reviewRoundValues = new Set();
   const targetRoleCounts = new Map();
@@ -876,10 +985,26 @@ export function reportTaskEventLog({ target, taskId } = {}) {
     if (reviewRound) reviewRoundValues.add(reviewRound);
 
     if (event.event_type === 'check.run') {
+      const triagedUnrelated = event.data?.triaged_unrelated === true;
+      const acceptedKnownFailure = event.data?.accepted_known_failure === true;
+      const acceptedImperfect = triagedUnrelated || acceptedKnownFailure;
+
       if (event.outcome === 'success' || event.outcome === 'failure' || event.outcome === 'blocked') {
         checkRunCounts[event.outcome] += 1;
       }
-      if (event.outcome === 'failure' || event.outcome === 'blocked') {
+
+      if (acceptedImperfect) {
+        acceptedImperfectChecks.push({
+          occurred_at: event.occurred_at,
+          outcome: event.outcome,
+          summary: event.summary,
+          refs: [...event.refs],
+          command: normalizeNullableString(event.data?.command),
+          triaged_unrelated: triagedUnrelated,
+          accepted_known_failure: acceptedKnownFailure,
+          required: event.data?.required === true,
+        });
+      } else if (event.outcome === 'failure' || event.outcome === 'blocked') {
         failedOrBlockedChecks.push({
           occurred_at: event.occurred_at,
           outcome: event.outcome,
@@ -924,6 +1049,7 @@ export function reportTaskEventLog({ target, taskId } = {}) {
     traceDuration: formatDurationMilliseconds(traceDurationMs),
     strictAudit,
     checkRunCounts,
+    acceptedImperfectChecks,
     failedOrBlockedChecks,
     reviewResultCounts,
     reviewRounds: [...reviewRoundValues].sort(compareSummaryValues),

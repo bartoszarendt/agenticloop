@@ -46,9 +46,12 @@ It defines the ordered required sections and the optional `Proof Pressure`,
 `Grouping`, `Source Reference`, `Applicable Project Skills`, `Concurrency
 Plan`, and `Outcome` sections.
 
-The `## Outcome` section is optional, maintainer-filled at closeout, reuses
-`block_category` from [[blocked-state]], and never replaces acceptance criteria
-or proof pressure.
+The `## Outcome` section is optional for routine clean tasks, maintainer-filled
+at closeout. It becomes conditionally required when any of these happened:
+review_rounds > 1, failed or triaged checks, blocked/needs_context state, scope
+drift, stale evidence, human intervention, or follow-ups. It reuses the existing
+X-02 fields; do not add a new schema. It never replaces acceptance criteria or
+proof pressure.
 
 ## Proof pressure
 

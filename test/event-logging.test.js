@@ -751,4 +751,215 @@ describe('event logging module', () => {
       /Missing task event log: \.agenticloop\/logs\/T-404\.jsonl/
     );
   });
+
+  it('auditTaskEventLog fails when task.closed is only engineer/success', () => {
+    const target = makeTarget('audit-engineer-closure');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'files' });
+    writeTaskRecord(target, 'T-001');
+    appendAuditEvents(target, 'T-001');
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'files',
+      eventType: 'task.closed',
+      role: 'engineer',
+      summary: 'Engineer marked revision complete',
+      outcome: 'success',
+      refs: [],
+      data: {},
+    });
+
+    const result = auditTaskEventLog({ target, taskId: 'T-001' });
+
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(error => error.includes('Durable task.closed not satisfied')));
+    assert.equal(result.durableClosure.satisfied, false);
+    assert.ok(result.durableClosure.reason.includes('role was engineer'));
+  });
+
+  it('auditTaskEventLog fails for github backend when durable task.closed lacks issue or PR ref', () => {
+    const target = makeTarget('audit-github-missing-pr');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'github' });
+
+    appendAuditEvents(target, 'T-001');
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      eventType: 'task.closed',
+      role: 'maintainer',
+      summary: 'Closed task',
+      outcome: 'success',
+      refs: ['github:issue:42'],
+      data: {},
+    });
+
+    const result = auditTaskEventLog({ target, taskId: 'T-001' });
+
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(error => error.includes('Durable task.closed not satisfied')));
+    assert.equal(result.durableClosure.satisfied, false);
+    assert.ok(result.durableClosure.reason.includes('missing github:pr ref'));
+  });
+
+  it('auditTaskEventLog passes for github backend with maintainer or orchestrator task.closed plus refs', () => {
+    for (const role of ['maintainer', 'orchestrator']) {
+      const target = makeTarget(`audit-github-closure-${role}`);
+      writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'github' });
+
+      appendAuditEvents(target, 'T-001');
+      appendFixtureEvent(target, 'T-001', {
+        backend: 'github',
+        eventType: 'task.closed',
+        role,
+        summary: 'Closed task',
+        outcome: 'success',
+        refs: ['github:issue:42', 'github:pr:9'],
+        data: {},
+      });
+
+      const result = auditTaskEventLog({ target, taskId: 'T-001' });
+
+      assert.equal(result.ok, true, `expected ${role} closure to pass`);
+      assert.equal(result.durableClosure.satisfied, true);
+    }
+  });
+
+  it('auditTaskEventLog tolerates comma-joined legacy refs', () => {
+    const target = makeTarget('audit-comma-refs');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'github' });
+
+    appendAuditEvents(target, 'T-001');
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      eventType: 'task.closed',
+      role: 'maintainer',
+      summary: 'Closed task',
+      outcome: 'success',
+      refs: ['github:issue:42, github:pr:9'],
+      data: {},
+    });
+
+    const result = auditTaskEventLog({ target, taskId: 'T-001' });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.durableClosure.satisfied, true);
+  });
+
+  it('auditTaskEventLog passes for files backend with maintainer/orchestrator success task.closed without github refs', () => {
+    const target = makeTarget('audit-files-closure');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'files' });
+    writeTaskRecord(target, 'T-001');
+    appendAuditEvents(target, 'T-001');
+
+    const result = auditTaskEventLog({ target, taskId: 'T-001' });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.durableClosure.satisfied, true);
+  });
+
+  it('custom --require audits that omit task.closed do not enforce durable closure', () => {
+    const target = makeTarget('audit-custom-no-closure');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'files' });
+    writeTaskRecord(target, 'T-001');
+    appendAuditEvents(target, 'T-001', ['role.invoked', 'task.started', 'check.run', 'review.result']);
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'files',
+      eventType: 'task.closed',
+      role: 'engineer',
+      summary: 'Engineer revision complete',
+      outcome: 'success',
+      refs: [],
+      data: {},
+    });
+
+    const result = auditTaskEventLog({
+      target,
+      taskId: 'T-001',
+      requiredEventTypes: ['role.invoked', 'task.started', 'check.run', 'review.result'],
+      explicitRequire: true,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.durableClosure, undefined);
+  });
+
+  it('reportTaskEventLog returns durable closure status and accepted imperfect check data', () => {
+    const target = makeTarget('report-accepted-imperfect');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'github' });
+
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:00:00.000Z',
+      eventType: 'role.invoked',
+      role: 'orchestrator',
+      summary: 'Delegated engineer',
+      refs: ['github:issue:42'],
+      data: {},
+    });
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:01:00.000Z',
+      eventType: 'task.started',
+      role: 'engineer',
+      summary: 'Started implementation',
+      refs: ['github:issue:42'],
+      data: {},
+    });
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:02:00.000Z',
+      eventType: 'check.run',
+      role: 'engineer',
+      summary: 'Unrelated flaky test failed',
+      outcome: 'failure',
+      refs: ['command:npm test', 'github:pr:9'],
+      data: { command: 'npm test', exit_code: 1, passed: 127, failed: 1, triaged_unrelated: true, required: true },
+    });
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:03:00.000Z',
+      eventType: 'check.run',
+      role: 'engineer',
+      summary: 'Known pre-existing lint failure',
+      outcome: 'failure',
+      refs: ['command:npm run lint', 'github:pr:9'],
+      data: { command: 'npm run lint', exit_code: 1, accepted_known_failure: true },
+    });
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:04:00.000Z',
+      eventType: 'review.result',
+      role: 'maintainer',
+      summary: 'Accepted implementation',
+      outcome: 'accepted',
+      refs: ['github:pr:9'],
+      data: {},
+    });
+    appendFixtureEvent(target, 'T-001', {
+      backend: 'github',
+      occurredAt: '2026-06-17T10:05:00.000Z',
+      eventType: 'task.closed',
+      role: 'maintainer',
+      summary: 'Closed task',
+      outcome: 'success',
+      refs: ['github:issue:42', 'github:pr:9'],
+      data: {},
+    });
+
+    const report = reportTaskEventLog({ target, taskId: 'T-001' });
+
+    assert.equal(report.strictAudit.durableClosure.satisfied, true);
+    assert.equal(report.checkRunCounts.failure, 2);
+    assert.equal(report.failedOrBlockedChecks.length, 0);
+    assert.equal(report.acceptedImperfectChecks.length, 2);
+    assert.deepEqual(
+      report.acceptedImperfectChecks.map(check => ({
+        summary: check.summary,
+        triaged_unrelated: check.triaged_unrelated,
+        accepted_known_failure: check.accepted_known_failure,
+        required: check.required,
+      })),
+      [
+        { summary: 'Unrelated flaky test failed', triaged_unrelated: true, accepted_known_failure: false, required: true },
+        { summary: 'Known pre-existing lint failure', triaged_unrelated: false, accepted_known_failure: true, required: false },
+      ]
+    );
+  });
 });

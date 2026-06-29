@@ -255,6 +255,19 @@ closing-keyword process gap in the review, task record, or closeout marker note.
 Use an explicit close comment without a PR only for a documented no-PR backend
 exception.
 
+### Record Outcome
+
+For GitHub-backed tasks, record the optional `## Outcome` section in a
+maintainer closeout issue comment by default. Update the issue body with the
+`## Outcome` content only before the issue is closed when practical. Do not put
+`## Outcome` in the pull request body; the PR body remains the implementation
+summary source, not the Outcome source.
+
+When `## Outcome` is conditionally required (review rounds > 1, failed or
+triaged checks, blocked/needs_context state, scope drift, stale evidence, human
+intervention, or follow-ups), the maintainer must post it as a durable issue
+comment before or during closeout.
+
 ### Run Closeout
 
 Closeout is a verify-and-mark gate; it does not publish a separate summary

@@ -487,6 +487,12 @@ and help the reviewer verify that local success is real success. They complement
 acceptance criteria; they do not replace scope, out-of-scope boundaries, or
 required checks.
 
+`## Outcome` is optional for routine clean tasks. It becomes conditionally
+required at closeout when any of the following happened: review rounds > 1,
+failed or triaged checks, blocked/needs_context state, scope drift, stale
+evidence, human intervention, or follow-ups. The section reuses the existing
+X-02 fields; do not add a new schema.
+
 ## Task Backends
 
 The active task backend defines where task records live. Read `task_backend`
@@ -548,6 +554,15 @@ For strict audit, the minimal required event set is:
 - `review.result`
 - `task.closed` when the task is closed
 
+A durable `task.closed` event must have `outcome: success` and role
+`maintainer` or `orchestrator`. For GitHub-backed tasks it must also include
+both `github:issue:<number>` and `github:pr:<number>` refs, or document an
+exception in `data.closure_exception` (for example a no-PR or manual-close
+exception with a non-empty `reason`). Files-backed tasks do not require GitHub
+refs. The audit treats the last `task.closed` event as the final satisfying
+closure event, so a later non-durable engineer revision-complete marker fails
+strict audit.
+
 Use event logging for these recommended default gates:
 
 - `task.created` when a durable task record is created.
@@ -586,13 +601,27 @@ Recommended `refs` values:
 Recommended `data` conventions:
 
 - `check.run`: `command`, `exit_code`, `passed`, `failed`, `skipped`,
-  `duration_ms`, `attempt`
+  `duration_ms`, `attempt`, `required`, `triaged_unrelated`,
+  `accepted_known_failure`
 - `role.invoked`: `target_role`, `delegation_mode`
   (`host_subagent`, `explicit_agent_invocation`, or `single_agent_fallback`),
   `fallback`, `adapter`, `model` only when explicitly known from adapter
   config, and `reason`
 - `review.started` and `review.result`: `review_round`, `artifact_revision`,
   `pr_head`
+
+`check.run` triage fields:
+
+- `required`: true when the check is a required gate for this task.
+- `triaged_unrelated`: true when the failure or blocked result is unrelated to
+  the task change and accepted as such.
+- `accepted_known_failure`: true when the failure is a pre-existing known
+  failure and accepted for this task.
+
+A triaged unrelated or known failure must still be logged with its real outcome
+(usually `failure` or `blocked`), not rewritten as a clean `success`. The triage
+fields let reports distinguish an accepted imperfect check from an untriaged
+failure.
 
 `data` must stay small, structured, and non-transcript. Do not copy prompts,
 responses, full tool output, token streams, per-turn telemetry, or raw host

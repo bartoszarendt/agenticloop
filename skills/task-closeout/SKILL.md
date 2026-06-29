@@ -47,7 +47,11 @@ Review:
 - optional local event log entries emitted at workflow gates when event logging is enabled.
 
 When closing a task, the maintainer may fill the optional `## Outcome` section
-with the structured fields; it is not required and does not gate closeout. The
+with the structured fields; it is not required for routine clean tasks. The
+`## Outcome` section becomes conditionally required at closeout when any of
+these happened: review_rounds > 1, failed or triaged checks,
+blocked/needs_context state, scope drift, stale evidence, human intervention,
+or follow-ups. Reuse the existing X-02 fields; do not add a new schema. The
 `review_result` field in `## Outcome` is the final closeout classification for
 the task record, distinct from the per-review `review.result` field used in
 event-log entries.

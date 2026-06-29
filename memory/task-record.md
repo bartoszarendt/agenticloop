@@ -85,8 +85,13 @@ here so the engineer knows what evidence to publish.
 
 ## Outcome
 
-Optional. Maintainer-filled at closeout. Records structured signal for later
-loop-improvement pattern mining. Omit for routine tasks.
+Optional for routine clean tasks. Conditionally required at closeout when any
+of these happened: review_rounds > 1, failed or triaged checks,
+blocked/needs_context state, scope drift, stale evidence, human intervention,
+or follow-ups. Reuses the existing X-02 fields; do not add a new schema.
+
+Maintainer-filled at closeout. Records structured signal for later
+loop-improvement pattern mining.
 
 `review_result` here is the final closeout classification for the task record;
 it is different from the per-review event-log field `review.result` emitted
