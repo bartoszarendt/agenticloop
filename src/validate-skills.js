@@ -11,7 +11,7 @@
  *
  * Warnings (do not fail):
  *   - orphan skill (no inbound [[link]] from another skill)
- *   - body under 50 or over 3000 words
+ *   - body under 50 or over 4000 words
  *   - description without an explicit trigger phrase
  *
  * [[agent: ...]] attribution markers are not skill links and are ignored.
@@ -26,7 +26,8 @@ const WIKILINK_RE = /\[\[([^\]]+)\]\]/g;
 const REQUIRED_FIELDS = ['name', 'description'];
 const TRIGGER_PHRASES = ['use when', 'use whenever', 'use before', 'use the moment'];
 const MIN_WORDS = 50;
-const MAX_WORDS = 3000;
+const MAX_WORDS = 4000;
+const WORD_RE = /[\p{L}\p{N}]+(?:['\u2019\u002d\u2013\u2014][\p{L}\p{N}]+)*/gu;
 
 const TRUST_FIELDS = ['side_effects', 'credentials', 'runs_scripts'];
 const TRUST_ENUMS = {
@@ -36,7 +37,7 @@ const TRUST_ENUMS = {
 };
 
 function countWords(text) {
-  return text.split(/\s+/).filter(Boolean).length;
+  return text.match(WORD_RE)?.length ?? 0;
 }
 
 function skillLinks(body) {

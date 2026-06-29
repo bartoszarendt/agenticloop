@@ -158,6 +158,31 @@ describe('Word count warnings', () => {
     const report = validateSkills(d);
     assert.ok(report.skills.tiny.warnings.some(w => w.includes('very short')));
   });
+
+  it('does not count Markdown punctuation or standalone dashes as words', () => {
+    const d = mkdtempSync(join(tmpDir, 'markdown-punctuation-'));
+    const body = '## - * ``` \u2013 \u2014 '.repeat(60);
+    makeSkill(d, 'punctuation-only', null, body);
+    const report = validateSkills(d);
+    assert.ok(report.skills['punctuation-only'].warnings.some(w => w.includes('very short (0 words)')));
+  });
+
+  it('counts words joined by internal hyphens and dashes as words', () => {
+    const d = mkdtempSync(join(tmpDir, 'joined-words-'));
+    const body = 'well-known end-to-end pre\u2013review post\u2014review '.repeat(13);
+    makeSkill(d, 'joined-words', null, body);
+    const report = validateSkills(d);
+    assert.ok(!report.skills['joined-words'].warnings.some(w => w.includes('very short')));
+  });
+
+  it('warns only when body exceeds 4000 readable words', () => {
+    const d = mkdtempSync(join(tmpDir, 'long-body-'));
+    makeSkill(d, 'below-long-limit', null, 'word '.repeat(3500));
+    makeSkill(d, 'above-long-limit', null, 'word '.repeat(4001));
+    const report = validateSkills(d);
+    assert.ok(!report.skills['below-long-limit'].warnings.some(w => w.includes('Body is long')));
+    assert.ok(report.skills['above-long-limit'].warnings.some(w => w.includes('Body is long (4001 words)')));
+  });
 });
 
 describe('Trigger phrase warning', () => {
