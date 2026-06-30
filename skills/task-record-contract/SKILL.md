@@ -276,6 +276,12 @@ Fields:
 - **Reason**: the concrete basis for the eligibility verdict; when `unknown`,
   name the missing information a bounded read-only discovery step would resolve.
 
+When `Parallel eligibility` is `unknown` for a code/collision fact and 2 or more
+ready tasks could otherwise run in parallel, the maintainer runs one bounded
+read-only discovery pass before returning. If the verdict stays unknown, the
+reason must state what stayed unknown and recommend serial for that blocker.
+Host/lane capability unknowns stay with the orchestrator.
+
 A standalone single task outside a multi-task unit may omit the section.
 
 ## Bug tasks

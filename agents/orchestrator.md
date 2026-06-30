@@ -41,9 +41,11 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 - For an authorized multi-task unit, perform the Parallel Opportunity Scan in
   `agenticloop/AGENTIC_LOOP.md` after task decomposition and before implementation
   delegation. Serial-by-default is a safety floor, not a reason to skip the scan.
-  Classify each ready task (dependency edges, owned paths, backend objects,
-  shared/generated files, lockfiles, schemas/APIs, external state, coordination
-  surfaces, host parallel capability), then either:
+  Use maintainer-supplied `## Parallel Safety` classifications as the primary
+  input for dependency edges, owned paths, backend objects, shared/generated
+  files, lockfiles, schemas/APIs, and external state. Add orchestration-only
+  checks for coordination surfaces, host parallel capability, worktrees, leases,
+  stop conditions, and join conditions, then either:
   - record a bounded parallel plan reference plus join condition (default maximum
     3 implementation lanes), or
   - record a concrete serial reason naming the specific blocker.
@@ -53,9 +55,10 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   host limitation instead. When 2 or more ready tasks are independent and
   collision criteria are known and disjoint, prefer the bounded parallel batch.
 - When collision criteria are unknown and the unit has 2 or more ready
-  candidates, run a bounded read-only discovery step first, then decide parallel
-  batch or serial; if uncertainty remains, run serial and record what stayed
-  unknown.
+  candidates, route code/collision unknowns to maintainer for one bounded
+  read-only discovery pass when parallel work is otherwise plausible. Resolve
+  coordination/host unknowns directly. Then decide parallel batch or serial; if
+  uncertainty remains, run serial and record what stayed unknown.
 - Create or verify worktrees before delegation when authorizing parallel
   file-mutating write work.
 - Perform and report the delegation capability check before any fallback.

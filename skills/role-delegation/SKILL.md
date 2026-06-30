@@ -49,6 +49,8 @@ Apply this skill when the orchestrator:
 | Set up or confirm project map | maintainer |
 | Create or refine task records | maintainer |
 | Plan scope, acceptance criteria, proof pressure when needed | maintainer |
+| Classify per-task parallel safety and resolve code/collision unknowns | maintainer |
+| Validate host/lane capability, record concurrency plan, and delegate lanes | orchestrator |
 | Implement scoped work | engineer |
 | Revise after review feedback | engineer |
 | Review implementation artifacts | maintainer |
@@ -95,15 +97,18 @@ Delegation is serial by default. Mutation governs concurrency safety. See
 Serial-by-default is a safety floor. A multi-task unit with 2+ ready tasks
 requires a scan first:
 
-- **Trigger.** 2+ independent ready tasks with known, disjoint collision criteria
-  prefer a bounded parallel batch. Default maximum **3** lanes, unless config or a
-  human changes it.
+- **Trigger.** A multi-task unit with 2+ ready tasks requires the scan. If 2+
+  independent ready tasks have known, disjoint collision criteria, prefer a
+  bounded parallel batch. Default maximum **3** lanes, unless config or a human
+  changes it.
 - **Serial justification.** Serial needs a concrete reason (dependency edge,
   shared generated file/lockfile, schema/API ordering, shared external state, or
   a host that cannot bound/surface lanes); "parallel is complex" does not count.
 - **Unknown -> read-only discovery -> decide.** Unknown criteria must not start
-  write lanes; run a bounded read-only discovery step first, then decide; if
-  uncertainty remains, run serial and record what stayed unknown.
+  write lanes. Route code/collision unknowns to maintainer for one bounded
+  read-only discovery pass when parallel work is otherwise plausible; resolve
+  host/lane unknowns in the orchestrator. Then decide; if uncertainty remains,
+  run serial and record what stayed unknown.
 
 After implementation join, review-ready artifacts with distinct review targets
 and backend objects should use bounded parallel coordination/review lanes when

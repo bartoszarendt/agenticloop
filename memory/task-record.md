@@ -79,6 +79,11 @@ orchestrator's Parallel Opportunity Scan can classify the task. It complements
 - Parallel eligibility: eligible | blocked | unknown
 - Reason:
 
+If code/collision eligibility is unknown and 2 or more ready tasks could
+otherwise run in parallel, the maintainer resolves it with one bounded read-only
+discovery pass before returning. If still unknown, state what stayed unknown and
+recommend serial. Host/lane capability unknowns stay with the orchestrator.
+
 ## Completion Summary Template
 
 Use `agenticloop/memory/work-unit-summary.md` as the canonical section shape

@@ -234,11 +234,14 @@ for safe bounded parallelism before defaulting to serial. The default is not
 **Trigger.** Any authorized work unit (phase, group, milestone, epic, task set,
 or other bounded multi-task unit) that has 2 or more ready task records.
 
-Before selecting an execution order, the orchestrator must classify each ready
-task. Do not jump straight to serial delegation for a multi-task unit without
-this scan.
+Before selecting an execution order, the orchestrator must complete this scan.
+The maintainer supplies per-task code/collision classifications through
+`## Parallel Safety`; the orchestrator uses those classifications as primary
+input, adds host/lane capability checks, and records the final parallel or
+serial decision. Do not jump straight to serial delegation for a multi-task unit
+without this scan.
 
-For each ready task, classify:
+For each ready task, the scan must cover:
 
 - **Dependency edges** -- which other tasks must finish first.
 - **Expected files or owned paths** -- the task's scope map (`Expected Files or
@@ -356,9 +359,15 @@ shared external state, and no overlapping task-record or backend-object updates.
 lanes -- never open parallel write lanes on guesswork. But unknown is not an
 automatic verdict of serial when the work unit has 2 or more ready candidates and
 the only blocker is missing information. In that case, run a bounded read-only
-discovery step first (inspect dependency edges, owned paths, shared/generated
-files, lockfiles, schemas, and external state for the candidate tasks). After
-discovery, decide one of:
+discovery step first -- exactly one pass -- before deciding. Route
+code/collision unknowns (dependency edges, owned paths, shared/generated files,
+lockfiles, schemas/APIs, and external state) to the maintainer unless the
+maintainer already returned a bounded discovery result. Resolve coordination/host
+unknowns (host parallel capability, worktree availability, leases, stop
+conditions, and join conditions) in the orchestrator. Use this discovery pass
+only when parallel work is otherwise
+plausible: 2 or more ready candidates, no known hard dependency edge, and the
+unknown fact is the only blocker. After discovery, decide one of:
 
 - a parallel batch with a recorded concurrency plan, when the criteria came back
   known and disjoint, or
