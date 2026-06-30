@@ -105,11 +105,25 @@ requires a scan first:
   write lanes; run a bounded read-only discovery step first, then decide; if
   uncertainty remains, run serial and record what stayed unknown.
 
-Review, integration, and merge stay serial after join unless shown safe.
-Parallel delegation requires a recorded concurrency plan: lane id/type, role,
-read/write mode, owned backend objects, worktree path/branch for file-mutating
-lanes, artifact, allowed files/areas, collision risks, liveness cadence, stop
-condition, and join condition.
+After implementation join, review-ready artifacts with distinct review targets
+and backend objects should use bounded parallel coordination/review lanes when
+there are no shared labels, comments, status markers, event logs, group state, or
+comparison/joining/ordering needs during review. Serial review after eligible
+review candidates exist needs a concrete reason. Posting review markers,
+updating `review_status`, changing labels, or emitting review events are writes;
+cover them in the concurrency plan. Files-backed review/status/event writes are
+file-mutating write lanes and still need one worktree and branch per lane, plus
+no shared event-log target, group state, status marker, closeout file, scratch
+output, or other local append/update target. Durable review outcomes wait for
+the implementation join or an explicit partial-join decision classifying every
+unfinished lane as failed or blocked. An earlier review pass is allowed only as
+explicitly planned read-only inspection against a fixed artifact, with no review
+marker, acceptance, or closure; after join, confirm those findings still apply to
+the current artifact revision or run a fresh review. Integration and merge stay
+serial after review unless shown safe. Parallel delegation requires a recorded
+concurrency plan: lane id/type, role, read/write mode, owned backend objects,
+worktree path/branch for file-mutating lanes, artifact, allowed files/areas,
+collision risks, liveness cadence, stop condition, and join condition.
 
 File-mutating write lanes need one `git worktree` and branch per lane at
 `.agenticloop/worktrees/<task-id>`, never a `../sibling`; GitHub lanes also need

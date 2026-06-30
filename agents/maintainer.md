@@ -64,8 +64,12 @@ acting.
   `git status --short --untracked-files=all`. If the worktree or branch is
   wrong, dirty unexpectedly, or a collision appears, return status or a blocker
   instead of continuing.
-- Review and acceptance of multiple parallel implementation artifacts should be
-  serial when the artifacts must be compared, joined, or ordered.
+- After an implementation batch joins, review and acceptance of multiple
+  artifacts should run in parallel under a recorded coordination/review plan when
+  review targets and backend objects are distinct. Keep review serial when
+  artifacts must be compared, joined, or ordered. Do not post durable review
+  outcomes before the implementation join; an earlier pass must be explicitly
+  recorded as read-only and non-accepting.
 
 ## Required Skills
 

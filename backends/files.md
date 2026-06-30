@@ -56,8 +56,25 @@ mutates implementation files, task records, or other tracked state -- requires:
 A branch alone is not sufficient when multiple agents share one checkout.
 Copying selected touched files into a temporary folder is not valid isolation.
 
-Integration of parallel files-backed lanes is serial: review and merge happen
-one lane at a time after all lanes return.
+Integration of parallel files-backed lanes is serial. After the implementation
+join, prefer bounded parallel coordination/review lanes when each lane owns
+distinct task files or workflow artifacts and does not need to compare, join, or
+order artifacts during review. Updating `review_status`, appending maintainer
+review sections, or emitting events are files-backed write-lane mutations, so
+each parallel review lane still requires its own worktree, branch, owned task
+file or workflow file, lease, and join condition. The plan must prove there are
+no shared event-log targets, group state, status markers, closeout files, scratch
+outputs, or other local append/update targets; otherwise review happens one lane
+at a time after all lanes return. Merge remains serial.
+
+Durable files-backed review status waits for the implementation batch join. A
+plan may authorize an earlier read-only pass against a completed lane's fixed
+artifact, but that pass must not update `review_status`, accept the task, or
+close the task until the implementation join has succeeded or the orchestrator
+has recorded an explicit partial-join decision that classifies every unfinished
+lane as failed or blocked. After the join, the maintainer must either confirm the
+earlier read-only findings still apply to the current artifact revision before
+updating `review_status`, or run a fresh review.
 
 **Non-Git targets.** Parallel write lanes are not allowed when the target is
 not a Git repository. Run all write work serially. Read-only parallel discovery

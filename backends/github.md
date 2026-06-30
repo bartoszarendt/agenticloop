@@ -266,11 +266,26 @@ definitions and backend-specific rules in `agenticloop/AGENTIC_LOOP.md`.
 For an authorized multi-task unit with 2 or more ready issues, the orchestrator
 runs the Parallel Opportunity Scan in `agenticloop/AGENTIC_LOOP.md` before
 defaulting to serial. A bounded parallel batch defaults to a maximum of 3
-implementation lanes. Review and integration (merge) remain serial after the
-join. Choosing serial execution after eligible candidates exist requires a
+implementation lanes. After the implementation join, prefer bounded parallel
+review when each review lane owns distinct review targets and backend objects
+and does not need to compare, join, or order artifacts during review. The plan
+must prove there are no shared labels, comments, status markers, event-log
+targets, closeout state, or group state. Posting PR review markers, changing
+labels, or emitting events are coordination/review writes, so the concurrency
+plan must cover those review lanes. Integration and merge remain serial after
+review. Choosing serial execution after eligible candidates exist requires a
 recorded concrete reason (dependency edge, shared generated file or lockfile,
 schema/API ordering, shared external state, or a host that cannot bound or
 surface parallel lanes); "parallel is complex" is not a reason.
+
+Durable GitHub review markers wait for the implementation batch join. A plan may
+authorize an earlier read-only pass against a completed PR's fixed diff, but
+that pass must not post a review marker, accept the task, or close the task until
+the implementation join has succeeded or the orchestrator has recorded an
+explicit partial-join decision that classifies every unfinished lane as failed or
+blocked. After the join, the maintainer must either confirm the earlier
+read-only findings still apply to the current PR head before posting a durable
+review marker, or run a fresh review.
 
 **Implementation lanes.** Each parallel implementation lane requires its own
 `git worktree`, its own task branch, its own GitHub issue, its own pull request,

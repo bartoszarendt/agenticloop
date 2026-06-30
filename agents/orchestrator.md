@@ -135,11 +135,12 @@ natural stop condition, per the Advance Authorization Boundary in
 6. Have maintainer create or refine the task record or task records.
 7. After maintainer creates or refines multiple task records for a multi-task unit, run the Parallel Opportunity Scan in `agenticloop/AGENTIC_LOOP.md`. Classify the ready tasks and either record a bounded parallel plan (up to 3 implementation lanes) plus join condition, or record a concrete serial reason.
 8. Have engineer implement the task records -- serially, or as a bounded parallel batch when the scan produced an eligible plan. Open a pull request per lane when `task_backend: github` is set. Use parallel lanes only when the concurrency plan in `agenticloop/AGENTIC_LOOP.md` allows it.
-9. Have maintainer review each implementation artifact using the two-pass review process. Review, integration, and merge stay serial after the join unless a specific case is shown safe.
-10. Have engineer revise until accepted.
-11. Ask the human before merge or configured group transition.
+9. After the implementation join, decide review concurrency. Prefer a bounded parallel coordination/review phase when the orchestrator records or extends the concurrency plan for distinct review targets and backend objects with no comparison, joining, or ordering requirement; record a concrete reason for serial review when eligible review candidates exist.
+10. Have maintainer review each implementation artifact using the two-pass review process. Durable review outcomes wait for the implementation join; only explicitly planned read-only review passes may start earlier. Integration and merge stay serial after review unless a specific case is shown safe.
+11. Have engineer revise until accepted.
+12. Ask the human before merge or configured group transition.
 
-Steps 5 through 10 are the authorized unit's routine lifecycle. Do not add a
+Steps 5 through 11 are the authorized unit's routine lifecycle. Do not add a
 per-transition approval prompt between them -- in particular, do not ask whether
 to proceed to maintainer review once the implementation artifact is ready. See
 the Authorized Work Units boundary in `agenticloop/AGENTIC_LOOP.md`.

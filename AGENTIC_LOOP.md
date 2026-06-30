@@ -270,11 +270,32 @@ Decision after the scan:
   sufficient serial reason. Name a concrete collision or host limitation, or run
   the bounded parallel batch.
 
-Review, integration, and merge remain serial after the join, unless a specific
-case is shown to be safe to parallelize. The hard safety rules below are not
-relaxed by the scan: every parallel write lane still requires its own
-worktree/branch, its own owned PR/issue or task file, a join condition, a lease,
-and (for GitHub batches) a merge barrier.
+After the implementation join, review is a new coordination/review phase. A
+parallel implementation plan does not automatically authorize parallel review
+lanes, but the same scan evidence should be reused. When 2 or more review-ready
+artifacts have distinct review targets, distinct backend objects, no shared
+labels, comments, status markers, event logs, or group state, and no need to
+compare, join, or order artifacts during review, prefer a bounded parallel
+review batch. Serial review after eligible review candidates exist requires a
+concrete recorded reason; do not serialize review just because integration and
+merge are serial. Posting review markers, updating `review_status`, changing
+labels, and emitting events are coordination/review writes, so the orchestrator
+must record or extend the concurrency plan for those review lanes. Integration
+and merge remain serial after review unless a specific case is shown safe to
+parallelize. The hard safety rules below are not relaxed by the scan: every
+parallel write lane still requires its own worktree/branch, its own owned
+PR/issue or task file, a join condition, a lease, and (for GitHub batches) a
+merge barrier.
+
+Durable review outcomes (`accepted` or `needs_revision`) wait for the
+implementation batch join. A plan may authorize an earlier read-only review pass
+against a completed lane's fixed artifact, but that pass must not post the
+durable review marker, update review status, accept the task, or close the task
+until the implementation join has succeeded or the orchestrator has recorded an
+explicit partial-join decision that classifies every unfinished lane as failed or
+blocked. After the join, the maintainer must either confirm the earlier
+read-only findings still apply to the current artifact revision before posting a
+durable outcome, or run a fresh review.
 
 #### Lane Types
 
@@ -302,7 +323,7 @@ concurrency plan in the task record or coordination output. The plan must name:
 - shared files, generated files, lockfiles, schemas, APIs, and external state
   that could collide,
 - liveness checkpoint cadence and stop condition for each delegated lane,
-- join condition before review, acceptance, merge, or closeout.
+- join condition before durable review outcome, acceptance, merge, or closeout.
 
 Safe parallel work is limited to:
 
@@ -367,7 +388,7 @@ parallel implementation lane requires:
   collision,
 - a lease with observable-step checkpoint cadence, stop condition, and
   no-progress budget,
-- a join condition before review, acceptance, merge, or closeout,
+- a join condition before durable review outcome, acceptance, merge, or closeout,
 - a merge barrier (see below).
 
 **GitHub backend -- coordination/review lanes.** Parallel maintainer or
@@ -399,8 +420,21 @@ write lane requires:
 - a lease,
 - a join condition.
 
-Integration of parallel files-backed lanes is serial: review and merge happen
-one lane at a time after all lanes return.
+**Files backend -- coordination/review lanes.** Parallel files-backed
+coordination/review lanes that mutate task files, workflow files, event logs,
+status markers, closeout summaries, scratch outputs, or other local state are
+files-backed write lanes. They require the worktree, branch, owned task file or
+workflow file, lease, and join-condition isolation above. Each lane must own
+distinct task files or workflow artifacts, and no lane may share an event-log
+target, group state, status marker, closeout file, scratch output, or other
+append/update target. If the review writes must touch shared local state, run
+review serially or defer that write to a single serial integration/closeout lane.
+
+Integration of parallel files-backed lanes is serial. After the implementation
+join, prefer bounded parallel coordination/review lanes under the files-backend
+coordination/review lane rules above when there is no comparison, joining, or
+ordering requirement during review. Otherwise review happens one lane at a time
+after all lanes return. Merge remains serial.
 
 **Files backend without Git.** Parallel write lanes are not allowed. Run all
 write work serially. Read-only parallel discovery is still allowed when bounded
