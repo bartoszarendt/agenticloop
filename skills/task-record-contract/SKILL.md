@@ -114,6 +114,42 @@ oversized task record. If the work item is genuinely one implementation task,
 the task record's scope, expected files, acceptance criteria, and required
 checks must make that clear.
 
+## Materializing a task set
+
+Decomposition may identify the full task set in one planning pass, but durable
+task records for a large task set must be materialized incrementally. The
+default is one task record per write/checkpoint. A small bounded batch of at
+most 3 simple records is allowed only when the tasks are similar, low-risk, and
+the maintainer can keep every record concrete. For 10 or more task records,
+default to one-at-a-time materialization.
+
+Before writing full records, produce or retain a compact decomposition inventory
+containing, for each task:
+
+- task id
+- title
+- one-line scope
+- source reference
+- dependency edges
+- expected owned files/areas
+- initial parallel eligibility
+
+After each record or bounded batch:
+
+- ensure every created record is complete and non-placeholder
+- emit `task.created` if event logging is enabled
+- checkpoint status for resumability
+- with the files backend, the created task files are durable workflow-gate
+  artifacts and should be committed at the task-creation gate when the target
+  project follows that discipline
+
+If materialization fails mid-set, resume from the first missing or invalid task
+record instead of regenerating the whole set.
+
+The fix for large task sets is smaller writes, not thinner task records. Do not
+replace concrete required sections with placeholders or generic checklists to
+make a batch fit.
+
 ## No placeholders
 
 The following are forbidden in any durable task record:

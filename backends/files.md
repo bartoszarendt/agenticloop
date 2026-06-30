@@ -172,6 +172,16 @@ Optional frontmatter conventions:
 Create `.agenticloop/tasks/<TASK-ID>.md` using `agenticloop/memory/task-record.md`.
 Do not leave placeholder sections.
 
+### Incremental task-set creation
+
+Files-backed task creation is a per-task workflow gate. Large task sets should
+not be written as one oversized patch. Materialize durable task records one at a
+time by default, or in a bounded batch of at most 3 simple records when the tasks
+are similar and low-risk. Checkpoint and commit each record or batch at the
+task-creation gate when the target project follows that discipline. If
+materialization is interrupted, resume from the existing task files and the first
+missing or invalid task id instead of regenerating the whole set.
+
 ### Read Task Record
 
 Read frontmatter for mechanical state and the body sections for scope,

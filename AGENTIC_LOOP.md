@@ -193,6 +193,12 @@ set authorization is not permission to create one oversized task record; task
 sets still decompose into ordinary task records using the configured backend
 and task ID convention.
 
+A work unit may authorize a whole task set, but materializing durable task
+records for that set is incremental. Decomposition can be one planning pass;
+full task records should be written in bounded chunks of one record by default,
+or at most three simple records per batch, and checkpointed so an interruption
+resumes from the first missing or invalid task.
+
 When a human authorizes a work unit to run, continue, or finish, Agentic Loop
 performs the routine lifecycle steps that unit needs under the configured
 backend -- selecting included tasks, creating or updating task records,
