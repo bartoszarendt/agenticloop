@@ -215,8 +215,11 @@ Do not omit scope, out of scope, expected output, stop condition, or Operating f
 Treat `Source docs` as the closed context set. A delegated role may also read
 the named task record, `.agenticloop/project.md` for backend or document
 selection, the matching `agenticloop/backends/` projection, and files explicitly
-named by the human or task record. Do not scan the repository for "related"
-files. Do not read `.agenticloop/logs/` as ambient context; use task-scoped
+named by the human or task record. The engineer reads the task record's stepped
+`## Implementation Notes` first, then the named `Source docs`; the orchestrator
+must not copy the plan text into the subagent prompt — the plan lives in the task
+record. Do not scan the repository for "related" files.
+ Do not read `.agenticloop/logs/` as ambient context; use task-scoped
 event-log audit/report or an explicit task need. `.agenticloop/tmp/` is scratch,
 not source. This limits source/context expansion, not task execution tools:
 search, call graphs, git, tests, and host context-management tools stay available

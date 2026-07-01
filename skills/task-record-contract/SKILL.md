@@ -43,8 +43,8 @@ event log.
 
 Use `agenticloop/memory/task-record.md` as the canonical task-record shape.
 It defines the ordered required sections and the optional `Proof Pressure`,
-`Grouping`, `Source Reference`, `Applicable Project Skills`, `Concurrency
-Plan`, and `Outcome` sections.
+`Concurrency Plan`, `Parallel Safety`, `Grouping`, `Source Reference`,
+`Applicable Project Skills`, and `Outcome` sections.
 
 The `## Outcome` section is optional for routine clean tasks, maintainer-filled
 at closeout. It becomes conditionally required when any of these happened:
@@ -242,6 +242,19 @@ When `allowed_paths` is present, `agenticloop validate` performs a warn-only mec
 
 If implementation changes an unexpected file, the implementation summary must explain why. Review treats unexplained unexpected files as a scope issue under [[review-and-accept]].
 Bundling an incidental toolkit, dependency, or asset-refresh change into a task that does not require it is the same scope violation. If a refresh is genuinely needed, it is its own task and its own artifact.
+
+## Implementation notes
+
+`## Implementation Notes` records constraints, sequencing, or migration notes.
+For nontrivial or churn-prone work, the maintainer may also include an optional
+numbered, file-level stepped plan (`N. <action> — file: <path>`). The engineer
+reads it as a strong prior, verifies assumptions, and records divergence under
+`## Deviations From Plan` rather than following stale steps.
+
+Keep the plan DRY: reference `## Expected Files or Areas`, `## Required Checks`,
+and `## Proof Pressure` for files, checks, and escalation signals; do not
+restate them. Add stale-assumption triggers that tell the engineer when to return
+`needs_context` instead of continuing.
 
 ## Concurrency plan
 

@@ -54,6 +54,15 @@ If present, each field must be concrete.
 
 ## Implementation Notes
 - Record important constraints, sequencing, or migration notes.
+- For nontrivial or churn-prone work, the maintainer may include an optional
+  numbered, file-level stepped plan here (`N. <action> — file: <path>`). The
+  engineer treats this plan as a strong prior, verifies assumptions, and records
+  any divergence under `## Deviations From Plan` (or returns `needs_context` via
+  `blocked-state`) instead of following stale steps. One-line or obvious fixes
+  should omit the plan.
+- Keep the plan DRY: reference `## Expected Files or Areas`, `## Required Checks`,
+  and `## Proof Pressure` for files, checks, and escalation signals; do not
+  restate them.
 
 ## Concurrency Plan
 Optional. Required only when the orchestrator allows parallel delegation for

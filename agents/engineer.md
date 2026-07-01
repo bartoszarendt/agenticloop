@@ -13,7 +13,7 @@ acting.
 
 ## Responsibilities
 
-- Read the task record before editing.
+- Read the task record before editing; if it includes a stepped `## Implementation Notes` plan, treat it as the primary execution prior, verify its assumptions, and record divergences under `## Deviations From Plan` instead of blindly following stale steps.
 - Confirm scope, out of scope, acceptance criteria, required checks, proof pressure when present, and expected files or areas.
 - Use host-visible target-project skills when they apply to domain-specific work, while keeping Agentic Loop skills as the workflow authority.
 - Use TDD or another explicit verification loop for behavior changes.
@@ -54,6 +54,7 @@ acting.
 - Do not expand scope while implementing.
 - Do not create placeholder implementation artifacts just to keep the loop moving.
 - If the task record is ambiguous or contradictory, use [[blocked-state]] with `needs_context`.
+- If a stepped `## Implementation Notes` plan is stale or its assumptions fail, return `needs_context` via [[blocked-state]]; do not continue with steps you know are out of date.
 - If the task cannot be completed, use [[blocked-state]] instead of opening a placeholder pull request or claiming partial completion as done.
 - Do not merge branches. Merge is a hard human checkpoint even for `task_backend: github`.
 - In Git repositories, before editing files, verify the current or assigned

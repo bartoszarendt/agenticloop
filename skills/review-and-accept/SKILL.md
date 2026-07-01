@@ -21,6 +21,10 @@ AGENT_REVIEW_STATUS: accepted
 AGENT_REVIEW_STATUS: needs_revision
 ```
 
+When posting `needs_revision`, the maintainer may include a short numbered
+revision plan in the review body or comment (a "revision packet"), consistent
+with the ≤3-revision churn-classification rule in [[role-delegation]].
+
 ### Neutral rule
 
 Record one durable review outcome for the current artifact revision. A later valid outcome for a
