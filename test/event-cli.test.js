@@ -1123,3 +1123,172 @@ describe('event CLI', () => {
     assert.match(result.stderr, /Missing task event log: \.agenticloop\/logs\/T-404\.jsonl/);
   });
 });
+
+describe('event-logging host inference', () => {
+  it('infers host from a single generated adapter marker when --host is omitted', () => {
+    const target = makeTarget('host-inference-single');
+    assertOk(run(['init', '--target', target]));
+    mkdirSync(join(target, '.opencode', 'agents'), { recursive: true });
+    writeFileSync(join(target, '.opencode', 'agents', 'orchestrator.md'), '# orchestrator\n', 'utf-8');
+    writeValidTaskRecord(target, 'T-001');
+
+    assertOk(run([
+      'event-logging', 'task.started', '--target', target, '--task', 'T-001', '--role', 'engineer', '--summary', 'Started task',
+    ]));
+
+    const event = JSON.parse(readFileSync(eventLogPath(target, 'T-001.jsonl'), 'utf-8').trim());
+    assert.equal(event.host, 'opencode');
+  });
+
+  it('preserves explicit --host over inferred adapter', () => {
+    const target = makeTarget('host-explicit-wins');
+    assertOk(run(['init', '--target', target]));
+    mkdirSync(join(target, '.opencode', 'agents'), { recursive: true });
+    writeFileSync(join(target, '.opencode', 'agents', 'orchestrator.md'), '# orchestrator\n', 'utf-8');
+    writeValidTaskRecord(target, 'T-001');
+
+    assertOk(run([
+      'event-logging', 'task.started', '--target', target, '--task', 'T-001', '--role', 'engineer', '--host', 'custom-host', '--summary', 'Started task',
+    ]));
+
+    const event = JSON.parse(readFileSync(eventLogPath(target, 'T-001.jsonl'), 'utf-8').trim());
+    assert.equal(event.host, 'custom-host');
+  });
+
+  it('records host unknown when adapter detection is ambiguous', () => {
+    const target = makeTarget('host-inference-ambiguous');
+    assertOk(run(['init', '--target', target]));
+    mkdirSync(join(target, '.opencode', 'agents'), { recursive: true });
+    writeFileSync(join(target, '.opencode', 'agents', 'orchestrator.md'), '# orchestrator\n', 'utf-8');
+    mkdirSync(join(target, '.claude', 'agents'), { recursive: true });
+    writeFileSync(join(target, '.claude', 'agents', 'maintainer.md'), '# maintainer\n', 'utf-8');
+    writeValidTaskRecord(target, 'T-001');
+
+    assertOk(run([
+      'event-logging', 'task.started', '--target', target, '--task', 'T-001', '--role', 'engineer', '--summary', 'Started task',
+    ]));
+
+    const event = JSON.parse(readFileSync(eventLogPath(target, 'T-001.jsonl'), 'utf-8').trim());
+    assert.equal(event.host, 'unknown');
+  });
+});
+
+describe('event-logging aggregate report', () => {
+  it('reports across task logs and survives malformed and empty logs', () => {
+    const target = makeTarget('aggregate-report-cli');
+    assertOk(run(['init', '--target', target]));
+    writeValidTaskRecord(target, 'T-001');
+    writeValidTaskRecord(target, 'T-002');
+
+    mkdirSync(join(target, '.opencode', 'agents'), { recursive: true });
+    writeFileSync(join(target, '.opencode', 'agents', 'orchestrator.md'), '# orchestrator\n', 'utf-8');
+    appendAuditFixtureEvents(target, 'T-001');
+
+    assertOk(run(['event-logging', 'task.started', '--target', target, '--task', 'T-002', '--role', 'engineer', '--summary', 'Started T-002']));
+    assertOk(run(['event-logging', 'review.result', '--target', target, '--task', 'T-002', '--role', 'maintainer', '--outcome', 'accepted', '--summary', 'Accepted T-002']));
+
+    assertOk(run(['event-logging', 'task.started', '--target', target, '--task', 'T-003', '--role', 'engineer', '--host', 'unknown', '--summary', 'Unknown host event']));
+
+    mkdirSync(join(target, '.agenticloop', 'logs'), { recursive: true });
+    writeFileSync(join(target, '.agenticloop', 'logs', 'broken.jsonl'), 'not json\n', 'utf-8');
+    writeFileSync(join(target, '.agenticloop', 'logs', 'empty.jsonl'), '', 'utf-8');
+
+    const result = run(['event-logging', 'report', '--target', target]);
+
+    assertOk(result);
+    assert.match(result.stdout, /agenticloop event-logging report/);
+    assert.match(result.stdout, /files scanned: 5/);
+    assert.match(result.stdout, /valid task logs: 3/);
+    assert.match(result.stdout, /invalid logs: 1/);
+    assert.match(result.stdout, /empty logs: 1/);
+    assert.match(result.stdout, /strict audit: pass=1, fail=2/);
+    assert.match(result.stdout, /events with host=unknown: 1/);
+    assert.match(result.stdout, /invalid logs:/);
+    assert.match(result.stdout, /empty logs:/);
+    assert.match(result.stdout, /host=unknown events:/);
+    assert.match(result.stdout, /T-001/);
+    assert.match(result.stdout, /T-002/);
+    assert.match(result.stdout, /T-003/);
+  });
+
+  it('prints aggregate delegation, fallback, and affected task ids', () => {
+    const target = makeTarget('aggregate-delegation-cli');
+    assertOk(run(['init', '--target', target]));
+    writeValidTaskRecord(target, 'T-001');
+    writeValidTaskRecord(target, 'T-002');
+
+    assertOk(run([
+      'event-logging', 'role.invoked', '--target', target, '--task', 'T-001', '--role', 'orchestrator',
+      '--summary', 'Delegated engineer', '--data-json',
+      JSON.stringify({ target_role: 'engineer', delegation_mode: 'host_subagent', fallback: false }),
+    ]));
+    assertOk(run(['event-logging', 'task.started', '--target', target, '--task', 'T-001', '--role', 'engineer', '--summary', 'Started T-001']));
+    assertOk(run([
+      'event-logging', 'role.invoked', '--target', target, '--task', 'T-001', '--role', 'orchestrator',
+      '--summary', 'Fallback maintainer', '--data-json',
+      JSON.stringify({ target_role: 'maintainer', delegation_mode: 'single_agent_fallback', fallback: true }),
+    ]));
+    assertOk(run([
+      'event-logging', 'task.closed', '--target', target, '--task', 'T-001', '--role', 'maintainer',
+      '--outcome', 'success', '--summary', 'Closed T-001',
+    ]));
+
+    assertOk(run(['event-logging', 'task.started', '--target', target, '--task', 'T-002', '--role', 'engineer', '--summary', 'Started T-002']));
+
+    const result = run(['event-logging', 'report', '--target', target]);
+
+    assertOk(result);
+    assert.match(result.stdout, /role\.invoked targets: engineer=1, maintainer=1/);
+    assert.match(result.stdout, /delegation modes: host_subagent=1, single_agent_fallback=1/);
+    assert.match(result.stdout, /fallback count: 1/);
+    assert.match(result.stdout, /tasks missing task\.closed: 1 \(T-002\)/);
+  });
+
+  it('marks mixed-task log rows when host unknown is attached to event task ids', () => {
+    const target = makeTarget('aggregate-mixed-task-host-quality');
+    assertOk(run(['init', '--target', target]));
+    writeValidTaskRecord(target, 'T-001');
+    writeValidTaskRecord(target, 'T-002');
+    const mixedLog = eventLogPath(target, 'mixed.jsonl');
+
+    assertOk(run([
+      'event-logging', 'task.started', '--target', target, '--task', 'T-001', '--role', 'engineer',
+      '--host', 'unknown', '--summary', 'Started T-001', '--output', mixedLog,
+    ]));
+    assertOk(run([
+      'event-logging', 'task.started', '--target', target, '--task', 'T-002', '--role', 'engineer',
+      '--host', 'unknown', '--summary', 'Started T-002', '--output', mixedLog,
+    ]));
+
+    const result = run(['event-logging', 'report', '--target', target]);
+
+    assertOk(result);
+    assert.match(result.stdout, /events with host=unknown: 2/);
+    assert.match(result.stdout, /mixed\s+2\s+role\.invoked, check\.run, review\.result, task\.closed\s+missing\/failing\s+none\s+0\/0\/0\s+unknown present/);
+  });
+
+  it('handles aggregate report errors cleanly', () => {
+    const target = makeTarget('aggregate-report-error');
+    mkdirSync(join(target, '.agenticloop'), { recursive: true });
+    writeFileSync(join(target, '.agenticloop', 'logs'), 'not a directory', 'utf-8');
+
+    const result = run(['event-logging', 'report', '--target', target]);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Failed to generate aggregate event log report/);
+    assert.doesNotMatch(result.stderr, /\s+at\s+/);
+  });
+
+  it('keeps per-task report backward compatible', () => {
+    const target = makeTarget('aggregate-report-per-task-compat');
+    assertOk(run(['init', '--target', target]));
+    writeValidTaskRecord(target, 'T-001');
+    appendAuditFixtureEvents(target, 'T-001');
+
+    const result = run(['event-logging', 'report', '--target', target, '--task', 'T-001']);
+
+    assertOk(result);
+    assert.match(result.stdout, /task: T-001/);
+    assert.match(result.stdout, /strict audit missing: none/);
+  });
+});

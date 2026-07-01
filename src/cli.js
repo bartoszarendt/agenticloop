@@ -11,7 +11,7 @@
  *   agenticloop event-logging <event_type> [--target <dir>] [--summary <text>] [--task <id>]
  *   agenticloop event-logging validate [--target <dir>] [--output <file>]
  *   agenticloop event-logging audit --task <id> [--target <dir>] [--require a,b,c]
- *   agenticloop event-logging report --task <id> [--target <dir>]
+ *   agenticloop event-logging report [--task <id>] [--target <dir>]
  *   agenticloop bootstrap-labels [--repo <r>] [--dry-run] [--group <g>] [--task-id <id>]
  *   agenticloop generate opencode     [--target <dir>] [--output-dir <dir>]
  *   agenticloop generate codex        [--target <dir>] [--output-dir <dir>]
@@ -62,6 +62,7 @@ import {
   auditTaskEventLog,
   buildEvent,
   DEFAULT_LOG_DIR,
+  reportEventLogs,
   reportTaskEventLog,
   STRICT_AUDIT_EVENT_TYPES,
   VALID_EVENT_TYPES,
@@ -149,6 +150,15 @@ function formatSummaryList(values) {
   return values.length > 0 ? values.join(', ') : 'none';
 }
 
+const TASK_ID_LIST_LIMIT = 5;
+
+function formatTaskIdList(taskIds) {
+  if (taskIds.length === 0) return 'none';
+  const shown = taskIds.slice(0, TASK_ID_LIST_LIMIT);
+  const remainder = taskIds.length - shown.length;
+  return remainder > 0 ? `${shown.join(', ')} (+${remainder} more)` : shown.join(', ');
+}
+
 function formatCountSummary(entries) {
   return entries.length > 0 ? entries.map(entry => `${entry.value}=${entry.count}`).join(', ') : 'none';
 }
@@ -183,6 +193,17 @@ function normalizeEventOutcomeOption(eventType, outcome) {
   }
 
   return { outcome, warnings: [] };
+}
+
+function inferEventHost(target, explicitHost) {
+  if (typeof explicitHost === 'string' && explicitHost.trim()) {
+    return explicitHost.trim();
+  }
+
+  const detected = detectHost(target);
+  if (detected.length === 1) return detected[0];
+
+  return undefined;
 }
 
 function usage() {
@@ -258,7 +279,7 @@ Options (event-logging <event_type>):
   --summary <text>      Required short event summary.
   --outcome <value>     Outcome: success, failure, blocked, needs_context, accepted, needs_revision, unknown.
   --backend <name>      Backend: files, github, unknown.
-  --host <name>         Host label (default: unknown).
+  --host <name>         Host label (default: unknown; inferred when exactly one generated adapter is detected). Inferred host is a heuristic, not proof of the actual runtime host; use --host when accuracy matters.
   --trace-id <uuid>     Trace id used to correlate related events.
   --parent-event-id <uuid>  Parent event id when this event extends an earlier gate.
   --ref <value>         Reference string; may be passed multiple times.
@@ -275,7 +296,8 @@ Options (event-logging audit):
 
 Options (event-logging report):
   --target <dir>        Target directory (default: current directory).
-  --task <id>           Task id to summarize from <target>/${TASK_EVENT_LOG_PATH_DISPLAY}.
+  --task <id>           Optional task id for a per-task report from <target>/${TASK_EVENT_LOG_PATH_DISPLAY}.
+                        Omit for a read-only aggregate report over <target>/${DEFAULT_EVENT_LOG_GLOB_DISPLAY}.
 
 Options (configure models):
   --target <dir>        Directory containing agenticloop.json (default: current).
@@ -732,7 +754,7 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
     console.log('Subcommands:');
     console.log('  validate              Validate event log files.');
     console.log('  audit                 Audit task event logs for required events.');
-    console.log('  report                Generate a report from task event logs.');
+    console.log('  report                Generate a per-task or aggregate report from event logs.');
     console.log();
     console.log('Write path (bare event type):');
     console.log(`  ${commandLabel} <event_type> --summary "..." [options]`);
@@ -865,17 +887,82 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
   }
 
   if (sub === 'report') {
-    if (!opts.task) {
-      console.error('--task is required for event log report');
-      process.exitCode = 1;
+    if (opts.task) {
+      let result;
+      try {
+        result = reportTaskEventLog({ target, taskId: opts.task });
+      } catch (error) {
+        console.error(error.message);
+        process.exitCode = 1;
+        return;
+      }
+
+      console.log();
+      console.log(`agenticloop ${commandLabel} report`);
+      console.log('='.repeat(50));
+      console.log(`  task: ${result.taskId}`);
+      console.log(`  event log: ${result.path}`);
+      console.log(`  events: ${result.eventCount}`);
+      console.log(`  first event: ${result.firstEventTimestamp ?? 'none'}`);
+      console.log(`  last event: ${result.lastEventTimestamp ?? 'none'}`);
+      console.log(`  trace duration: ${result.traceDuration}`);
+      console.log(`  strict audit present: ${formatSummaryList(result.strictAudit.presentEventTypes)}`);
+      console.log(`  strict audit missing: ${formatSummaryList(result.strictAudit.missingEventTypes)}`);
+      const durableClosureStatus = result.strictAudit.durableClosure.satisfied
+        ? 'yes'
+        : `no (${result.strictAudit.durableClosure.reason})`;
+      console.log(`  durable task.closed: ${durableClosureStatus}`);
+      console.log(
+        `  check.run counts: success=${result.checkRunCounts.success}, failure=${result.checkRunCounts.failure}, blocked=${result.checkRunCounts.blocked}`
+      );
+      console.log(
+        `  review.result counts: accepted=${result.reviewResultCounts.accepted}, needs_revision=${result.reviewResultCounts.needs_revision}`
+      );
+      console.log(`  review rounds: ${formatSummaryList(result.reviewRounds)}`);
+      console.log(`  role.invoked targets: ${formatCountSummary(result.roleInvoked.targetRoleCounts)}`);
+      console.log(`  delegation modes: ${formatCountSummary(result.roleInvoked.delegationModeCounts)}`);
+      console.log(`  fallback count: ${result.roleInvoked.fallbackCount}`);
+      console.log(`  refs summary: ${formatRefSummary(result.refsSummary)}`);
+
+      console.log('  accepted imperfect checks (not clean success):');
+      if (result.acceptedImperfectChecks.length === 0) {
+        console.log('    none');
+      } else {
+        for (const check of result.acceptedImperfectChecks) {
+          const details = [];
+          if (check.command) details.push(`command=${check.command}`);
+          const triage = [];
+          if (check.triaged_unrelated) triage.push('triaged_unrelated');
+          if (check.accepted_known_failure) triage.push('accepted_known_failure');
+          if (triage.length > 0) details.push(`triage=${triage.join(',')}`);
+          details.push(`refs=${check.refs.length > 0 ? check.refs.join(', ') : 'none'}`);
+          console.log(`    - ${check.outcome}: ${check.summary} (${details.join('; ')})`);
+        }
+      }
+
+      console.log('  failed/blocked checks:');
+      if (result.failedOrBlockedChecks.length === 0) {
+        console.log('    none');
+      } else {
+        for (const check of result.failedOrBlockedChecks) {
+          const details = [];
+          if (check.command) details.push(`command=${check.command}`);
+          details.push(`refs=${check.refs.length > 0 ? check.refs.join(', ') : 'none'}`);
+          console.log(`    - ${check.outcome}: ${check.summary} (${details.join('; ')})`);
+        }
+      }
+
+      for (const warning of result.warnings) console.warn(`  WARN: ${warning}`);
+      console.log();
+      process.exitCode = 0;
       return;
     }
 
     let result;
     try {
-      result = reportTaskEventLog({ target, taskId: opts.task });
+      result = reportEventLogs({ target });
     } catch (error) {
-      console.error(error.message);
+      console.error(`Failed to generate aggregate event log report: ${error.message}`);
       process.exitCode = 1;
       return;
     }
@@ -883,55 +970,82 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
     console.log();
     console.log(`agenticloop ${commandLabel} report`);
     console.log('='.repeat(50));
-    console.log(`  task: ${result.taskId}`);
-    console.log(`  event log: ${result.path}`);
-    console.log(`  events: ${result.eventCount}`);
-    console.log(`  first event: ${result.firstEventTimestamp ?? 'none'}`);
-    console.log(`  last event: ${result.lastEventTimestamp ?? 'none'}`);
-    console.log(`  trace duration: ${result.traceDuration}`);
-    console.log(`  strict audit present: ${formatSummaryList(result.strictAudit.presentEventTypes)}`);
-    console.log(`  strict audit missing: ${formatSummaryList(result.strictAudit.missingEventTypes)}`);
-    const durableClosureStatus = result.strictAudit.durableClosure.satisfied
-      ? 'yes'
-      : `no (${result.strictAudit.durableClosure.reason})`;
-    console.log(`  durable task.closed: ${durableClosureStatus}`);
-    console.log(
-      `  check.run counts: success=${result.checkRunCounts.success}, failure=${result.checkRunCounts.failure}, blocked=${result.checkRunCounts.blocked}`
-    );
-    console.log(
-      `  review.result counts: accepted=${result.reviewResultCounts.accepted}, needs_revision=${result.reviewResultCounts.needs_revision}`
-    );
-    console.log(`  review rounds: ${formatSummaryList(result.reviewRounds)}`);
-    console.log(`  role.invoked targets: ${formatCountSummary(result.roleInvoked.targetRoleCounts)}`);
-    console.log(`  delegation modes: ${formatCountSummary(result.roleInvoked.delegationModeCounts)}`);
-    console.log(`  fallback count: ${result.roleInvoked.fallbackCount}`);
-    console.log(`  refs summary: ${formatRefSummary(result.refsSummary)}`);
+    console.log(`  directory: ${result.directory}`);
+    console.log(`  files scanned: ${result.filesScanned}`);
+    console.log(`  valid task logs: ${result.validTaskLogCount}`);
+    console.log(`  invalid logs: ${result.invalidLogCount}`);
+    console.log(`  empty logs: ${result.emptyLogCount}`);
+    console.log();
 
-    console.log('  accepted imperfect checks (not clean success):');
-    if (result.acceptedImperfectChecks.length === 0) {
-      console.log('    none');
-    } else {
-      for (const check of result.acceptedImperfectChecks) {
-        const details = [];
-        if (check.command) details.push(`command=${check.command}`);
-        const triage = [];
-        if (check.triaged_unrelated) triage.push('triaged_unrelated');
-        if (check.accepted_known_failure) triage.push('accepted_known_failure');
-        if (triage.length > 0) details.push(`triage=${triage.join(',')}`);
-        details.push(`refs=${check.refs.length > 0 ? check.refs.join(', ') : 'none'}`);
-        console.log(`    - ${check.outcome}: ${check.summary} (${details.join('; ')})`);
+    if (result.missingLogs) {
+      console.log('  No event log files found.');
+      console.log();
+      process.exitCode = 0;
+      return;
+    }
+
+    console.log(`  strict audit: pass=${result.strictAuditPassCount}, fail=${result.strictAuditFailCount}`);
+    console.log(
+      `  durable task.closed: satisfied=${result.durableClosureSatisfied}, missing=${result.durableClosureMissing}, failing=${result.durableClosureFailing}`
+    );
+    console.log(
+      `  check.run totals: success=${result.totalCheckOutcomes.success}, failure=${result.totalCheckOutcomes.failure}, blocked=${result.totalCheckOutcomes.blocked}`
+    );
+    console.log(
+      `  review.result totals: accepted=${result.totalReviewOutcomes.accepted}, needs_revision=${result.totalReviewOutcomes.needs_revision}`
+    );
+    console.log(`  role.invoked targets: ${formatCountSummary(result.totalRoleInvokedTargets)}`);
+    console.log(`  delegation modes: ${formatCountSummary(result.totalDelegationModes)}`);
+    console.log(`  fallback count: ${result.totalFallbackCount}`);
+    console.log(`  tasks with review churn: ${result.tasksWithReviewChurn.length} (${formatTaskIdList(result.tasksWithReviewChurn)})`);
+    console.log(`  tasks missing role.invoked: ${result.tasksWithMissingRoleInvoked.length} (${formatTaskIdList(result.tasksWithMissingRoleInvoked)})`);
+    console.log(`  tasks missing task.started: ${result.tasksWithMissingTaskStarted.length} (${formatTaskIdList(result.tasksWithMissingTaskStarted)})`);
+    console.log(`  tasks missing review.result: ${result.tasksWithMissingReviewResult.length} (${formatTaskIdList(result.tasksWithMissingReviewResult)})`);
+    console.log(`  tasks missing task.closed: ${result.tasksWithMissingTaskClosed.length} (${formatTaskIdList(result.tasksWithMissingTaskClosed)})`);
+    console.log(`  events with host=unknown: ${result.hostUnknownEvents.length}`);
+    console.log();
+
+    console.log('  per-task summary:');
+    console.log(
+      `    ${'task id'.padEnd(12)} ${'events'.padEnd(7)} ${'missing strict'.padEnd(15)} ${'closure'.padEnd(10)} ${'review rounds'.padEnd(14)} ${'checks (s/f/b)'.padEnd(16)} host quality`
+    );
+    for (const task of result.tasks) {
+      const missing = task.strictAudit.missingEventTypes.join(', ') || 'none';
+      const closure = task.strictAudit.durableClosure.satisfied ? 'satisfied' : 'missing/failing';
+      const rounds = task.reviewRounds.join(', ') || 'none';
+      const checks = `${task.checkRunCounts.success}/${task.checkRunCounts.failure}/${task.checkRunCounts.blocked}`;
+      const hostQuality = result.hostUnknownEvents.some(entry =>
+        entry.taskId === task.taskId || entry.inferredTaskId === task.taskId
+      ) ? 'unknown present' : 'ok';
+      console.log(
+        `    ${String(task.taskId).padEnd(12)} ${String(task.eventCount).padEnd(7)} ${missing.padEnd(15)} ${closure.padEnd(10)} ${rounds.padEnd(14)} ${checks.padEnd(16)} ${hostQuality}`
+      );
+    }
+
+    if (result.invalidLogs.length > 0) {
+      console.log();
+      console.log('  invalid logs:');
+      for (const invalid of result.invalidLogs) {
+        console.log(`    - ${invalid.displayPath} (${invalid.eventCount} events)`);
+        for (const error of invalid.errors) console.error(`      ERROR: ${error}`);
+        for (const warning of invalid.warnings) console.warn(`      WARN: ${warning}`);
       }
     }
 
-    console.log('  failed/blocked checks:');
-    if (result.failedOrBlockedChecks.length === 0) {
-      console.log('    none');
-    } else {
-      for (const check of result.failedOrBlockedChecks) {
-        const details = [];
-        if (check.command) details.push(`command=${check.command}`);
-        details.push(`refs=${check.refs.length > 0 ? check.refs.join(', ') : 'none'}`);
-        console.log(`    - ${check.outcome}: ${check.summary} (${details.join('; ')})`);
+    if (result.emptyLogs.length > 0) {
+      console.log();
+      console.log('  empty logs:');
+      for (const empty of result.emptyLogs) {
+        console.log(`    - ${empty.displayPath} (${empty.eventCount} events)`);
+        for (const warning of empty.warnings) console.warn(`      WARN: ${warning}`);
+      }
+    }
+
+    if (result.hostUnknownEvents.length > 0) {
+      console.log();
+      console.log('  host=unknown events:');
+      for (const entry of result.hostUnknownEvents) {
+        console.log(`    - ${entry.file} line ${entry.line} (${entry.taskId})`);
       }
     }
 
@@ -979,7 +1093,7 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
     summary: opts.summary,
     outcome: outcomeOption.outcome ?? (sub === 'check.run' ? inferCheckRunOutcome(data) : undefined),
     backend: opts.backend ?? defaultBackend,
-    host: opts.host,
+    host: inferEventHost(target, opts.host),
     traceId: opts.traceId,
     parentEventId: opts.parentEventId,
     refs: opts.ref,

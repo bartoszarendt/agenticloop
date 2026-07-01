@@ -926,30 +926,13 @@ export function auditTaskEventLog({ target, taskId, requiredEventTypes, explicit
   return result;
 }
 
-export function reportTaskEventLog({ target, taskId } = {}) {
-  const resolvedTarget = target ? resolve(target) : process.cwd();
-  const normalizedTaskId = normalizeNullableString(taskId);
-  if (!normalizedTaskId) {
-    throw new Error('taskId is required for event log report');
-  }
-
-  const eventLogPath = resolveEventLogPath(resolvedTarget, undefined, normalizedTaskId).path;
-  const displayPath = formatEventLogPathForDisplay(eventLogPath, resolvedTarget);
-  const validation = validateEventLogFile(eventLogPath, { target: resolvedTarget });
-  if (!validation.exists) {
-    throw new Error(`Missing task event log: ${displayPath}`);
-  }
-  if (validation.errors.length > 0) {
-    throw new Error(validation.errors.join('; '));
-  }
-
-  const events = loadEvents(eventLogPath);
+function summarizeEvents(events, repoRoot) {
   const recordedEventTypes = new Set(events.map(event => event.event_type));
   const strictAudit = {
     requiredEventTypes: [...STRICT_AUDIT_EVENT_TYPES],
     presentEventTypes: STRICT_AUDIT_EVENT_TYPES.filter(eventType => recordedEventTypes.has(eventType)),
     missingEventTypes: STRICT_AUDIT_EVENT_TYPES.filter(eventType => !recordedEventTypes.has(eventType)),
-    durableClosure: evaluateDurableClosure(events, resolvedTarget),
+    durableClosure: evaluateDurableClosure(events, repoRoot),
   };
 
   const checkRunCounts = { success: 0, failure: 0, blocked: 0 };
@@ -1039,9 +1022,6 @@ export function reportTaskEventLog({ target, taskId } = {}) {
   const traceDurationMs = events.length > 0 ? Math.max(0, lastTimestampMs - firstTimestampMs) : 0;
 
   return {
-    taskId: normalizedTaskId,
-    path: eventLogPath,
-    displayPath,
     eventCount: events.length,
     firstEventTimestamp,
     lastEventTimestamp,
@@ -1060,6 +1040,248 @@ export function reportTaskEventLog({ target, taskId } = {}) {
       fallbackCount,
     },
     refsSummary: sortCountEntries(refsSummary).map(entry => ({ ref: entry.value, count: entry.count })),
+  };
+}
+
+export function reportTaskEventLog({ target, taskId } = {}) {
+  const resolvedTarget = target ? resolve(target) : process.cwd();
+  const normalizedTaskId = normalizeNullableString(taskId);
+  if (!normalizedTaskId) {
+    throw new Error('taskId is required for event log report');
+  }
+
+  const eventLogPath = resolveEventLogPath(resolvedTarget, undefined, normalizedTaskId).path;
+  const displayPath = formatEventLogPathForDisplay(eventLogPath, resolvedTarget);
+  const validation = validateEventLogFile(eventLogPath, { target: resolvedTarget });
+  if (!validation.exists) {
+    throw new Error(`Missing task event log: ${displayPath}`);
+  }
+  if (validation.errors.length > 0) {
+    throw new Error(validation.errors.join('; '));
+  }
+
+  const events = loadEvents(eventLogPath);
+  const summary = summarizeEvents(events, resolvedTarget);
+
+  return {
+    taskId: normalizedTaskId,
+    path: eventLogPath,
+    displayPath,
+    ...summary,
     warnings: [...validation.warnings],
   };
+}
+
+export function reportEventLogs({ target } = {}) {
+  const resolvedTarget = target ? resolve(target) : process.cwd();
+  const { directory, files } = listEventLogFiles(resolvedTarget);
+
+  const result = {
+    directory,
+    filesScanned: 0,
+    validTaskLogCount: 0,
+    invalidLogCount: 0,
+    emptyLogCount: 0,
+    strictAuditPassCount: 0,
+    strictAuditFailCount: 0,
+    durableClosureSatisfied: 0,
+    durableClosureMissing: 0,
+    durableClosureFailing: 0,
+    totalCheckOutcomes: { success: 0, failure: 0, blocked: 0 },
+    totalReviewOutcomes: { accepted: 0, needs_revision: 0 },
+    totalRoleInvokedTargets: [],
+    totalDelegationModes: [],
+    totalFallbackCount: 0,
+    tasksWithReviewChurn: [],
+    tasksWithMissingRoleInvoked: [],
+    tasksWithMissingTaskStarted: [],
+    tasksWithMissingReviewResult: [],
+    tasksWithMissingTaskClosed: [],
+    hostUnknownEvents: [],
+    invalidLogs: [],
+    emptyLogs: [],
+    warnings: [],
+    tasks: [],
+    missingLogs: false,
+  };
+
+  if (files.length === 0) {
+    result.missingLogs = true;
+    result.warnings.push(`No event log files found in ${DEFAULT_LOG_DIR_DISPLAY}/`);
+    return result;
+  }
+
+  const taskEvents = new Map();
+  const totalRoleInvokedTargets = new Map();
+  const totalDelegationModes = new Map();
+  let totalFallbackCount = 0;
+
+  for (const filePath of files) {
+    result.filesScanned += 1;
+
+    const validation = validateEventLogFile(filePath, { target: resolvedTarget });
+    const displayPath = formatEventLogPathForDisplay(filePath, resolvedTarget);
+    const hasErrors = validation.errors.length > 0;
+    const isEmpty = validation.exists && validation.eventCount === 0;
+
+    if (isEmpty && !hasErrors) {
+      result.emptyLogCount += 1;
+      result.emptyLogs.push({
+        path: filePath,
+        displayPath,
+        eventCount: validation.eventCount,
+        warnings: validation.warnings,
+      });
+      result.warnings.push(`${displayPath}: event log has zero events`);
+      continue;
+    }
+
+    if (hasErrors) {
+      result.invalidLogCount += 1;
+      result.invalidLogs.push({
+        path: filePath,
+        displayPath,
+        eventCount: validation.eventCount,
+        errors: validation.errors,
+        warnings: validation.warnings,
+      });
+      continue;
+    }
+
+    let parsed;
+    try {
+      parsed = parseEventLogEntries(filePath);
+    } catch (error) {
+      result.invalidLogCount += 1;
+      result.invalidLogs.push({
+        path: filePath,
+        displayPath,
+        eventCount: validation.eventCount,
+        errors: [error.message],
+        warnings: validation.warnings,
+      });
+      continue;
+    }
+
+    if (parsed.errors.length > 0) {
+      result.invalidLogCount += 1;
+      result.invalidLogs.push({
+        path: filePath,
+        displayPath,
+        eventCount: validation.eventCount,
+        errors: parsed.errors,
+        warnings: validation.warnings,
+      });
+      continue;
+    }
+
+    if (validation.warnings.length > 0) {
+      result.warnings.push(...validation.warnings);
+    }
+
+    const events = parsed.entries.map(entry => entry.event);
+    const fileNameTaskId = filePath.replace(/\\/g, '/').split('/').pop().replace(/\.jsonl$/, '');
+    const taskIdsFromEvents = new Set(events.map(event => event.task_id).filter(Boolean));
+    const inferredTaskId = taskIdsFromEvents.size === 1
+      ? [...taskIdsFromEvents][0]
+      : fileNameTaskId;
+
+    const entry = taskEvents.get(inferredTaskId) ?? { files: new Set(), events: [] };
+    entry.files.add(displayPath);
+    entry.events.push(...events);
+    taskEvents.set(inferredTaskId, entry);
+
+    for (const { lineNumber, event } of parsed.entries) {
+      if (event.host === 'unknown') {
+        result.hostUnknownEvents.push({
+          taskId: event.task_id ?? inferredTaskId,
+          file: displayPath,
+          line: lineNumber,
+          eventId: event.event_id,
+          inferredTaskId,
+          eventTaskId: event.task_id ?? null,
+        });
+      }
+    }
+  }
+
+  result.validTaskLogCount = taskEvents.size;
+
+  for (const [taskId, entry] of taskEvents) {
+    const summary = summarizeEvents(entry.events, resolvedTarget);
+
+    result.tasks.push({
+      taskId,
+      files: [...entry.files].sort(),
+      ...summary,
+    });
+
+    const strictAuditOk = summary.strictAudit.missingEventTypes.length === 0 && summary.strictAudit.durableClosure.satisfied;
+    if (strictAuditOk) {
+      result.strictAuditPassCount += 1;
+    } else {
+      result.strictAuditFailCount += 1;
+    }
+
+    const hasTaskClosed = entry.events.some(event => event.event_type === 'task.closed');
+    if (summary.strictAudit.durableClosure.satisfied) {
+      result.durableClosureSatisfied += 1;
+    } else if (!hasTaskClosed) {
+      result.durableClosureMissing += 1;
+    } else {
+      result.durableClosureFailing += 1;
+    }
+
+    result.totalCheckOutcomes.success += summary.checkRunCounts.success;
+    result.totalCheckOutcomes.failure += summary.checkRunCounts.failure;
+    result.totalCheckOutcomes.blocked += summary.checkRunCounts.blocked;
+
+    result.totalReviewOutcomes.accepted += summary.reviewResultCounts.accepted;
+    result.totalReviewOutcomes.needs_revision += summary.reviewResultCounts.needs_revision;
+
+    for (const targetRoleEntry of summary.roleInvoked.targetRoleCounts) {
+      incrementCount(totalRoleInvokedTargets, targetRoleEntry.value, targetRoleEntry.count);
+    }
+    for (const delegationModeEntry of summary.roleInvoked.delegationModeCounts) {
+      incrementCount(totalDelegationModes, delegationModeEntry.value, delegationModeEntry.count);
+    }
+    totalFallbackCount += summary.roleInvoked.fallbackCount;
+
+    if (summary.reviewResultCounts.needs_revision > 0 || summary.reviewRounds.length > 1) {
+      result.tasksWithReviewChurn.push(taskId);
+    }
+
+    if (!summary.strictAudit.presentEventTypes.includes('role.invoked')) {
+      result.tasksWithMissingRoleInvoked.push(taskId);
+    }
+    if (!summary.strictAudit.presentEventTypes.includes('task.started')) {
+      result.tasksWithMissingTaskStarted.push(taskId);
+    }
+    if (!summary.strictAudit.presentEventTypes.includes('review.result')) {
+      result.tasksWithMissingReviewResult.push(taskId);
+    }
+    if (!summary.strictAudit.presentEventTypes.includes('task.closed')) {
+      result.tasksWithMissingTaskClosed.push(taskId);
+    }
+  }
+
+  result.totalRoleInvokedTargets = sortCountEntries(totalRoleInvokedTargets);
+  result.totalDelegationModes = sortCountEntries(totalDelegationModes);
+  result.totalFallbackCount = totalFallbackCount;
+
+  result.tasks.sort((a, b) => String(a.taskId).localeCompare(String(b.taskId)));
+  result.tasksWithReviewChurn.sort();
+  result.tasksWithMissingRoleInvoked.sort();
+  result.tasksWithMissingTaskStarted.sort();
+  result.tasksWithMissingReviewResult.sort();
+  result.tasksWithMissingTaskClosed.sort();
+  result.hostUnknownEvents.sort((a, b) => {
+    const byTask = String(a.taskId).localeCompare(String(b.taskId));
+    if (byTask !== 0) return byTask;
+    const byFile = String(a.file).localeCompare(String(b.file));
+    if (byFile !== 0) return byFile;
+    return a.line - b.line;
+  });
+
+  return result;
 }

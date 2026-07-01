@@ -766,11 +766,15 @@ exports into it.
 Use `npx agenticloop event-logging validate` to validate the local event logs
 when needed. Use `npx agenticloop event-logging audit --task <TASK-ID>` for a
 strict task-scoped audit of the minimal required events. Use `npx agenticloop
-event-logging report --task <TASK-ID>` for a local read-side summary derived
-from the existing log file. Reporting stays local; it does not upload data or
-require producers to add new event keys before it is useful. `npx agenticloop
-validate` also validates every default `.agenticloop/logs/*.jsonl` file when
-present.
+event-logging report --task <TASK-ID>` for a local read-side summary of one
+task log. Use `npx agenticloop event-logging report` (without `--task`) for a
+read-only aggregate summary across every `.agenticloop/logs/*.jsonl` file;
+the aggregate surfaces strict-audit gaps, durable-closure gaps, review churn,
+check outcomes, delegation/fallback counts, invalid or empty logs, and
+`host=unknown` events as telemetry-quality warnings rather than workflow failures. Reporting
+stays local; it does not upload data or require producers to add new event keys
+before it is useful. `npx agenticloop validate` also validates every default
+`.agenticloop/logs/*.jsonl` file when present.
 
 ## Decision Records
 

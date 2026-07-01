@@ -1,5 +1,23 @@
 # AGENTS.md
 
+## Agentic Loop is the subject here, not the process
+
+This repository *authors* the Agentic Loop methodology. `AGENTIC_LOOP.md`,
+`agents/`, `skills/`, and `backends/` are the product being maintained — they
+are **artifacts to edit**, not a workflow to adopt for work in this repo.
+
+Do not read `AGENTIC_LOOP.md` and then take on its roles, task-record
+contract, worktree/parallel-lane rules, or event logging on your own
+initiative. Ordinary work here — editing docs, fixing skills/backends,
+answering questions, one-off changes — follows the rest of this AGENTS.md
+directly, as normal manual repository work.
+
+Only operate *as* Agentic Loop (adopt roles, create task records, spin up
+worktrees/lanes, log events) when the user explicitly asks to run or dogfood
+the methodology against this tree. Reading `AGENTIC_LOOP.md` to edit it or to
+answer a question about it is fine and expected; adopting it as your process
+is not.
+
 ## Purpose
 
 This file defines repository-wide rules for Agentic Loop itself.

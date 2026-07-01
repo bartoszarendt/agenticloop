@@ -9,6 +9,7 @@ import {
   appendEventLog,
   buildEvent,
   loadEvents,
+  reportEventLogs,
   reportTaskEventLog,
   resolveEventLogPath,
   STRICT_AUDIT_EVENT_TYPES,
@@ -116,6 +117,7 @@ function appendFixtureEvent(target, taskId, definition) {
       target,
       task: taskId,
       backend: definition.backend,
+      host: definition.host,
       occurredAt: definition.occurredAt,
       eventType: definition.eventType,
       role: definition.role,
@@ -961,5 +963,227 @@ describe('event logging module', () => {
         { summary: 'Known pre-existing lint failure', triaged_unrelated: false, accepted_known_failure: true, required: false },
       ]
     );
+  });
+});
+
+describe('reportEventLogs aggregate', () => {
+  it('summarizes a complete passing task log', () => {
+    const target = makeTarget('aggregate-complete-pass');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'files' });
+    writeTaskRecord(target, 'T-001');
+    appendAuditEvents(target, 'T-001');
+
+    const result = reportEventLogs({ target });
+
+    assert.equal(result.filesScanned, 1);
+    assert.equal(result.validTaskLogCount, 1);
+    assert.equal(result.invalidLogCount, 0);
+    assert.equal(result.strictAuditPassCount, 1);
+    assert.equal(result.strictAuditFailCount, 0);
+    assert.equal(result.durableClosureSatisfied, 1);
+    assert.equal(result.durableClosureMissing, 0);
+    assert.equal(result.durableClosureFailing, 0);
+    assert.equal(result.tasks.length, 1);
+    assert.equal(result.tasks[0].taskId, 'T-001');
+    assert.equal(result.tasks[0].eventCount, STRICT_AUDIT_EVENT_TYPES.length);
+  });
+
+  it('flags incomplete historical logs missing strict-audit events', () => {
+    const target = makeTarget('aggregate-incomplete');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'files' });
+    writeTaskRecord(target, 'T-001');
+    appendFixtureEvent(target, 'T-001', {
+      eventType: 'task.started',
+      role: 'engineer',
+      summary: 'Started implementation',
+    });
+    appendFixtureEvent(target, 'T-001', {
+      eventType: 'review.result',
+      role: 'maintainer',
+      summary: 'Accepted implementation',
+      outcome: 'accepted',
+    });
+
+    const result = reportEventLogs({ target });
+
+    assert.equal(result.filesScanned, 1);
+    assert.equal(result.validTaskLogCount, 1);
+    assert.equal(result.strictAuditPassCount, 0);
+    assert.equal(result.strictAuditFailCount, 1);
+    assert.deepEqual(result.tasksWithMissingRoleInvoked, ['T-001']);
+    assert.deepEqual(result.tasksWithMissingTaskClosed, ['T-001']);
+  });
+
+  it('surfaces accepted imperfect checks separately from failed/blocked checks', () => {
+    const target = makeTarget('aggregate-accepted-imperfect');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'files' });
+    writeTaskRecord(target, 'T-001');
+    appendAuditEvents(target, 'T-001', ['role.invoked', 'task.started', 'review.result', 'task.closed']);
+    appendFixtureEvent(target, 'T-001', {
+      eventType: 'check.run',
+      role: 'engineer',
+      summary: 'Unrelated flaky test failed',
+      outcome: 'failure',
+      data: { command: 'npm test', triaged_unrelated: true, required: true },
+    });
+    appendFixtureEvent(target, 'T-001', {
+      eventType: 'check.run',
+      role: 'engineer',
+      summary: 'Known pre-existing lint failure',
+      outcome: 'failure',
+      data: { command: 'npm run lint', accepted_known_failure: true },
+    });
+
+    const result = reportEventLogs({ target });
+
+    assert.equal(result.filesScanned, 1);
+    assert.equal(result.totalCheckOutcomes.failure, 2);
+    assert.equal(result.tasks[0].acceptedImperfectChecks.length, 2);
+    assert.equal(result.tasks[0].failedOrBlockedChecks.length, 0);
+  });
+
+  it('collects invalid and malformed logs without failing the whole aggregate', () => {
+    const target = makeTarget('aggregate-invalid-log');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'files' });
+    writeTaskRecord(target, 'T-001');
+    appendAuditEvents(target, 'T-001');
+
+    mkdirSync(join(target, '.agenticloop', 'logs'), { recursive: true });
+    writeFileSync(join(target, '.agenticloop', 'logs', 'manual.jsonl'), 'not json\n', 'utf-8');
+
+    const result = reportEventLogs({ target });
+
+    assert.equal(result.filesScanned, 2);
+    assert.equal(result.validTaskLogCount, 1);
+    assert.equal(result.invalidLogCount, 1);
+    assert.equal(result.emptyLogCount, 0);
+    assert.equal(result.invalidLogs.length, 1);
+    assert.equal(result.emptyLogs.length, 0);
+    assert.ok(result.invalidLogs[0].errors.some(error => error.includes('invalid JSON')));
+  });
+
+  it('reports empty logs separately from malformed logs', () => {
+    const target = makeTarget('aggregate-empty-log');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'files' });
+    writeTaskRecord(target, 'T-001');
+    appendAuditEvents(target, 'T-001');
+
+    mkdirSync(join(target, '.agenticloop', 'logs'), { recursive: true });
+    writeFileSync(join(target, '.agenticloop', 'logs', 'empty.jsonl'), '', 'utf-8');
+    writeFileSync(join(target, '.agenticloop', 'logs', 'manual.jsonl'), 'not json\n', 'utf-8');
+
+    const result = reportEventLogs({ target });
+
+    assert.equal(result.filesScanned, 3);
+    assert.equal(result.validTaskLogCount, 1);
+    assert.equal(result.invalidLogCount, 1);
+    assert.equal(result.emptyLogCount, 1);
+    assert.equal(result.invalidLogs.length, 1);
+    assert.equal(result.emptyLogs.length, 1);
+    assert.equal(result.emptyLogs[0].displayPath, '.agenticloop/logs/empty.jsonl');
+    assert.ok(result.warnings.some(warning => warning.includes('empty.jsonl: event log has zero events')));
+  });
+
+  it('rolls up aggregate delegation mode totals and fallback count', () => {
+    const target = makeTarget('aggregate-delegation-rollups');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'files' });
+
+    appendFixtureEvent(target, 'T-001', {
+      eventType: 'role.invoked',
+      role: 'orchestrator',
+      summary: 'Delegated engineer',
+      data: { target_role: 'engineer', delegation_mode: 'host_subagent', fallback: false },
+    });
+    appendFixtureEvent(target, 'T-001', {
+      eventType: 'task.started',
+      role: 'engineer',
+      summary: 'Started T-001',
+    });
+    appendFixtureEvent(target, 'T-001', {
+      eventType: 'role.invoked',
+      role: 'orchestrator',
+      summary: 'Fallback review',
+      data: { target_role: 'maintainer', delegation_mode: 'single_agent_fallback', fallback: true },
+    });
+
+    appendFixtureEvent(target, 'T-002', {
+      eventType: 'role.invoked',
+      role: 'orchestrator',
+      summary: 'Delegated engineer for T-002',
+      data: { target_role: 'engineer', delegation_mode: 'host_subagent', fallback: false },
+    });
+    appendFixtureEvent(target, 'T-002', {
+      eventType: 'task.started',
+      role: 'engineer',
+      summary: 'Started T-002',
+    });
+
+    const result = reportEventLogs({ target });
+
+    assert.equal(result.validTaskLogCount, 2);
+    assert.deepEqual(result.totalRoleInvokedTargets, [
+      { value: 'engineer', count: 2 },
+      { value: 'maintainer', count: 1 },
+    ]);
+    assert.deepEqual(result.totalDelegationModes, [
+      { value: 'host_subagent', count: 2 },
+      { value: 'single_agent_fallback', count: 1 },
+    ]);
+    assert.equal(result.totalFallbackCount, 1);
+  });
+
+  it('uses parsed line numbers for host=unknown events', () => {
+    const target = makeTarget('aggregate-host-unknown-line');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'files' });
+    writeTaskRecord(target, 'T-001');
+    mkdirSync(join(target, '.opencode', 'agents'), { recursive: true });
+    writeFileSync(join(target, '.opencode', 'agents', 'orchestrator.md'), '# orchestrator\n', 'utf-8');
+
+    appendFixtureEvent(target, 'T-001', {
+      eventType: 'task.started',
+      role: 'engineer',
+      summary: 'Started T-001',
+      host: 'opencode',
+    });
+    appendFixtureEvent(target, 'T-001', {
+      eventType: 'check.run',
+      role: 'engineer',
+      summary: 'Check passed',
+      outcome: 'success',
+      host: 'unknown',
+    });
+
+    const result = reportEventLogs({ target });
+
+    assert.equal(result.hostUnknownEvents.length, 1);
+    assert.equal(result.hostUnknownEvents[0].taskId, 'T-001');
+    assert.equal(result.hostUnknownEvents[0].line, 2);
+    assert.equal(result.hostUnknownEvents[0].inferredTaskId, 'T-001');
+    assert.equal(result.hostUnknownEvents[0].eventTaskId, 'T-001');
+  });
+
+  it('surfaces host=unknown events as telemetry-quality warnings', () => {
+    const target = makeTarget('aggregate-host-unknown');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'files' });
+    writeTaskRecord(target, 'T-001');
+    mkdirSync(join(target, '.opencode', 'agents'), { recursive: true });
+    writeFileSync(join(target, '.opencode', 'agents', 'orchestrator.md'), '# orchestrator\n', 'utf-8');
+    appendFixtureEvent(target, 'T-001', {
+      eventType: 'role.invoked',
+      role: 'orchestrator',
+      summary: 'Delegated engineer',
+      host: 'unknown',
+    });
+    appendFixtureEvent(target, 'T-001', {
+      eventType: 'task.started',
+      role: 'engineer',
+      summary: 'Started implementation',
+      host: 'opencode',
+    });
+
+    const result = reportEventLogs({ target });
+
+    assert.equal(result.hostUnknownEvents.length, 1);
+    assert.equal(result.hostUnknownEvents[0].taskId, 'T-001');
   });
 });
