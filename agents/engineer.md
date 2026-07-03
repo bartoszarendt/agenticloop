@@ -119,6 +119,12 @@ Return control with status when the lease expires, the no-progress budget is
 exhausted, the branch or worktree is wrong, a collision appears, the task needs
 context, or the stop condition is reached. Do not continue indefinitely.
 
+Host-visible remaining tool-call counts, incidental runtime budget notes, or
+similar execution-environment hints are not task-quality constraints. If those
+limits prevent adequate discovery, implementation, or verification, return
+status with concrete remaining unknowns instead of guessing, cutting required
+work, or publishing a placeholder implementation artifact.
+
 If you state the same intended next action twice without performing it, stop
 deliberating. Perform the action now, or record blocked-state category
 `no-progress` and return status. Do not re-verify an artifact you just produced

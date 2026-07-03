@@ -213,6 +213,8 @@ Do not omit scope, out of scope, expected output, stop condition, or Operating f
 
 `Budgets:` propagates the task record's non-default `minimalism`, `attempt_budget`, `review_budget`, and medium/high `context_overflow_risk` so the role does not have to infer them. Omit the line entirely when the task record leaves all discipline, effort, and context-risk signals at defaults or low; the role still reads the task record. Reaching a budget means return status, not push past it -- this restates the task-record effort bounds and the Attempt Budget and Review Round Checkpoint in `agenticloop/AGENTIC_LOOP.md`; it does not add a new limit. Medium context overflow risk is an engineer discipline signal; high context overflow risk is a split-or-tighten signal unless the task record justifies one engineer execution. Medium/high context overflow risk means the role must summarize or return status when unexpected context expansion would exceed the task record's bounds. The existing `Stop condition:` and `Lease:` lines still carry the stop semantics.
 
+Host-visible remaining tool-call counts, incidental runtime budget notes, or similar execution-environment hints are not delegation budgets unless the orchestrator explicitly records them in `Lease:` or `Stop condition:`. If a hard host limit prevents adequate discovery, implementation, or review, the delegated role returns status with concrete remaining unknowns instead of reducing task quality or guessing.
+
 
 ## Context Read Discipline
 
