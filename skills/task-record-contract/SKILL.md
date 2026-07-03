@@ -311,7 +311,8 @@ A bugfix without a confirmed or explicitly investigated reproduction starts from
 
 Task-file frontmatter carries machine-readable current state. Required fields:
 `task_id`, `status`, `backend`. Optional fields include `implementation_artifact`,
-`review_status`, `allowed_paths`, and `minimalism`.
+`review_status`, `allowed_paths`, `minimalism`, `attempt_budget`, and
+`review_budget`.
 
 ### minimalism
 
@@ -334,6 +335,33 @@ human requirements.
 
 This is documented and procedural enforcement; there is no new validator for
 the `minimalism` field.
+
+### effort bounds
+
+The optional `attempt_budget` and `review_budget` fields tune the process
+ceilings that already exist in `agenticloop/AGENTIC_LOOP.md`. They are process
+bounds, not scope reducers.
+
+- `attempt_budget`: overrides the default-3 shared Attempt Budget for equivalent
+  no-progress attempts. Default is `3` when omitted.
+- `review_budget`: the number of `needs_revision` rounds allowed before the
+  Review Round Checkpoint runs. Default is `3` when omitted (the checkpoint runs
+  before a fourth revision).
+
+Direction matters. Lower these to save effort on cheap or low-risk tasks;
+raising either above its default needs a concrete recorded reason, because a
+higher ceiling means more churn, not more assurance. They bound only the
+default-3 guards: they never loosen the deliberately-tighter no-progress guards
+(empty-result command, recorded-setup-gap, the "maintainer is needed" stop, and
+the self-loop guard), which get no extra attempts regardless of these fields.
+
+When a budget is reached or is likely to be exceeded, the role returns status
+(`needs_context` or `blocked` via [[blocked-state]]) instead of starting another
+discovery, review, or revision pass. Effort bounds never override acceptance
+criteria, required checks, proof pressure, or review.
+
+This is documented and procedural enforcement; there is no new validator for the
+`attempt_budget` or `review_budget` fields.
 
 ## Backend enforcement
 

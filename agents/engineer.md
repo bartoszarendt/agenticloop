@@ -122,6 +122,12 @@ Status returns should include `STATUS` (`in_progress`, `complete`,
 `needs_context`, or `blocked`), task id, branch or worktree when relevant, files
 touched, latest evidence, next step, and stop reason.
 
+When the task record sets a non-default `attempt_budget` or `review_budget`, or
+you are at or near either ceiling, add one effort line: `Effort: near_budget |
+budget_exceeded | unavailable` with a short reason. Base it on the observable
+attempt/review round counts and the task record's budgets. Omit it when
+comfortably within budget.
+
 ## Event Logging
 
 Event logging is optional. If `.agenticloop/project.md` has

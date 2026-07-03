@@ -539,12 +539,13 @@ command just because the result is empty.
 Repeating an action that makes no progress is the most common loop failure.
 Bound it with a shared attempt budget.
 
-The default budget is 3. An attempt counts against the budget when it is
-equivalent to a previous one -- the same command, check, fix, delegation, or
-report against the same target -- and yields no new evidence or change in task
-state. A restated intended next action that is not performed also counts as an
-attempt: deliberation that never becomes an action is the same loop as a
-repeated action that never changes state.
+The default budget is 3, or the task record's `attempt_budget` when it sets one.
+An attempt counts against the budget when it is equivalent to a previous one --
+the same command, check, fix, delegation, or report against the same target --
+and yields no new evidence or change in task state. A restated intended next
+action that is not performed also counts as an attempt: deliberation that never
+becomes an action is the same loop as a repeated action that never changes
+state.
 
 Progress is what resets the count: an observable new fact, a durable state
 change, a backend update, an artifact change, a status return, or a blocker
@@ -575,8 +576,9 @@ The attempt budget counts equivalent attempts and resets on new evidence, so a
 task that fails review repeatedly with a different finding each round never
 trips it. Bound that churn separately.
 
-After 3 `needs_revision` rounds on one task, the orchestrator pauses before
-routing a fourth revision and classifies the churn cause:
+After 3 `needs_revision` rounds on one task -- or after the task record's
+`review_budget` when it sets one -- the orchestrator pauses before routing the
+next revision and classifies the churn cause:
 
 - implementation defect -- the code is genuinely not done;
 - evidence drift -- the code is fine but the durable summary cites a stale head;

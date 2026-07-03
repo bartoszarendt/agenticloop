@@ -83,5 +83,5 @@ If a task is genuinely unverifiable, say so under Known Limitations. Do not writ
 
 - [[verification-evidence]]
 - [[review-and-accept]]
-- [[ponytail]] when the user explicitly asks for YAGNI/minimalism while still preserving RED-GREEN-REFACTOR and required evidence.
+- [[ponytail]] when the task record sets `minimalism: lite|full|ultra` or the user explicitly asks for YAGNI/minimalism, while still preserving RED-GREEN-REFACTOR and required evidence.
 - [[frontend-design-quality]] when the behavior under test is a UI component or screen.

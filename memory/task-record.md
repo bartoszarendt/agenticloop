@@ -10,6 +10,13 @@ review_status:
 # Maintainer auto-selection may choose at most full.
 # ultra requires explicit human request.
 minimalism: none
+# Effort bounds: process ceilings, not scope reducers. Omit to keep defaults.
+# attempt_budget tunes the default-3 equivalent-attempt guard; review_budget is
+# the needs_revision round count allowed before the churn checkpoint. Lower them
+# to save effort on cheap/low-risk tasks; raising above the default needs a
+# concrete reason. They never loosen the deliberately-tighter no-progress guards.
+attempt_budget: 3
+review_budget: 3
 # Structured scope map: repo-relative glob patterns for mechanical changed-file
 # validation. Examples: ["src/example.js", "test/example.test.js", "docs/"].
 # Leave empty or omit to rely on the human-readable `## Expected Files or Areas`

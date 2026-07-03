@@ -178,8 +178,9 @@ If neither host delegation nor single-agent role assumption is allowed, use [[bl
 
 ## Review Round Checkpoint
 
-The orchestrator counts `needs_revision` rounds per task. Before a fourth
-revision on the same task, run the Review Round Checkpoint in `agenticloop/AGENTIC_LOOP.md`:
+The orchestrator counts `needs_revision` rounds per task. Before the revision
+that would exceed the task record's `review_budget` (default 3, so before a
+fourth revision), run the Review Round Checkpoint in `agenticloop/AGENTIC_LOOP.md`:
 classify the churn cause, then route one targeted revision plan naming the cause,
 or record `needs_context` or `blocked` with [[blocked-state]]. Do not route an
 undirected fourth revision.
@@ -203,11 +204,14 @@ Scope:             <what the role should do>
 Out of scope:      <what the role must not do>
 Expected output:   <what the role should produce>
 Stop condition:    <when the role must stop and return to orchestrator or human>
+Budgets:           <omit when all defaults; else `minimalism=<lite|full|ultra>; attempt_budget=<n>; review_budget=<n>` for the non-default task-record effort bounds>
 Concurrency:       `serial -- reason: <concrete blocker>`, or `parallel batch <id> -- lanes: <n>/3; join: <condition>`
 Lease:             <observable-step checkpoint cadence, no-progress budget, and any relevant max duration or milestone>
 ```
 
 Do not omit scope, out of scope, expected output, stop condition, or Operating facts for real delegation. Use explicit `none` for inapplicable fields. The payload mechanism is a doc pointer or `none`, never a copied command recipe.
+
+`Budgets:` propagates the task record's non-default `minimalism`, `attempt_budget`, and `review_budget` so the role does not have to infer them. Omit the line entirely when the task record leaves all three at their defaults; the role still reads the task record. Reaching a budget means return status, not push past it -- this restates the task-record effort bounds and the Attempt Budget and Review Round Checkpoint in `agenticloop/AGENTIC_LOOP.md`; it does not add a new limit. The existing `Stop condition:` and `Lease:` lines still carry the stop semantics.
 
 
 ## Context Read Discipline
@@ -410,7 +414,7 @@ omit the delegation field.
 - Files-backed work starts from a draft task record, lacks `implementation_artifact` or an inline
   task-file summary, silently rewrites evidence without a dated correction, leaves the task record
   untracked without exception, or leaves `review_status` unset or stale.
-- A fourth revision is routed on one task without running the Review Round Checkpoint.
+- A revision beyond the task record's `review_budget` (default 3, i.e. a fourth) is routed on one task without running the Review Round Checkpoint.
 - A human checkpoint is skipped before implementation or merge, requested for a routine in-scope
   step, or ignored after merge approval while the agent starts a new task first.
 - Sequential actions are presented as numbered alternatives, or a numeric choice is acted on without

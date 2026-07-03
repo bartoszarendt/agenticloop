@@ -273,9 +273,9 @@ Review items are claims, not orders. Before implementing a review item, the engi
 
 If a review item is wrong or conflicts with the task record, the engineer lists it under `Disputed Items` in the revision summary with evidence.
 
-The next review must explicitly sustain or withdraw each disputed item. If the same item remains sustained and disputed after the attempt budget of 3 review rounds (see Attempt Budget in `agenticloop/AGENTIC_LOOP.md`), use [[blocked-state]] so a human can decide.
+The next review must explicitly sustain or withdraw each disputed item. If sustained-and-disputed review rounds exhaust the attempt budget (default 3, or the task record's `attempt_budget`; see Attempt Budget in `agenticloop/AGENTIC_LOOP.md`), use [[blocked-state]] so a human can decide.
 
-Distinct from a single sustained-and-disputed item: after 3 `needs_revision` rounds on one task -- regardless of whether the findings repeat -- the orchestrator runs the Review Round Checkpoint in `agenticloop/AGENTIC_LOOP.md` before routing any further revision.
+Distinct from a single sustained-and-disputed item: once `needs_revision` rounds on one task reach the task record's `review_budget` (default 3) -- regardless of whether the findings repeat -- the orchestrator runs the Review Round Checkpoint in `agenticloop/AGENTIC_LOOP.md` before routing any further revision.
 
 ## Mandatory triage before accepting
 
