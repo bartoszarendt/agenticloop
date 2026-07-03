@@ -118,7 +118,8 @@
         "Maintainer, use lazy mode and identify the minimal acceptable scope without dropping acceptance criteria.",
         "Apply YAGNI here: do less, avoid boilerplate, and use the simplest solution that still passes required checks.",
         "The active task record sets minimalism: full, so apply the ponytail minimalism discipline for this engineer task.",
-        "Task record minimalism: lite is selected; maintainer should use lazy ponytail discipline without dropping acceptance criteria."
+        "Task record minimalism: lite is selected; maintainer should use lazy ponytail discipline without dropping acceptance criteria.",
+        "During task creation the source item requests a pluggable framework with one concrete consumer; choose the minimalism level."
       ],
       "shouldNotTrigger": [
         "Implement the new behavior by writing a failing test before production code.",

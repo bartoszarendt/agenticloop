@@ -1,6 +1,6 @@
 ---
 name: ponytail
-description: Use when the current role is maintainer or engineer and either the human explicitly asks for ponytail, lazy mode, YAGNI, simplest solution, minimal solution, do less, shortest path, or minimalist implementation discipline, or the active task record sets minimalism: lite, minimalism: full, or minimalism: ultra. The task-record minimalism field selects Ponytail intensity. Omitted or minimalism: none does not activate Ponytail. Do not use for orchestrator coordination or instead of Agentic Loop task-record, TDD, evidence, review, blocked-state, or change-request gates.
+description: Use when the current role is maintainer or engineer and either the human explicitly asks for ponytail, lazy mode, YAGNI, simplest solution, minimal solution, do less, shortest path, or minimalist implementation discipline, or the active task record sets minimalism: lite, minimalism: full, or minimalism: ultra, or the minimalism level is being selected during task creation. The task-record minimalism field selects Ponytail intensity. Omitted or minimalism: none does not activate Ponytail. Do not use for orchestrator coordination or instead of Agentic Loop task-record, TDD, evidence, review, blocked-state, or change-request gates.
 metadata:
   area: engineering-discipline
   side_effects: writes-files
@@ -21,7 +21,7 @@ Ponytail is necessity-driven reduction, not clever terseness. Do not pick a flim
 ## When to use
 
 - Only when the current role is maintainer or engineer.
-- When the human explicitly asks for ponytail, lazy mode, YAGNI, the simplest solution, the minimal solution, the shortest path, or similar minimalist discipline; **or** when the active task record sets `minimalism: lite`, `minimalism: full`, or `minimalism: ultra`.
+- When the human explicitly asks for ponytail, lazy mode, YAGNI, the simplest solution, the minimal solution, the shortest path, or similar minimalist discipline; **or** when the active task record sets `minimalism: lite`, `minimalism: full`, or `minimalism: ultra`; **or** when the maintainer is selecting the task-record `minimalism` level during task creation.
 - Task-record `minimalism` selects intensity: `lite`, `full`, or `ultra` as set in the task record. Omitted or `minimalism: none` does not activate Ponytail.
 - `ultra` from a task record is valid only with explicit human request or authorization. Maintainers must not auto-select `ultra`.
 - Use it to reduce over-building inside accepted scope, not to argue away required work after the fact.
