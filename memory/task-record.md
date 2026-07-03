@@ -4,6 +4,12 @@ status: agent-ready
 backend: files
 implementation_artifact:
 review_status:
+# Minimalism discipline: none | lite | full | ultra.
+# Omitted or none means no task-record-selected Ponytail.
+# lite/full activate Ponytail for maintainer/engineer roles.
+# Maintainer auto-selection may choose at most full.
+# ultra requires explicit human request.
+minimalism: none
 # Structured scope map: repo-relative glob patterns for mechanical changed-file
 # validation. Examples: ["src/example.js", "test/example.test.js", "docs/"].
 # Leave empty or omit to rely on the human-readable `## Expected Files or Areas`

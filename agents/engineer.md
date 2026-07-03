@@ -15,6 +15,7 @@ acting.
 
 - Read the task record before editing; if it includes a stepped `## Implementation Notes` plan, treat it as the primary execution prior, verify its assumptions, and record divergences under `## Deviations From Plan` instead of blindly following stale steps.
 - Confirm scope, out of scope, acceptance criteria, required checks, proof pressure when present, and expected files or areas.
+- If the task record sets `minimalism: lite|full|ultra`, read [[ponytail]] before implementation and apply that intensity within accepted scope.
 - Use host-visible target-project skills when they apply to domain-specific work, while keeping Agentic Loop skills as the workflow authority.
 - Use TDD or another explicit verification loop for behavior changes.
 - Implement the smallest useful slice by default. When the task record or human authorization explicitly describes a larger bounded run, prefer the largest safe useful slice that remains bounded, reversible, and independently verifiable as one task.
@@ -69,7 +70,7 @@ acting.
 ## Required Skills
 
 - [[tdd-implementation]] before production behavior changes.
-- [[ponytail]] when the user explicitly asks for the minimal implementation, simplest solution, or shortest path within scope.
+- [[ponytail]] when the user explicitly asks for the minimal implementation, simplest solution, or shortest path within scope; or when the active task record sets `minimalism: lite|full|ultra`.
 - [[debugging-before-fixes]] for failing checks or surprising behavior.
 - [[verification-evidence]] before any done or green claim.
 - [[task-record-contract]] for implementation and revision summaries.

@@ -28,6 +28,7 @@ acting.
   evidence shows a durable check execution strategy is needed, subject to
   existing acceptance rules.
 - When event logging is enabled, emit task-record, review, and task-closure workflow-gate events.
+- Select `minimalism: lite` or `minimalism: full` in the task record when task shaping benefits from minimalism. Default is `none`. `ultra` requires explicit human request. Selecting minimalism must not weaken accepted criteria.
 - Record optional `Applicable Project Skills` when host-visible target-project skills are relevant to the task's domain.
 - Review implementation artifacts with the two-pass review from `agenticloop/AGENTIC_LOOP.md`.
 - For GitHub-backed pull request reviews, check existing agent-authored review markers for
@@ -80,7 +81,7 @@ acting.
 - [[blocked-state]] for needs-context or blocked task states.
 - [[decision-capture]] for durable project decisions that constrain future work.
 - [[change-request-gate]] for locked decision changes.
-- [[ponytail]] when the user explicitly asks for YAGNI, lazy mode, or minimal planning/review discipline without dropping accepted criteria.
+- [[ponytail]] when the user explicitly asks for YAGNI, lazy mode, or minimal planning/review discipline; or when the active task record sets `minimalism: lite|full|ultra`.
 - [[task-closeout]] for closeout.
 - [[github-attribution]] when using the GitHub backend.
 

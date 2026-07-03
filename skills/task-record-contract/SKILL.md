@@ -307,6 +307,34 @@ Bug task records must include reproduction status:
 
 A bugfix without a confirmed or explicitly investigated reproduction starts from [[debugging-before-fixes]], not from a speculative patch.
 
+## Frontmatter fields
+
+Task-file frontmatter carries machine-readable current state. Required fields:
+`task_id`, `status`, `backend`. Optional fields include `implementation_artifact`,
+`review_status`, `allowed_paths`, and `minimalism`.
+
+### minimalism
+
+The optional `minimalism` field selects the Ponytail minimalism discipline for
+maintainer and engineer roles. Allowed values: `none`, `lite`, `full`, `ultra`.
+
+- Omitted or `none`: Ponytail is not activated by the task record.
+- `lite`: build what was asked, then briefly mention the lazier alternative.
+- `full`: enforce the minimalism ladder within accepted task scope.
+- `ultra`: aggressively challenge unnecessary work; may recommend descoping.
+
+Maintainer auto-selection may choose at most `full`. `ultra` requires explicit
+human request or authorization because it may recommend descoping.
+
+This is a discipline knob, not a scope reducer. Minimalism must never weaken
+task scope, acceptance criteria, out-of-scope boundaries, required checks, proof
+pressure, TDD, verification evidence, review, blocked-state, change-request
+gates, security, trust-boundary validation, accessibility basics, or explicit
+human requirements.
+
+This is documented and procedural enforcement; there is no new validator for
+the `minimalism` field.
+
 ## Backend enforcement
 
 Before creating a task record, read `.agenticloop/project.md` for the `task_backend`

@@ -52,5 +52,5 @@ is out of scope.
 
 ## Links
 
-- [IMPLEMENTATION_PLAN.md](../IMPLEMENTATION_PLAN.md) - phase status and scope.
+- [PLAN.md](../.dev/PLAN.md) - phase status and scope.
 - [docs/host-adapters.md](host-adapters.md) - adapter status table.
