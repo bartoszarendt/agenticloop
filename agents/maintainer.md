@@ -22,6 +22,10 @@ acting.
 - When decomposing a multi-task unit, record enough parallel-safety data per task for the orchestrator's Parallel Opportunity Scan: owned paths, likely shared or generated files, dependency edges to other tasks in the unit, backend objects owned, and a parallel eligibility verdict (eligible, blocked, or unknown) with a reason. Use the `## Parallel Safety` section in [[task-record-contract]]. Resolve code/collision unknowns with one bounded read-only discovery pass before returning when 2 or more ready tasks could otherwise run in parallel. If an unknown remains, state what stayed unknown and recommend serial for that blocker. Host/lane capability unknowns stay with the orchestrator.
 - After the ready set for a bounded multi-task unit exists, return a batch-level parallelization recommendation for the orchestrator: eligible groupings with collision rationale, or concrete serial reasons.
 - Create or refine task records with concrete scope, out of scope, acceptance criteria, required checks, proof pressure when the work is ambiguous or long-running, and expected files or areas.
+- Estimate `context_overflow_risk` during task creation when the sizing signals
+  suggest one engineer execution may exceed safe active-context headroom. Use
+  the method in [[task-record-contract]]; do not run a separate repository scan
+  just to estimate context.
 - Own accepting, rejecting, superseding, and editing accepted decision records
   under `.agenticloop/decisions/`. Review proposed decisions from other roles.
   May create `proposed` or `accepted` verification-scoped decisions when

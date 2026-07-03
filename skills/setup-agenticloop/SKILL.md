@@ -213,6 +213,11 @@ When helpful, also write these optional backend-confirmation notes:
 - `backend_confirmed_by: <human or maintainer>`
 - `backend_evidence_summary: <one-line backend evidence summary or explicit files exception>`
 
+When the human or target setup already knows the engineer model's active context
+window, the maintainer may also record:
+
+- `engineer_context_window_tokens: <positive integer>`
+
 When `.agenticloop/project.md` already exists:
 
 - Parse the existing frontmatter.
@@ -225,7 +230,7 @@ When `.agenticloop/project.md` does not exist, write a fresh file using the
 project-map shape: YAML frontmatter with `setup_status`,
 `setup_confirmed_at`, `setup_confirmed_by`, `task_backend`,
 `task_id_pattern`, `task_id_regex`, `task_file_template`,
-and optional typed `documents` keys, followed by a
+optional `engineer_context_window_tokens`, and optional typed `documents` keys, followed by a
 `# Agentic Loop Project Map` heading.
 Alternatively, tell the human to run `npx agenticloop init` first, which
 creates the file automatically.

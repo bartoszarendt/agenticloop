@@ -35,7 +35,10 @@ conventions.
 
 ## needs_context
 
-Use `needs_context` when the engineer cannot proceed because the task record is ambiguous, incomplete, or contradictory, but no locked decision needs to change.
+Use `needs_context` when the engineer cannot proceed because the task record is
+ambiguous, incomplete, or contradictory, but no locked decision needs to change.
+Also use it when unexpected context expansion would exceed the task record's
+bounds and the maintainer can split or tighten the task.
 
 ### Neutral rule
 
@@ -54,6 +57,12 @@ Post an issue comment containing:
 
 ```text
 AGENT_TASK_STATUS: needs_context
+```
+
+When context pressure caused the pause, also include:
+
+```text
+AGENT_CONTEXT_REASON: context_overflow
 ```
 
 The maintainer answers in one comment ending with:
@@ -75,7 +84,8 @@ Then append dated notes or questions under `## Comments` or a dedicated blocker 
 - what was checked,
 - what answer is needed,
 - who can answer,
-- the recommended default when one exists.
+- the recommended default when one exists,
+- `context_reason: context_overflow` when context pressure caused the pause.
 
 ## Event Logging
 

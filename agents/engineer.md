@@ -15,6 +15,12 @@ acting.
 
 - Read the task record before editing; if it includes a stepped `## Implementation Notes` plan, treat it as the primary execution prior, verify its assumptions, and record divergences under `## Deviations From Plan` instead of blindly following stale steps.
 - Confirm scope, out of scope, acceptance criteria, required checks, proof pressure when present, and expected files or areas.
+- If the task record sets `context_overflow_risk: medium|high`, keep discovery
+  and tool output tightly tied to the expected files or areas. Summarize
+  intermediate findings or return `needs_context` when unexpected context
+  expansion would exceed the task record's bounds. When returning
+  `needs_context` for this reason, record `context_reason: context_overflow`
+  (files) or `AGENT_CONTEXT_REASON: context_overflow` (GitHub).
 - If the task record sets `minimalism: lite|full|ultra`, read [[ponytail]] before implementation and apply that intensity within accepted scope.
 - Use host-visible target-project skills when they apply to domain-specific work, while keeping Agentic Loop skills as the workflow authority.
 - Use TDD or another explicit verification loop for behavior changes.

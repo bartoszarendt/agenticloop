@@ -100,6 +100,27 @@ describe('validateProjectMap', () => {
     assert.deepEqual(validation.errors, []);
   });
 
+  it('accepts engineer_context_window_tokens as a positive integer', () => {
+    const dir = makeProjectMap([
+      'engineer_context_window_tokens: 256000',
+    ]);
+    const result = loadProjectMap(dir);
+    const validation = validateProjectMap(result.config, result.raw, dir);
+
+    assert.equal(result.config.engineer_context_window_tokens, 256000);
+    assert.deepEqual(validation.errors, []);
+  });
+
+  it('rejects invalid engineer_context_window_tokens values', () => {
+    const dir = makeProjectMap([
+      'engineer_context_window_tokens: "256k"',
+    ]);
+    const result = loadProjectMap(dir);
+    const validation = validateProjectMap(result.config, result.raw, dir);
+
+    assert.ok(validation.errors.some(error => error.includes('engineer_context_window_tokens must be a positive integer')));
+  });
+
   it('rejects invalid event_logging values', () => {
     const dir = makeProjectMap([
       'event_logging: maybe',

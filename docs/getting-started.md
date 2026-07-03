@@ -173,7 +173,8 @@ repo already shows durable GitHub workflow evidence.
 
 `.agenticloop/project.md` is the primary project configuration. Edit its
 frontmatter to record setup confirmation, typed document selections, task ID
-pattern, backend choice, or optional grouping:
+pattern, backend choice, optional grouping, or optional process planning
+conventions:
 
 ```yaml
 ---
@@ -185,6 +186,7 @@ task_id_pattern: "T-<number>"
 task_id_regex: "^T-\\d{3,}$"
 task_file_template: ".agenticloop/tasks/{taskId}.md"
 grouping_profile: flat
+# engineer_context_window_tokens: 256000
 # documents:
 #   plan: "ROADMAP.md"
 ---
@@ -208,6 +210,10 @@ and backend choice have been reviewed for this target project.
 
 `backend_confirmed_at`, `backend_confirmed_by`, and `backend_evidence_summary`
 are optional frontmatter notes for the bounded backend-evidence review.
+
+`engineer_context_window_tokens` is optional. Set it only when the engineer
+model's active context window is known and task sizing should use that value
+instead of the generic examples in Agentic Loop.
 
 To confirm defaults manually, update the setup fields in the same file. Example:
 
@@ -237,8 +243,9 @@ Agentic Loop-owned adapter config uses strict JSON: `agenticloop.json`,
 `agenticloop/config.json`, and `agenticloop/skills/agenticloop-tests.json`. Agentic Loop does
 not own `opencode.jsonc`.
 
-Do not put model IDs or workflow configuration in `.agenticloop/project.md`;
-those belong in `agenticloop.json` under `adapters.<host>.roleSettings`.
+Do not put model IDs, provider names, or reasoning effort settings in
+`.agenticloop/project.md`; those belong in `agenticloop.json` under
+`adapters.<host>.roleSettings`.
 
 Top-level `taskBackend` in `agenticloop.json` is legacy compatibility for
 older targets and should be removed when `.agenticloop/project.md` exists.

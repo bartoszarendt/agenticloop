@@ -79,6 +79,10 @@ allowed pattern. Out-of-scope changed files surface as warnings; reviewers still
 enforce unexpected files through `## Deviations`. The structured field
 complements the human-readable section; it does not replace it.
 
+The issue-body frontmatter may also include `context_overflow_risk: medium|high`
+and optional `context_note` when one engineer execution needs tighter
+active-context discipline.
+
 Apply the configured task label and, when the project uses grouping, the
 configured grouping label. Use `agent-ready` only after the maintainer confirms
 the record is complete enough for implementation.
@@ -121,7 +125,8 @@ Post a comment containing:
 AGENT_TASK_STATUS: needs_context
 ```
 
-State what is missing and who can answer.
+Add `AGENT_CONTEXT_REASON: context_overflow` when context pressure caused the
+pause. State what is missing and who can answer.
 
 ### Mark Blocked
 
@@ -365,7 +370,8 @@ summary source, not the Outcome source.
 
 When `## Outcome` is conditionally required (review rounds > 1, failed or
 triaged checks, blocked/needs_context state, scope drift, stale evidence, human
-intervention, or follow-ups), the maintainer must post it as a durable issue
+intervention, predicted medium/high context overflow risk, context pressure
+encountered, or follow-ups), the maintainer must post it as a durable issue
 comment before or during closeout.
 
 ### Run Closeout

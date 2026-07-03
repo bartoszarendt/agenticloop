@@ -11,6 +11,10 @@ setup_status: unconfirmed
 setup_confirmed_at: ""
 setup_confirmed_by: ""
 
+# Optional planning convention. Set when the engineer model's active context
+# window is known and differs from the task-sizing examples in Agentic Loop.
+# engineer_context_window_tokens: 256000
+#
 # Optional backend confirmation notes. Use these when setup reviews bounded
 # backend evidence or when files is kept as an explicit exception.
 # backend_confirmed_at: "2026-06-16"
@@ -45,8 +49,9 @@ setup_confirmed_by: ""
 # Agentic Loop Project Map
 
 This file is target-owned. Edit it to record task naming, optional grouping,
-backend choice, and typed source-document selections for this project. Do not
-put model IDs here; those belong in `agenticloop.json` under
+backend choice, typed source-document selections, and optional process planning
+conventions for this project. Do not put model IDs here; those belong in
+`agenticloop.json` under
 `adapters.<host>.roleSettings`, created by `agenticloop init --adapter <host>`.
 
 ## Setup State

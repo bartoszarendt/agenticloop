@@ -17,6 +17,11 @@ minimalism: none
 # concrete reason. They never loosen the deliberately-tighter no-progress guards.
 attempt_budget: 3
 review_budget: 3
+# Context overflow risk: stored values are medium | high. Omit for ordinary
+# low-risk tasks; do not write "low". Add context_note only when medium/high
+# changes delegation or stop behavior.
+# context_overflow_risk:
+# context_note:
 # Structured scope map: repo-relative glob patterns for mechanical changed-file
 # validation. Examples: ["src/example.js", "test/example.test.js", "docs/"].
 # Leave empty or omit to rely on the human-readable `## Expected Files or Areas`
@@ -118,6 +123,7 @@ here so the engineer knows what evidence to publish.
 - [ ] Unexpected files are justified in `## Deviations From Plan`.
 - [ ] Required checks were rerun on the final state with fresh output.
 - [ ] If `## Proof Pressure` is present, completion oracle, final proof, and likely misfire were checked.
+- [ ] If `context_overflow_risk: medium|high` was set or context pressure was encountered, `## Outcome` records `context_pressure_encountered: true|false`.
 - [ ] The durable task record includes the current implementation summary.
 - [ ] The implementation artifact is linked to the task record.
 - [ ] If parallel delegation was used, the concurrency plan was followed and the join condition was met.
@@ -130,7 +136,8 @@ here so the engineer knows what evidence to publish.
 Optional for routine clean tasks. Conditionally required at closeout when any
 of these happened: review_rounds > 1, failed or triaged checks,
 blocked/needs_context state, scope drift, stale evidence, human intervention,
-or follow-ups. Reuses the existing X-02 fields; do not add a new schema.
+predicted medium/high context overflow risk, context pressure encountered, or
+follow-ups.
 
 Maintainer-filled at closeout. Records structured signal for later
 loop-improvement pattern mining.
@@ -147,6 +154,7 @@ during review events.
 - **scope_drift_detected**: `true` | `false`.
 - **stale_evidence_detected**: `true` | `false`.
 - **human_intervention_required**: `true` | `false`.
+- **context_pressure_encountered**: `true` | `false`.
 
 ## Comments
 

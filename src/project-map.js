@@ -85,6 +85,15 @@ function normalizeRawFrontmatter(raw) {
     else delete normalized.event_logging_command;
   }
 
+  if (typeof normalized.engineer_context_window_tokens === 'string') {
+    const trimmedTokens = normalized.engineer_context_window_tokens.trim();
+    if (/^\d+$/.test(trimmedTokens)) {
+      normalized.engineer_context_window_tokens = Number(trimmedTokens);
+    } else {
+      normalized.engineer_context_window_tokens = trimmedTokens;
+    }
+  }
+
   return normalized;
 }
 
@@ -184,6 +193,15 @@ export function validateProjectMap(config, raw, repoRoot) {
 
   if (raw.event_logging_command !== undefined && typeof raw.event_logging_command !== 'string') {
     errors.push('project.md: event_logging_command must be a string when provided');
+  }
+
+  // Planning-only convention consumed by role instructions; it does not route
+  // models or change adapter generation.
+  if (
+    raw.engineer_context_window_tokens !== undefined &&
+    (!Number.isInteger(raw.engineer_context_window_tokens) || raw.engineer_context_window_tokens <= 0)
+  ) {
+    errors.push('project.md: engineer_context_window_tokens must be a positive integer when provided');
   }
 
   if (!config.task_id_pattern) {

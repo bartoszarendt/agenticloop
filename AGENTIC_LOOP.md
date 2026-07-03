@@ -193,6 +193,11 @@ set authorization is not permission to create one oversized task record; task
 sets still decompose into ordinary task records using the configured backend
 and task ID convention.
 
+Right-sized also accounts for active-context headroom. A task that is one
+deliverable but likely cannot fit inside one engineer execution with safety
+headroom is still too large; split it or tighten the expected files, checks, and
+discovery bounds before implementation.
+
 A work unit may authorize a whole task set, but materializing durable task
 records for that set is incremental. Decomposition can be one planning pass;
 full task records should be written in bounded chunks of one record by default,
@@ -621,8 +626,10 @@ required checks.
 `## Outcome` is optional for routine clean tasks. It becomes conditionally
 required at closeout when any of the following happened: review rounds > 1,
 failed or triaged checks, blocked/needs_context state, scope drift, stale
-evidence, human intervention, or follow-ups. The section reuses the existing
-X-02 fields; do not add a new schema.
+evidence, human intervention, predicted medium/high context overflow risk,
+context pressure encountered, or follow-ups. The section uses the task-record
+Outcome fields, including `context_pressure_encountered`, for later pattern
+mining.
 
 ## Task Backends
 
@@ -912,11 +919,13 @@ For each task:
 2. Identify expected files, commands, and risks.
 3. For behavior changes, create a failing test or failing check first.
 4. Implement the smallest useful slice by default.
-5. Run the focused check.
-6. Run the required checks.
-7. Publish the implementation summary with evidence in the backend's canonical
+5. Summarize or return `needs_context` when unexpected context expansion exceeds
+   the task record's bounds.
+6. Run the focused check.
+7. Run the required checks.
+8. Publish the implementation summary with evidence in the backend's canonical
    location.
-8. Request review.
+9. Request review.
 
 The default sizing is one independently verifiable task at a time, the smallest
 useful implementation slice. When a human authorizes a larger bounded run,
@@ -989,7 +998,8 @@ the dispute with evidence rather than repeated assertion.
 ## Blocked and Needs Context
 
 Use `needs_context` when the task record is incomplete but the maintainer can
-answer or amend it.
+answer or amend it, or when unexpected context expansion means the task must be
+split or tightened before implementation can continue.
 
 Use `blocked` when progress requires a human decision, missing credentials,
 unavailable services, merge conflict resolution, or another external action.
@@ -997,12 +1007,14 @@ unavailable services, merge conflict resolution, or another external action.
 For files-backed work, record durable state in the task file:
 
 - `status: needs_context` plus dated questions or notes under `## Comments` when
-  the maintainer can answer,
+  the maintainer can answer. Use `context_reason: context_overflow` in the note
+  when context pressure caused the pause,
 - `status: blocked` plus `block_category: <category>` and a blocker section when
   an external action or human decision is required.
 
 For GitHub-backed work, `needs_context` is a task-record comment containing
-`AGENT_TASK_STATUS: needs_context`.
+`AGENT_TASK_STATUS: needs_context`. Add
+`AGENT_CONTEXT_REASON: context_overflow` when context pressure caused the pause.
 
 GitHub-backed blocked tasks carry both:
 

@@ -181,6 +181,8 @@ Optional frontmatter conventions:
 - `type: change-request` for locked-decision changes that require the docs-first approval gate.
 - `approved: true` after a human approves a files-backed change request.
 - `block_category: <category>` while the task is blocked.
+- `context_overflow_risk: medium|high` plus optional `context_note` when one
+  engineer execution needs tighter active-context discipline.
 
 ## Operations
 
@@ -235,7 +237,8 @@ Set:
 status: needs_context
 ```
 
-Append a comment explaining what is missing and who can answer.
+Append a comment explaining what is missing and who can answer. Include
+`context_reason: context_overflow` when context pressure caused the pause.
 
 ### Mark Blocked
 

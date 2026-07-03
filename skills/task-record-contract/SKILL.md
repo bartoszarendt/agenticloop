@@ -49,9 +49,9 @@ It defines the ordered required sections and the optional `Proof Pressure`,
 The `## Outcome` section is optional for routine clean tasks, maintainer-filled
 at closeout. It becomes conditionally required when any of these happened:
 review_rounds > 1, failed or triaged checks, blocked/needs_context state, scope
-drift, stale evidence, human intervention, or follow-ups. It reuses the existing
-X-02 fields; do not add a new schema. It never replaces acceptance criteria or
-proof pressure.
+drift, stale evidence, human intervention, predicted medium/high context
+overflow risk, context pressure encountered, or follow-ups. It never replaces
+acceptance criteria or proof pressure.
 
 ## Proof pressure
 
@@ -100,7 +100,10 @@ true:
   user-facing surfaces;
 - the source plan describes phase, milestone, epic, or roadmap-altitude work
   rather than one focused change;
-- one slice can be implemented, checked, reviewed, or reverted without the rest.
+- one slice can be implemented, checked, reviewed, or reverted without the rest;
+- estimated engineer context load would likely exceed the safe single-task
+  ceiling even though the item has one deliverable, for example because the work
+  requires broad discovery or one very large surface.
 
 When decomposition is needed, create ordinary task records using the configured
 backend and task ID convention. Preserve the source plan item in `Source
@@ -133,6 +136,7 @@ containing, for each task:
 - dependency edges
 - expected owned files/areas
 - initial parallel eligibility
+- context overflow risk when medium or high
 
 After each record or bounded batch:
 
@@ -243,6 +247,44 @@ When `allowed_paths` is present, `agenticloop validate` performs a warn-only mec
 If implementation changes an unexpected file, the implementation summary must explain why. Review treats unexplained unexpected files as a scope issue under [[review-and-accept]].
 Bundling an incidental toolkit, dependency, or asset-refresh change into a task that does not require it is the same scope violation. If a refresh is genuinely needed, it is its own task and its own artifact.
 
+## Context overflow risk
+
+Context overflow risk estimates whether one engineer execution can stay within
+the model's active context window with safety headroom. It is not a precise token
+count, billing estimate, or license to relax scope.
+
+Use cheap sizing signals already needed for task creation: breadth of expected
+files or areas, known input size, likely tool output, required discovery,
+debug/revision risk, and whether one surface is unusually large. Do not perform
+a separate repository scan or file-content measurement pass just to estimate
+context. Tokenize known input mechanically when a cheap tokenizer is available;
+otherwise store only the risk verdict.
+
+Use `.agenticloop/project.md` `engineer_context_window_tokens` when present, or
+the engineer model's known active context window otherwise. Do not target the
+full window. Reserve roughly 25-35% for role prompts, task record text,
+tool-output surprises, review feedback, and final summary. Scale the ladder from
+the active context window `W`: below about `0.25 * W` is normally low when
+uncertainty is low; `0.25-0.55 * W` is medium when it changes engineer context
+discipline; `0.55-0.75 * W` is high and should be tightened or split unless
+justified; above `0.75 * W` should decompose; above `0.85 * W` must not be
+delegated as one engineer task. For a 256k window, those cutoffs are roughly
+60k, 140k, 190k, and 220k.
+
+Record `context_overflow_risk: medium` or `high` only when it changes behavior.
+Add a one-line `context_note` for medium or high risk. Omit the fields for
+ordinary low-risk tasks; do not write `context_overflow_risk: low`. Medium risk
+is an engineer context-discipline signal. High risk is an orchestrator split or
+tightening signal unless the task record gives a concrete reason one engineer
+execution can stay within safe active-context headroom. A medium or high verdict
+tells the engineer to summarize or return `needs_context` if unexpected
+discovery would expand beyond the task record.
+
+At closeout, record `context_pressure_encountered: true|false` in `## Outcome`
+when the task had medium/high risk or actually hit context pressure. This
+calibrates the estimate without storing raw prompts, token streams, or tool
+output.
+
 ## Implementation notes
 
 `## Implementation Notes` records constraints, sequencing, or migration notes.
@@ -311,8 +353,8 @@ A bugfix without a confirmed or explicitly investigated reproduction starts from
 
 Task-file frontmatter carries machine-readable current state. Required fields:
 `task_id`, `status`, `backend`. Optional fields include `implementation_artifact`,
-`review_status`, `allowed_paths`, `minimalism`, `attempt_budget`, and
-`review_budget`.
+`review_status`, `allowed_paths`, `minimalism`, `attempt_budget`,
+`review_budget`, `context_overflow_risk`, and `context_note`.
 
 ### minimalism
 

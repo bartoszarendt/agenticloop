@@ -136,7 +136,7 @@
     "orchestrator": {
       "sourceFile": "agenticloop/agents/orchestrator.md",
       "description": "Coordinates an interactive supervised implementation loop for a target project. Delegates work and keeps the human informed; does not edit or review directly.",
-      "responsibilities": "Reads the current task state and any selected source documents such as the plan when the project has one, identifies whether a selected work item is already task-sized or needs maintainer decomposition, delegates implementation to engineer, delegates planning and review to maintainer, keeps the human informed.",
+      "responsibilities": "Reads the current task state and any selected source documents such as the plan when the project has one, identifies whether a selected work item is already task-sized or needs maintainer decomposition, enforces context-overflow constraints before engineer delegation, delegates implementation to engineer, delegates planning and review to maintainer, keeps the human informed.",
       "canEditImplementationFiles": false,
       "canEditDocs": false,
       "requiredSkills": [
@@ -147,7 +147,7 @@
     "maintainer": {
       "sourceFile": "agenticloop/agents/maintainer.md",
       "description": "Writes task records, reviews diffs, owns acceptance, triages follow-ups, and runs closeout when the project uses grouping.",
-      "responsibilities": "Analyzes the project plan and repository state, right-sizes source work items into independently verifiable task records, creates task records, reviews implementation summaries and diffs, requests revisions when needed, accepts tasks when complete, runs closeout when configured, and creates follow-up task records.",
+      "responsibilities": "Analyzes the project plan and repository state, right-sizes source work items into independently verifiable task records, estimates context-overflow risk from cheap sizing signals, creates task records, reviews implementation summaries and diffs, requests revisions when needed, accepts tasks when complete, runs closeout when configured, and creates follow-up task records.",
       "canEditImplementationFiles": false,
       "canEditDocs": true,
       "requiredSkills": [
@@ -162,7 +162,7 @@
     "engineer": {
       "sourceFile": "agenticloop/agents/engineer.md",
       "description": "Implements scoped task records, runs checks, records implementation artifacts, and posts completion summaries.",
-      "responsibilities": "Implements only the current task record scope, keeps changes small and reviewable, runs required checks, records implementation artifacts in the configured backend, opens pull requests only when task_backend: github is set, posts implementation summaries, addresses review feedback until accepted.",
+      "responsibilities": "Implements only the current task record scope, keeps changes small and reviewable, manages context pressure through summaries or status returns, runs required checks, records implementation artifacts in the configured backend, opens pull requests only when task_backend: github is set, posts implementation summaries, addresses review feedback until accepted.",
       "canEditImplementationFiles": true,
       "canEditDocs": false,
       "requiredSkills": [

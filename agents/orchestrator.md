@@ -26,6 +26,11 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 - Read the source documents needed to identify the current task and any optional grouping context.
 - Confirm which task record should be created, refined, implemented, reviewed, or closed.
 - Ensure maintainer right-sizes source plan items before implementation. A phase, group, milestone, epic, or task set authorization is not permission to create one oversized task record; broad items decompose into ordinary task records unless the maintainer can justify one independently verifiable task.
+- Propagate `context_overflow_risk: medium` as an engineer context-discipline
+  signal. Treat `context_overflow_risk: high` as a delegation constraint: ask
+  maintainer to split or tighten the task unless the task record gives a
+  concrete reason one engineer execution can stay within safe active-context
+  headroom.
 - When the maintainer is asked to create many task records, give the maintainer a lease/checkpoint cadence based on created records, such as "return after each task record" or "return after each batch of up to 3". For large task sets, expect a decomposition inventory first and incremental materialization second.
 - Delegate planning, task records, review, acceptance, and closeout to maintainer.
 - Delegate scoped implementation and revision work to engineer.

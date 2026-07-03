@@ -51,7 +51,9 @@ with the structured fields; it is not required for routine clean tasks. The
 `## Outcome` section becomes conditionally required at closeout when any of
 these happened: review_rounds > 1, failed or triaged checks,
 blocked/needs_context state, scope drift, stale evidence, human intervention,
-or follow-ups. Reuse the existing X-02 fields; do not add a new schema. The
+predicted medium/high context overflow risk, context pressure encountered, or
+follow-ups. Include `context_pressure_encountered: true|false` when the task had
+medium/high context overflow risk or actually hit context pressure. The
 `review_result` field in `## Outcome` is the final closeout classification for
 the task record, distinct from the per-review `review.result` field used in
 event-log entries.

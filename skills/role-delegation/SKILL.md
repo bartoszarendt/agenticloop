@@ -204,14 +204,14 @@ Scope:             <what the role should do>
 Out of scope:      <what the role must not do>
 Expected output:   <what the role should produce>
 Stop condition:    <when the role must stop and return to orchestrator or human>
-Budgets:           <omit when all defaults; else `minimalism=<lite|full|ultra>; attempt_budget=<n>; review_budget=<n>` for the non-default task-record effort bounds>
+Budgets:           <omit when all defaults/low; else `minimalism=<lite|full|ultra>; attempt_budget=<n>; review_budget=<n>; context_overflow_risk=<medium|high>` for non-default task-record constraints>
 Concurrency:       `serial -- reason: <concrete blocker>`, or `parallel batch <id> -- lanes: <n>/3; join: <condition>`
 Lease:             <observable-step checkpoint cadence, no-progress budget, and any relevant max duration or milestone>
 ```
 
 Do not omit scope, out of scope, expected output, stop condition, or Operating facts for real delegation. Use explicit `none` for inapplicable fields. The payload mechanism is a doc pointer or `none`, never a copied command recipe.
 
-`Budgets:` propagates the task record's non-default `minimalism`, `attempt_budget`, and `review_budget` so the role does not have to infer them. Omit the line entirely when the task record leaves all three at their defaults; the role still reads the task record. Reaching a budget means return status, not push past it -- this restates the task-record effort bounds and the Attempt Budget and Review Round Checkpoint in `agenticloop/AGENTIC_LOOP.md`; it does not add a new limit. The existing `Stop condition:` and `Lease:` lines still carry the stop semantics.
+`Budgets:` propagates the task record's non-default `minimalism`, `attempt_budget`, `review_budget`, and medium/high `context_overflow_risk` so the role does not have to infer them. Omit the line entirely when the task record leaves all discipline, effort, and context-risk signals at defaults or low; the role still reads the task record. Reaching a budget means return status, not push past it -- this restates the task-record effort bounds and the Attempt Budget and Review Round Checkpoint in `agenticloop/AGENTIC_LOOP.md`; it does not add a new limit. Medium context overflow risk is an engineer discipline signal; high context overflow risk is a split-or-tighten signal unless the task record justifies one engineer execution. Medium/high context overflow risk means the role must summarize or return status when unexpected context expansion would exceed the task record's bounds. The existing `Stop condition:` and `Lease:` lines still carry the stop semantics.
 
 
 ## Context Read Discipline
