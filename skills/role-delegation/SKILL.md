@@ -130,12 +130,30 @@ concurrency plan: lane id/type, role, read/write mode, owned backend objects,
 worktree path/branch for file-mutating lanes, artifact, allowed files/areas,
 collision risks, liveness cadence, stop condition, and join condition.
 
-File-mutating write lanes need one `git worktree` and branch per lane at
-`.agenticloop/worktrees/<task-id>`, never a `../sibling`; GitHub lanes also need
-their own issue and PR. No batch PR merges until every lane has returned,
-maintainer review is complete, cross-branch risk is checked, and human approves
-merge order. Coordination/review lanes own distinct backend objects; files-backed
-non-Git parallel write lanes are not allowed.
+File-mutating write lanes need one worktree and branch per lane, created with
+`npx agenticloop worktree add <task-id> <branch> [--from <ref>]` at
+`.agenticloop/worktrees/<task-id>`. Raw `git worktree add` is not valid for
+ordinary lanes; a `../sibling` outside the repository root requires an explicit
+external-worktree exception and immediate `npx agenticloop worktree guard --fix
+<path>`. GitHub lanes also need their own issue and PR. No batch PR merges until
+every lane has returned, maintainer review is complete, cross-branch risk is
+checked, and human approves merge order. Coordination/review lanes own distinct
+backend objects; files-backed non-Git parallel write lanes are not allowed.
+
+Git and `gh` in delegated lanes must be non-interactive. `npx agenticloop
+worktree add` installs worktree-scoped Git guard config; use `npx agenticloop
+worktree guard --fix --all` to repair existing Agentic Loop worktrees. Set or
+require the host or lane environment guard from `agenticloop/AGENTIC_LOOP.md`.
+Use explicit or file-backed commit messages (`git commit -m` or `git commit -F`),
+`git --no-pager` for read commands when needed, `git merge --no-edit`,
+`gh pr create --title ... --body-file ...`, and
+`git -c core.editor=true -c sequence.editor=true rebase --continue` only after
+conflicts are deliberately resolved and staged. Do not run bare `git commit`,
+`git rebase -i`, `git tag -a`, `git config --edit`, or other editor-backed Git
+commands in unattended work. If a lane is already blocked on an editor, pager, or
+credential prompt, abort or return status instead of waiting indefinitely.
+`credential.interactive=false` is a Git-version-dependent config guard; keep the
+session environment guard for coordinator work and credential prompts.
 
 ## Event Logging
 

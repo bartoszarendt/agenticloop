@@ -297,12 +297,21 @@ review marker, or run a fresh review.
 disjoint expected files or areas, and no shared generated files, lockfiles,
 schema, API, or external-state collision. A branch alone is not sufficient when
 multiple agents share one checkout. Copying selected touched files into a
-temporary folder is not valid isolation. Create each lane worktree at a
-repo-internal path (`git worktree add .agenticloop/worktrees/<task-id>
-<branch>`), never as a `../sibling` outside the repository root -- an external
-worktree falls outside the host's workspace sandbox and triggers an
-access-prompt that stalls autonomous runs. See Worktree placement in
-`agenticloop/AGENTIC_LOOP.md`.
+temporary folder is not valid isolation. Create each lane worktree with
+`npx agenticloop worktree add <task-id> <branch> [--from <ref>]`, which places it
+under `.agenticloop/worktrees/<task-id>`. Raw `git worktree add` is not valid for
+ordinary lanes. Never create a `../sibling` outside the repository root unless a
+human-approved external-worktree exception is recorded and guard repair is run as
+described in Worktree placement in `agenticloop/AGENTIC_LOOP.md`.
+
+Implementation lanes must also run Git and `gh` non-interactively. `npx
+agenticloop worktree add` installs worktree-scoped Git guard config; use `npx
+agenticloop worktree guard --fix --all` to repair existing Agentic Loop
+worktrees. Also set the host or lane environment guard from
+`agenticloop/AGENTIC_LOOP.md`, use explicit commit messages or file-backed
+messages, use `gh pr create --title ... --body-file ...`, and do not run
+editor-backed commands such as bare `git commit`, `git rebase -i`, `git tag -a`,
+`git config --edit`, or `gh pr create --editor`.
 
 **Coordination/review lanes.** Parallel maintainer or orchestrator lanes that
 mutate GitHub backend state -- issues, PRs, labels, review comments, status

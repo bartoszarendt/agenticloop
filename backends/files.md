@@ -38,11 +38,11 @@ no lane mutates repository files or task records.
 **Write lanes in a Git repository.** Each parallel write lane -- whether it
 mutates implementation files, task records, or other tracked state -- requires:
 
-- its own `git worktree` at a repo-internal path (`git worktree add
-  .agenticloop/worktrees/<task-id> <branch>`), never a `../sibling` outside the
-  repository root -- an external worktree falls outside the host's workspace
-  sandbox and triggers an access-prompt that stalls autonomous runs (see
-  Worktree placement in `agenticloop/AGENTIC_LOOP.md`),
+- its own repo-internal worktree created with `npx agenticloop worktree add
+  <task-id> <branch> [--from <ref>]`; raw `git worktree add` is not valid for
+  ordinary lanes, and a `../sibling` outside the repository root requires the
+  explicit external-worktree exception and guard repair described in Worktree
+  placement in `agenticloop/AGENTIC_LOOP.md`,
 - its own local branch,
 - its own `.agenticloop/tasks/<TASK-ID>.md` task file or explicitly owned
   workflow file(s),
@@ -55,6 +55,13 @@ mutates implementation files, task records, or other tracked state -- requires:
 
 A branch alone is not sufficient when multiple agents share one checkout.
 Copying selected touched files into a temporary folder is not valid isolation.
+Each lane must run Git non-interactively. `npx agenticloop worktree add` installs
+worktree-scoped Git guard config; use `npx agenticloop worktree guard --fix --all`
+to repair existing Agentic Loop worktrees. Also set the host or lane environment
+guard from `agenticloop/AGENTIC_LOOP.md` for Git and GitHub CLI prompts, use
+explicit commit messages or file-backed messages, and do not run editor-backed
+commands such as bare `git commit`, `git rebase -i`, `git tag -a`, or
+`git config --edit`.
 
 Integration of parallel files-backed lanes is serial. After the implementation
 join, prefer bounded parallel coordination/review lanes when each lane owns

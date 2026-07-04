@@ -24,6 +24,7 @@ import { resolveRoleModel } from './adapters/shared.js';
 import { generatedCopilotArtifactsPresent } from './adapters/copilot.js';
 import { generatedCursorArtifactsPresent } from './adapters/cursor.js';
 import { detectSetupState, formatSetupChecklist, nextStepsFromState } from './setup-state.js';
+import { formatGitGuardDoctor } from './worktree.js';
 
 function hasModelSettings(adapterCfg, roles) {
   const rs = adapterCfg?.roleSettings ?? {};
@@ -311,6 +312,9 @@ export function printDoctor(repoRoot) {
       console.log(`    ${missing}`);
     }
   }
+
+  console.log();
+  console.log(formatGitGuardDoctor(repoRoot));
 
   const steps = nextStepsFromState(state);
   console.log();

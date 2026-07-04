@@ -24,6 +24,16 @@ unless the human explicitly asks. Respect the Advance Authorization Boundary,
 blocked-state handling, decision records, event logging rules, and configured
 group approval gates.
 
+Before running Git or `gh` in unattended role work, keep them non-interactive.
+Prefer a host/session environment with `GIT_EDITOR=true`,
+`GIT_SEQUENCE_EDITOR=true`, `GIT_PAGER=cat`, `GIT_TERMINAL_PROMPT=0`,
+`GH_EDITOR=true`, `GH_PAGER=cat`, and `GH_PROMPT_DISABLED=1`; otherwise apply
+equivalent per-command settings such as `git --no-pager ...`, explicit
+`git commit -m/-F`, `gh pr create --title ... --body-file ...`, and
+`git -c core.editor=true -c sequence.editor=true rebase --continue` after
+resolved conflicts. Do not launch editor-backed Git or GitHub CLI commands that
+can block on a human closing a message, todo, pager, or credential prompt.
+
 Agentic Loop is serial by default. Do not run parallel maintainer or engineer
 delegations unless the orchestrator records a concurrency plan and join
 condition. Long-running or parallel role work must include a lease:

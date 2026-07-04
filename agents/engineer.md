@@ -53,6 +53,15 @@ acting.
   scratch files after use unless retained with a stated reason. Do not re-derive
   shell quoting when the delegation prompt, backend doc, or adapter doc already
   names the safe payload mechanism.
+- Keep Git and `gh` non-interactive in unattended work: use explicit or
+  file-backed commit and PR body messages, `git --no-pager` for read commands
+  when needed, `git merge --no-edit`, `gh pr create --title ... --body-file ...`,
+  and `git -c core.editor=true -c sequence.editor=true rebase --continue` only
+  after conflicts are resolved and staged. Do not run bare `git commit`,
+  `git rebase -i`, `git tag -a`, `git config --edit`, `gh pr create --editor`, or
+  other commands that depend on a human closing an editor, pager, or prompt. If
+  Git or `gh` is already waiting on one, return status or a blocker instead of
+  waiting.
 
 ## Edit Boundary
 

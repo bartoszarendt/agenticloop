@@ -115,6 +115,14 @@ alone is not sufficient in a shared checkout. The lease progress checkpoint is a
 return-to-orchestrator checkpoint cadence, not an async heartbeat, unless the
 host exposes running-subagent status.
 
+Launch Cursor sessions that run Agentic Loop with non-interactive Git
+environment variables (`GIT_EDITOR=true`, `GIT_SEQUENCE_EDITOR=true`,
+`GIT_PAGER=cat`, `GIT_TERMINAL_PROMPT=0`, `GH_EDITOR=true`, `GH_PAGER=cat`,
+`GH_PROMPT_DISABLED=1`) as described in
+[Host Adapters](host-adapters.md#non-interactive-git-environment). This prevents
+unattended lanes from blocking on `COMMIT_EDITMSG`, interactive rebase todo
+files, pagers, PR prompts, or credential prompts.
+
 ## What this MVP does not generate
 
 These Cursor customization surfaces remain user or team-owned:

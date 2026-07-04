@@ -45,6 +45,40 @@ The bundled catalog is a convenience fallback with source and freshness
 metadata; it may become stale and is never treated as a complete current
 source of truth.
 
+## Non-Interactive Git Environment
+
+Launch Agentic Loop host sessions with Git editor, pager, and terminal prompts
+neutralized so unattended lanes fail or accept prepared messages instead of
+hanging on VS Code, Vim, a pager, or credential input. Include GitHub CLI prompt
+guards when the project uses the GitHub backend:
+
+```powershell
+$env:GIT_EDITOR = 'true'
+$env:GIT_SEQUENCE_EDITOR = 'true'
+$env:GIT_PAGER = 'cat'
+$env:GIT_TERMINAL_PROMPT = '0'
+$env:GH_EDITOR = 'true'
+$env:GH_PAGER = 'cat'
+$env:GH_PROMPT_DISABLED = '1'
+```
+
+The same values can be set in Bash with `export`. These environment variables
+override the user's global Git and GitHub CLI editor and pager only for the
+launched session. Agents should still use explicit-message, file-backed, and
+no-pager commands, but the environment is the backstop when a conflict
+continuation, PR command, or read command would otherwise open an interactive
+surface.
+
+Use `npx agenticloop worktree add <task-id> <branch> [--from <ref>]` for
+delegated write lanes. It creates `.agenticloop/worktrees/<task-id>`, ignores the
+worktree parent through `.git/info/exclude`, and writes worktree-scoped Git guard
+config. Use `npx agenticloop worktree guard --fix --all` to repair existing
+Agentic Loop worktrees, and `npx agenticloop doctor` to report missing guards.
+The main checkout is intentionally not repaired by the worktree guard, so
+coordinator Git or `gh` commands rely on the session environment above.
+`credential.interactive=false` is written for Git versions that support it;
+`GIT_TERMINAL_PROMPT=0` remains the portable credential-prompt backstop.
+
 | Host | Status | Adapter output | Generation command |
 |---|---|---|---|
 | OpenCode | supported | `.opencode/agents/*.md` plus `.opencode/commands/agenticloop.md` | `agenticloop generate opencode` |

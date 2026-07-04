@@ -12,6 +12,8 @@
  *   agenticloop event-logging validate [--target <dir>] [--output <file>]
  *   agenticloop event-logging audit --task <id> [--target <dir>] [--require a,b,c]
  *   agenticloop event-logging report [--task <id>] [--target <dir>]
+ *   agenticloop worktree add <task-id> <branch> [--from <ref>] [--target <dir>]
+ *   agenticloop worktree guard [--fix] [--all|<path>] [--target <dir>]
  *   agenticloop bootstrap-labels [--repo <r>] [--dry-run] [--group <g>] [--task-id <id>]
  *   agenticloop generate opencode     [--target <dir>] [--output-dir <dir>]
  *   agenticloop generate codex        [--target <dir>] [--output-dir <dir>]
@@ -74,6 +76,11 @@ import {
 } from './event-logging.js';
 import { runValidation } from './validate-runner.js';
 import { runPreflight, PreflightError } from './github-preflight.js';
+import {
+  createAgenticLoopWorktree,
+  formatWorktreeGuardResult,
+  guardAgenticLoopWorktrees,
+} from './worktree.js';
 
 function toCamelCase(s) {
   return s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
@@ -220,6 +227,7 @@ Commands:
   github-preflight      Pre-review gate: verify a GitHub PR body carries final-state
                         evidence for every required check, tied to the current head.
   doctor                Show setup checklist, adapter state, and next commands.
+  worktree              Create or check guarded Agentic Loop Git worktrees.
   event-logging         Write events (bare event type), validate, audit, or report optional durable workflow event logs.
   event                 Compatibility alias for event-logging.
   configure models      Set per-host role model settings in agenticloop.json.
@@ -251,6 +259,15 @@ Options (github-preflight):
 
 Options (doctor):
   --target <dir>        Directory to inspect (default: current directory).
+
+Options (worktree add):
+  --target <dir>        Git repository root or working tree (default: current directory).
+  --from <ref>          Start point for a new branch (default: HEAD).
+
+Options (worktree guard):
+  --target <dir>        Git repository root or working tree (default: current directory).
+  --fix                 Write missing non-interactive Git guard config.
+  --all                 Check or fix every Agentic Loop worktree under .agenticloop/worktrees/.
 
 Options (update):
   --target <dir>        Target directory (default: current directory).
@@ -1240,6 +1257,74 @@ async function cmdStatus(args) {
   printAdapterDiscovery(target);
 }
 
+async function cmdWorktree(args) {
+  const sub = args[0];
+  if (!sub) {
+    console.error('worktree requires a subcommand: add | guard');
+    process.exitCode = 1;
+    return;
+  }
+
+  try {
+    if (sub === 'add') {
+      const { opts, positional } = parseArgs(args.slice(1));
+      const [taskId, branch] = positional;
+      if (!taskId || !branch || positional.length !== 2) {
+        console.error('Usage: agenticloop worktree add <task-id> <branch> [--from <ref>] [--target <dir>]');
+        process.exitCode = 1;
+        return;
+      }
+      if (opts.from === true) {
+        console.error('--from requires a ref value');
+        process.exitCode = 1;
+        return;
+      }
+      const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
+      const result = createAgenticLoopWorktree({
+        target,
+        taskId,
+        branch,
+        from: opts.from,
+      });
+      console.log('Created Agentic Loop worktree:');
+      console.log(`  path: ${result.path}`);
+      console.log(`  branch: ${result.branch}`);
+      console.log(`  from: ${result.from ?? '(existing branch)'}`);
+      console.log(`  git guard: ${result.guard.ok ? 'configured' : 'missing'}`);
+      if (result.ignored) {
+        console.log('  ignored: .agenticloop/worktrees/');
+      }
+      process.exitCode = 0;
+      return;
+    }
+
+    if (sub === 'guard') {
+      const { opts, positional } = parseArgs(args.slice(1));
+      if (positional.length > 1) {
+        console.error('Usage: agenticloop worktree guard [--fix] [--all|<path>] [--target <dir>]');
+        process.exitCode = 1;
+        return;
+      }
+      const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
+      const result = guardAgenticLoopWorktrees({
+        target,
+        path: positional[0],
+        all: Boolean(opts.all),
+        fix: Boolean(opts.fix),
+      });
+      console.log(formatWorktreeGuardResult(result));
+      process.exitCode = result.ok ? 0 : 1;
+      return;
+    }
+
+    console.error(`Unknown worktree subcommand: ${sub}`);
+    process.exitCode = 1;
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+  }
+}
+
 async function cmdBootstrapLabels(args) {
   const { opts } = parseArgs(args);
   const target = opts.target ? resolve(opts.target) : process.cwd();
@@ -1353,6 +1438,9 @@ switch (command) {
     break;
   case 'doctor':
     await cmdDoctor(rest);
+    break;
+  case 'worktree':
+    await cmdWorktree(rest);
     break;
   case 'event-logging':
     await cmdEvent(rest, 'event-logging');

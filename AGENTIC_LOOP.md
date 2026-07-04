@@ -345,16 +345,41 @@ Safe parallel work is limited to:
   collisions. Copying selected touched files into a temporary folder is not
   valid isolation and must not be used as a substitute for a real worktree.
 
-**Worktree placement.** Create each lane worktree at a repo-relative path inside
-the repository root -- `git worktree add .agenticloop/worktrees/<task-id>
-<branch>` -- never as a `../sibling` directory outside the root. A worktree
-outside the repository root falls outside the host's workspace sandbox and
-triggers an external-directory access prompt that stalls autonomous runs. Keep
-the worktree parent directory (`.agenticloop/worktrees/`) gitignored in the
-target repository so the nested worktree is not reported as untracked. If a
-target's recursive tooling (test runners, linters, bundlers) would scan the
-nested worktree, place worktrees outside the root only when the external path is
-pre-authorized in the host's allowed directories before delegation.
+**Worktree placement.** Create each lane worktree with `npx agenticloop worktree
+add <task-id> <branch> [--from <ref>]`. The command creates the worktree at
+`.agenticloop/worktrees/<task-id>`, adds the worktree parent to the repository's
+local Git exclude file, and installs worktree-scoped non-interactive Git config.
+Do not create ordinary lane worktrees with raw `git worktree add`, and do not
+create them as `../sibling` directories outside the root. A worktree outside the
+repository root falls outside the host's workspace sandbox and triggers an
+external-directory access prompt that stalls autonomous runs. If a target's
+recursive tooling (test runners, linters, bundlers) forces a human-approved
+external worktree exception, record the exception before delegation and
+immediately run `npx agenticloop worktree guard --fix <path>` on that worktree.
+
+**Non-interactive Git.** Agentic Loop runs must not depend on a human closing a
+Git editor, pager, or credential prompt. The host session or delegated lane
+environment should set `GIT_EDITOR=true`, `GIT_SEQUENCE_EDITOR=true`,
+`GIT_PAGER=cat`, `GIT_TERMINAL_PROMPT=0`, `GH_EDITOR=true`, `GH_PAGER=cat`, and
+`GH_PROMPT_DISABLED=1` before running Git or `gh`. `npx agenticloop worktree add`
+enforces the Git config guard for delegated worktrees; use `npx agenticloop
+worktree guard --fix --all` to repair existing Agentic Loop worktrees and
+`npx agenticloop doctor` to report drift. The coordinator/main checkout is not
+repaired by worktree guard so the user's interactive editor remains intact; it
+must be protected by the session environment before coordinator Git or `gh`
+commands run. Agents must use file-backed or
+explicit-message forms such as `git commit -m` or `git commit -F`, `git merge
+--no-edit`, `git --no-pager ...`, `gh pr create --title ... --body-file ...`, and
+`git -c core.editor=true -c sequence.editor=true rebase --continue` when
+continuing a resolved rebase. Do not run `git rebase -i`, bare `git commit`,
+`git tag -a`, `git config --edit`, `gh pr create --editor`, or any other
+editor-backed command in unattended lane work. If Git or `gh` is already waiting
+on an editor or prompt, close/abort the operation and return status instead of
+leaving the lane blocked.
+
+`credential.interactive=false` is written for Git versions that support it. The
+session-level `GIT_TERMINAL_PROMPT=0` guard remains required for older Git
+versions and for coordinator/main-checkout credential prompts.
 
 Additionally, parallel write lanes must have disjoint allowed files or areas, no
 shared generated files or lockfiles, no schema or API ordering dependency, no

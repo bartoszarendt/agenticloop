@@ -327,6 +327,8 @@ npx agenticloop doctor                               Show setup checklist and ad
 npx agenticloop update [--adapter <host>]            Refresh toolkit assets and existing adapter output
 npx agenticloop validate                             Validate skills, config, links, and host setup
 npx agenticloop status                               Show configured adapters, artifacts, and next steps
+npx agenticloop worktree add <task-id> <branch>      Create guarded repo-internal lane worktree
+npx agenticloop worktree guard [--fix] [--all]       Check or repair non-interactive Git guard config
 npx agenticloop generate <host|all>                  Generate host adapter artifacts
 npx agenticloop configure models --adapter <host>    Configure per-role models (requires agenticloop.json)
 npx agenticloop bootstrap-labels                     Create GitHub labels via the gh CLI (needs gh auth + repo)
