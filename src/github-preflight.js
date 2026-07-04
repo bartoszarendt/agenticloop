@@ -23,7 +23,7 @@
  *   - runPreflight({ pr, issue, repo, commandRunner })
  */
 
-import { spawnSync } from 'node:child_process';
+import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
 
 export class PreflightError extends Error {
   constructor(message) {
@@ -375,35 +375,11 @@ export function evaluatePreflight({ prData, issueData }) {
   };
 }
 
-function defaultCommandRunner(command, args, options = {}) {
-  return spawnSync(command, args, { encoding: 'utf-8', ...options });
-}
-
-function runGhJson(commandRunner, args) {
-  const result = commandRunner('gh', args, { encoding: 'utf-8' });
-  if (result.error) {
-    throw new PreflightError(
-      `Failed to run 'gh ${args.join(' ')}': ${result.error.message}. Install the GitHub CLI and ensure it is on PATH.`
-    );
-  }
-  if (result.status !== 0) {
-    const stderr = (result.stderr ?? '').trim();
-    const stdout = (result.stdout ?? '').trim();
-    const detail = stderr || stdout || `exit ${result.status}`;
-    let hint = '';
-    if (/not logged|authentication|gh auth/i.test(detail)) {
-      hint = " Run 'gh auth login' first.";
-    }
-    throw new PreflightError(`'gh ${args.join(' ')}' failed: ${detail}.${hint}`);
-  }
-  const stdout = (result.stdout ?? '').trim();
-  if (!stdout) {
-    throw new PreflightError(`'gh ${args.join(' ')}' returned no output`);
-  }
+function runGhPreflightJson(commandRunner, args) {
   try {
-    return JSON.parse(stdout);
-  } catch {
-    throw new PreflightError(`'gh ${args.join(' ')}' returned output that is not valid JSON`);
+    return runGhJson(commandRunner, args);
+  } catch (error) {
+    throw new PreflightError(error.message);
   }
 }
 
@@ -447,7 +423,7 @@ export function resolveIssueNumber(prData, explicitIssue) {
  * @returns {object} the evaluatePreflight result.
  * @throws {PreflightError} on missing/incomplete GitHub data.
  */
-export function runPreflight({ pr, issue, repo, commandRunner = defaultCommandRunner } = {}) {
+export function runPreflight({ pr, issue, repo, commandRunner = defaultGhCommandRunner } = {}) {
   if (pr === undefined || pr === null || pr === '') {
     throw new PreflightError('--pr <number> is required');
   }
@@ -458,13 +434,13 @@ export function runPreflight({ pr, issue, repo, commandRunner = defaultCommandRu
 
   const prArgs = ['pr', 'view', String(prNumber), '--json', PR_FIELDS];
   if (repo) prArgs.push('--repo', repo);
-  const prData = runGhJson(commandRunner, prArgs);
+  const prData = runGhPreflightJson(commandRunner, prArgs);
 
   const { issueNumber } = resolveIssueNumber(prData, issue);
 
   const issueArgs = ['issue', 'view', String(issueNumber), '--json', ISSUE_FIELDS];
   if (repo) issueArgs.push('--repo', repo);
-  const issueData = runGhJson(commandRunner, issueArgs);
+  const issueData = runGhPreflightJson(commandRunner, issueArgs);
 
   return evaluatePreflight({ prData, issueData });
 }

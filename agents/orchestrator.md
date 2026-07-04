@@ -65,7 +65,11 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   coordination/host unknowns directly. Then decide parallel batch or serial; if
   uncertainty remains, run serial and record what stayed unknown.
 - Create or verify worktrees before delegation when authorizing parallel
-  file-mutating write work.
+  file-mutating write work. After acceptance and integration, run
+  `npx agenticloop worktree cleanup --dry-run` to preview lane removal and
+  `npx agenticloop worktree cleanup --yes` to remove merged standard lanes
+  safely. Cleanup is destructive and requires the dry-run/yes confirmation
+  pattern.
 - Perform and report the delegation capability check before any fallback.
 - Treat task or subagent tools with role, agent, type, mode, or `subagent_type` arguments as real delegation.
 - Do not proceed with maintainer-owned or engineer-owned work inline when a valid delegation mechanism exists.

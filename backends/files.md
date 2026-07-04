@@ -57,11 +57,29 @@ A branch alone is not sufficient when multiple agents share one checkout.
 Copying selected touched files into a temporary folder is not valid isolation.
 Each lane must run Git non-interactively. `npx agenticloop worktree add` installs
 worktree-scoped Git guard config; use `npx agenticloop worktree guard --fix --all`
-to repair existing Agentic Loop worktrees. Also set the host or lane environment
-guard from `agenticloop/AGENTIC_LOOP.md` for Git and GitHub CLI prompts, use
-explicit commit messages or file-backed messages, and do not run editor-backed
-commands such as bare `git commit`, `git rebase -i`, `git tag -a`, or
-`git config --edit`.
+to repair existing Agentic Loop worktrees. After a task is accepted and its
+artifact is integrated, run `npx agenticloop worktree cleanup --dry-run` to
+preview lane removal, then `npx agenticloop worktree cleanup --yes` to remove
+merged standard lanes. Cleanup keeps locked worktrees, worktrees with blocking
+dirty source or shared `.agenticloop` state, external or detached worktrees, and
+lanes with active task state. Task-specific lane-local `.agenticloop` state is
+flat only (`logs`, `tasks`, `summaries`, and `decisions` files directly under
+`.agenticloop/<dir>/`); it is preserved before removal and does not by itself block
+cleanup. Nested or shared `.agenticloop` files are not lane-local and dirty shared
+state blocks cleanup. Git worktree removal may be forced internally only after
+preservation succeeds. For `.jsonl` lane-local files, preservation is safe when
+the root file already contains every lane line (a root superset). If lane-local
+preservation conflicts with existing root state, use `npx agenticloop worktree
+resolve-state <task-id|path> --strategy <prefer-root|prefer-worktree|union-jsonl>
+--yes` (default `--dry-run`) to resolve before cleanup: `prefer-root` copies the
+root file into the lane, `prefer-worktree` copies the lane file into the root,
+and `union-jsonl` computes a root-first max-count multiset union and writes the
+result to both files. resolve-state never removes worktrees or branches. Shared `.agenticloop` files are not
+preserved. Project-root bare coordinator repos are supported. Branch deletion is
+not part of v1 cleanup. Also set the host or lane environment guard from
+`agenticloop/AGENTIC_LOOP.md` for Git and GitHub CLI prompts, use explicit commit
+messages or file-backed messages, and do not run editor-backed commands such as
+bare `git commit`, `git rebase -i`, `git tag -a`, or `git config --edit`.
 
 Integration of parallel files-backed lanes is serial. After the implementation
 join, prefer bounded parallel coordination/review lanes when each lane owns

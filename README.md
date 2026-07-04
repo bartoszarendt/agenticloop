@@ -50,6 +50,7 @@ It probably does not make sense if you only use agents for one-shot questions or
 | **GitHub backend** | Optionally project task records to GitHub issues and implementation artifacts to pull requests. |
 | **Decision records** | Preserve durable project decisions under `.agenticloop/decisions/` so future agent sessions do not rediscover or contradict them. |
 | **Optional event logs** | Record compact JSONL workflow-gate events for local audit and summary generation without storing raw transcripts. |
+| **Worktree lifecycle** | Create guarded repo-internal `git worktree` lanes, inspect guard state, list/remove/prune worktrees, and run safe bulk cleanup after acceptance. |
 | **Host adapters** | Generate host-native shims for OpenCode, Claude Code, Codex, GitHub Copilot, and Cursor from one canonical Markdown source. |
 
 ## The core loop
@@ -329,6 +330,14 @@ npx agenticloop validate                             Validate skills, config, li
 npx agenticloop status                               Show configured adapters, artifacts, and next steps
 npx agenticloop worktree add <task-id> <branch>      Create guarded repo-internal lane worktree
 npx agenticloop worktree guard [--fix] [--all]       Check or repair non-interactive Git guard config
+npx agenticloop worktree list [--json]               List all registered worktrees
+npx agenticloop worktree remove <id|path> --dry-run  Preview worktree removal
+npx agenticloop worktree remove <id|path> --yes      Remove a standard worktree and preserve lane state
+npx agenticloop worktree cleanup --dry-run           Preview bulk cleanup of merged/integrated lanes
+npx agenticloop worktree cleanup --yes               Remove merged standard worktrees after confirmation
+npx agenticloop worktree resolve-state <id|path>     Resolve lane-local state preservation conflicts
+npx agenticloop worktree prune --dry-run             Preview stale worktree registrations
+npx agenticloop worktree prune --yes                 Remove stale worktree registrations
 npx agenticloop generate <host|all>                  Generate host adapter artifacts
 npx agenticloop configure models --adapter <host>    Configure per-role models (requires agenticloop.json)
 npx agenticloop bootstrap-labels                     Create GitHub labels via the gh CLI (needs gh auth + repo)
@@ -337,6 +346,17 @@ npx agenticloop remove --dry-run                     Preview overlay removal
 npx agenticloop remove --yes                         Remove toolkit assets and generated shims
 npx agenticloop remove --yes --include-state         Also remove target-owned `.agenticloop/` state
 ```
+
+Lane-local state that cleanup can preserve is flat only (`logs`, `tasks`,
+`summaries`, and `decisions` files directly under `.agenticloop/<dir>/`). Nested
+or shared `.agenticloop` files are treated as blocking dirty state. For `.jsonl`
+files, preservation is safe when the root file already contains every lane line
+(a root superset). If preservation conflicts with existing root state, use
+`worktree resolve-state` with `--strategy prefer-root` (copy root into lane),
+`--strategy prefer-worktree` (copy lane into root), or `--strategy union-jsonl`
+(root-first max-count multiset union written to both files) before running
+cleanup. `union-jsonl` is the recommended lossless strategy for JSONL log
+conflicts. resolve-state does not remove worktrees or branches.
 
 Event logging is **disabled by default**. Enable it in `.agenticloop/project.md` with `event_logging: enabled`. `event_logging_command` can stay blank; agents test `npx agenticloop --help` once when enabled. Writes require `--task` and `--summary`; `validate`/`audit`/`report` inspect existing logs. Per-task completion summaries are always written inline into `.agenticloop/tasks/<TASK-ID>.md` (the `## Scope Completed` section). There is no separate `.agenticloop/summaries/` directory; closeout is a verify-and-mark gate that confirms those inline summaries and posts a status marker.
 

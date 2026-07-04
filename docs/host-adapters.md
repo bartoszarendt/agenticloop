@@ -73,11 +73,33 @@ Use `npx agenticloop worktree add <task-id> <branch> [--from <ref>]` for
 delegated write lanes. It creates `.agenticloop/worktrees/<task-id>`, ignores the
 worktree parent through `.git/info/exclude`, and writes worktree-scoped Git guard
 config. Use `npx agenticloop worktree guard --fix --all` to repair existing
-Agentic Loop worktrees, and `npx agenticloop doctor` to report missing guards.
-The main checkout is intentionally not repaired by the worktree guard, so
-coordinator Git or `gh` commands rely on the session environment above.
-`credential.interactive=false` is written for Git versions that support it;
-`GIT_TERMINAL_PROMPT=0` remains the portable credential-prompt backstop.
+Agentic Loop worktrees, `npx agenticloop worktree list` to inspect all registered
+worktrees, and `npx agenticloop doctor` to report missing guards.
+
+Worktrees have a lifecycle. After a task is accepted and integrated, run
+`npx agenticloop worktree cleanup --dry-run` to preview which standard
+`.agenticloop/worktrees/*` lanes are safe to remove. Cleanup is destructive
+filesystem cleanup and requires `--dry-run` first, then `--yes`. It keeps open
+pull requests, locked worktrees, worktrees with blocking dirty source or shared
+`.agenticloop` state, external or detached worktrees, and lanes with active task
+state. Task-specific lane-local `.agenticloop` state is flat only (`logs`,
+`tasks`, `summaries`, and `decisions` files directly under `.agenticloop/<dir>/`);
+it is preserved before removal and does not by itself block cleanup. Nested or
+shared `.agenticloop` files are not lane-local and dirty shared state blocks
+cleanup. Git worktree removal may be forced internally only after preservation
+succeeds. For `.jsonl` lane-local files, preservation is safe when the root file
+already contains every lane line (a root superset). If lane-local preservation
+conflicts with existing root state, use `npx agenticloop worktree resolve-state
+<task-id|path> --strategy <prefer-root|prefer-worktree|union-jsonl> --yes`
+(default `--dry-run`) to resolve before cleanup: `prefer-root` copies the root
+file into the lane, `prefer-worktree` copies the lane file into the root, and
+`union-jsonl` computes a root-first max-count multiset union and writes the
+result to both files. resolve-state never removes worktrees or branches. Shared `.agenticloop` files are not preserved.
+Project-root bare coordinator repos are supported. Branch deletion is not part
+of v1 cleanup. External or detached worktrees require explicit review and are
+never bulk-removed. Use `npx agenticloop worktree remove <task-id|path> --yes`
+for single-worktree removal with lane-local state preservation, or
+`npx agenticloop worktree prune --dry-run` to inspect stale Git registrations.
 
 | Host | Status | Adapter output | Generation command |
 |---|---|---|---|

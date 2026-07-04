@@ -14,6 +14,11 @@
  *   agenticloop event-logging report [--task <id>] [--target <dir>]
  *   agenticloop worktree add <task-id> <branch> [--from <ref>] [--target <dir>]
  *   agenticloop worktree guard [--fix] [--all|<path>] [--target <dir>]
+ *   agenticloop worktree list [--target <dir>] [--json]
+ *   agenticloop worktree remove <task-id|path> [--target <dir>] [--dry-run|--yes] [--force] [--json]
+ *   agenticloop worktree cleanup [--target <dir>] [--dry-run|--yes] [--json]
+ *   agenticloop worktree resolve-state <task-id|path> [--target <dir>] [--strategy <strategy>] [--dry-run|--yes] [--json]
+ *   agenticloop worktree prune [--target <dir>] [--dry-run|--yes] [--json]
  *   agenticloop bootstrap-labels [--repo <r>] [--dry-run] [--group <g>] [--task-id <id>]
  *   agenticloop generate opencode     [--target <dir>] [--output-dir <dir>]
  *   agenticloop generate codex        [--target <dir>] [--output-dir <dir>]
@@ -77,9 +82,19 @@ import {
 import { runValidation } from './validate-runner.js';
 import { runPreflight, PreflightError } from './github-preflight.js';
 import {
+  cleanupAgenticLoopWorktrees,
   createAgenticLoopWorktree,
+  formatResolveStateResult,
+  formatWorktreeCleanupResult,
   formatWorktreeGuardResult,
+  formatWorktreeList,
+  formatWorktreePruneResult,
+  formatWorktreeRemoveResult,
   guardAgenticLoopWorktrees,
+  listAgenticLoopWorktrees,
+  pruneAgenticLoopWorktrees,
+  removeAgenticLoopWorktree,
+  resolveAgenticLoopStateConflicts,
 } from './worktree.js';
 
 function toCamelCase(s) {
@@ -227,7 +242,7 @@ Commands:
   github-preflight      Pre-review gate: verify a GitHub PR body carries final-state
                         evidence for every required check, tied to the current head.
   doctor                Show setup checklist, adapter state, and next commands.
-  worktree              Create or check guarded Agentic Loop Git worktrees.
+  worktree              Manage guarded Agentic Loop Git worktrees (add, guard, list, remove, cleanup, resolve-state, prune).
   event-logging         Write events (bare event type), validate, audit, or report optional durable workflow event logs.
   event                 Compatibility alias for event-logging.
   configure models      Set per-host role model settings in agenticloop.json.
@@ -268,6 +283,36 @@ Options (worktree guard):
   --target <dir>        Git repository root or working tree (default: current directory).
   --fix                 Write missing non-interactive Git guard config.
   --all                 Check or fix every Agentic Loop worktree under .agenticloop/worktrees/.
+
+Options (worktree list):
+  --target <dir>        Git repository root or working tree (default: current directory).
+  --json                Emit machine-readable JSON instead of human-readable output.
+
+Options (worktree remove):
+  --target <dir>        Git repository root or working tree (default: current directory).
+  --dry-run             Print what would happen without making changes.
+  --yes                 Remove the worktree and preserve lane-local state.
+  --force               Allow removing a dirty worktree (single worktree only).
+  --json                Emit machine-readable JSON instead of human-readable output.
+
+Options (worktree cleanup):
+  --target <dir>        Git repository root or working tree (default: current directory).
+  --dry-run             Print what would happen without making changes.
+  --yes                 Remove standard worktrees classified as safe to remove.
+  --json                Emit machine-readable JSON instead of human-readable output.
+
+Options (worktree resolve-state):
+  --target <dir>        Git repository root or working tree (default: current directory).
+  --dry-run             Print what would happen without making changes (default).
+  --yes                 Resolve conflicts and update root state files.
+  --strategy <strategy> Strategy for resolving conflicts: prefer-root, prefer-worktree, union-jsonl.
+  --json                Emit machine-readable JSON instead of human-readable output.
+
+Options (worktree prune):
+  --target <dir>        Git repository root or working tree (default: current directory).
+  --dry-run             Print prunable registrations without removing them.
+  --yes                 Run git worktree prune to remove stale registrations.
+  --json                Emit machine-readable JSON instead of human-readable output.
 
 Options (update):
   --target <dir>        Target directory (default: current directory).
@@ -1260,7 +1305,7 @@ async function cmdStatus(args) {
 async function cmdWorktree(args) {
   const sub = args[0];
   if (!sub) {
-    console.error('worktree requires a subcommand: add | guard');
+    console.error('worktree requires a subcommand: add | guard | list | remove | cleanup | resolve-state | prune');
     process.exitCode = 1;
     return;
   }
@@ -1290,7 +1335,7 @@ async function cmdWorktree(args) {
       console.log(`  path: ${result.path}`);
       console.log(`  branch: ${result.branch}`);
       console.log(`  from: ${result.from ?? '(existing branch)'}`);
-      console.log(`  git guard: ${result.guard.ok ? 'configured' : 'missing'}`);
+      console.log(`  git guard: ${result.guard?.ok ? 'configured' : result.guard === null ? 'session environment required' : 'missing'}`);
       if (result.ignored) {
         console.log('  ignored: .agenticloop/worktrees/');
       }
@@ -1314,6 +1359,132 @@ async function cmdWorktree(args) {
       });
       console.log(formatWorktreeGuardResult(result));
       process.exitCode = result.ok ? 0 : 1;
+      return;
+    }
+
+    if (sub === 'list') {
+      const { opts } = parseArgs(args.slice(1));
+      const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
+      const asJson = Boolean(opts.json);
+      const records = listAgenticLoopWorktrees(target);
+      if (asJson) {
+        console.log(JSON.stringify(records, null, 2));
+      } else {
+        console.log(formatWorktreeList(records));
+      }
+      process.exitCode = 0;
+      return;
+    }
+
+    if (sub === 'remove') {
+      const { opts, positional } = parseArgs(args.slice(1));
+      const identifier = positional[0];
+      if (!identifier) {
+        console.error('Usage: agenticloop worktree remove <task-id|path> [--target <dir>] [--dry-run|--yes] [--force] [--json]');
+        process.exitCode = 1;
+        return;
+      }
+      const dryRun = Boolean(opts.dryRun);
+      const yes = Boolean(opts.yes);
+      if (!dryRun && !yes) {
+        console.error("worktree remove requires either --dry-run or --yes");
+        process.exitCode = 1;
+        return;
+      }
+      const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
+      const result = removeAgenticLoopWorktree({
+        target,
+        identifier,
+        dryRun,
+        yes,
+        force: Boolean(opts.force),
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(formatWorktreeRemoveResult(result, { dryRun }));
+      }
+      process.exitCode = result.errors.length > 0 ? 1 : 0;
+      return;
+    }
+
+    if (sub === 'cleanup') {
+      const { opts } = parseArgs(args.slice(1));
+      const dryRun = Boolean(opts.dryRun);
+      const yes = Boolean(opts.yes);
+      if (!dryRun && !yes) {
+        console.error("worktree cleanup requires either --dry-run or --yes");
+        process.exitCode = 1;
+        return;
+      }
+      const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
+      const result = cleanupAgenticLoopWorktrees({
+        target,
+        dryRun,
+        yes,
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(formatWorktreeCleanupResult(result));
+      }
+      process.exitCode = result.errors.length > 0 ? 1 : 0;
+      return;
+    }
+
+    if (sub === 'resolve-state') {
+      const { opts, positional } = parseArgs(args.slice(1));
+      const identifier = positional[0];
+      if (!identifier) {
+        console.error('Usage: agenticloop worktree resolve-state <task-id|path> [--target <dir>] [--strategy <strategy>] [--dry-run|--yes] [--json]');
+        process.exitCode = 1;
+        return;
+      }
+      const dryRun = !Boolean(opts.yes);
+      const yes = Boolean(opts.yes);
+      if (opts.dryRun && yes) {
+        console.error('worktree resolve-state accepts either --dry-run or --yes, not both');
+        process.exitCode = 1;
+        return;
+      }
+      const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
+      const result = resolveAgenticLoopStateConflicts({
+        target,
+        identifier,
+        strategy: opts.strategy,
+        dryRun,
+        yes,
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(formatResolveStateResult(result));
+      }
+      process.exitCode = result.errors.length > 0 ? 1 : 0;
+      return;
+    }
+
+    if (sub === 'prune') {
+      const { opts } = parseArgs(args.slice(1));
+      const dryRun = Boolean(opts.dryRun);
+      const yes = Boolean(opts.yes);
+      if (!dryRun && !yes) {
+        console.error("worktree prune requires either --dry-run or --yes");
+        process.exitCode = 1;
+        return;
+      }
+      const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
+      const result = pruneAgenticLoopWorktrees({
+        target,
+        dryRun,
+        yes,
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(formatWorktreePruneResult(result));
+      }
+      process.exitCode = result.errors.length > 0 ? 1 : 0;
       return;
     }
 
