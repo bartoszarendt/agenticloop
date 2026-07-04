@@ -1335,4 +1335,26 @@ describe('event-logging aggregate report', () => {
     assert.match(result.stdout, /verification-sweep=1/);
     assert.match(result.stdout, /context overflow risk: medium=1/);
   });
+
+  it('event-logging report --features prints context-risk omission candidates', () => {
+    const target = makeTarget('report-features-omission');
+    assertOk(run(['init', '--target', target]));
+    writeValidTaskRecord(target, 'P40-10');
+    assertOk(run([
+      'event', 'task.created', '--target', target, '--task', 'P40-10', '--role', 'maintainer',
+      '--summary', 'Created', '--data-json', JSON.stringify({
+        feature_telemetry_version: 1, minimalism: 'none', minimalism_trigger: 'ordinary-default',
+      }),
+    ]));
+    assertOk(run([
+      'event', 'task.closed', '--target', target, '--task', 'P40-10', '--role', 'maintainer',
+      '--summary', 'Closed', '--outcome', 'success', '--data-json', JSON.stringify({
+        feature_telemetry_version: 1, context_pressure_encountered: true,
+      }),
+    ]));
+    const result = run(['event-logging', 'report', '--features', '--target', target]);
+    assertOk(result);
+    assert.match(result.stdout, /context-risk omission candidates/);
+    assert.match(result.stdout, /pressure hit but no risk predicted \(higher confidence\): 1 \(P40-10\)/);
+  });
 });

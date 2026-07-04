@@ -1385,4 +1385,78 @@ describe('feature-adoption telemetry', () => {
     }));
     assert.ok(result.errors.some(error => error.includes("banned privacy-sensitive key 'data.prompt'")));
   });
+
+  it('flags Rule 1: telemetry task hit context pressure with no risk predicted', () => {
+    const target = makeTarget('omission-rule1');
+    appendFixtureEvent(target, 'P40-01', {
+      eventType: 'task.created', role: 'maintainer', summary: 'Created',
+      data: { feature_telemetry_version: 1, minimalism: 'none', minimalism_trigger: 'ordinary-default' },
+    });
+    appendFixtureEvent(target, 'P40-01', {
+      eventType: 'task.closed', role: 'maintainer', summary: 'Closed', outcome: 'success',
+      data: { feature_telemetry_version: 1, context_pressure_encountered: true },
+    });
+    const { features } = reportEventLogs({ target });
+    assert.deepEqual(features.omissionCandidates.contextRiskPressureNoPredict, ['P40-01']);
+    assert.deepEqual(features.omissionCandidates.contextRiskOverBudgetNoPredict, []);
+    assert.deepEqual(features.warnings, []); // candidate, not a warning
+  });
+
+  it('does not flag Rule 1 when risk was predicted', () => {
+    const target = makeTarget('omission-rule1-predicted');
+    appendFixtureEvent(target, 'P40-02', {
+      eventType: 'task.created', role: 'maintainer', summary: 'Created',
+      data: { feature_telemetry_version: 1, minimalism: 'none', minimalism_trigger: 'cross-cutting', context_overflow_risk: 'medium', context_note: 'broad' },
+    });
+    appendFixtureEvent(target, 'P40-02', {
+      eventType: 'task.closed', role: 'maintainer', summary: 'Closed', outcome: 'success',
+      data: { feature_telemetry_version: 1, context_overflow_risk: 'medium', context_pressure_encountered: true },
+    });
+    const { features } = reportEventLogs({ target });
+    assert.deepEqual(features.omissionCandidates.contextRiskPressureNoPredict, []);
+  });
+
+  it('flags Rule 2: reached/exceeded budget, no risk, no confirmed pressure', () => {
+    const target = makeTarget('omission-rule2');
+    appendFixtureEvent(target, 'P40-03', {
+      eventType: 'task.created', role: 'maintainer', summary: 'Created',
+      data: { feature_telemetry_version: 1, minimalism: 'none', minimalism_trigger: 'ordinary-default' },
+    });
+    appendFixtureEvent(target, 'P40-03', {
+      eventType: 'task.closed', role: 'maintainer', summary: 'Closed', outcome: 'success',
+      data: { feature_telemetry_version: 1, review_rounds: 6 },
+    });
+    const { features } = reportEventLogs({ target });
+    assert.equal(features.omissionCandidates.contextRiskOverBudgetNoPredict.length, 1);
+    assert.equal(features.omissionCandidates.contextRiskOverBudgetNoPredict[0].taskId, 'P40-03');
+    assert.deepEqual(features.omissionCandidates.contextRiskPressureNoPredict, []);
+  });
+
+  it('Rule 1 owns a task over budget that also hit pressure (no double-listing)', () => {
+    const target = makeTarget('omission-rule1-owns');
+    appendFixtureEvent(target, 'P40-04', {
+      eventType: 'task.created', role: 'maintainer', summary: 'Created',
+      data: { feature_telemetry_version: 1, minimalism: 'none', minimalism_trigger: 'ordinary-default' },
+    });
+    appendFixtureEvent(target, 'P40-04', {
+      eventType: 'task.closed', role: 'maintainer', summary: 'Closed', outcome: 'success',
+      data: { feature_telemetry_version: 1, review_rounds: 6, context_pressure_encountered: true },
+    });
+    const { features } = reportEventLogs({ target });
+    assert.deepEqual(features.omissionCandidates.contextRiskPressureNoPredict, ['P40-04']);
+    assert.deepEqual(features.omissionCandidates.contextRiskOverBudgetNoPredict, []);
+  });
+
+  it('does not flag omission candidates on historical non-telemetry logs', () => {
+    const target = makeTarget('omission-historical');
+    for (let i = 0; i < 5; i += 1) {
+      appendFixtureEvent(target, 'P40-05', {
+        eventType: 'review.result', role: 'maintainer', summary: `Round ${i + 1}`, outcome: 'needs_revision',
+      });
+    }
+    const { features } = reportEventLogs({ target });
+    assert.ok(features.reviewRounds.tasksOverBudget.includes('P40-05')); // over budget, but...
+    assert.deepEqual(features.omissionCandidates.contextRiskPressureNoPredict, []);
+    assert.deepEqual(features.omissionCandidates.contextRiskOverBudgetNoPredict, []); // forward-gated
+  });
 });

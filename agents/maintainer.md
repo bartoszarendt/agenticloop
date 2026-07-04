@@ -181,7 +181,14 @@ true|false` when the budget was reached, and `context_overflow_risk` plus
 when a context-risk task's closeout omits `context_pressure_encountered`. When enabled, a
 completed review or closed task with zero maintainer gate events is
 non-conformant; record a concise missed-event process gap instead of inventing
-backdated normal events.
+backdated normal events. The `feature_telemetry_version` marker means the event
+participates in feature telemetry (minimalism is always emitted); it does not
+assert that every optional knob was consciously evaluated, so an absent
+`context_overflow_risk` reads as low/default, not as a recorded decline.
+`event-logging report --features` surfaces context-risk omission candidates --
+telemetry tasks that recorded context pressure, or reached/exceeded review
+budget, without a predicted `context_overflow_risk` -- as heuristic candidates
+for calibration review, not as errors or required fields.
 
 ## Output
 

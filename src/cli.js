@@ -250,6 +250,16 @@ function printFeatureReport(result, commandLabel) {
   );
 
   console.log();
+  const oc = f.omissionCandidates;
+  console.log('  context-risk omission candidates (heuristic; candidates, not misses):');
+  console.log(
+    `    pressure hit but no risk predicted (higher confidence): ${oc.contextRiskPressureNoPredict.length} (${formatTaskIdList(oc.contextRiskPressureNoPredict)})`
+  );
+  console.log(
+    `    reached/exceeded review budget but no risk predicted (lower confidence): ${oc.contextRiskOverBudgetNoPredict.length} (${formatTaskIdList(oc.contextRiskOverBudgetNoPredict.map(entry => entry.taskId))})`
+  );
+
+  console.log();
   if (f.warnings.length === 0) {
     console.log('  feature telemetry warnings: none');
   } else {

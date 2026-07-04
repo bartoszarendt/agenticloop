@@ -1211,6 +1211,10 @@ function createEmptyFeatureAggregate() {
     },
     contextOverflowRisk: { medium: 0, high: 0, tasks: [] },
     contextPressure: { true: 0, false: 0, missingForRiskTasks: [] },
+    omissionCandidates: {
+      contextRiskPressureNoPredict: [], // Rule 1: taskIds
+      contextRiskOverBudgetNoPredict: [], // Rule 2: {taskId, derivedReviewRounds, reviewBudget}
+    },
     warnings: [],
   };
 }
@@ -1271,6 +1275,25 @@ function accumulateTaskFeatures(features, triggerCounts, taskId, taskFeatures) {
     }
   }
 
+  // Context-risk omission candidates (report-only heuristic, NOT warnings).
+  // Forward-gated to telemetry tasks. "Candidate", not "missed": heuristic signal.
+  // Rule 1 = higher-confidence candidate (pressure hit, no risk predicted).
+  // Rule 2 = lower-confidence candidate (budget reached/exceeded, no risk,
+  // no confirmed pressure so Rule 1 does not own it).
+  if (taskFeatures.hasTelemetry) {
+    const riskPredicted = taskFeatures.contextOverflowRisk === 'medium'
+      || taskFeatures.contextOverflowRisk === 'high';
+    if (!riskPredicted && taskFeatures.contextPressureEncountered === true) {
+      features.omissionCandidates.contextRiskPressureNoPredict.push(taskId);
+    } else if (!riskPredicted && taskFeatures.overReviewBudget) {
+      features.omissionCandidates.contextRiskOverBudgetNoPredict.push({
+        taskId,
+        derivedReviewRounds: taskFeatures.derivedReviewRounds,
+        reviewBudget: taskFeatures.reviewBudget,
+      });
+    }
+  }
+
   // Task-level telemetry warnings are forward-gated: only telemetry tasks.
   if (taskFeatures.hasTelemetry) {
     const risk = taskFeatures.contextOverflowRisk;
@@ -1305,6 +1328,10 @@ function finalizeFeatureAggregate(features, triggerCounts) {
   features.budgets.nonDefaultReview.sort((a, b) => String(a.taskId).localeCompare(String(b.taskId)));
   features.contextOverflowRisk.tasks.sort((a, b) => String(a).localeCompare(String(b)));
   features.contextPressure.missingForRiskTasks.sort((a, b) => String(a).localeCompare(String(b)));
+  features.omissionCandidates.contextRiskPressureNoPredict
+    .sort((a, b) => String(a).localeCompare(String(b)));
+  features.omissionCandidates.contextRiskOverBudgetNoPredict
+    .sort((a, b) => String(a.taskId).localeCompare(String(b.taskId)));
   features.warnings.sort((a, b) => a.localeCompare(b));
 }
 

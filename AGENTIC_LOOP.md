@@ -841,7 +841,10 @@ stays local; it does not upload data or require producers to add new event keys
 before it is useful. Add `--features` to that aggregate command for a
 feature-adoption view: minimalism levels and triggers, non-default effort
 budgets, medium/high context-overflow risk, context-pressure calibration
-coverage, and review-round churn against budget. The review-round dimension is
+coverage, review-round churn against budget, and context-risk omission
+candidates (telemetry tasks that hit context pressure or reached/exceeded review
+budget without a predicted context_overflow_risk), reported as heuristic
+candidates rather than warnings. The review-round dimension is
 derived from existing `review.result` events, so it works on historical logs;
 the knob dimensions read the optional `task.created`/`task.closed` telemetry
 fields when present. `npx agenticloop validate` also validates every default
