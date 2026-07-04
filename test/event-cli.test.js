@@ -1291,4 +1291,48 @@ describe('event-logging aggregate report', () => {
     assert.match(result.stdout, /task: T-001/);
     assert.match(result.stdout, /strict audit missing: none/);
   });
+
+  it('event-logging report --features works over existing review.result logs', () => {
+    const target = makeTarget('report-features-historical');
+    assertOk(run(['init', '--target', target]));
+    writeValidTaskRecord(target, 'P23-16');
+    // Three review.result events -> three derived review rounds, no producer telemetry.
+    for (let i = 0; i < 2; i += 1) {
+      assertOk(run(['event', 'review.result', '--target', target, '--task', 'P23-16', '--role', 'maintainer', '--summary', `Round ${i + 1}`, '--outcome', 'needs_revision']));
+    }
+    assertOk(run(['event', 'review.result', '--target', target, '--task', 'P23-16', '--role', 'maintainer', '--summary', 'Accepted', '--outcome', 'accepted']));
+
+    const result = run(['event-logging', 'report', '--features', '--target', target]);
+
+    assertOk(result);
+    assert.match(result.stdout, /report --features/);
+    assert.match(result.stdout, /max derived review rounds: 3/);
+    assert.match(result.stdout, /tasks with feature telemetry: 0/);
+    assert.match(result.stdout, /feature telemetry warnings: none/);
+  });
+
+  it('event-logging report --features surfaces emitted telemetry', () => {
+    const target = makeTarget('report-features-telemetry');
+    assertOk(run(['init', '--target', target]));
+    writeValidTaskRecord(target, 'P23-16');
+    assertOk(run([
+      'event', 'task.created', '--target', target, '--task', 'P23-16', '--role', 'maintainer',
+      '--summary', 'Created integration sweep',
+      '--data-json', JSON.stringify({
+        feature_telemetry_version: 1,
+        minimalism: 'none',
+        minimalism_trigger: 'verification-sweep',
+        context_overflow_risk: 'medium',
+        context_note: 'Broad integration; focused checks then final gate.',
+      }),
+    ]));
+
+    const result = run(['event-logging', 'report', '--features', '--target', target]);
+
+    assertOk(result);
+    assert.match(result.stdout, /tasks with feature telemetry: 1/);
+    assert.match(result.stdout, /minimalism \(telemetry tasks\): none=1/);
+    assert.match(result.stdout, /verification-sweep=1/);
+    assert.match(result.stdout, /context overflow risk: medium=1/);
+  });
 });

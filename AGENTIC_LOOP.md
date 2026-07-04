@@ -838,7 +838,13 @@ the aggregate surfaces strict-audit gaps, durable-closure gaps, review churn,
 check outcomes, delegation/fallback counts, invalid or empty logs, and
 `host=unknown` events as telemetry-quality warnings rather than workflow failures. Reporting
 stays local; it does not upload data or require producers to add new event keys
-before it is useful. `npx agenticloop validate` also validates every default
+before it is useful. Add `--features` to that aggregate command for a
+feature-adoption view: minimalism levels and triggers, non-default effort
+budgets, medium/high context-overflow risk, context-pressure calibration
+coverage, and review-round churn against budget. The review-round dimension is
+derived from existing `review.result` events, so it works on historical logs;
+the knob dimensions read the optional `task.created`/`task.closed` telemetry
+fields when present. `npx agenticloop validate` also validates every default
 `.agenticloop/logs/*.jsonl` file when present.
 
 ## Decision Records

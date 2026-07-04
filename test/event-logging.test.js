@@ -1187,3 +1187,202 @@ describe('reportEventLogs aggregate', () => {
     assert.equal(result.hostUnknownEvents[0].taskId, 'T-001');
   });
 });
+
+describe('feature-adoption telemetry', () => {
+  it('derives review rounds from review.result events without new producer data', () => {
+    const target = makeTarget('features-derive');
+    // A P23-16-like case: three review.result events -> three derived rounds.
+    appendFixtureEvent(target, 'P23-16', {
+      eventType: 'review.result', role: 'maintainer', summary: 'Round 1', outcome: 'needs_revision',
+    });
+    appendFixtureEvent(target, 'P23-16', {
+      eventType: 'review.result', role: 'maintainer', summary: 'Round 2', outcome: 'needs_revision',
+    });
+    appendFixtureEvent(target, 'P23-16', {
+      eventType: 'review.result', role: 'maintainer', summary: 'Round 3', outcome: 'accepted',
+    });
+
+    const { features } = reportEventLogs({ target });
+    const task = features.reviewRounds.churnTasks.find(entry => entry.taskId === 'P23-16');
+    assert.ok(task, 'P23-16 should be a churn task');
+    assert.equal(task.derivedReviewRounds, 3);
+    assert.equal(task.needsRevisionCount, 2);
+    assert.equal(task.acceptedCount, 1);
+    assert.equal(features.tasksWithTelemetry, 0, 'no emitted telemetry present');
+  });
+
+  it('reports tasks above the default review budget', () => {
+    const target = makeTarget('features-over-budget');
+    for (let i = 0; i < 4; i += 1) {
+      appendFixtureEvent(target, 'P12-01', {
+        eventType: 'review.result', role: 'maintainer', summary: `Round ${i + 1}`, outcome: 'needs_revision',
+      });
+    }
+    appendFixtureEvent(target, 'P12-01', {
+      eventType: 'review.result', role: 'maintainer', summary: 'Accepted', outcome: 'accepted',
+    });
+
+    const { features } = reportEventLogs({ target });
+    assert.ok(features.reviewRounds.tasksOverBudget.includes('P12-01'));
+    assert.equal(features.reviewRounds.maxDerivedReviewRounds, 5);
+  });
+
+  it('does not warn on historical logs without telemetry', () => {
+    const target = makeTarget('features-historical');
+    appendAuditEvents(target, 'T-001');
+    const { features } = reportEventLogs({ target });
+    assert.deepEqual(features.warnings, []);
+    // Default single-round audit task is not over budget.
+    assert.deepEqual(features.reviewRounds.tasksOverBudget, []);
+  });
+
+  it('aggregates emitted minimalism, triggers, budgets, and context risk', () => {
+    const target = makeTarget('features-aggregate');
+    appendFixtureEvent(target, 'P23-16', {
+      eventType: 'task.created', role: 'maintainer', summary: 'Created integration sweep',
+      data: {
+        feature_telemetry_version: 1,
+        minimalism: 'none',
+        minimalism_trigger: 'verification-sweep',
+        review_budget: 5,
+        context_overflow_risk: 'medium',
+        context_note: 'Broad integration; focused checks then final gate.',
+      },
+    });
+    appendFixtureEvent(target, 'P23-16', {
+      eventType: 'review.result', role: 'maintainer', summary: 'Round 1', outcome: 'accepted',
+    });
+    appendFixtureEvent(target, 'P23-16', {
+      eventType: 'task.closed', role: 'maintainer', summary: 'Closed', outcome: 'success',
+      data: {
+        feature_telemetry_version: 1,
+        review_rounds: 1,
+        review_budget: 5,
+        review_budget_exceeded: false,
+        context_overflow_risk: 'medium',
+        context_pressure_encountered: false,
+      },
+    });
+
+    const { features } = reportEventLogs({ target });
+    assert.equal(features.tasksWithTelemetry, 1);
+    assert.equal(features.minimalism.none, 1);
+    assert.deepEqual(features.minimalismTriggers, [{ trigger: 'verification-sweep', count: 1 }]);
+    assert.deepEqual(features.budgets.nonDefaultReview, [{ taskId: 'P23-16', reviewBudget: 5 }]);
+    assert.equal(features.contextOverflowRisk.medium, 1);
+    assert.deepEqual(features.contextOverflowRisk.tasks, ['P23-16']);
+    assert.equal(features.contextPressure.false, 1);
+    assert.deepEqual(features.contextPressure.missingForRiskTasks, []);
+    assert.deepEqual(features.warnings, []);
+  });
+
+  it('consumes the closeout review_rounds total when review.result events are sparse', () => {
+    const target = makeTarget('features-review-rounds-plural');
+    appendFixtureEvent(target, 'P30-01', {
+      eventType: 'task.created', role: 'maintainer', summary: 'Created task',
+      data: { feature_telemetry_version: 1, minimalism: 'none', minimalism_trigger: 'ordinary-default' },
+    });
+    appendFixtureEvent(target, 'P30-01', {
+      eventType: 'task.closed', role: 'maintainer', summary: 'Closed', outcome: 'success',
+      data: { feature_telemetry_version: 1, review_rounds: 5 },
+    });
+
+    const { features } = reportEventLogs({ target });
+    assert.equal(features.reviewRounds.maxDerivedReviewRounds, 5);
+    assert.ok(features.reviewRounds.tasksOverBudget.includes('P30-01'));
+    // Over budget with no review_budget_exceeded recorded -> warns (missing).
+    assert.ok(features.warnings.some(warning => warning.includes('P30-01') && warning.includes('missing')));
+  });
+
+  it('warns when an over-budget task records review_budget_exceeded: false', () => {
+    const target = makeTarget('features-exceeded-false');
+    appendFixtureEvent(target, 'P30-02', {
+      eventType: 'task.created', role: 'maintainer', summary: 'Created task',
+      data: { feature_telemetry_version: 1, minimalism: 'none', minimalism_trigger: 'ordinary-default' },
+    });
+    appendFixtureEvent(target, 'P30-02', {
+      eventType: 'task.closed', role: 'maintainer', summary: 'Closed', outcome: 'success',
+      data: { feature_telemetry_version: 1, review_rounds: 6, review_budget_exceeded: false },
+    });
+
+    const { features } = reportEventLogs({ target });
+    assert.ok(features.warnings.some(warning => warning.includes('P30-02') && warning.includes('false, not true')));
+  });
+
+  it('warns when review_budget_exceeded: true contradicts within-budget derived rounds', () => {
+    const target = makeTarget('features-exceeded-inverse');
+    appendFixtureEvent(target, 'P30-03', {
+      eventType: 'task.created', role: 'maintainer', summary: 'Created task',
+      data: { feature_telemetry_version: 1, minimalism: 'none', minimalism_trigger: 'ordinary-default' },
+    });
+    appendFixtureEvent(target, 'P30-03', {
+      eventType: 'review.result', role: 'maintainer', summary: 'Accepted', outcome: 'accepted',
+    });
+    appendFixtureEvent(target, 'P30-03', {
+      eventType: 'task.closed', role: 'maintainer', summary: 'Closed', outcome: 'success',
+      data: { feature_telemetry_version: 1, review_rounds: 1, review_budget_exceeded: true },
+    });
+
+    const { features } = reportEventLogs({ target });
+    assert.ok(!features.reviewRounds.tasksOverBudget.includes('P30-03'));
+    assert.ok(features.warnings.some(warning => warning.includes('P30-03') && warning.includes('within budget')));
+  });
+
+  it('warns when a context-risk telemetry task omits context_pressure_encountered', () => {
+    const target = makeTarget('features-missing-pressure');
+    appendFixtureEvent(target, 'P23-20', {
+      eventType: 'task.created', role: 'maintainer', summary: 'Created risky task',
+      data: {
+        feature_telemetry_version: 1,
+        minimalism: 'none',
+        minimalism_trigger: 'cross-cutting',
+        context_overflow_risk: 'high',
+        context_note: 'Large surface.',
+      },
+    });
+    appendFixtureEvent(target, 'P23-20', {
+      eventType: 'task.closed', role: 'maintainer', summary: 'Closed',
+      outcome: 'success', data: { feature_telemetry_version: 1 },
+    });
+
+    const { features } = reportEventLogs({ target });
+    assert.equal(features.contextPressure.missingForRiskTasks.length, 1);
+    assert.ok(features.warnings.some(warning => warning.includes('P23-20') && warning.includes('context_pressure_encountered')));
+  });
+
+  it('validateEvent warns when a telemetry task.created omits minimalism', () => {
+    const result = validateEvent(buildEvent({
+      task: 'P23-30', eventType: 'task.created', role: 'maintainer', summary: 'Created task',
+      data: { feature_telemetry_version: 1 },
+    }));
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.warnings.some(warning => warning.includes('missing minimalism')));
+  });
+
+  it('validateEvent does not require minimalism when telemetry marker is absent', () => {
+    const result = validateEvent(buildEvent({
+      task: 'P23-31', eventType: 'task.created', role: 'maintainer', summary: 'Created task',
+      data: {},
+    }));
+    assert.deepEqual(result.errors, []);
+    assert.ok(!result.warnings.some(warning => warning.includes('minimalism')));
+  });
+
+  it('validateEvent warns on a dump-like context_note but still accepts telemetry keys', () => {
+    const longNote = `system: ${'x'.repeat(400)}\nassistant: ${'y'.repeat(400)}`;
+    const result = validateEvent(buildEvent({
+      task: 'P23-32', eventType: 'task.created', role: 'maintainer', summary: 'Created task',
+      data: { feature_telemetry_version: 1, minimalism: 'none', context_note: longNote },
+    }));
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.warnings.some(warning => warning.includes('context_note')));
+  });
+
+  it('still blocks banned privacy keys inside telemetry data', () => {
+    const result = validateEvent(buildEvent({
+      task: 'P23-33', eventType: 'task.created', role: 'maintainer', summary: 'Created task',
+      data: { feature_telemetry_version: 1, minimalism: 'none', prompt: 'leaked prompt text' },
+    }));
+    assert.ok(result.errors.some(error => error.includes("banned privacy-sensitive key 'data.prompt'")));
+  });
+});

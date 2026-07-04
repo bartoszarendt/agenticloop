@@ -11,7 +11,7 @@
  *   agenticloop event-logging <event_type> [--target <dir>] [--summary <text>] [--task <id>]
  *   agenticloop event-logging validate [--target <dir>] [--output <file>]
  *   agenticloop event-logging audit --task <id> [--target <dir>] [--require a,b,c]
- *   agenticloop event-logging report [--task <id>] [--target <dir>]
+ *   agenticloop event-logging report [--task <id>] [--features] [--target <dir>]
  *   agenticloop worktree add <task-id> <branch> [--from <ref>] [--target <dir>]
  *   agenticloop worktree guard [--fix] [--all|<path>] [--target <dir>]
  *   agenticloop worktree list [--target <dir>] [--json]
@@ -189,6 +189,76 @@ function formatRefSummary(entries) {
   return entries.length > 0 ? entries.map(entry => `${entry.ref}=${entry.count}`).join(', ') : 'none';
 }
 
+const CHURN_DETAIL_LIMIT = 15;
+
+function printFeatureReport(result, commandLabel) {
+  const f = result.features;
+  console.log();
+  console.log(`agenticloop ${commandLabel} report --features`);
+  console.log('='.repeat(50));
+  console.log(`  directory: ${result.directory}`);
+  console.log(`  tasks scanned: ${f.tasksScanned}`);
+  console.log(`  tasks with feature telemetry: ${f.tasksWithTelemetry}`);
+
+  if (result.missingLogs) {
+    console.log();
+    console.log('  No event log files found.');
+    console.log();
+    return;
+  }
+
+  console.log();
+  console.log('  review budget / churn (derived from review.result, data.review_round, closeout review_rounds):');
+  console.log(`    max derived review rounds: ${f.reviewRounds.maxDerivedReviewRounds}`);
+  console.log(`    tasks with review churn: ${f.reviewRounds.churnTasks.length}`);
+  console.log(
+    `    tasks over review budget: ${f.reviewRounds.tasksOverBudget.length} (${formatTaskIdList(f.reviewRounds.tasksOverBudget)})`
+  );
+  const overBudgetChurn = f.reviewRounds.churnTasks
+    .filter(task => task.overBudget)
+    .sort((a, b) => b.derivedReviewRounds - a.derivedReviewRounds || String(a.taskId).localeCompare(String(b.taskId)));
+  if (overBudgetChurn.length > 0) {
+    console.log('    over-budget detail (highest rounds first):');
+    for (const task of overBudgetChurn.slice(0, CHURN_DETAIL_LIMIT)) {
+      const budget = `${task.reviewBudget}${task.reviewBudgetIsDefault ? ' (default)' : ''}`;
+      console.log(
+        `      - ${task.taskId}: rounds=${task.derivedReviewRounds} needs_revision=${task.needsRevisionCount} accepted=${task.acceptedCount} budget=${budget}`
+      );
+    }
+    if (overBudgetChurn.length > CHURN_DETAIL_LIMIT) {
+      console.log(`      (+${overBudgetChurn.length - CHURN_DETAIL_LIMIT} more over budget)`);
+    }
+  }
+
+  console.log();
+  const m = f.minimalism;
+  console.log(
+    `  minimalism (telemetry tasks): none=${m.none}, lite=${m.lite}, full=${m.full}, ultra=${m.ultra}, missing=${m.missing}, other=${m.other}`
+  );
+  console.log(`  minimalism triggers: ${formatCountSummary(f.minimalismTriggers.map(entry => ({ value: entry.trigger, count: entry.count })))}`);
+  console.log(
+    `  non-default attempt budgets: ${f.budgets.nonDefaultAttempt.length} (${formatTaskIdList(f.budgets.nonDefaultAttempt.map(entry => `${entry.taskId}=${entry.attemptBudget}`))})`
+  );
+  console.log(
+    `  non-default review budgets: ${f.budgets.nonDefaultReview.length} (${formatTaskIdList(f.budgets.nonDefaultReview.map(entry => `${entry.taskId}=${entry.reviewBudget}`))})`
+  );
+  console.log(
+    `  context overflow risk: medium=${f.contextOverflowRisk.medium}, high=${f.contextOverflowRisk.high} (tasks: ${formatTaskIdList(f.contextOverflowRisk.tasks)})`
+  );
+  console.log(
+    `  context pressure: true=${f.contextPressure.true}, false=${f.contextPressure.false}, missing-for-risk-tasks=${f.contextPressure.missingForRiskTasks.length} (${formatTaskIdList(f.contextPressure.missingForRiskTasks)})`
+  );
+
+  console.log();
+  if (f.warnings.length === 0) {
+    console.log('  feature telemetry warnings: none');
+  } else {
+    console.log('  feature telemetry warnings:');
+    for (const warning of f.warnings) console.warn(`    WARN: ${warning}`);
+  }
+  console.log();
+}
+
 function inferCheckRunOutcome(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
 
@@ -360,6 +430,9 @@ Options (event-logging report):
   --target <dir>        Target directory (default: current directory).
   --task <id>           Optional task id for a per-task report from <target>/${TASK_EVENT_LOG_PATH_DISPLAY}.
                         Omit for a read-only aggregate report over <target>/${DEFAULT_EVENT_LOG_GLOB_DISPLAY}.
+  --features            Print a feature-adoption telemetry report (minimalism, effort
+                        budgets, context-overflow risk, and derived review-round churn)
+                        over the aggregate logs instead of the full aggregate report.
 
 Options (configure models):
   --target <dir>        Directory containing agenticloop.json (default: current).
@@ -818,6 +891,7 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
     console.log('  validate              Validate event log files.');
     console.log('  audit                 Audit task event logs for required events.');
     console.log('  report                Generate a per-task or aggregate report from event logs.');
+    console.log('                        Add --features for a feature-adoption telemetry report.');
     console.log();
     console.log('Write path (bare event type):');
     console.log(`  ${commandLabel} <event_type> --summary "..." [options]`);
@@ -950,6 +1024,20 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
   }
 
   if (sub === 'report') {
+    if (opts.features) {
+      let result;
+      try {
+        result = reportEventLogs({ target });
+      } catch (error) {
+        console.error(`Failed to generate feature telemetry report: ${error.message}`);
+        process.exitCode = 1;
+        return;
+      }
+      printFeatureReport(result, commandLabel);
+      process.exitCode = 0;
+      return;
+    }
+
     if (opts.task) {
       let result;
       try {

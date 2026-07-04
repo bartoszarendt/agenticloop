@@ -87,6 +87,20 @@ const BANNED_PRIVACY_KEYS = new Set([
   'raw_output',
 ]);
 
+// Feature-adoption telemetry. Task-record knobs (minimalism, effort budgets,
+// context-overflow risk, context-pressure calibration) live in the durable task
+// record (GitHub issue / files task file). These optional event-data fields are a
+// log-native mirror so adoption can be measured from JSONL without scraping the
+// backend. The event log is the telemetry/audit stream, not the task contract.
+// `data` stays free-form (normalizeData); these are conventions, not new schema.
+export const FEATURE_TELEMETRY_VERSION = 1;
+export const DEFAULT_ATTEMPT_BUDGET = 3;
+export const DEFAULT_REVIEW_BUDGET = 3;
+export const MINIMALISM_LEVELS = ['none', 'lite', 'full', 'ultra'];
+export const CONTEXT_OVERFLOW_RISK_LEVELS = ['medium', 'high'];
+// One verdict/reason line. Longer values are the caller dumping discovery output.
+const CONTEXT_NOTE_WARN_LENGTH = 280;
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ISO_8601_UTC_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const SUMMARY_WARN_LENGTH = 300;
@@ -340,6 +354,31 @@ function compareSummaryValues(a, b) {
     return aNumber - bNumber;
   }
   return String(a).localeCompare(String(b));
+}
+
+function toFiniteNumber(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function readNullableBoolean(value) {
+  if (value === true || value === false) return value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return null;
+}
+
+// Forward gate: a task's events opt into feature telemetry by carrying
+// `feature_telemetry_version`. Historical events without the marker are never
+// held to the telemetry contract, so existing logs cannot start warning.
+function isTelemetryEvent(event) {
+  return isPlainObject(event?.data)
+    && toFiniteNumber(event.data.feature_telemetry_version) !== null
+    && toFiniteNumber(event.data.feature_telemetry_version) >= 1;
 }
 
 function formatDurationMilliseconds(durationMs) {
@@ -690,6 +729,25 @@ export function validateEvent(event, options = {}) {
       errors.push('data is too large for a durable workflow event');
     } else if (dataSize > 4000 && looksLikeTranscriptDump(JSON.stringify(event.data, null, 2))) {
       errors.push('data looks like a transcript or raw tool dump');
+    }
+
+    // Forward-gated feature-telemetry checks: only fire when the event opts in via
+    // feature_telemetry_version, so historical logs never start warning. Non-fatal.
+    if (isTelemetryEvent(event)) {
+      if (event.event_type === 'task.created'
+        && normalizeNullableString(event.data.minimalism) === null) {
+        warnings.push('feature-telemetry task.created is missing minimalism');
+      }
+      const contextNote = event.data.context_note;
+      if (typeof contextNote === 'string') {
+        if (contextNote.length > CONTEXT_NOTE_WARN_LENGTH) {
+          warnings.push(
+            `context_note is longer than ${CONTEXT_NOTE_WARN_LENGTH} characters; keep it to one verdict line`
+          );
+        } else if (looksLikeTranscriptDump(contextNote)) {
+          warnings.push('context_note looks like a transcript or raw tool dump');
+        }
+      }
     }
   }
 
@@ -1043,6 +1101,69 @@ function summarizeEvents(events, repoRoot) {
   };
 }
 
+// Per-task feature-adoption view. Review-round dimension is derived from events
+// that already exist (review.result count, data.review_round, and the closeout
+// data.review_rounds total), so it works on
+// historical logs with no producer changes. The knob fields (minimalism, budgets,
+// context risk/pressure) are read from emitted telemetry when present.
+function summarizeTaskFeatures(events) {
+  const created = events.find(event => event.event_type === 'task.created') ?? null;
+  let closed = null;
+  for (const event of events) {
+    if (event.event_type === 'task.closed') closed = event; // last one wins
+  }
+
+  const reviewResultEvents = events.filter(event => event.event_type === 'review.result');
+  const reviewResultCount = reviewResultEvents.length;
+  const needsRevisionCount = reviewResultEvents.filter(event => event.outcome === 'needs_revision').length;
+  const acceptedCount = reviewResultEvents.filter(event => event.outcome === 'accepted').length;
+
+  let maxExplicitReviewRound = 0;
+  for (const event of events) {
+    // Per-review round number (review.started/review.result) and the closeout
+    // total (task.closed data.review_rounds) are both explicit round signals.
+    const round = toFiniteNumber(event.data?.review_round);
+    if (round !== null && round > maxExplicitReviewRound) maxExplicitReviewRound = round;
+    const rounds = toFiniteNumber(event.data?.review_rounds);
+    if (rounds !== null && rounds > maxExplicitReviewRound) maxExplicitReviewRound = rounds;
+  }
+  const derivedReviewRounds = Math.max(maxExplicitReviewRound, reviewResultCount);
+
+  const reviewBudgetExplicit = toFiniteNumber(closed?.data?.review_budget)
+    ?? toFiniteNumber(created?.data?.review_budget);
+  const reviewBudget = reviewBudgetExplicit ?? DEFAULT_REVIEW_BUDGET;
+  const reviewBudgetIsDefault = reviewBudgetExplicit === null;
+  const overReviewBudget = derivedReviewRounds > reviewBudget || needsRevisionCount >= reviewBudget;
+
+  const attemptBudget = toFiniteNumber(created?.data?.attempt_budget);
+  const minimalism = normalizeNullableString(created?.data?.minimalism);
+  const minimalismTrigger = normalizeNullableString(created?.data?.minimalism_trigger);
+  const contextOverflowRisk = normalizeNullableString(created?.data?.context_overflow_risk)
+    ?? normalizeNullableString(closed?.data?.context_overflow_risk);
+  const contextPressureEncountered = readNullableBoolean(closed?.data?.context_pressure_encountered);
+  const reviewBudgetExceededRecorded = readNullableBoolean(closed?.data?.review_budget_exceeded);
+
+  return {
+    hasTelemetry: events.some(isTelemetryEvent),
+    hasCreated: created !== null,
+    hasClosed: closed !== null,
+    reviewResultCount,
+    needsRevisionCount,
+    acceptedCount,
+    maxExplicitReviewRound,
+    derivedReviewRounds,
+    reviewBudget,
+    reviewBudgetIsDefault,
+    overReviewBudget,
+    reviewBudgetExceededRecorded,
+    attemptBudget,
+    minimalism,
+    minimalismTrigger,
+    contextOverflowRisk,
+    contextPressureEncountered,
+  };
+}
+
 export function reportTaskEventLog({ target, taskId } = {}) {
   const resolvedTarget = target ? resolve(target) : process.cwd();
   const normalizedTaskId = normalizeNullableString(taskId);
@@ -1070,6 +1191,121 @@ export function reportTaskEventLog({ target, taskId } = {}) {
     ...summary,
     warnings: [...validation.warnings],
   };
+}
+
+function createEmptyFeatureAggregate() {
+  return {
+    telemetryVersion: FEATURE_TELEMETRY_VERSION,
+    tasksScanned: 0,
+    tasksWithTelemetry: 0,
+    reviewRounds: {
+      maxDerivedReviewRounds: 0,
+      tasksOverBudget: [],
+      churnTasks: [],
+    },
+    minimalism: { none: 0, lite: 0, full: 0, ultra: 0, missing: 0, other: 0 },
+    minimalismTriggers: [],
+    budgets: {
+      nonDefaultAttempt: [],
+      nonDefaultReview: [],
+    },
+    contextOverflowRisk: { medium: 0, high: 0, tasks: [] },
+    contextPressure: { true: 0, false: 0, missingForRiskTasks: [] },
+    warnings: [],
+  };
+}
+
+function accumulateTaskFeatures(features, triggerCounts, taskId, taskFeatures) {
+  features.tasksScanned += 1;
+  if (taskFeatures.hasTelemetry) features.tasksWithTelemetry += 1;
+
+  // Review-round dimension: derived from existing events, applies to every task.
+  features.reviewRounds.maxDerivedReviewRounds = Math.max(
+    features.reviewRounds.maxDerivedReviewRounds,
+    taskFeatures.derivedReviewRounds
+  );
+  if (taskFeatures.overReviewBudget) {
+    features.reviewRounds.tasksOverBudget.push(taskId);
+  }
+  if (taskFeatures.derivedReviewRounds > 1 || taskFeatures.needsRevisionCount > 0) {
+    features.reviewRounds.churnTasks.push({
+      taskId,
+      derivedReviewRounds: taskFeatures.derivedReviewRounds,
+      needsRevisionCount: taskFeatures.needsRevisionCount,
+      acceptedCount: taskFeatures.acceptedCount,
+      reviewBudget: taskFeatures.reviewBudget,
+      reviewBudgetIsDefault: taskFeatures.reviewBudgetIsDefault,
+      overBudget: taskFeatures.overReviewBudget,
+    });
+  }
+
+  // Emitted-telemetry dimensions: only count tasks that opted into telemetry so
+  // historical tasks are not miscounted as "minimalism missing".
+  if (taskFeatures.hasTelemetry && taskFeatures.hasCreated) {
+    if (taskFeatures.minimalism === null) {
+      features.minimalism.missing += 1;
+    } else if (MINIMALISM_LEVELS.includes(taskFeatures.minimalism)) {
+      features.minimalism[taskFeatures.minimalism] += 1;
+    } else {
+      features.minimalism.other += 1;
+    }
+    if (taskFeatures.minimalismTrigger) incrementCount(triggerCounts, taskFeatures.minimalismTrigger);
+  }
+
+  if (taskFeatures.attemptBudget !== null && taskFeatures.attemptBudget !== DEFAULT_ATTEMPT_BUDGET) {
+    features.budgets.nonDefaultAttempt.push({ taskId, attemptBudget: taskFeatures.attemptBudget });
+  }
+  if (!taskFeatures.reviewBudgetIsDefault && taskFeatures.reviewBudget !== DEFAULT_REVIEW_BUDGET) {
+    features.budgets.nonDefaultReview.push({ taskId, reviewBudget: taskFeatures.reviewBudget });
+  }
+
+  if (taskFeatures.contextOverflowRisk === 'medium' || taskFeatures.contextOverflowRisk === 'high') {
+    features.contextOverflowRisk[taskFeatures.contextOverflowRisk] += 1;
+    features.contextOverflowRisk.tasks.push(taskId);
+    if (taskFeatures.contextPressureEncountered === true) {
+      features.contextPressure.true += 1;
+    } else if (taskFeatures.contextPressureEncountered === false) {
+      features.contextPressure.false += 1;
+    } else {
+      features.contextPressure.missingForRiskTasks.push(taskId);
+    }
+  }
+
+  // Task-level telemetry warnings are forward-gated: only telemetry tasks.
+  if (taskFeatures.hasTelemetry) {
+    const risk = taskFeatures.contextOverflowRisk;
+    if ((risk === 'medium' || risk === 'high') && taskFeatures.contextPressureEncountered === null) {
+      features.warnings.push(
+        `${taskId}: context_overflow_risk '${risk}' set but closeout records no context_pressure_encountered`
+      );
+    }
+    if (taskFeatures.overReviewBudget) {
+      if (taskFeatures.reviewBudgetExceededRecorded !== true) {
+        const found = taskFeatures.reviewBudgetExceededRecorded === false ? 'false' : 'missing';
+        features.warnings.push(
+          `${taskId}: review rounds (${taskFeatures.derivedReviewRounds}) exceed budget (${taskFeatures.reviewBudget}) but closeout review_budget_exceeded is ${found}, not true`
+        );
+      }
+    } else if (taskFeatures.reviewBudgetExceededRecorded === true) {
+      features.warnings.push(
+        `${taskId}: closeout records review_budget_exceeded: true but derived review rounds (${taskFeatures.derivedReviewRounds}) are within budget (${taskFeatures.reviewBudget})`
+      );
+    }
+  }
+}
+
+function finalizeFeatureAggregate(features, triggerCounts) {
+  features.minimalismTriggers = sortCountEntries(triggerCounts).map(entry => ({
+    trigger: entry.value,
+    count: entry.count,
+  }));
+  features.reviewRounds.tasksOverBudget.sort((a, b) => String(a).localeCompare(String(b)));
+  features.reviewRounds.churnTasks.sort((a, b) => String(a.taskId).localeCompare(String(b.taskId)));
+  features.budgets.nonDefaultAttempt.sort((a, b) => String(a.taskId).localeCompare(String(b.taskId)));
+  features.budgets.nonDefaultReview.sort((a, b) => String(a.taskId).localeCompare(String(b.taskId)));
+  features.contextOverflowRisk.tasks.sort((a, b) => String(a).localeCompare(String(b)));
+  features.contextPressure.missingForRiskTasks.sort((a, b) => String(a).localeCompare(String(b)));
+  features.warnings.sort((a, b) => a.localeCompare(b));
 }
 
 export function reportEventLogs({ target } = {}) {
@@ -1102,6 +1338,7 @@ export function reportEventLogs({ target } = {}) {
     emptyLogs: [],
     warnings: [],
     tasks: [],
+    features: createEmptyFeatureAggregate(),
     missingLogs: false,
   };
 
@@ -1114,6 +1351,7 @@ export function reportEventLogs({ target } = {}) {
   const taskEvents = new Map();
   const totalRoleInvokedTargets = new Map();
   const totalDelegationModes = new Map();
+  const featureTriggerCounts = new Map();
   let totalFallbackCount = 0;
 
   for (const filePath of files) {
@@ -1251,6 +1489,8 @@ export function reportEventLogs({ target } = {}) {
       result.tasksWithReviewChurn.push(taskId);
     }
 
+    accumulateTaskFeatures(result.features, featureTriggerCounts, taskId, summarizeTaskFeatures(entry.events));
+
     if (!summary.strictAudit.presentEventTypes.includes('role.invoked')) {
       result.tasksWithMissingRoleInvoked.push(taskId);
     }
@@ -1268,6 +1508,7 @@ export function reportEventLogs({ target } = {}) {
   result.totalRoleInvokedTargets = sortCountEntries(totalRoleInvokedTargets);
   result.totalDelegationModes = sortCountEntries(totalDelegationModes);
   result.totalFallbackCount = totalFallbackCount;
+  finalizeFeatureAggregate(result.features, featureTriggerCounts);
 
   result.tasks.sort((a, b) => String(a.taskId).localeCompare(String(b.taskId)));
   result.tasksWithReviewChurn.sort();

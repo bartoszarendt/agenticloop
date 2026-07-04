@@ -113,6 +113,31 @@ the optional `## Trace` section of `agenticloop/memory/work-unit-summary.md`
 when workflow-gate events exist. Use them to confirm sequence, checks,
 decisions, and blockers.
 
+### Feature-adoption telemetry (closeout)
+
+When event logging is enabled and the task carried feature telemetry (see the
+feature-adoption telemetry guidance in `agenticloop/agents/maintainer.md`),
+mirror the closeout calibration fields into the `task.closed` event `data` so adoption stays
+auditable from logs without reading the backend. The durable record is still the
+`## Outcome` section of the task record; these are a log-native copy, not a
+replacement.
+
+Add to `task.closed --data-json`:
+
+- `feature_telemetry_version: 1`
+- `review_rounds`: the final closeout review-round count.
+- `review_budget` when it was set non-default on the task.
+- `review_budget_exceeded: true|false` when the review budget was reached or
+  exceeded.
+- `context_overflow_risk` when it was set on the task, and
+  `context_pressure_encountered: true|false` whenever context risk was set or
+  pressure actually occurred.
+
+Keep these to scalar verdicts. `agenticloop event-logging report --features`
+derives review-round churn from existing `review.result` events even when this
+telemetry is absent, and warns for a context-risk task whose closeout omits
+`context_pressure_encountered`.
+
 Do not copy raw transcripts, host runtime dumps, or full tool output into the task record.
 
 ## Group gate

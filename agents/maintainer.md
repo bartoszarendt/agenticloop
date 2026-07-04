@@ -156,7 +156,29 @@ Use the resolved command for maintainer-owned gates:
 decision is task-linked, `--role maintainer`, the required `--outcome` where
 the event type requires it, and a short summary. Do not attempt event logging
 when `event_logging` is disabled, and do not copy full task records, decision
-bodies, review bodies, or transcripts into the event log. When enabled, a
+bodies, review bodies, or transcripts into the event log.
+
+Feature-adoption telemetry: when event logging is enabled, mirror the
+task-record knobs into event `data` so `npx agenticloop event-logging report
+--features` can measure adoption from local logs without scraping the backend.
+The durable task record stays the contract; `data` is free-form, so this adds no
+schema, and none of these keys collide with the banned privacy keys. On
+`task.created` always emit `feature_telemetry_version: 1`, `minimalism`
+(`none|lite|full|ultra`), and a categorical `minimalism_trigger` (one of
+`ordinary-default`, `human-request`, `speculative-abstraction`, `new-dependency`,
+`future-proofing`, `trust-boundary`, `personal-data`, `safety-workflow`,
+`shared-schema`, `migration`, `cross-cutting`, `verification-sweep`, `unknown`);
+keep the rationale prose in `## Implementation Notes` so the event field stays
+aggregatable. Emit `attempt_budget`, `review_budget`, `context_overflow_risk`
+(`medium|high`), and a one-line `context_note` only when set non-default or
+present. Keep `context_note` to one verdict line, never discovery output or
+transcripts. On `task.closed` emit `feature_telemetry_version: 1`,
+`review_rounds`, `review_budget` when non-default, `review_budget_exceeded:
+true|false` when the budget was reached, and `context_overflow_risk` plus
+`context_pressure_encountered: true|false` when the task carried context risk.
+`event-logging validate` warns when a telemetry `task.created` omits
+`minimalism` or a `context_note` looks like a dump; `report --features` warns
+when a context-risk task's closeout omits `context_pressure_encountered`. When enabled, a
 completed review or closed task with zero maintainer gate events is
 non-conformant; record a concise missed-event process gap instead of inventing
 backdated normal events.
