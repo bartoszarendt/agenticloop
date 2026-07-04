@@ -187,9 +187,10 @@ linked issue (`number`, `body`, `title`), then checks that:
 - every required check has acceptable PR-body evidence, or an unambiguous
   successful status check that matches it.
 
-This gate does not change `agenticloop validate`. Offline validation never
-makes GitHub network calls; the preflight is a separate, opt-in GitHub-backed
-command.
+This gate does not change `agenticloop validate`. Normal validation performs
+GitHub label checks only when the active backend is `github`; files-backed
+validation makes no GitHub CLI or network calls. The preflight is a separate,
+opt-in GitHub-backed command that fetches pull request and issue data.
 
 Expected PR `## Evidence` shape:
 

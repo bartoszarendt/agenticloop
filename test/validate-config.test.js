@@ -391,6 +391,18 @@ function githubEvidenceRunner({
   };
 }
 
+// Wraps a command runner so tests can assert which commands were invoked
+// (used to prove files-backed validation never shells out to `gh`).
+function recordingRunner(inner) {
+  const calls = [];
+  const runner = (command, args, options) => {
+    calls.push({ command, args: [...args] });
+    return inner(command, args, options);
+  };
+  runner.calls = calls;
+  return runner;
+}
+
 // ---------------------------------------------------------------------------
 // Toolkit source repo passes
 // ---------------------------------------------------------------------------
@@ -1957,8 +1969,8 @@ describe('Files-first validation with project.md only', () => {
     assert.deepEqual(warnings, []);
   });
 
-  it('warns when project.md keeps files despite strong GitHub workflow evidence', () => {
-    const d = mkdtempSync(join(tmpDir, 'files-first-github-evidence-'));
+  it('never invokes gh for a files-backed project, even with a GitHub remote and populated labels', () => {
+    const d = mkdtempSync(join(tmpDir, 'files-no-gh-'));
     writeProjectMap(d, [
       'setup_status: unconfirmed',
       'setup_confirmed_at: ""',
@@ -1973,28 +1985,63 @@ describe('Files-first validation with project.md only', () => {
     mkdirSync(join(d, '.agenticloop', 'tmp'), { recursive: true });
     writeFileSync(join(d, '.gitignore'), '.agenticloop/tmp/\n');
 
-    const { warnings } = validateConfig(d, {
-      commandRunner: githubEvidenceRunner({
-        labelNames: [
-          'agent-ready',
-          'blocked',
-          'approved',
-          'type:impl',
-          'type:change-request',
-          'task:P6-FU-1',
-        ],
-        issueTitles: ['P3-10-FU-1 Implement checkout flow'],
-      }),
-    });
+    const runner = recordingRunner(githubEvidenceRunner({
+      labelNames: [
+        'agent-ready',
+        'blocked',
+        'approved',
+        'type:impl',
+        'type:change-request',
+        'task:P6-FU-1',
+      ],
+      issueTitles: ['P3-10-FU-1 Implement checkout flow'],
+    }));
+    const { warnings } = validateConfig(d, { commandRunner: runner });
 
     assert.ok(
-      warnings.some(w => /bounded GitHub backend evidence/.test(w) && w.includes('task labels already exist') && w.includes('issue title prefixes already exist')),
-      `expected GitHub evidence warning, got: ${JSON.stringify(warnings)}`
+      !runner.calls.some(call => call.command === 'gh'),
+      `files backend must not invoke gh, but did: ${JSON.stringify(runner.calls.filter(c => c.command === 'gh'))}`
+    );
+    assert.ok(
+      !warnings.some(w => /GitHub/.test(w)),
+      `files backend must not emit GitHub evidence warnings, got: ${JSON.stringify(warnings)}`
     );
   });
 
-  it('warns when project.md task_id_regex rejects observed GitHub task ids', () => {
-    const d = mkdtempSync(join(tmpDir, 'files-first-task-id-warning-'));
+  it('never invokes gh for a confirmed files-backed project with a GitHub remote', () => {
+    const d = mkdtempSync(join(tmpDir, 'files-confirmed-no-gh-'));
+    writeProjectMap(d, [
+      'setup_status: confirmed',
+      'setup_confirmed_at: "2026-01-01"',
+      'setup_confirmed_by: "maintainer"',
+      'task_backend: files',
+      'task_id_pattern: "T-<number>"',
+      'task_id_regex: "^T-\\\\d{3,}$"',
+      'task_file_template: ".agenticloop/tasks/{taskId}.md"',
+      'grouping_profile: flat',
+    ]);
+    writeBackendProjection(d, 'files');
+    mkdirSync(join(d, '.agenticloop', 'tmp'), { recursive: true });
+    writeFileSync(join(d, '.gitignore'), '.agenticloop/tmp/\n');
+
+    const runner = recordingRunner(githubEvidenceRunner({
+      labelNames: ['agent-ready', 'blocked', 'approved', 'type:impl', 'type:change-request'],
+      issueTitles: ['P3-10-FU-1 Implement checkout flow'],
+    }));
+    const { warnings } = validateConfig(d, { commandRunner: runner });
+
+    assert.ok(
+      !runner.calls.some(call => call.command === 'gh'),
+      `confirmed files backend must not invoke gh, but did: ${JSON.stringify(runner.calls.filter(c => c.command === 'gh'))}`
+    );
+    assert.ok(
+      !warnings.some(w => /GitHub/.test(w)),
+      `confirmed files backend must not emit GitHub evidence warnings, got: ${JSON.stringify(warnings)}`
+    );
+  });
+
+  it('does not consult GitHub task ids for task_id_regex on a files-backed project', () => {
+    const d = mkdtempSync(join(tmpDir, 'files-first-task-id-nowarn-'));
     writeProjectMap(d, [
       'setup_status: unconfirmed',
       'setup_confirmed_at: ""',
@@ -2006,6 +2053,37 @@ describe('Files-first validation with project.md only', () => {
       'grouping_profile: flat',
     ]);
     writeBackendProjection(d, 'files');
+    mkdirSync(join(d, '.agenticloop', 'tmp'), { recursive: true });
+    writeFileSync(join(d, '.gitignore'), '.agenticloop/tmp/\n');
+
+    const runner = recordingRunner(githubEvidenceRunner({
+      labelNames: ['agent-ready', 'blocked', 'approved', 'task:P6-FU-1'],
+    }));
+    const { warnings } = validateConfig(d, { commandRunner: runner });
+
+    assert.ok(
+      !runner.calls.some(call => call.command === 'gh'),
+      `files backend must not invoke gh for task_id_regex checks, but did: ${JSON.stringify(runner.calls.filter(c => c.command === 'gh'))}`
+    );
+    assert.ok(
+      !warnings.some(w => /task_id_regex/.test(w)),
+      `files backend must not warn about observed GitHub task ids, got: ${JSON.stringify(warnings)}`
+    );
+  });
+
+  it('warns when project.md task_id_regex rejects observed GitHub task ids on a github backend', () => {
+    const d = mkdtempSync(join(tmpDir, 'github-task-id-warning-'));
+    writeProjectMap(d, [
+      'setup_status: unconfirmed',
+      'setup_confirmed_at: ""',
+      'setup_confirmed_by: ""',
+      'task_backend: github',
+      'task_id_pattern: "T-<number>"',
+      'task_id_regex: "^T-\\\\d{3,}$"',
+      'task_file_template: ".agenticloop/tasks/{taskId}.md"',
+      'grouping_profile: flat',
+    ]);
+    writeBackendProjection(d, 'github');
     mkdirSync(join(d, '.agenticloop', 'tmp'), { recursive: true });
     writeFileSync(join(d, '.gitignore'), '.agenticloop/tmp/\n');
 

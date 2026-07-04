@@ -731,7 +731,7 @@ function uniqueExamples(values, limit = 3) {
   return [...new Set(values.filter(Boolean))].slice(0, limit);
 }
 
-function collectGithubBackendEvidence(repoRoot, config, commandRunner, taskBackendResolution) {
+function collectGithubBackendEvidence(repoRoot, config, commandRunner) {
   const githubConfig = config?.backends?.github ?? {};
   const requiredLabelNames = Object.values(resolveGithubLabelNames(config));
   const taskLabelTemplate = githubConfig.taskLabelTemplate ?? DEFAULT_TASK_LABEL_TEMPLATE;
@@ -751,15 +751,7 @@ function collectGithubBackendEvidence(repoRoot, config, commandRunner, taskBacke
     missingRequiredLabels: [],
     taskLabelIds: [],
     issueTitleIds: [],
-    strongReasons: [],
   };
-
-  if (
-    taskBackendResolution?.source === 'agenticloop.json' &&
-    taskBackendResolution?.legacyJsonTaskBackend === 'github'
-  ) {
-    evidence.strongReasons.push('legacy agenticloop.json sets taskBackend: github');
-  }
 
   if (!repoSlug) {
     return evidence;
@@ -809,17 +801,6 @@ function collectGithubBackendEvidence(repoRoot, config, commandRunner, taskBacke
           .filter(Boolean),
         5
       );
-
-      if (evidence.presentRequiredLabels.length >= 3) {
-        evidence.strongReasons.push(
-          `GitHub workflow labels already exist (${uniqueExamples(evidence.presentRequiredLabels).join(', ')})`
-        );
-      }
-      if (evidence.taskLabelIds.length > 0) {
-        evidence.strongReasons.push(
-          `task labels already exist (${uniqueExamples(evidence.taskLabelIds).join(', ')})`
-        );
-      }
     } else {
       evidence.labelListError = 'gh label list returned non-JSON output';
     }
@@ -848,11 +829,6 @@ function collectGithubBackendEvidence(repoRoot, config, commandRunner, taskBacke
           .filter(Boolean),
         5
       );
-      if (evidence.issueTitleIds.length > 0) {
-        evidence.strongReasons.push(
-          `issue title prefixes already exist (${uniqueExamples(evidence.issueTitleIds).join(', ')})`
-        );
-      }
     } else {
       evidence.issueListError = 'gh issue list returned non-JSON output';
     }
@@ -891,9 +867,18 @@ function validateBackendEvidence(repoRoot, taskBackendResolution, projectMap, js
     );
   }
 
-  const evidence = collectGithubBackendEvidence(repoRoot, jsonConfig, commandRunner, taskBackendResolution);
+  // GitHub label and issue evidence is gathered only for the GitHub backend. A
+  // files-backed project must never invoke `gh` during validation, even when a
+  // GitHub remote is configured and the CLI is authenticated. The legacy
+  // taskBackend mismatch checks above are offline and are the only backend
+  // evidence a files-backed project needs.
+  if (effectiveTaskBackend !== 'github') {
+    return;
+  }
 
-  if (effectiveTaskBackend === 'github' && evidence.repoSlug) {
+  const evidence = collectGithubBackendEvidence(repoRoot, jsonConfig, commandRunner);
+
+  if (evidence.repoSlug) {
     if (evidence.ghState === 'missing' || evidence.ghState === 'unavailable') {
       warnings.push("Active task backend is 'github' but gh is unavailable, so required label checks were skipped.");
     } else if (evidence.ghState === 'unauthenticated') {
@@ -906,12 +891,6 @@ function validateBackendEvidence(repoRoot, taskBackendResolution, projectMap, js
         `Active task backend is 'github' but required GitHub labels are missing: ${evidence.missingRequiredLabels.join(', ')}. Run 'agenticloop bootstrap-labels'.`
       );
     }
-  }
-
-  if (effectiveTaskBackend === 'files' && evidence.strongReasons.length > 0) {
-    warnings.push(
-      `Active task backend is 'files' but bounded GitHub backend evidence suggests an existing GitHub issue/PR workflow: ${evidence.strongReasons.join('; ')}. Review the backend choice and record an explicit files-backend exception before confirming setup.`
-    );
   }
 
   if (projectMap?.task_id_regex) {

@@ -19,7 +19,7 @@
  *   agenticloop worktree cleanup [--target <dir>] [--dry-run|--yes] [--json]
  *   agenticloop worktree resolve-state <task-id|path> [--target <dir>] [--strategy <strategy>] [--dry-run|--yes] [--json]
  *   agenticloop worktree prune [--target <dir>] [--dry-run|--yes] [--json]
- *   agenticloop bootstrap-labels [--repo <r>] [--dry-run] [--group <g>] [--task-id <id>]
+ *   agenticloop bootstrap-labels [--repo <r>] [--dry-run] [--group <g>] [--task-id <id>] [--force]
  *   agenticloop generate opencode     [--target <dir>] [--output-dir <dir>]
  *   agenticloop generate codex        [--target <dir>] [--output-dir <dir>]
  *   agenticloop generate claude-code  [--target <dir>] [--output-dir <dir>]
@@ -376,6 +376,7 @@ Options (bootstrap-labels):
   --dry-run             Print gh commands without running them.
   --group <id>          Also create a grouping label.
   --task-id <id>        Also create a task:<id> label.
+  --force               Run even when the active task backend is not github.
 
 Options (generate opencode):
   --target <dir>        Directory containing agenticloop.json (default: current).
@@ -1511,6 +1512,20 @@ async function cmdBootstrapLabels(args) {
       process.exitCode = 1;
       return;
     }
+  }
+
+  // bootstrap-labels is a GitHub-backend-only setup step. Guard against running
+  // it accidentally against a files-backed project, where it would create
+  // GitHub labels the workflow never uses.
+  const backendResolution = resolveTaskBackend(target);
+  if (backendResolution.backend !== 'github' && !opts.force) {
+    console.error(
+      `Active task backend is '${backendResolution.backend}', not 'github'. ` +
+      `bootstrap-labels creates GitHub labels and is only used by the github backend.\n` +
+      `Set task_backend: github in .agenticloop/project.md, or pass --force to run anyway.`
+    );
+    process.exitCode = 1;
+    return;
   }
 
   console.log();

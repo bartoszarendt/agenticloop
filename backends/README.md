@@ -114,3 +114,17 @@ Migration must carry over:
 Fields that have no equivalent in the target backend (for example a GitHub issue
 number when moving to files) are recorded in a `## Provenance` section so the
 audit trail is not lost.
+
+### Cross-backend surface mapping
+
+The two backends project the same task-record surfaces onto different storage.
+This mapping is a migration and orientation aid; neither backend depends on the
+other at runtime.
+
+| Files backend | GitHub backend |
+|---|---|
+| Frontmatter fields | Labels, PR status, issue state |
+| Current implementation summary | PR body |
+| `## Revision Log`, `## Comments` | PR/issue comments, timeline |
+| Maintainer review sections | PR review comments |
+| Git commits of the task file | Git commits of the PR |

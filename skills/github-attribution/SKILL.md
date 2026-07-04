@@ -10,6 +10,10 @@ metadata:
 
 # GitHub attribution
 
+This skill applies only when `task_backend: github` is set. Files-backed
+projects do not post GitHub bodies or comments and do not use these trailers; see
+`agenticloop/backends/files.md`.
+
 When multiple agent roles share one GitHub token, GitHub's author field cannot identify which role wrote a comment. Agentic Loop uses a cooperative text trailer for role attribution.
 
 This is not cryptographic. Treat missing or malformed attribution as `unknown`.

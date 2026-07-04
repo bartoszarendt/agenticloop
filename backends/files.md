@@ -6,13 +6,19 @@ The files backend stores task records as local Markdown files. It is the
 default backend for Agentic Loop projects. No GitHub repository, account, or
 labels are required.
 
-A GitHub remote does not select the GitHub backend. Only `.agenticloop/project.md`
-`task_backend: github` enables GitHub issue/PR behavior. For `task_backend: files`,
-implementation artifacts are local branch, commit, range, patch, or diff references
-recorded in the task file. Files backend agents must not open PRs, close issues, or
-merge branches as part of the workflow. After files-backed acceptance,
-integration/publish/PR/merge is a separate human decision outside normal files-backend
-task automation, unless the project explicitly switches to the GitHub backend.
+Everything the backend needs lives locally. Implementation artifacts are a local
+branch, commit, range, patch, or diff reference recorded in the task file; task
+state, evidence, and review all live in the task file and in Git. Files-backend
+validation and task operations never call `gh` or make GitHub network requests,
+even when a GitHub remote and an authenticated GitHub CLI are available.
+
+The backend is selected by `.agenticloop/project.md` `task_backend: files` (the
+default). A GitHub remote does not change the backend; only `task_backend: github`
+enables GitHub issue/PR behavior. Files-backend agents must not open PRs, close
+issues, or merge branches as part of the workflow. After files-backed acceptance,
+integration/publish/PR/merge is a separate human decision outside normal
+files-backend task automation, unless the project explicitly switches to the
+GitHub backend.
 
 The files backend is not an autonomous runner. It is a storage projection for
 the same Agentic Loop roles, skills, and review gates.
@@ -77,7 +83,7 @@ and `union-jsonl` computes a root-first max-count multiset union and writes the
 result to both files. resolve-state never removes worktrees or branches. Shared `.agenticloop` files are not
 preserved. Project-root bare coordinator repos are supported. Branch deletion is
 not part of v1 cleanup. Also set the host or lane environment guard from
-`agenticloop/AGENTIC_LOOP.md` for Git and GitHub CLI prompts, use explicit commit
+`agenticloop/AGENTIC_LOOP.md` for Git prompts, use explicit commit
 messages or file-backed messages, and do not run editor-backed commands such as
 bare `git commit`, `git rebase -i`, `git tag -a`, or `git config --edit`.
 
@@ -342,9 +348,9 @@ the closeout status marker on the last accepted task record (see
 ## Current State and History Discipline
 
 Files-backed task records use a hybrid model: some fields are mutable current
-state and some sections are append-only history. This mirrors the GitHub
-projection where the PR body and labels are the current surface while comments
-and timeline are the history.
+state and some sections are append-only history. The frontmatter fields and the
+current implementation summary are the mutable surface; the comments and
+revision-log sections grow append-only.
 
 ### Mutable current state
 
@@ -352,9 +358,9 @@ These may be updated in place to reflect the latest truth:
 
 - YAML frontmatter fields: `status`, `review_status`, `implementation_artifact`,
   `block_category`, `type`, `approved`, and other mechanical state.
-- The one current `## Implementation Summary` (or `## Scope Completed` when
-  using the unified work-unit summary shape). This section may be refreshed to
-  match the latest artifact and evidence.
+- The one current `## Scope Completed` (or legacy `## Implementation Summary`)
+  section. This section may be refreshed to match the latest artifact and
+  evidence.
 
 ### Append-only history
 
@@ -394,13 +400,3 @@ Review must inspect untracked files with
 Untracked `.agenticloop/tasks/*.md` files are a review blocker unless the
 project explicitly records a local-only exception in `.agenticloop/project.md`
 or the task file itself.
-
-### GitHub analogy
-
-| Files backend | GitHub backend |
-|---|---|
-| Frontmatter fields | Labels, PR status, issue state |
-| Current implementation summary | PR body |
-| `## Revision Log`, `## Comments` | PR/issue comments, timeline |
-| Maintainer review sections | PR review comments |
-| Git commits of the task file | Git commits of the PR |

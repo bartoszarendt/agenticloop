@@ -12,7 +12,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -130,6 +130,64 @@ describe('bootstrap-labels CLI config loading', () => {
         !result.stdout.includes('gh label create agent-ready'),
         'CLI should not emit default-label dry-run commands after config load failure'
       );
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('bootstrap-labels backend guard', () => {
+  function writeProjectMap(dir, backend) {
+    mkdirSync(join(dir, '.agenticloop'), { recursive: true });
+    writeFileSync(
+      join(dir, '.agenticloop', 'project.md'),
+      ['---', `task_backend: ${backend}`, '---', '# Project Map'].join('\n')
+    );
+  }
+
+  function runCli(dir, extraArgs = []) {
+    return spawnSync(
+      process.execPath,
+      [join(REPO_ROOT, 'bin', 'agenticloop.js'), 'bootstrap-labels', '--target', dir, '--dry-run', ...extraArgs],
+      { cwd: REPO_ROOT, encoding: 'utf-8' }
+    );
+  }
+
+  it('refuses to run against a files-backed project without --force', () => {
+    const d = mkdtempSync(join(tmpdir(), 'al-bootstrap-files-'));
+    try {
+      writeProjectMap(d, 'files');
+      const result = runCli(d);
+      assert.notEqual(result.status, 0, 'CLI should fail for a files-backed project');
+      assert.match(result.stderr, /task backend is 'files'/);
+      assert.ok(
+        !result.stdout.includes('gh label create agent-ready'),
+        'CLI should not emit label commands for a files-backed project'
+      );
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('runs against a files-backed project when --force is supplied', () => {
+    const d = mkdtempSync(join(tmpdir(), 'al-bootstrap-files-force-'));
+    try {
+      writeProjectMap(d, 'files');
+      const result = runCli(d, ['--force']);
+      assert.equal(result.status, 0, `CLI should succeed with --force, stderr: ${result.stderr}`);
+      assert.match(result.stdout, /gh label create agent-ready/);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('runs against a github-backed project without --force', () => {
+    const d = mkdtempSync(join(tmpdir(), 'al-bootstrap-github-'));
+    try {
+      writeProjectMap(d, 'github');
+      const result = runCli(d);
+      assert.equal(result.status, 0, `CLI should succeed for a github-backed project, stderr: ${result.stderr}`);
+      assert.match(result.stdout, /gh label create agent-ready/);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
