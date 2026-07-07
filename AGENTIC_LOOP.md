@@ -88,7 +88,7 @@ before constructing any path.
 | Path | Leading dot | Owner | Read/write | Holds |
 | --- | --- | --- | --- | --- |
 | `agenticloop/` | no | toolkit | read-only | `AGENTIC_LOOP.md`, `agents/`, `skills/`, `backends/`, `commands/`, `memory/`, `config.json` |
-| `.agenticloop/` | yes | target project | read/write | `project.md`, `tasks/`, `decisions/`, `improvements/`, `logs/`, `tmp/` |
+| `.agenticloop/` | yes | target project | read/write | `project.md`, `tasks/`, `decisions/`, `improvements/` (created on first proposal), `logs/`, `tmp/` |
 
 The process doc is `agenticloop/AGENTIC_LOOP.md` (no dot) and the role files are
 `agenticloop/agents/<role>.md` (no dot). Project state such as
@@ -366,9 +366,10 @@ confirmation pattern. In dry-run JSON output, `wouldRemove` lists the planned
 removals; no worktrees are deleted. It keeps open pull requests, locked worktrees, worktrees
 with blocking dirty source or shared `.agenticloop` state, external or detached
 worktrees, and lanes with active task state. Task-specific lane-local
-`.agenticloop` state is flat only (`logs`, `tasks`, `summaries`, and `decisions`
-files directly under `.agenticloop/<dir>/`); it is preserved before removal and
-does not by itself block cleanup. Nested or shared `.agenticloop` files are not
+`.agenticloop` state is flat only (`logs`, `tasks`, `summaries` (legacy;
+preserved for migration only -- current projects do not create a summaries
+directory), and `decisions` files directly under `.agenticloop/<dir>/`); it is
+preserved before removal and does not by itself block cleanup. Nested or shared `.agenticloop` files are not
 lane-local and dirty shared state blocks cleanup. Git worktree removal may be
 forced internally only after preservation succeeds. For `.jsonl` lane-local
 files, preservation is safe when the root file already contains every lane line
@@ -917,7 +918,7 @@ Valid default task IDs: `T-001`, `T-002`, `T-120`.
 .agenticloop/
   decisions/
     D-2026-06-17-001.md
-  improvements/
+  improvements/ (created on first proposal)
     I-2026-06-17-001.md
   tasks/
     T-001.md
@@ -928,6 +929,11 @@ No GitHub repository is required for files-backed work.
 
 Projects that choose a grouping profile may still use group-shaped task IDs such
 as `P1-01`, but that is optional project config, not the universal default.
+
+The registry regex in `agenticloop/config.json` bounds detection candidates
+only; the enforced per-project convention is `task_id_regex` in
+`.agenticloop/project.md` (default `^T-\d{3,}$`). An ID valid under the registry
+regex is not necessarily valid for the project.
 
 ## Optional Backend: GitHub
 

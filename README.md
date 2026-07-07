@@ -131,7 +131,7 @@ target-project/
     project.md
     tasks/
     decisions/
-    improvements/
+    improvements/ (created on first proposal)
     logs/
     tmp/
 ```
@@ -348,8 +348,10 @@ npx agenticloop remove --yes --include-state         Also remove target-owned `.
 ```
 
 Lane-local state that cleanup can preserve is flat only (`logs`, `tasks`,
-`summaries`, and `decisions` files directly under `.agenticloop/<dir>/`). Nested
-or shared `.agenticloop` files are treated as blocking dirty state. For `.jsonl`
+`summaries` (legacy; preserved for migration only -- current projects do not
+create a summaries directory), and `decisions` files directly under
+`.agenticloop/<dir>/`). Nested or shared `.agenticloop` files are treated as
+blocking dirty state. For `.jsonl`
 files, preservation is safe when the root file already contains every lane line
 (a root superset). If preservation conflicts with existing root state, use
 `worktree resolve-state` with `--strategy prefer-root` (copy root into lane),

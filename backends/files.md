@@ -69,10 +69,11 @@ preview lane removal, then `npx agenticloop worktree cleanup --yes` to remove
 merged standard lanes. Cleanup keeps locked worktrees, worktrees with blocking
 dirty source or shared `.agenticloop` state, external or detached worktrees, and
 lanes with active task state. Task-specific lane-local `.agenticloop` state is
-flat only (`logs`, `tasks`, `summaries`, and `decisions` files directly under
-`.agenticloop/<dir>/`); it is preserved before removal and does not by itself block
-cleanup. Nested or shared `.agenticloop` files are not lane-local and dirty shared
-state blocks cleanup. Git worktree removal may be forced internally only after
+flat only (`logs`, `tasks`, `summaries` (legacy; preserved for migration only --
+current projects do not create a summaries directory), and `decisions` files
+directly under `.agenticloop/<dir>/`); it is preserved before removal and does
+not by itself block cleanup. Nested or shared `.agenticloop` files are not
+lane-local and dirty shared state blocks cleanup. Git worktree removal may be forced internally only after
 preservation succeeds. For `.jsonl` lane-local files, preservation is safe when
 the root file already contains every lane line (a root superset). If lane-local
 preservation conflicts with existing root state, use `npx agenticloop worktree
@@ -185,6 +186,11 @@ Projects that choose grouping may override this. For example, a project with
 The default regex is `^T-\d{3,}$`. Override `task_id_regex` in
 `.agenticloop/project.md` only when the target project uses a different naming
 convention.
+
+The registry regex in `agenticloop/config.json` bounds detection candidates
+only; the enforced per-project convention is `task_id_regex` in
+`.agenticloop/project.md` (default `^T-\d{3,}$`). An ID valid under the registry
+regex is not necessarily valid for the project.
 
 ## Task File Shape
 
