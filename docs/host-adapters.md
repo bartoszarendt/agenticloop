@@ -159,6 +159,12 @@ record of how much an adapter is trusted.
 - `placeholder` - reserved name with no generator yet. Avoid referencing it in
   target-owned config until the generator exists.
 
+Adapter promotion to `supported` and major adapter-methodology changes require
+a dated real-run evidence note naming the host, target project or fixture, date,
+command or session path, result, and follow-up decision. Agentic Loop does not
+maintain standing telemetry; collect evidence only from deliberate validation
+runs recorded in docs or plans.
+
 ## Loop-Guard Capabilities
 
 Prompt-level liveness rules reduce loop risk, but host runtime controls are the
