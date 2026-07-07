@@ -213,9 +213,7 @@ See [docs/host-adapters.md](docs/host-adapters.md) for the full adapter matrix a
 
 ## Cost-quality routing by role
 
-Different roles need different intelligence. The orchestrator reads docs and routes work -- a cheap fast model can do that. The maintainer defines scope, reviews implementation, and decides acceptance -- that needs the strongest reasoning you can justify. The engineer implements scoped changes with tests and evidence -- a capable coding model, not necessarily the most expensive one.
-
-This is not just about saving money. It is about putting expensive reasoning where it changes the outcome and not burning it on coordination work.
+Different roles need different intelligence. Cheap, fast orchestration is appropriate only for serial single-task coordination with clear scope; parallel scans, lease design, backend selection, and authorization-boundary judgment need strong reasoning. The practical savings usually come from splitting implementation and review: use a capable coding model for engineer work, and reserve the strongest reasoning you can justify for maintainer scope, review, and acceptance decisions.
 
 Adapter-local role settings live under `adapters.<host>.roleSettings.<role>` in `agenticloop.json`. OpenCode and Codex support role-specific reasoning effort. Claude Code supports role-specific model and permission mode. Copilot and Cursor currently support role-specific model selection.
 
