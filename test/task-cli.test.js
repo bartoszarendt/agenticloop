@@ -195,4 +195,15 @@ describe('task CLI', () => {
     assert.equal(payload[0].errors.length, 0);
     assert.ok(payload[0].warnings.some(w => w.includes("empty '## Outcome' section")));
   });
+
+  it('warns but continues when a task subcommand receives an unknown option', () => {
+    const target = makeTarget('unknown-option');
+    assertOk(run(['task', 'new', 'Warn on unknown option', '--target', target]));
+
+    const result = run(['task', 'list', '--target', target, '--bogus']);
+
+    assertOk(result);
+    assert.match(result.stderr, /WARN: task list ignoring unknown option\(s\): --bogus/);
+    assert.match(result.stdout, /T-001/);
+  });
 });

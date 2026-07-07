@@ -68,6 +68,13 @@ describe('lifecycle CLI', () => {
     assert.doesNotMatch(result.stdout, /No configuration found/);
   });
 
+  it('warns but continues when validate receives an unknown option', () => {
+    const result = run(['validate', '--unknown-option'], { cwd: REPO_ROOT });
+
+    assertOk(result);
+    assert.match(result.stderr, /WARN: validate ignoring unknown option\(s\): --unknown-option/);
+  });
+
   it('init refuses to mutate the package source repo root', () => {
     const result = run(['init'], { cwd: REPO_ROOT });
 

@@ -106,6 +106,10 @@ function toCamelCase(s) {
   return s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
 }
 
+function toKebabCase(s) {
+  return s.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`);
+}
+
 const REPEATABLE_OPTIONS = new Set(['adapter', 'ref']);
 const DEFAULT_LOG_DIR_DISPLAY = DEFAULT_LOG_DIR.replaceAll('\\', '/');
 const TASK_EVENT_LOG_PATH_DISPLAY = `${DEFAULT_LOG_DIR_DISPLAY}/<task-id>.jsonl`;
@@ -137,6 +141,14 @@ function parseArgs(rawArgs) {
     }
   }
   return { opts, positional };
+}
+
+function warnUnknownOptions(opts, allowed, commandLabel) {
+  const allowedSet = new Set(allowed);
+  const unknown = Object.keys(opts).filter(key => !allowedSet.has(key));
+  if (unknown.length > 0) {
+    console.warn(`  WARN: ${commandLabel} ignoring unknown option(s): ${unknown.map(key => `--${toKebabCase(key)}`).join(', ')}`);
+  }
 }
 
 function parseRequiredEventTypesOption(value) {
@@ -512,7 +524,7 @@ function normalizeAdapterTargets(adapterOpt) {
   return { adapters: raw, errors: [] };
 }
 
-function detectGeneratedAdapterTargets(target, alConfig = null) {
+function detectGeneratedAdapterTargets(target) {
   const adapters = [];
   const opencodePresent = Object.values(OPENCODE_AGENT_RELATIVE_PATHS)
     .some(relPath => existsSync(join(target, relPath))) || existsSync(join(target, OPENCODE_COMMAND_RELATIVE_PATH));
@@ -661,6 +673,7 @@ async function generateAdapterTarget(sub, { opts, target, alConfig, preserveExis
 
 async function cmdInit(args) {
   const { opts } = parseArgs(args);
+  warnUnknownOptions(opts, ['target', 'adapter', 'setup', 'opencode', 'updateAssets'], 'init');
   const target = opts.target ? resolve(opts.target) : process.cwd();
   const adapter = Array.isArray(opts.adapter) ? opts.adapter[0] : opts.adapter;
   const setup = Boolean(opts.setup);
@@ -725,6 +738,7 @@ async function cmdInit(args) {
 
 async function cmdUpdate(args) {
   const { opts } = parseArgs(args);
+  warnUnknownOptions(opts, ['target', 'adapter'], 'update');
   const target = opts.target ? resolve(opts.target) : process.cwd();
   const { adapters: requestedAdapters, errors: adapterErrors } = normalizeAdapterTargets(opts.adapter);
 
@@ -744,17 +758,9 @@ async function cmdUpdate(args) {
     return;
   }
 
-  let detectedConfig = null;
-  const detectedConfigPath = join(target, 'agenticloop.json');
-  if (requestedAdapters.length === 0 && existsSync(detectedConfigPath)) {
-    try {
-      detectedConfig = loadAgenticLoopConfig(detectedConfigPath);
-    } catch { /* loadAlConfigOrExit will report later if needed */ }
-  }
-
   const adapters = requestedAdapters.length > 0
     ? requestedAdapters
-    : detectGeneratedAdapterTargets(target, detectedConfig);
+    : detectGeneratedAdapterTargets(target);
 
   if (adapters.length === 0) {
     console.log('  No existing generated adapter artifacts found.');
@@ -799,6 +805,7 @@ async function cmdUpdate(args) {
 
 async function cmdRemove(args) {
   const { opts } = parseArgs(args);
+  warnUnknownOptions(opts, ['target', 'dryRun', 'yes', 'includeState'], 'remove');
   const target = opts.target ? resolve(opts.target) : process.cwd();
   const dryRun = Boolean(opts.dryRun);
   const yes = Boolean(opts.yes);
@@ -832,6 +839,7 @@ async function cmdRemove(args) {
 
 async function cmdValidate(args) {
   const { opts } = parseArgs(args);
+  warnUnknownOptions(opts, ['target', 'adapter'], 'validate');
   const target = opts.target ? resolve(opts.target) : process.cwd();
   const forcedAdapters = Array.isArray(opts.adapter) ? opts.adapter : (opts.adapter ? [opts.adapter] : []);
   const result = runValidation(target, { adapters: forcedAdapters });
@@ -953,6 +961,7 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
   const target = opts.target ? resolve(opts.target) : process.cwd();
 
   if (sub === 'validate') {
+    warnUnknownOptions(opts, ['target', 'output'], `${commandLabel} validate`);
     const eventLogDirectory = resolveLogDirectory(target);
     const pathResult = opts.output ? resolveEventLogPath(target, opts.output) : null;
     const eventLogPath = pathResult?.path ?? null;
@@ -991,6 +1000,7 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
   }
 
   if (sub === 'audit') {
+    warnUnknownOptions(opts, ['target', 'task', 'require'], `${commandLabel} audit`);
     if (!opts.task) {
       console.error('--task is required for event log audit');
       process.exitCode = 1;
@@ -1059,6 +1069,7 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
   }
 
   if (sub === 'report') {
+    warnUnknownOptions(opts, ['target', 'task', 'features'], `${commandLabel} report`);
     if (opts.features) {
       let result;
       try {
@@ -1241,6 +1252,18 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
     return;
   }
 
+  warnUnknownOptions(
+    opts,
+    ['target', 'summary', 'outcome', 'role', 'backend', 'task', 'traceId', 'parentEventId', 'ref', 'refs', 'dataJson', 'output', 'host'],
+    `${commandLabel} ${sub}`
+  );
+
+  if (opts.refs !== undefined) {
+    const refs = String(opts.refs).split(',').map(ref => ref.trim()).filter(Boolean);
+    const existing = Array.isArray(opts.ref) ? opts.ref : (opts.ref ? [opts.ref] : []);
+    opts.ref = [...existing, ...refs];
+  }
+
   if (!opts.summary) {
     console.error('--summary is required for event writes');
     process.exitCode = 1;
@@ -1265,6 +1288,7 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
   }
 
   const backendResolution = resolveTaskBackend(target);
+  for (const warning of backendResolution.warnings) console.warn(`  WARN: ${warning}`);
   const defaultBackend = backendResolution.backend === 'files' || backendResolution.backend === 'github'
     ? backendResolution.backend
     : 'unknown';
@@ -1315,6 +1339,7 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
 
 async function cmdConfigureModels(args) {
   const { opts } = parseArgs(args);
+  warnUnknownOptions(opts, ['target', 'adapter', 'role', 'model', 'reasoningEffort'], 'configure models');
   const target = opts.target ? resolve(opts.target) : process.cwd();
   let adapter = Array.isArray(opts.adapter) ? opts.adapter[0] : opts.adapter;
 
@@ -1392,6 +1417,7 @@ async function cmdConfigureModels(args) {
 
 async function cmdSetup(args) {
   const { opts } = parseArgs(args);
+  warnUnknownOptions(opts, ['target', 'adapter', 'yes', 'nonInteractive'], 'setup');
   const target = opts.target ? resolve(opts.target) : process.cwd();
   const adapter = Array.isArray(opts.adapter) ? opts.adapter[0] : opts.adapter;
   const nonInteractive = Boolean(opts.yes) || Boolean(opts.nonInteractive);
@@ -1416,12 +1442,14 @@ async function cmdSetup(args) {
 
 async function cmdDoctor(args) {
   const { opts } = parseArgs(args);
+  warnUnknownOptions(opts, ['target'], 'doctor');
   const target = opts.target ? resolve(opts.target) : process.cwd();
   printDoctor(target);
 }
 
 async function cmdStatus(args) {
   const { opts } = parseArgs(args);
+  warnUnknownOptions(opts, ['target'], 'status');
   const target = opts.target ? resolve(opts.target) : process.cwd();
   printAdapterDiscovery(target);
   console.log('Task state: run "agenticloop task list" to inspect files-backed task records.');
@@ -1438,6 +1466,7 @@ async function cmdWorktree(args) {
   try {
     if (sub === 'add') {
       const { opts, positional } = parseArgs(args.slice(1));
+      warnUnknownOptions(opts, ['target', 'from'], 'worktree add');
       const [taskId, branch] = positional;
       if (!taskId || !branch || positional.length !== 2) {
         console.error('Usage: agenticloop worktree add <task-id> <branch> [--from <ref>] [--target <dir>]');
@@ -1470,6 +1499,7 @@ async function cmdWorktree(args) {
 
     if (sub === 'guard') {
       const { opts, positional } = parseArgs(args.slice(1));
+      warnUnknownOptions(opts, ['target', 'fix', 'all'], 'worktree guard');
       if (positional.length > 1) {
         console.error('Usage: agenticloop worktree guard [--fix] [--all|<path>] [--target <dir>]');
         process.exitCode = 1;
@@ -1489,6 +1519,7 @@ async function cmdWorktree(args) {
 
     if (sub === 'list') {
       const { opts } = parseArgs(args.slice(1));
+      warnUnknownOptions(opts, ['target', 'json'], 'worktree list');
       const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
       const asJson = Boolean(opts.json);
       const records = listAgenticLoopWorktrees(target);
@@ -1503,6 +1534,7 @@ async function cmdWorktree(args) {
 
     if (sub === 'remove') {
       const { opts, positional } = parseArgs(args.slice(1));
+      warnUnknownOptions(opts, ['target', 'dryRun', 'yes', 'force', 'json'], 'worktree remove');
       const identifier = positional[0];
       if (!identifier) {
         console.error('Usage: agenticloop worktree remove <task-id|path> [--target <dir>] [--dry-run|--yes] [--force] [--json]');
@@ -1535,6 +1567,7 @@ async function cmdWorktree(args) {
 
     if (sub === 'cleanup') {
       const { opts } = parseArgs(args.slice(1));
+      warnUnknownOptions(opts, ['target', 'dryRun', 'yes', 'json'], 'worktree cleanup');
       const dryRun = Boolean(opts.dryRun);
       const yes = Boolean(opts.yes);
       if (!dryRun && !yes) {
@@ -1559,6 +1592,7 @@ async function cmdWorktree(args) {
 
     if (sub === 'resolve-state') {
       const { opts, positional } = parseArgs(args.slice(1));
+      warnUnknownOptions(opts, ['target', 'strategy', 'dryRun', 'yes', 'json'], 'worktree resolve-state');
       const identifier = positional[0];
       if (!identifier) {
         console.error('Usage: agenticloop worktree resolve-state <task-id|path> [--target <dir>] [--strategy <strategy>] [--dry-run|--yes] [--json]');
@@ -1591,6 +1625,7 @@ async function cmdWorktree(args) {
 
     if (sub === 'prune') {
       const { opts } = parseArgs(args.slice(1));
+      warnUnknownOptions(opts, ['target', 'dryRun', 'yes', 'json'], 'worktree prune');
       const dryRun = Boolean(opts.dryRun);
       const yes = Boolean(opts.yes);
       if (!dryRun && !yes) {
@@ -1623,6 +1658,7 @@ async function cmdWorktree(args) {
 
 async function cmdBootstrapLabels(args) {
   const { opts } = parseArgs(args);
+  warnUnknownOptions(opts, ['target', 'repo', 'dryRun', 'group', 'taskId', 'force'], 'bootstrap-labels');
   const target = opts.target ? resolve(opts.target) : process.cwd();
   const projectMap = loadProjectMap(target)?.config ?? null;
 
@@ -1642,6 +1678,7 @@ async function cmdBootstrapLabels(args) {
   // it accidentally against a files-backed project, where it would create
   // GitHub labels the workflow never uses.
   const backendResolution = resolveTaskBackend(target);
+  for (const warning of backendResolution.warnings) console.warn(`  WARN: ${warning}`);
   if (backendResolution.backend !== 'github' && !opts.force) {
     console.error(
       `Active task backend is '${backendResolution.backend}', not 'github'. ` +
@@ -1689,13 +1726,6 @@ function loadAlConfigOrExit(target, hint = '') {
   }
 }
 
-function resolveOutputPath(opts, target, defaultFile) {
-  if (opts.output) {
-    return isAbsolute(opts.output) ? opts.output : resolve(opts.output);
-  }
-  return join(target, defaultFile);
-}
-
 function resolveOutputDir(opts, target) {
   if (opts.outputDir) {
     return isAbsolute(opts.outputDir) ? opts.outputDir : resolve(opts.outputDir);
@@ -1711,6 +1741,7 @@ async function cmdGenerate(subArgs) {
     return;
   }
   const { opts } = parseArgs(subArgs.slice(1));
+  warnUnknownOptions(opts, ['target', 'outputDir', 'output'], `generate ${sub}`);
   const target = opts.target ? resolve(opts.target) : process.cwd();
 
   const alConfig = loadAlConfigOrExit(target);

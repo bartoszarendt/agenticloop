@@ -96,6 +96,12 @@ export function resolveTaskBackend(repoRoot, options = {}) {
     source = 'agenticloop.json';
   }
 
+  if (!isValidTaskBackend(backend)) {
+    warnings.push(
+      `Unsupported task backend '${backend}' from ${source}; supported backends: ${[...VALID_TASK_BACKENDS].join(', ')}`
+    );
+  }
+
   return {
     backend,
     source,

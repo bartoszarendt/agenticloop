@@ -45,6 +45,18 @@ function parseArgs(rawArgs) {
   return { opts, positional };
 }
 
+function toKebabCase(s) {
+  return s.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`);
+}
+
+function warnUnknownOptions(opts, allowed, commandLabel) {
+  const allowedSet = new Set(allowed);
+  const unknown = Object.keys(opts).filter(key => !allowedSet.has(key));
+  if (unknown.length > 0) {
+    console.warn(`  WARN: ${commandLabel} ignoring unknown option(s): ${unknown.map(key => `--${toKebabCase(key)}`).join(', ')}`);
+  }
+}
+
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -226,6 +238,7 @@ export async function cmdTask(args) {
 
   try {
     if (sub === 'list') {
+      warnUnknownOptions(opts, ['target', 'status', 'json'], 'task list');
       const rows = taskFiles(target, projectConfig)
         .map(taskRecordFromFile)
         .filter(row => !opts.status || row.status === opts.status)
@@ -241,6 +254,7 @@ export async function cmdTask(args) {
     }
 
     if (sub === 'lint') {
+      warnUnknownOptions(opts, ['target', 'json'], 'task lint');
       const taskId = positional[0];
       const files = taskId ? [taskPathForId(target, projectConfig, taskId)] : taskFiles(target, projectConfig);
       const results = files.map(file => existsSync(file)
@@ -252,6 +266,7 @@ export async function cmdTask(args) {
     }
 
     if (sub === 'new') {
+      warnUnknownOptions(opts, ['target', 'id', 'json'], 'task new');
       const title = positional.join(' ').trim();
       if (!title) {
         console.error('task new requires a title');
@@ -288,6 +303,7 @@ export async function cmdTask(args) {
     }
 
     if (sub === 'status') {
+      warnUnknownOptions(opts, ['target', 'note', 'blockCategory', 'json'], 'task status');
       const [taskId, nextStatus] = positional;
       if (!taskId || !nextStatus) {
         console.error('task status requires <id> and <status>');

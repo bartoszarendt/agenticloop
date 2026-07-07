@@ -241,6 +241,31 @@ describe('setup CLI', () => {
       'unknown answer must not confirm setup');
   });
 
+  it('edit path requires a second yes before writing project map changes', () => {
+    const d = makeEmptyTarget();
+    writeFileSync(join(d, 'AGENTS.md'), '# AGENTS\n');
+    writeFileSync(join(d, 'README.md'), '# README\n');
+    writeFileSync(join(d, 'IMPLEMENTATION_PLAN.md'), '# Plan\n');
+
+    const input = [
+      'edit',
+      'github',
+      '',
+      '',
+      '',
+      'no',
+    ].join('\n');
+    const result = run(['setup', '--target', d], { input });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.match(result.stdout, /Edited project map values/);
+    assert.match(result.stdout, /not written/);
+    const content = readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8');
+    const [fm] = parseFrontmatter(content);
+    assert.notEqual(fm?.setup_status, 'confirmed');
+    assert.equal(fm?.task_backend, 'files');
+  });
+
   it('--adapter does not generate artifacts before confirmation', () => {
     const d = makeEmptyTarget();
     writeFileSync(join(d, 'AGENTS.md'), '# AGENTS\n');

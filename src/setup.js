@@ -214,6 +214,23 @@ export async function setup(options) {
         if (taskIdRegexAnswer) {
           confirmValues.task_id_regex = taskIdRegexAnswer;
         }
+
+        write('\nEdited project map values:');
+        for (const [key, val] of Object.entries(confirmValues)) {
+          if (key === 'documents' && typeof val === 'object') {
+            for (const [docRole, docPath] of Object.entries(val)) {
+              write(`  documents.${docRole}: "${docPath}"`);
+            }
+          } else {
+            write(`  ${key}: ${JSON.stringify(val)}`);
+          }
+        }
+
+        const applyEdited = (await prompts.ask('\nApply edited project setup? (yes/no): ')).trim().toLowerCase();
+        if (applyEdited !== 'yes' && applyEdited !== 'y') {
+          write('Setup cancelled. Edited project map values were not written.');
+          return { errors, warnings };
+        }
       } else {
         write('Setup cancelled. Explicit "yes" or "edit" required to confirm project setup.');
         return { errors, warnings };

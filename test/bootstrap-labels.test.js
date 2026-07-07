@@ -192,6 +192,19 @@ describe('bootstrap-labels backend guard', () => {
       rmSync(d, { recursive: true, force: true });
     }
   });
+
+  it('surfaces unsupported task backend warnings before refusing bootstrap-labels', () => {
+    const d = mkdtempSync(join(tmpdir(), 'al-bootstrap-unsupported-'));
+    try {
+      writeProjectMap(d, 'jira');
+      const result = runCli(d);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Unsupported task backend 'jira'/);
+      assert.match(result.stderr, /Active task backend is 'jira'/);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('bootstrap-labels existing labels', () => {

@@ -274,6 +274,27 @@ describe('event CLI', () => {
     assert.ok(existsSync(eventLogPath(target, 'T-001.jsonl')));
   });
 
+  it('surfaces unsupported task backend warnings on event writes', () => {
+    const target = makeTarget('unsupported-backend-warning');
+    writeProjectMap(target, { taskBackend: 'jira' });
+
+    const result = run([
+      'event-logging',
+      'task.started',
+      '--target',
+      target,
+      '--task',
+      'T-001',
+      '--role',
+      'engineer',
+      '--summary',
+      'Started scoped task',
+    ]);
+
+    assertOk(result);
+    assert.match(result.stderr, /Unsupported task backend 'jira'/);
+  });
+
   it('writes task-scoped events with the same derived trace id', () => {
     const target = makeTarget('append-events');
     assertOk(run(['init', '--target', target]));

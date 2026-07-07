@@ -91,4 +91,18 @@ describe('resolveTaskBackend', () => {
     assert.equal(result.source, 'default');
     assert.equal(result.legacyJsonTaskBackend, null);
   });
+
+  it('warns when the resolved backend is unsupported', () => {
+    const d = makeTarget('unsupported-backend');
+    writeProjectMap(d, ['task_backend: jira']);
+
+    const result = resolveTaskBackend(d);
+
+    assert.equal(result.backend, 'jira');
+    assert.equal(result.source, 'project.md');
+    assert.ok(
+      result.warnings.some(warning => warning.includes("Unsupported task backend 'jira'")),
+      `expected unsupported backend warning, got: ${JSON.stringify(result.warnings)}`
+    );
+  });
 });
