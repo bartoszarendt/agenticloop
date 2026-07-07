@@ -152,6 +152,22 @@ Optional frontmatter conventions:
 
 ## Operations
 
+### CLI Support
+
+The files backend remains Markdown-first; the CLI is a convenience and
+consistency layer, not a required runtime. Agents may still edit files directly.
+
+Operation mapping:
+
+- Create task record: `agenticloop task new <title> [--id <id>]`.
+- Read task record: open `.agenticloop/tasks/<TASK-ID>.md` directly.
+- List task records: `agenticloop task list [--status <status>] [--json]`.
+- Update status: `agenticloop task status <id> <status> [--note <text>]`.
+- Mark needs context or blocked: `agenticloop task status <id> needs_context
+  --note <text>` or `agenticloop task status <id> blocked --block-category
+  <category> --note <text>`.
+- Lint task records: `agenticloop task lint [<task-id>] [--json]`.
+
 ### Create Task Record
 
 Create `.agenticloop/tasks/<TASK-ID>.md` using `agenticloop/memory/task-record.md`.

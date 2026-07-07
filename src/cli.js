@@ -12,6 +12,10 @@
  *   agenticloop event-logging validate [--target <dir>] [--output <file>]
  *   agenticloop event-logging audit --task <id> [--target <dir>] [--require a,b,c]
  *   agenticloop event-logging report [--task <id>] [--features] [--target <dir>]
+ *   agenticloop task list [--status <s>] [--json] [--target <dir>]
+ *   agenticloop task lint [<task-id>] [--json] [--target <dir>]
+ *   agenticloop task new <title> [--id <id>] [--target <dir>]
+ *   agenticloop task status <id> <status> [--note <text>] [--block-category <category>] [--target <dir>]
  *   agenticloop worktree add <task-id> <branch> [--from <ref>] [--target <dir>]
  *   agenticloop worktree guard [--fix] [--all|<path>] [--target <dir>]
  *   agenticloop worktree list [--target <dir>] [--json]
@@ -51,6 +55,7 @@ import { validateSharedAgenticLoopPluginCompatibility } from './adapter-plugin-c
 import { loadAgenticLoopConfig } from './json.js';
 import { loadProjectMap } from './project-map.js';
 import { resolveTaskBackend } from './task-backend.js';
+import { cmdTask } from './task-cli.js';
 import {
   configureModels,
   parseModelMutations,
@@ -322,6 +327,7 @@ Commands:
   github-preflight      Pre-review gate: verify a GitHub PR body carries final-state
                         evidence for every required check, tied to the current head.
   doctor                Show setup checklist, adapter state, and next commands.
+  task                  Manage files-backed task records (list, lint, new, status).
   worktree              Manage guarded Agentic Loop Git worktrees (add, guard, list, remove, cleanup, resolve-state, prune).
   event-logging         Write events (bare event type), validate, audit, or report optional durable workflow event logs.
   event                 Compatibility alias for event-logging.
@@ -443,6 +449,25 @@ Options (event-logging report):
   --features            Print a feature-adoption telemetry report (minimalism, effort
                         budgets, context-overflow risk, and derived review-round churn)
                         over the aggregate logs instead of the full aggregate report.
+
+Options (task list):
+  --target <dir>        Target directory (default: current directory).
+  --status <status>     Filter by task status.
+  --json                Emit machine-readable JSON instead of a table.
+
+Options (task lint):
+  --target <dir>        Target directory (default: current directory).
+  --json                Emit machine-readable JSON.
+
+Options (task new):
+  --target <dir>        Target directory (default: current directory).
+  --id <id>             Explicit task id. Omit to allocate the next default T-### id.
+
+Options (task status):
+  --target <dir>        Target directory (default: current directory).
+  --note <text>         Append a dated line under ## Comments.
+  --block-category <c>  Required when setting status to blocked.
+  --json                Emit machine-readable JSON.
 
 Options (configure models):
   --target <dir>        Directory containing agenticloop.json (default: current).
@@ -1399,6 +1424,7 @@ async function cmdStatus(args) {
   const { opts } = parseArgs(args);
   const target = opts.target ? resolve(opts.target) : process.cwd();
   printAdapterDiscovery(target);
+  console.log('Task state: run "agenticloop task list" to inspect files-backed task records.');
 }
 
 async function cmdWorktree(args) {
@@ -1722,6 +1748,9 @@ switch (command) {
     break;
   case 'doctor':
     await cmdDoctor(rest);
+    break;
+  case 'task':
+    await cmdTask(rest);
     break;
   case 'worktree':
     await cmdWorktree(rest);

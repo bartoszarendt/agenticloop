@@ -126,7 +126,7 @@ const PLACEHOLDER_PATTERNS = [
   /\bto be filled during review\b/i,
 ];
 
-const FILES_TASK_STATUSES = new Set([
+export const FILES_TASK_STATUSES = new Set([
   'draft',
   'agent-ready',
   'in-progress',
@@ -363,7 +363,7 @@ function validateWorkUnitSummarySkeleton(content, filename) {
   return errors;
 }
 
-function validateTaskRecord(content, filename) {
+export function validateTaskRecord(content, filename) {
   const errors = [];
 
   for (const section of TASK_REQUIRED_SECTION_HEADINGS) {
@@ -532,7 +532,7 @@ function validateChangedFilesAgainstScope(repoRoot, commandRunner, filename, sco
   }
 }
 
-function validateFilesTaskRecord(content, filename, options = {}) {
+export function validateFilesTaskRecord(content, filename, options = {}) {
   const errors = [];
   const warnings = options.warnings ?? [];
   const [frontmatter] = parseFrontmatter(content);
@@ -554,6 +554,7 @@ function validateFilesTaskRecord(content, filename, options = {}) {
   const status = frontmatterString(frontmatter.status);
   const implementationArtifact = frontmatterString(frontmatter.implementation_artifact);
   const reviewStatus = frontmatterString(frontmatter.review_status);
+  const blockCategory = frontmatterString(frontmatter.block_category);
   const expectedBackend = 'files';
 
   if (!taskId) {
@@ -607,6 +608,10 @@ function validateFilesTaskRecord(content, filename, options = {}) {
     );
   }
 
+  if (status === 'blocked' && !blockCategory) {
+    errors.push(`Task record '${filename}' has status 'blocked' but is missing required frontmatter field 'block_category'`);
+  }
+
   if (status === 'accepted' || status === 'closed') {
     const hasWorkUnitSummary = content.includes('## Scope Completed');
     const hasLegacyImplSummary = !!sectionBody(content, '## Implementation Summary');
@@ -618,6 +623,16 @@ function validateFilesTaskRecord(content, filename, options = {}) {
     }
     if (!hasRecordedImplementationArtifact(content, implementationArtifact)) {
       errors.push(`Task record '${filename}' must record implementation_artifact in frontmatter or clearly in the task file when status is '${status}'`);
+    }
+
+    const hasChurnSignals =
+      reviewStatus === 'needs_revision' ||
+      !!sectionBody(content, '## Revision Log') ||
+      !!blockCategory;
+    if (hasChurnSignals && !sectionBody(content, '## Outcome')) {
+      warnings.push(
+        `Task record '${filename}' has status '${status}' with visible churn signals but an empty '## Outcome' section; verify whether Outcome is required at closeout`
+      );
     }
   }
 
