@@ -266,91 +266,26 @@ unclear, stop for human direction instead of creating a criss-cross history.
 
 ### Parallel Write Lanes
 
-Concurrency safety is governed by mutation, not by role. See the lane
-definitions and backend-specific rules in `agenticloop/AGENTIC_LOOP.md`.
+Concurrency safety is governed by mutation, not by role. Load
+[[parallel-delegation]] for the Parallel Opportunity Scan, lane definitions, plan
+fields, liveness, join behavior, and the full backend-specific parallel write
+rules.
 
-For an authorized multi-task unit with 2 or more ready issues, the orchestrator
-runs the Parallel Opportunity Scan in `agenticloop/AGENTIC_LOOP.md` before
-defaulting to serial. A bounded parallel batch defaults to a maximum of 3
-implementation lanes. After the implementation join, prefer bounded parallel
-review when each review lane owns distinct review targets and backend objects
-and does not need to compare, join, or order artifacts during review. The plan
-must prove there are no shared labels, comments, status markers, event-log
-targets, closeout state, or group state. Posting PR review markers, changing
-labels, or emitting events are coordination/review writes, so the concurrency
-plan must cover those review lanes. Integration and merge remain serial after
-review. Choosing serial execution after eligible candidates exist requires a
-recorded concrete reason (dependency edge, shared generated file or lockfile,
-schema/API ordering, shared external state, or a host that cannot bound or
-surface parallel lanes); "parallel is complex" is not a reason.
+GitHub-backend deltas:
 
-Durable GitHub review markers wait for the implementation batch join. A plan may
-authorize an earlier read-only pass against a completed PR's fixed diff, but
-that pass must not post a review marker, accept the task, or close the task until
-the implementation join has succeeded or the orchestrator has recorded an
-explicit partial-join decision that classifies every unfinished lane as failed or
-blocked. After the join, the maintainer must either confirm the earlier
-read-only findings still apply to the current PR head before posting a durable
-review marker, or run a fresh review.
-
-**Implementation lanes.** Each parallel implementation lane requires its own
-`git worktree`, its own task branch, its own GitHub issue, its own pull request,
-disjoint expected files or areas, and no shared generated files, lockfiles,
-schema, API, or external-state collision. A branch alone is not sufficient when
-multiple agents share one checkout. Copying selected touched files into a
-temporary folder is not valid isolation. Create each lane worktree with
-`npx agenticloop worktree add <task-id> <branch> [--from <ref>]`, which places it
-under `.agenticloop/worktrees/<task-id>`. Raw `git worktree add` is not valid for
-ordinary lanes. Never create a `../sibling` outside the repository root unless a
-human-approved external-worktree exception is recorded and guard repair is run as
-described in Worktree placement in `agenticloop/AGENTIC_LOOP.md`.
-
-Implementation lanes must also run Git and `gh` non-interactively. `npx
-agenticloop worktree add` installs worktree-scoped Git guard config; use `npx
-agenticloop worktree guard --fix --all` to repair existing Agentic Loop
-worktrees. After a task is accepted and its PR is merged, run
-`npx agenticloop worktree cleanup --dry-run` to preview lane removal, then
-`npx agenticloop worktree cleanup --yes` to remove merged standard lanes.
-Cleanup keeps open PRs, locked worktrees, worktrees with blocking dirty source or
-shared `.agenticloop` state, external or detached worktrees, and lanes with active
-task state. Task-specific lane-local `.agenticloop` state is flat only (`logs`,
-`tasks`, `summaries`, and `decisions` files directly under `.agenticloop/<dir>/`);
-it is preserved before removal and does not by itself block cleanup. Nested or
-shared `.agenticloop` files are not lane-local and dirty shared state blocks
-cleanup. Git worktree removal may be forced internally only after preservation
-succeeds. For `.jsonl` lane-local files, preservation is safe when the root file
-already contains every lane line (a root superset). If lane-local preservation
-conflicts with existing root state, use `npx agenticloop worktree resolve-state
-<task-id|path> --strategy <prefer-root|prefer-worktree|union-jsonl> --yes`
-(default `--dry-run`) to resolve before cleanup: `prefer-root` copies the root
-file into the lane, `prefer-worktree` copies the lane file into the root, and
-`union-jsonl` computes a root-first max-count multiset union and writes the
-result to both files. resolve-state never removes worktrees or branches. Shared `.agenticloop` files are not preserved.
-Project-root bare coordinator repos are supported. Branch deletion is not part of
-v1 cleanup. Also set the host or lane environment guard from
-`agenticloop/AGENTIC_LOOP.md`, use explicit commit messages or file-backed
-messages, use `gh pr create --title ... --body-file ...`, and do not run
-editor-backed commands such as bare `git commit`, `git rebase -i`, `git tag -a`,
-`git config --edit`, or `gh pr create --editor`.
-
-**Coordination/review lanes.** Parallel maintainer or orchestrator lanes that
-mutate GitHub backend state -- issues, PRs, labels, review comments, status
-markers, closeout markers, or event logs -- may run only when each lane owns
-distinct backend objects (for example, distinct issues or distinct PR review
-targets) and the concurrency plan proves that no shared labels, comments, status
-markers, closeout state, event logs, or group state collide. If lanes must touch
-the same issue, PR, or label set, run them serially.
-
-**Merge barrier.** Do not merge any pull request from a parallel batch into the
-default or integration branch until every parallel lane has returned, maintainer
-review is complete for every implementation artifact, cross-branch conflict and
-ordering risk has been checked, and the human approves the merge order. If a pull
-request can safely merge without waiting for the other lanes, treat it as an
-ordinary independent task instead of part of a parallel batch.
-
-**Join behavior.** Missing pushed branch or missing PR at join time is a
-failed or blocked lane, not a pending lane. The orchestrator must not wait
-indefinitely.
+- Each parallel implementation lane requires its own repo-internal worktree,
+  task branch, GitHub issue, pull request, disjoint expected files or areas,
+  lease, join condition, and merge barrier.
+- Parallel coordination/review lanes may mutate GitHub backend state only when
+  each lane owns distinct backend objects, such as distinct issues or distinct
+  PR review targets. Shared issues, PRs, labels, comments, status markers,
+  closeout state, event logs, or group state require serial work.
+- Do not merge any pull request from a parallel batch into the default or
+  integration branch until every lane has returned, maintainer review is
+  complete for every implementation artifact, cross-branch conflict and ordering
+  risk has been checked, and the human approves the merge order.
+- Missing pushed branch, missing PR, or missing expected backend update at join
+  time is a failed or blocked lane, not a pending lane.
 
 ### Record Review Status
 

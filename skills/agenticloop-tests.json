@@ -243,6 +243,22 @@
         "Scan for candidate source documents once and ask for confirmation before writing any overrides."
       ],
       "nearMissTarget": "task-record-contract"
+    },
+    "parallel-delegation": {
+      "shouldTrigger": [
+        "We have 4 ready independent tasks, can we parallelize?",
+        "Plan a bounded parallel batch and join condition for these ready task records.",
+        "Review whether these parallel lanes have disjoint backend objects, leases, and merge barriers."
+      ],
+      "shouldNotTrigger": [
+        "Implement this single task serially and report the result.",
+        "Clean up the accepted worktree after integration.",
+        "Run worktree cleanup dry-run for an already accepted task."
+      ],
+      "nearMiss": [
+        "Plan parallel delegation for four ready tasks with disjoint backend objects, leases, and a join condition."
+      ],
+      "nearMissTarget": "role-delegation"
     }
   }
 }

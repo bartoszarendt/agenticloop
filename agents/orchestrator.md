@@ -34,36 +34,14 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 - When the maintainer is asked to create many task records, give the maintainer a lease/checkpoint cadence based on created records, such as "return after each task record" or "return after each batch of up to 3". For large task sets, expect a decomposition inventory first and incremental materialization second.
 - Delegate planning, task records, review, acceptance, and closeout to maintainer.
 - Delegate scoped implementation and revision work to engineer.
-- Coordinate serially by default. Start parallel role work only when the
-  concurrency plan and collision criteria in `agenticloop/AGENTIC_LOOP.md` are
-  satisfied. The concurrency plan must name lane type (read-only,
-  implementation, or coordination/review), role, owned backend objects, and
-  expected artifact for every lane. For every write lane that mutates
-  repository files, the plan must name the absolute or repo-relative worktree
-  path and branch. Orchestrator-owned backend coordination that mutates shared
-  state (the same issue, PR, label set, event log, or closeout marker) should
-  normally be serial.
-- For an authorized multi-task unit, perform the Parallel Opportunity Scan in
-  `agenticloop/AGENTIC_LOOP.md` after task decomposition and before implementation
-  delegation. Serial-by-default is a safety floor, not a reason to skip the scan.
-  Use maintainer-supplied `## Parallel Safety` classifications as the primary
-  input for dependency edges, owned paths, backend objects, shared/generated
-  files, lockfiles, schemas/APIs, and external state. Add orchestration-only
-  checks for coordination surfaces, host parallel capability, worktrees, leases,
-  stop conditions, and join conditions, then either:
-  - record a bounded parallel plan reference plus join condition (default maximum
-    3 implementation lanes), or
-  - record a concrete serial reason naming the specific blocker.
-- Use a maximum of 3 implementation lanes unless project config or an explicit
-  human instruction lowers or raises it. Do not choose serial solely because
-  parallel coordination has overhead or is complex; name a concrete collision or
-  host limitation instead. When 2 or more ready tasks are independent and
-  collision criteria are known and disjoint, prefer the bounded parallel batch.
-- When collision criteria are unknown and the unit has 2 or more ready
-  candidates, route code/collision unknowns to maintainer for one bounded
-  read-only discovery pass when parallel work is otherwise plausible. Resolve
-  coordination/host unknowns directly. Then decide parallel batch or serial; if
-  uncertainty remains, run serial and record what stayed unknown.
+- Coordinate serially by default. For an authorized multi-task unit with 2 or
+  more ready task records, load [[parallel-delegation]] before choosing serial or
+  parallel execution. Use maintainer-supplied `## Parallel Safety`
+  classifications as primary input, add host/lane checks, then record either a
+  bounded parallel plan with join condition or a concrete serial reason.
+- Start parallel role work only when [[parallel-delegation]]'s concurrency plan,
+  lane ownership, lease, backend-specific write rules, and join requirements are
+  satisfied. Unknown collision criteria never start write lanes.
 - Create or verify worktrees before delegation when authorizing parallel
   file-mutating write work. After acceptance and integration, run
   `npx agenticloop worktree cleanup --dry-run` to preview lane removal and
@@ -105,6 +83,12 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 - [[role-delegation]] for all delegation, backend enforcement, and human checkpoint decisions.
 - [[blocked-state]] when work cannot continue or the task needs context.
 
+Conditional skill:
+
+- [[parallel-delegation]] when an authorized multi-task unit has 2 or more ready
+  task records, or when planning, reviewing, joining, or troubleshooting
+  parallel lanes.
+
 Require delegated roles to use their own required skills.
 
 ## Backend Use
@@ -145,8 +129,8 @@ natural stop condition, per the Advance Authorization Boundary in
 4. Identify the current work item or ask the human which work item to run.
 5. If the work item is a phase, group, milestone, epic, task set, or otherwise multi-deliverable item, have maintainer decompose it into right-sized task records before implementation.
 6. Have maintainer create or refine the task record or task records.
-7. After maintainer creates or refines multiple task records for a multi-task unit, run the Parallel Opportunity Scan in `agenticloop/AGENTIC_LOOP.md`. Classify the ready tasks and either record a bounded parallel plan (up to 3 implementation lanes) plus join condition, or record a concrete serial reason.
-8. Have engineer implement the task records -- serially, or as a bounded parallel batch when the scan produced an eligible plan. Open a pull request per lane when `task_backend: github` is set. Use parallel lanes only when the concurrency plan in `agenticloop/AGENTIC_LOOP.md` allows it.
+7. After maintainer creates or refines multiple task records for a multi-task unit, load [[parallel-delegation]], run the Parallel Opportunity Scan, and either record a bounded parallel plan plus join condition or record a concrete serial reason.
+8. Have engineer implement the task records -- serially, or as a bounded parallel batch when the scan produced an eligible plan. Open a pull request per lane when `task_backend: github` is set. Use parallel lanes only when [[parallel-delegation]] allows it.
 9. After the implementation join, decide review concurrency. Prefer a bounded parallel coordination/review phase when the orchestrator records or extends the concurrency plan for distinct review targets and backend objects with no comparison, joining, or ordering requirement; record a concrete reason for serial review when eligible review candidates exist.
 10. Have maintainer review each implementation artifact using the two-pass review process. Durable review outcomes wait for the implementation join; only explicitly planned read-only review passes may start earlier. Integration and merge stay serial after review unless a specific case is shown safe.
 11. Have engineer revise until accepted.

@@ -51,10 +51,10 @@ describe('parseFrontmatter', () => {
 });
 
 describe('Skill validator on real skills', () => {
-  it('finds 15 skills, 0 errors, 0 warnings on real skills/', () => {
+  it('finds 16 skills, 0 errors, 0 warnings on real skills/', () => {
     const skillsDir = join(REPO_ROOT, 'skills');
     const report = validateSkills(skillsDir);
-    assert.equal(Object.keys(report.skills).length, 15, 'expected 15 skills');
+    assert.equal(Object.keys(report.skills).length, 16, 'expected 16 skills');
     assert.equal(errorCount(report), 0, 'expected 0 errors');
     assert.equal(warningCount(report), 0, 'expected 0 warnings');
   });

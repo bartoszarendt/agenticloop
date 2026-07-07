@@ -366,8 +366,8 @@ function buildCopilotAgentBody(
 
   if (roleName === 'orchestrator') {
     lines.push(`When maintainer-owned work is needed, delegate through the Copilot custom agent \`${maintainerAgent}\`. When engineer-owned work is needed, delegate through the Copilot custom agent \`${engineerAgent}\` instead of doing that work inline.`);
-    lines.push('Agentic Loop is serial by default. Do not start parallel Copilot agents unless a recorded concurrency plan, lease, and join condition prove the lanes do not collide.');
-    lines.push('For authorized multi-task units, perform a Parallel Opportunity Scan before choosing serial execution. If 2+ ready tasks are independent and collision criteria are known/disjoint, prefer a bounded parallel batch of up to 3 lanes; otherwise record the concrete serial reason.');
+    lines.push('Agentic Loop is serial by default. For authorized multi-task units with 2+ ready task records, load parallel-delegation before choosing serial or parallel execution.');
+    lines.push('Start parallel role work only when the parallel-delegation skill plan, lease, backend ownership, and join condition requirements are satisfied; otherwise record the concrete serial reason.');
     lines.push('Use real Copilot custom-agent, subagent, or handoff delegation where the current surface supports it.');
     lines.push(`If delegation is unavailable after a capability check, record a bounded fallback reason and continue according to \`${roleDelegationReferencePath}\`.`);
     lines.push('For long-running or parallel delegated work, include the lease with an observable-step checkpoint cadence and require a status return at the progress checkpoint, stop condition, wrong branch/worktree, or no-progress budget.');
@@ -486,7 +486,7 @@ function renderCopilotPromptMarkdown(orchestratorAgent, agentNames) {
     'If `setup_status` is `unconfirmed`, follow `.github/skills/agenticloop/references/skills/setup-agenticloop/reference.md` or confirm the defaults before selecting or creating the first task.',
     `Read \`${PROCESS_DOC_RELATIVE_PATH}\` and the canonical role contracts in \`agenticloop/agents/\` before implementation work starts.`,
     `Keep the active Copilot session as coordinator/orchestrator, route maintainer-owned work through the Copilot custom agent \`${maintainerAgent}\`, route engineer-owned work through the Copilot custom agent \`${engineerAgent}\`, and create or refine the durable task record before implementation.`,
-    'Agentic Loop is serial by default; do not start parallel agents unless a recorded concurrency plan, lease, and join condition prove the lanes do not collide.',
+    'Agentic Loop is serial by default. For authorized multi-task units with 2+ ready task records, load parallel-delegation before choosing serial or parallel execution.',
     'Requested task or context: use the current user request or selected task id as the work unit to coordinate.',
     '',
   ];

@@ -92,41 +92,42 @@ describe('generated orchestrator surfaces default to serial with a concurrency p
   }
 });
 
-describe('generated orchestrator surfaces require a Parallel Opportunity Scan with bounded batches', () => {
+describe('generated orchestrator surfaces route parallel decisions through the conditional skill', () => {
   for (const host of HOSTS) {
-    it(`${host.name} orchestrator mentions the Parallel Opportunity Scan`, () => {
+    it(`${host.name} orchestrator mentions parallel-delegation`, () => {
       const text = surfaces.get(`${host.name}:orchestrator`);
-      assert.match(text, /parallel opportunity scan/i, `${host.name} orchestrator missing Parallel Opportunity Scan wording`);
+      assert.match(text, /parallel-delegation/i, `${host.name} orchestrator missing parallel-delegation wording`);
     });
 
-    it(`${host.name} orchestrator mentions bounded batches up to 3 lanes`, () => {
+    it(`${host.name} orchestrator keeps concrete serial-reason wording`, () => {
       const text = surfaces.get(`${host.name}:orchestrator`);
-      assert.match(text, /up to 3 (?:implementation )?lanes/i, `${host.name} orchestrator missing up-to-3-lanes wording`);
+      assert.match(text, /concrete serial reason/i, `${host.name} orchestrator missing concrete serial reason wording`);
     });
   }
 });
 
 describe('canonical Parallel Opportunity Scan policy is documented', () => {
-  it('AGENTIC_LOOP.md states the serial justification requirement', () => {
-    const text = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf-8').replace(/\s+/g, ' ');
+  it('parallel-delegation states the serial justification requirement', () => {
+    const text = readFileSync(join(REPO_ROOT, 'skills', 'parallel-delegation', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
     assert.match(text, /only with a concrete recorded reason/i);
     assert.match(text, /sufficient serial reason/i);
     assert.match(text, /default maximum parallel implementation lanes: 3/i);
   });
 
-  it('AGENTIC_LOOP.md documents unknown -> read-only discovery -> decide', () => {
-    const text = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf-8').replace(/\s+/g, ' ');
+  it('parallel-delegation documents unknown -> read-only discovery -> decide', () => {
+    const text = readFileSync(join(REPO_ROOT, 'skills', 'parallel-delegation', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
     assert.match(text, /Unknown collision criteria must not start write lanes/i);
     assert.match(text, /bounded read-only discovery step first/i);
     assert.match(text, /After discovery, decide/i);
     assert.match(text, /If uncertainty remains after bounded discovery, run serial/i);
   });
 
-  it('role-delegation preserves the short bounded batch observability split', () => {
-    const text = readFileSync(join(REPO_ROOT, 'skills', 'role-delegation', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
+  it('parallel-delegation preserves the short bounded batch observability split', () => {
+    const text = readFileSync(join(REPO_ROOT, 'skills', 'parallel-delegation', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
     assert.match(text, /do not start long-running parallel delegation/i);
-    assert.match(text, /Short bounded join-based batches may still run/i);
-    assert.match(text, /If lane artifacts cannot be verified at join, use bounded serial delegation/i);
+    assert.match(text, /Short bounded parallel batches/i);
+    assert.match(text, /If host limitations make even bounded join-based parallelism unverifiable/i);
+    assert.match(text, /run serial and record the host limitation as the concrete reason/i);
   });
 });
 
@@ -203,8 +204,7 @@ describe('generated engineer surfaces guard branch/worktree before continuing', 
 
 describe('GitHub merge-barrier wording is consistent across canonical docs', () => {
   const DOCS = [
-    'AGENTIC_LOOP.md',
-    'skills/role-delegation/SKILL.md',
+    'skills/parallel-delegation/SKILL.md',
     'backends/github.md',
   ];
   // Invariants every merge-barrier statement must keep, regardless of phrasing.
@@ -246,17 +246,17 @@ describe('durable concurrency-plan section stays registered', () => {
 });
 
 describe('lease terminology does not regress', () => {
-  it('AGENTIC_LOOP.md uses "progress checkpoint cadence", not "progress interval"', () => {
-    const text = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf-8');
+  it('parallel-delegation uses "progress checkpoint cadence", not "progress interval"', () => {
+    const text = readFileSync(join(REPO_ROOT, 'skills', 'parallel-delegation', 'SKILL.md'), 'utf-8');
     assert.match(text, /progress checkpoint cadence/i);
     assert.doesNotMatch(text, /progress interval/i);
   });
 
   it('canonical delegation docs require observable-step checkpoint cadence', () => {
     const docs = [
-      'AGENTIC_LOOP.md',
       'agents/orchestrator.md',
       'skills/role-delegation/SKILL.md',
+      'skills/parallel-delegation/SKILL.md',
       'commands/start.md',
     ];
     for (const doc of docs) {
@@ -264,7 +264,7 @@ describe('lease terminology does not regress', () => {
       assert.match(text, /observable-step checkpoint cadence/i, `${doc} missing observable-step lease wording`);
     }
 
-    const processDoc = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf-8').replace(/\s+/g, ' ');
+    const processDoc = readFileSync(join(REPO_ROOT, 'skills', 'parallel-delegation', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
     assert.match(processDoc, /private reasoning is not a step/i);
 
     const delegationSkill = readFileSync(join(REPO_ROOT, 'skills', 'role-delegation', 'SKILL.md'), 'utf-8');

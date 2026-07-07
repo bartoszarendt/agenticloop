@@ -27,94 +27,23 @@ the same Agentic Loop roles, skills, and review gates.
 
 Concurrency safety is governed by mutation, not by role. Files-backed task
 records, event logs, and scratch files are local mutable state that can collide
-across parallel lanes just like implementation files. See the lane definitions
-and backend-specific rules in `agenticloop/AGENTIC_LOOP.md`.
+across parallel lanes just like implementation files. Load [[parallel-delegation]]
+for the Parallel Opportunity Scan, lane definitions, plan fields, liveness,
+join behavior, and the full backend-specific parallel write rules.
 
-For an authorized multi-task unit with 2 or more ready task records, the
-orchestrator runs the Parallel Opportunity Scan in `agenticloop/AGENTIC_LOOP.md`
-before defaulting to serial. A bounded parallel batch defaults to a maximum of 3
-implementation lanes. Choosing serial execution after eligible candidates exist
-requires a recorded concrete reason (dependency edge, shared generated file or
-lockfile, schema/API ordering, shared external state, or a host that cannot
-bound or surface parallel lanes); "parallel is complex" is not a reason.
+Files-backend deltas:
 
-**Read-only parallel discovery** is allowed when bounded by fixed artifacts and
-no lane mutates repository files or task records.
-
-**Write lanes in a Git repository.** Each parallel write lane -- whether it
-mutates implementation files, task records, or other tracked state -- requires:
-
-- its own repo-internal worktree created with `npx agenticloop worktree add
-  <task-id> <branch> [--from <ref>]`; raw `git worktree add` is not valid for
-  ordinary lanes, and a `../sibling` outside the repository root requires the
-  explicit external-worktree exception and guard repair described in Worktree
-  placement in `agenticloop/AGENTIC_LOOP.md`,
-- its own local branch,
-- its own `.agenticloop/tasks/<TASK-ID>.md` task file or explicitly owned
-  workflow file(s),
-- its implementation or workflow artifact recorded as `branch:<name>` plus
-  `commit:<sha>` or `range:<base>..<head>` in the task file (patch is a
-  fallback, not the preferred form),
-- disjoint expected files or areas,
-- a lease,
-- a join condition.
-
-A branch alone is not sufficient when multiple agents share one checkout.
-Copying selected touched files into a temporary folder is not valid isolation.
-Each lane must run Git non-interactively. `npx agenticloop worktree add` installs
-worktree-scoped Git guard config; use `npx agenticloop worktree guard --fix --all`
-to repair existing Agentic Loop worktrees. After a task is accepted and its
-artifact is integrated, run `npx agenticloop worktree cleanup --dry-run` to
-preview lane removal, then `npx agenticloop worktree cleanup --yes` to remove
-merged standard lanes. Cleanup keeps locked worktrees, worktrees with blocking
-dirty source or shared `.agenticloop` state, external or detached worktrees, and
-lanes with active task state. Task-specific lane-local `.agenticloop` state is
-flat only (`logs`, `tasks`, `summaries` (legacy; preserved for migration only --
-current projects do not create a summaries directory), and `decisions` files
-directly under `.agenticloop/<dir>/`); it is preserved before removal and does
-not by itself block cleanup. Nested or shared `.agenticloop` files are not
-lane-local and dirty shared state blocks cleanup. Git worktree removal may be forced internally only after
-preservation succeeds. For `.jsonl` lane-local files, preservation is safe when
-the root file already contains every lane line (a root superset). If lane-local
-preservation conflicts with existing root state, use `npx agenticloop worktree
-resolve-state <task-id|path> --strategy <prefer-root|prefer-worktree|union-jsonl>
---yes` (default `--dry-run`) to resolve before cleanup: `prefer-root` copies the
-root file into the lane, `prefer-worktree` copies the lane file into the root,
-and `union-jsonl` computes a root-first max-count multiset union and writes the
-result to both files. resolve-state never removes worktrees or branches. Shared `.agenticloop` files are not
-preserved. Project-root bare coordinator repos are supported. Branch deletion is
-not part of v1 cleanup. Also set the host or lane environment guard from
-`agenticloop/AGENTIC_LOOP.md` for Git prompts, use explicit commit
-messages or file-backed messages, and do not run editor-backed commands such as
-bare `git commit`, `git rebase -i`, `git tag -a`, or `git config --edit`.
-
-Integration of parallel files-backed lanes is serial. After the implementation
-join, prefer bounded parallel coordination/review lanes when each lane owns
-distinct task files or workflow artifacts and does not need to compare, join, or
-order artifacts during review. Updating `review_status`, appending maintainer
-review sections, or emitting events are files-backed write-lane mutations, so
-each parallel review lane still requires its own worktree, branch, owned task
-file or workflow file, lease, and join condition. The plan must prove there are
-no shared event-log targets, group state, status markers, closeout files, scratch
-outputs, or other local append/update targets; otherwise review happens one lane
-at a time after all lanes return. Merge remains serial.
-
-Durable files-backed review status waits for the implementation batch join. A
-plan may authorize an earlier read-only pass against a completed lane's fixed
-artifact, but that pass must not update `review_status`, accept the task, or
-close the task until the implementation join has succeeded or the orchestrator
-has recorded an explicit partial-join decision that classifies every unfinished
-lane as failed or blocked. After the join, the maintainer must either confirm the
-earlier read-only findings still apply to the current artifact revision before
-updating `review_status`, or run a fresh review.
-
-**Non-Git targets.** Parallel write lanes are not allowed when the target is
-not a Git repository. Run all write work serially. Read-only parallel discovery
-is still allowed.
-
-**Join behavior.** Missing local commit or range at join time is a failed or
-blocked lane. Missing expected task-record update or workflow artifact is
-likewise a failure. The orchestrator must not wait indefinitely.
+- Read-only parallel discovery is allowed when bounded by fixed artifacts and no
+  lane mutates repository files or task records.
+- In a Git repository, each parallel write lane needs its own repo-internal
+  worktree, local branch, owned task file or explicitly owned workflow file,
+  recorded implementation/workflow artifact, lease, and join condition.
+- Parallel coordination/review lanes must own distinct task files or workflow
+  artifacts and must not share event-log targets, group state, status markers,
+  closeout files, scratch outputs, or other local append/update targets.
+- Integration of parallel files-backed lanes is serial; merge remains serial.
+- Non-Git targets do not allow parallel write lanes. Run all write work serially;
+  read-only parallel discovery is still allowed.
 
 ## Summary and Trace
 

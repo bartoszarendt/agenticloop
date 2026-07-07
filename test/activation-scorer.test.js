@@ -31,13 +31,13 @@ function loadCorpus() {
 }
 
 describe('loadSkillDescriptions', () => {
-  it('loads all 15 canonical skills with no errors', () => {
+  it('loads all 16 canonical skills with no errors', () => {
     // Intentional canonical-skill tripwire: this count must be updated when
     // skills are added or removed from the toolkit, and agenticloop-tests.json
     // must cover every canonical skill.
     const { skills, errors } = loadSkillDescriptions(SKILLS_DIR);
     assert.equal(errors.length, 0, `unexpected errors: ${errors.join(', ')}`);
-    assert.equal(skills.length, 15, 'expected 15 canonical skills');
+    assert.equal(skills.length, 16, 'expected 16 canonical skills');
     assert.ok(skills.some(s => s.name === 'task-record-contract'));
   });
 });

@@ -89,71 +89,17 @@ any real delegation mechanism for the requested role.
 
 ## Concurrency Policy
 
-Delegation is serial by default. Mutation governs concurrency safety. See
-`agenticloop/AGENTIC_LOOP.md` for lane definitions and join behavior.
+Delegation is serial by default. Mutation governs concurrency safety. When an
+authorized multi-task unit has 2 or more ready task records, or when planning,
+reviewing, or joining parallel lanes, load [[parallel-delegation]] before routing
+work.
 
-### Parallel Opportunity Scan
-
-Serial-by-default is a safety floor. A multi-task unit with 2+ ready tasks
-requires a scan first:
-
-- **Trigger.** A multi-task unit with 2+ ready tasks requires the scan. If 2+
-  independent ready tasks have known, disjoint collision criteria, prefer a
-  bounded parallel batch. Default maximum **3** lanes, unless config or a human
-  changes it.
-- **Serial justification.** Serial needs a concrete reason (dependency edge,
-  shared generated file/lockfile, schema/API ordering, shared external state, or
-  a host that cannot bound/surface lanes); "parallel is complex" does not count.
-- **Unknown -> read-only discovery -> decide.** Unknown criteria must not start
-  write lanes. Route code/collision unknowns to maintainer for one bounded
-  read-only discovery pass when parallel work is otherwise plausible; resolve
-  host/lane unknowns in the orchestrator. Then decide; if uncertainty remains,
-  run serial and record what stayed unknown.
-
-After implementation join, review-ready artifacts with distinct review targets
-and backend objects should use bounded parallel coordination/review lanes when
-there are no shared labels, comments, status markers, event logs, group state, or
-comparison/joining/ordering needs during review. Serial review after eligible
-review candidates exist needs a concrete reason. Posting review markers,
-updating `review_status`, changing labels, or emitting review events are writes;
-cover them in the concurrency plan. Files-backed review/status/event writes are
-file-mutating write lanes and still need one worktree and branch per lane, plus
-no shared event-log target, group state, status marker, closeout file, scratch
-output, or other local append/update target. Durable review outcomes wait for
-the implementation join or an explicit partial-join decision classifying every
-unfinished lane as failed or blocked. An earlier review pass is allowed only as
-explicitly planned read-only inspection against a fixed artifact, with no review
-marker, acceptance, or closure; after join, confirm those findings still apply to
-the current artifact revision or run a fresh review. Integration and merge stay
-serial after review unless shown safe. Parallel delegation requires a recorded
-concurrency plan: lane id/type, role, read/write mode, owned backend objects,
-worktree path/branch for file-mutating lanes, artifact, allowed files/areas,
-collision risks, liveness cadence, stop condition, and join condition.
-
-File-mutating write lanes need one worktree and branch per lane, created with
-`npx agenticloop worktree add <task-id> <branch> [--from <ref>]` at
-`.agenticloop/worktrees/<task-id>`. Raw `git worktree add` is not valid for
-ordinary lanes; a `../sibling` outside the repository root requires an explicit
-external-worktree exception and immediate `npx agenticloop worktree guard --fix
-<path>`. GitHub lanes also need their own issue and PR. No batch PR merges until
-every lane has returned, maintainer review is complete, cross-branch risk is
-checked, and human approves merge order. Coordination/review lanes own distinct
-backend objects; files-backed non-Git parallel write lanes are not allowed.
-
-Git and `gh` in delegated lanes must be non-interactive. `npx agenticloop
-worktree add` installs worktree-scoped Git guard config; use `npx agenticloop
-worktree guard --fix --all` to repair existing Agentic Loop worktrees. Set or
-require the host or lane environment guard from `agenticloop/AGENTIC_LOOP.md`.
-Use explicit or file-backed commit messages (`git commit -m` or `git commit -F`),
-`git --no-pager` for read commands when needed, `git merge --no-edit`,
-`gh pr create --title ... --body-file ...`, and
-`git -c core.editor=true -c sequence.editor=true rebase --continue` only after
-conflicts are deliberately resolved and staged. Do not run bare `git commit`,
-`git rebase -i`, `git tag -a`, `git config --edit`, or other editor-backed Git
-commands in unattended work. If a lane is already blocked on an editor, pager, or
-credential prompt, abort or return status instead of waiting indefinitely.
-`credential.interactive=false` is a Git-version-dependent config guard; keep the
-session environment guard for coordinator work and credential prompts.
+Role-delegation keeps the delegation prompt contract: the `Concurrency:` line is
+required for delegated work and must be either `serial -- reason: <concrete
+blocker>` or `parallel batch <id> -- lanes: <n>/3; join: <condition>`. The
+`Lease:` line carries observable-step checkpoint cadence, no-progress budget,
+and any relevant duration or milestone. Parallel plans, backend-specific lane
+rules, join behavior, and parallel liveness details live in [[parallel-delegation]].
 
 ## Event Logging
 
@@ -260,11 +206,8 @@ records to maintainer.
 Long-running or parallel work requires a lease. Without host cancellation, use a
 return-after-N-observable-steps checkpoint. Return status when the lease expires,
 no-progress budget is exhausted, branch/worktree is wrong, a collision appears,
-or the stop condition is reached. If the host cannot stream, cancel, or surface
-subagent status, do not start long-running parallel delegation. Short bounded
-join-based batches may still run when every lane has artifact, stop condition,
-lease, no-progress budget, and join condition. If lane artifacts cannot be
-verified at join, use bounded serial delegation and record host limitation.
+or the stop condition is reached. For parallel-specific liveness, host
+streaming/cancel limits, and join-based batch rules, load [[parallel-delegation]].
 Status returns include `STATUS`, task id, branch/worktree, files touched,
 evidence, next step, and stop reason.
 
