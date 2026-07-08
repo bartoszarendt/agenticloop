@@ -15,7 +15,7 @@ worktree lifecycle, and non-interactive Git rules remain in
 agenticloop/AGENTIC_LOOP.md because they also apply to serial worktree cleanup
 and ordinary delegated Git work.
 
-#### Parallel Opportunity Scan
+## Parallel Opportunity Scan
 
 **Trigger.** Any authorized work unit (phase, group, milestone, epic, task set,
 or other bounded multi-task unit) that has 2 or more ready task records.
@@ -86,7 +86,7 @@ blocked. After the join, the maintainer must either confirm the earlier
 read-only findings still apply to the current artifact revision before posting a
 durable outcome, or run a fresh review.
 
-#### Lane Types
+## Lane Types
 
 - **Read-only lane**: inspects fixed artifacts and returns findings. No VCS
   isolation is required.
@@ -158,7 +158,7 @@ must verify the assigned worktree path and branch, and check
 worktree or branch is wrong, dirty unexpectedly, or a collision appears, the
 role must return status or a blocker instead of continuing.
 
-### Backend-Specific Parallel Write Rules
+## Backend-Specific Parallel Write Rules
 
 **GitHub backend (`task_backend: github`) -- implementation lanes.** Each
 parallel implementation lane requires:
@@ -224,7 +224,7 @@ after all lanes return. Merge remains serial.
 write work serially. Read-only parallel discovery is still allowed when bounded
 by fixed artifacts.
 
-### Join Behavior
+## Join Behavior
 
 The orchestrator must not wait indefinitely for a lane that cannot produce its
 expected artifact. At join time, missing expected artifacts are classified as
@@ -239,7 +239,7 @@ A lane that cannot produce its artifact must return status or a blocker. The
 orchestrator records the failure, classifies the join outcome, and reports it
 to the human instead of spinning.
 
-### Delegation Liveness
+## Delegation Liveness
 
 Every delegation prompt has a stop condition. Long-running or parallel
 delegations must also have a lease: a host-enforced duration or milestone when

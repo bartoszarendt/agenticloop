@@ -34,6 +34,7 @@
 
 import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
+import { parseArgs, warnUnknownOptions } from './cli-args.js';
 import { init } from './init.js';
 import { bootstrapLabels } from './bootstrap-labels.js';
 import {
@@ -102,54 +103,9 @@ import {
   resolveAgenticLoopStateConflicts,
 } from './worktree.js';
 
-function toCamelCase(s) {
-  return s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-}
-
-function toKebabCase(s) {
-  return s.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`);
-}
-
-const REPEATABLE_OPTIONS = new Set(['adapter', 'ref']);
 const DEFAULT_LOG_DIR_DISPLAY = DEFAULT_LOG_DIR.replaceAll('\\', '/');
 const TASK_EVENT_LOG_PATH_DISPLAY = `${DEFAULT_LOG_DIR_DISPLAY}/<task-id>.jsonl`;
 const DEFAULT_EVENT_LOG_GLOB_DISPLAY = `${DEFAULT_LOG_DIR_DISPLAY}/*.jsonl`;
-
-function parseArgs(rawArgs) {
-  const opts = {};
-  const positional = [];
-  let i = 0;
-  while (i < rawArgs.length) {
-    const arg = rawArgs[i];
-    if (arg.startsWith('--')) {
-      const key = toCamelCase(arg.slice(2));
-      const next = rawArgs[i + 1];
-      if (REPEATABLE_OPTIONS.has(key) && next !== undefined && !next.startsWith('--')) {
-        if (!Array.isArray(opts[key])) opts[key] = [];
-        opts[key].push(next);
-        i += 2;
-      } else if (next !== undefined && !next.startsWith('--')) {
-        opts[key] = next;
-        i += 2;
-      } else {
-        opts[key] = true;
-        i++;
-      }
-    } else {
-      positional.push(arg);
-      i++;
-    }
-  }
-  return { opts, positional };
-}
-
-function warnUnknownOptions(opts, allowed, commandLabel) {
-  const allowedSet = new Set(allowed);
-  const unknown = Object.keys(opts).filter(key => !allowedSet.has(key));
-  if (unknown.length > 0) {
-    console.warn(`  WARN: ${commandLabel} ignoring unknown option(s): ${unknown.map(key => `--${toKebabCase(key)}`).join(', ')}`);
-  }
-}
 
 function parseRequiredEventTypesOption(value) {
   if (value === undefined) {

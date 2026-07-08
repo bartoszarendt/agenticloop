@@ -7,6 +7,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
+import { parseArgs, warnUnknownOptions } from './cli-args.js';
 import { parseFrontmatter } from './frontmatter.js';
 import {
   TASK_RECORD_TEMPLATE_RELATIVE_PATH,
@@ -20,42 +21,6 @@ import {
   validateFilesTaskRecord,
   validateTaskRecord,
 } from './validate-config.js';
-
-function parseArgs(rawArgs) {
-  const opts = {};
-  const positional = [];
-  let i = 0;
-  while (i < rawArgs.length) {
-    const arg = rawArgs[i];
-    if (arg.startsWith('--')) {
-      const key = arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-      const next = rawArgs[i + 1];
-      if (next !== undefined && !next.startsWith('--')) {
-        opts[key] = next;
-        i += 2;
-      } else {
-        opts[key] = true;
-        i += 1;
-      }
-    } else {
-      positional.push(arg);
-      i += 1;
-    }
-  }
-  return { opts, positional };
-}
-
-function toKebabCase(s) {
-  return s.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`);
-}
-
-function warnUnknownOptions(opts, allowed, commandLabel) {
-  const allowedSet = new Set(allowed);
-  const unknown = Object.keys(opts).filter(key => !allowedSet.has(key));
-  if (unknown.length > 0) {
-    console.warn(`  WARN: ${commandLabel} ignoring unknown option(s): ${unknown.map(key => `--${toKebabCase(key)}`).join(', ')}`);
-  }
-}
 
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -71,13 +36,13 @@ function resolveProject(target) {
 
 function guardFilesBackend(target) {
   const resolution = resolveTaskBackend(target);
-  if (resolution.backend === 'github') {
-    return {
-      ok: false,
-      message:
-        "Active task backend is 'github'. `agenticloop task` v1 supports the files backend only; " +
-        "use GitHub issues/PRs for task operations in this project.",
-    };
+  for (const warning of resolution.warnings) console.warn(`  WARN: ${warning}`);
+  if (resolution.backend !== 'files') {
+    const message = resolution.backend === 'github'
+      ? "Active task backend is 'github'. `agenticloop task` v1 supports the files backend only; " +
+        "use GitHub issues/PRs for task operations in this project."
+      : `Active task backend is '${resolution.backend}'. \`agenticloop task\` v1 supports the files backend only.`;
+    return { ok: false, message };
   }
   return { ok: true, resolution };
 }
@@ -182,20 +147,30 @@ function instantiateTaskTemplate(target, projectConfig, taskId, title) {
 }
 
 function replaceFrontmatterField(content, key, value) {
-  if (!content.startsWith('---')) {
+  // Operate only inside the leading YAML frontmatter block so a matching
+  // `key:` line elsewhere in the body (e.g. a fenced example) is never touched.
+  const fence = content.match(/^(---[ \t]*\r?\n)([\s\S]*?)(\r?\n---[ \t]*(?:\r?\n|$))/);
+  if (!fence) {
     throw new Error('Task record missing YAML frontmatter');
   }
+  const [full, open, block, close] = fence;
+  const eol = block.includes('\r\n') ? '\r\n' : '\n';
   const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(`^${escapedKey}:.*$`, 'm');
-  const line = value === null ? null : `${key}: ${value}`;
-  if (pattern.test(content)) {
-    if (line === null) {
-      return content.replace(pattern, '').replace(/\n{3,}/, '\n\n');
-    }
-    return content.replace(pattern, line);
+  const keyPattern = new RegExp(`^${escapedKey}:`);
+  const lines = block.split(/\r?\n/);
+  const index = lines.findIndex(l => keyPattern.test(l));
+
+  if (value === null) {
+    if (index === -1) return content;
+    lines.splice(index, 1);
+  } else if (index === -1) {
+    lines.unshift(`${key}: ${value}`);
+  } else {
+    lines[index] = `${key}: ${value}`;
   }
-  if (line === null) return content;
-  return content.replace(/^---[ \t]*\r?\n/, match => `${match}${line}\n`);
+
+  const newBlock = lines.join(eol);
+  return content.slice(0, fence.index) + open + newBlock + close + content.slice(fence.index + full.length);
 }
 
 function appendComment(content, note) {
@@ -296,7 +271,14 @@ export async function cmdTask(args) {
         return;
       }
       mkdirSync(dirname(filePath), { recursive: true });
-      writeFileSync(filePath, instantiateTaskTemplate(target, projectConfig, taskId, title), 'utf-8');
+      // A freshly scaffolded skeleton is not yet ready for an agent; the
+      // canonical template ships `agent-ready`, so open new tasks as `draft`.
+      const newContent = replaceFrontmatterField(
+        instantiateTaskTemplate(target, projectConfig, taskId, title),
+        'status',
+        'draft'
+      );
+      writeFileSync(filePath, newContent, 'utf-8');
       if (opts.json) console.log(JSON.stringify({ task_id: taskId, file: relative(target, filePath).replace(/\\/g, '/') }, null, 2));
       else console.log(`Created ${relative(target, filePath).replace(/\\/g, '/')}`);
       return;

@@ -124,7 +124,7 @@ describe('task CLI', () => {
     const list = run(['task', 'list', '--target', target]);
     assertOk(list);
     assert.match(list.stdout, /T-001/);
-    assert.match(list.stdout, /agent-ready/);
+    assert.match(list.stdout, /draft/);
 
     const lint = run(['task', 'lint', 'T-001', '--target', target]);
     assertOk(lint);
@@ -169,6 +169,18 @@ describe('task CLI', () => {
     assert.match(result.stderr, /supports the files backend only/);
   });
 
+  it('warns and refuses when the active backend is unsupported', () => {
+    const target = makeTarget('invalid-backend');
+    const projectPath = join(target, '.agenticloop', 'project.md');
+    const content = readFileSync(projectPath, 'utf-8').replace('task_backend: files', 'task_backend: jira');
+    writeFileSync(projectPath, content, 'utf-8');
+
+    const result = run(['task', 'list', '--target', target]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Unsupported task backend 'jira'/);
+    assert.match(result.stderr, /supports the files backend only/);
+  });
+
   it('requires block category for blocked status and lint catches missing block_category', () => {
     const target = makeTarget('blocked');
     assertOk(run(['task', 'new', 'Blocked task', '--target', target]));
@@ -178,7 +190,7 @@ describe('task CLI', () => {
     assert.match(blocked.stderr, /requires --block-category/);
 
     let content = readFileSync(taskPath(target, 'T-001'), 'utf-8');
-    content = content.replace(/^status: agent-ready$/m, 'status: blocked');
+    content = content.replace(/^status: draft$/m, 'status: blocked');
     writeFileSync(taskPath(target, 'T-001'), content, 'utf-8');
     const lint = run(['task', 'lint', 'T-001', '--target', target]);
     assert.notEqual(lint.status, 0);
