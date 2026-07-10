@@ -1,7 +1,7 @@
 /**
  * Cursor host adapter.
  *
- * Status: experimental.
+ * Status: supported.
  *
  * Repo-local Cursor MVP support focuses on explicit activation plus one public
  * Agentic Loop skill surface:
@@ -605,7 +605,7 @@ function buildCursorPluginManifest(version) {
   return {
     name: 'agenticloop',
     version,
-    description: 'Agentic Loop workflow toolkit (Cursor plugin distribution, experimental)',
+    description: 'Agentic Loop workflow toolkit (Cursor plugin distribution)',
     skills: './skills/',
     agents: './agents/',
   };

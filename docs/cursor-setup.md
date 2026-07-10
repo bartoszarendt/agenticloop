@@ -1,11 +1,7 @@
 # Cursor Setup
 
-Status: experimental.
-
-Agentic Loop now has an experimental Cursor adapter that stays repo-local and
-explicit-activation first.
-
-The Cursor MVP renders from the same canonical source as the other hosts:
+The Cursor adapter stays repo-local and explicit-activation first. It renders
+from the same canonical source as the other hosts:
 
 - `agenticloop/commands/start.md`
 - `agenticloop/agents/<role>.md`
@@ -196,8 +192,8 @@ Optional generated plugin packaging can be enabled later with:
 ```
 
 When enabled, Agentic Loop also generates `plugins/agenticloop/.cursor-plugin/`
-plus plugin-local `skills/agenticloop/` and `agents/`. This remains
-experimental and is disabled by default.
+plus plugin-local `skills/agenticloop/` and `agents/`. The plugin distribution
+is optional and disabled by default.
 
 ## Validation
 
@@ -217,9 +213,9 @@ Cursor validation checks:
 - backend references exist
 - optional plugin mode, when enabled or present, uses the same single-public-skill shape
 
-## Remaining live-validation gate
+## Smoke Protocol
 
-Cursor stays `experimental` until a real Cursor session documents that:
+Use this protocol to verify a Cursor deployment end-to-end:
 
 1. `/agenticloop` activates the generated public skill correctly.
 2. The active Cursor session stays the coordinator/orchestrator.

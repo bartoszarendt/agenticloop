@@ -726,7 +726,7 @@ async function cmdUpdate(args) {
   }
 
   if (adapters.includes('all')) {
-    console.log('  --adapter all selected: generating every implemented adapter artifact, including experimental hosts.');
+    console.log('  --adapter all selected: generating every implemented adapter artifact.');
   }
 
   const preservation = preserveExistingAdapterModelSettings(target, adapters);

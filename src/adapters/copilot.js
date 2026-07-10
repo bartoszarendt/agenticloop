@@ -1,7 +1,7 @@
 /**
  * GitHub Copilot host adapter.
  *
- * Status: experimental.
+ * Status: supported.
  *
  * Repo-local Copilot MVP support focuses on explicit slash activation plus one
  * public Agentic Loop skill surface:

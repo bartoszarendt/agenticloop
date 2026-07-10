@@ -176,7 +176,7 @@ npx agenticloop init --adapter copilot
 npx agenticloop init --adapter cursor
 ```
 
-Use `--adapter all` only when you intentionally want every implemented adapter, including experimental ones.
+Use `--adapter all` to generate artifacts for every supported host adapter.
 
 ## Start Agentic Loop
 
@@ -205,9 +205,9 @@ Host-specific activation surfaces differ:
 |---|---|---|
 | OpenCode | Supported | `/agenticloop` or `/agenticloop <task-id or task description>` |
 | Claude Code | Supported | Repo-local: `/agenticloop`; plugin: `/agenticloop:start` |
-| Codex | Experimental | `$agenticloop` or `$agenticloop <task-id or task description>` |
-| GitHub Copilot | Experimental | Copilot CLI: `/agenticloop`; IDE prompt files: generated `agenticloop` prompt |
-| Cursor | Experimental | `/agenticloop` or `/agenticloop <task-id or task description>` |
+| Codex | Supported | `$agenticloop` or `$agenticloop <task-id or task description>` |
+| GitHub Copilot | Supported | Copilot CLI: `/agenticloop`; IDE prompt files: generated `agenticloop` prompt |
+| Cursor | Supported | `/agenticloop` or `/agenticloop <task-id or task description>` |
 
 See [docs/host-adapters.md](docs/host-adapters.md) for the full adapter matrix and generated file shapes.
 
@@ -324,8 +324,14 @@ npx agenticloop init [--adapter <host>]              Scaffold overlay (files-onl
 npx agenticloop setup [--adapter <host>]             Guided onboarding: confirm setup, pick adapter, configure models
 npx agenticloop doctor                               Show setup checklist and adapter state; writes nothing
 npx agenticloop update [--adapter <host>]            Refresh toolkit assets and existing adapter output
+npx agenticloop upgrade                              Compatibility alias for update
 npx agenticloop validate                             Validate skills, config, links, and host setup
 npx agenticloop status                               Show configured adapters, artifacts, and next steps
+npx agenticloop github-preflight --pr <number>       Verify a GitHub PR body carries final-state evidence
+npx agenticloop task list [--status <s>] [--json]    List files-backed task records
+npx agenticloop task lint [<task-id>] [--json]       Lint task frontmatter and lifecycle state
+npx agenticloop task new <title> [--id <id>]         Create a new task record
+npx agenticloop task status <id> <status>            Change task lifecycle status
 npx agenticloop worktree add <task-id> <branch>      Create guarded repo-internal lane worktree
 npx agenticloop worktree guard [--fix] [--all]       Check or repair non-interactive Git guard config
 npx agenticloop worktree list [--json]               List all registered worktrees
@@ -408,13 +414,7 @@ updates. Canonical toolkit assets (agents, skills, backends) always live under
 
 ## Status
 
-Version 0.1.0. The methodology, files backend, Node CLI, validation, overlay management, and OpenCode/Claude Code adapters are stable and ready for use.
-
-Experimental (generated output is in place, but not yet validated in a live host session):
-
-- Codex adapter
-- GitHub Copilot adapter
-- Cursor adapter
+Version 0.1.0. The methodology, files backend, Node CLI, validation, overlay management, and all five host adapters (OpenCode, Claude Code, Codex, Copilot, and Cursor) are supported and ready for use.
 
 Registry, marketplace, and centralized services are intentionally deferred -- see [docs/registry-horizon.md](docs/registry-horizon.md) for the reasoning and the evidence gates that would need to pass before revisiting.
 

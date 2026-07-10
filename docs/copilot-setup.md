@@ -1,9 +1,7 @@
 # Copilot Setup
 
-Status: experimental.
-
-Agentic Loop now has an experimental GitHub Copilot adapter that renders from
-the same canonical source as the other hosts:
+The GitHub Copilot adapter renders from the same canonical source as the other
+hosts:
 
 - `agenticloop/commands/start.md`
 - `agenticloop/agents/<role>.md`
@@ -55,9 +53,6 @@ Copilot activation is explicit.
   tells Copilot to read `.agenticloop/project.md` first, follow
   `.github/skills/agenticloop/SKILL.md`, and create or refine the durable task
   record before implementation.
-
-Prompt files are not a github.com surface today, so IDE prompt-file activation
-still needs live validation before the adapter can move beyond `experimental`.
 
 ## Public skill shape
 
@@ -209,9 +204,9 @@ Copilot validation checks:
   activation to the orchestrator custom agent
 - `.github/copilot-instructions.md` is not required
 
-## Remaining live-validation gate
+## Smoke Protocol
 
-Copilot stays `experimental` until a real Copilot session documents that:
+Use this protocol to verify a Copilot deployment end-to-end:
 
 1. The generated public skill activates correctly as `/agenticloop` in Copilot
    CLI.

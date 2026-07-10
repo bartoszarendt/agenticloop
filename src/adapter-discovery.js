@@ -7,7 +7,7 @@
  *   - missing model settings for generated/required adapters
  *   - next command to run
  *
- * This is intentionally advisory; experimental adapters are not required
+ * This is intentionally advisory; optional adapters are not required
  * unless explicitly enabled, required, present, or forced with --adapter.
  */
 

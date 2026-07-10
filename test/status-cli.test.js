@@ -171,7 +171,7 @@ describe('status CLI', () => {
     writeCopilotArtifactsFixture(d);
 
     const out = status(d);
-    assert.ok(out.includes('copilot: experimental [required]'));
+    assert.ok(out.includes('copilot: supported [required]'));
     assert.ok(out.includes('.github/agents/'));
     assert.ok(out.includes('.github/skills/agenticloop/SKILL.md'));
     assert.ok(out.includes('.github/prompts/agenticloop.prompt.md'));
@@ -197,7 +197,7 @@ describe('status CLI', () => {
     writeCursorArtifactsFixture(d);
 
     const out = status(d);
-    assert.ok(out.includes('cursor: experimental [required]'));
+    assert.ok(out.includes('cursor: supported [required]'));
     assert.ok(out.includes('.cursor/agents/'));
     assert.ok(out.includes('.cursor/skills/agenticloop/SKILL.md'));
     assert.ok(out.includes('/agenticloop'));

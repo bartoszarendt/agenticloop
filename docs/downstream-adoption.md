@@ -198,8 +198,7 @@ Generate only the host a target project actually uses. Plain
 `agenticloop update` refreshes existing host output; it does not create new
 host artifacts unless you pass `--adapter <host>`. For OpenCode, update
 regenerates `.opencode/agents/*.md` and `.opencode/commands/agenticloop.md`.
-User-owned `opencode.jsonc` is left alone. `--adapter all` is an explicit request for every
-implemented host adapter, including experimental ones.
+User-owned `opencode.jsonc` is left alone. `--adapter all` is an explicit request for every supported host adapter.
 
 Codex repo-local activation is skill-first: use `$agenticloop` or select
 `Agentic Loop` from `/skills` in Codex after generating the repo-local adapter.
@@ -214,13 +213,13 @@ projects. Repo-local Claude Code adapter output is `.claude/commands/agenticloop
 `.claude/settings.local.json` by default. Targets may set `scope: "project"`
 to write shared `.claude/settings.json` instead.
 
-Copilot repo-local output is experimental. It uses `.github/agents/*.agent.md`,
+Copilot repo-local output uses `.github/agents/*.agent.md`,
 `.github/skills/agenticloop/`, and `.github/prompts/agenticloop.prompt.md`.
 Activation is explicit with `/agenticloop` in Copilot CLI; the prompt file is
 only the fallback for Copilot IDE prompt-file surfaces. It does not generate
 `.github/copilot-instructions.md`; that file remains user-owned.
 
-Cursor repo-local output is experimental. It uses `.cursor/agents/*.md` and
+Cursor repo-local output uses `.cursor/agents/*.md` and
 `.cursor/skills/agenticloop/`. Activation is explicit with `/agenticloop`, and
 the adapter does not generate `.cursor/rules/` by default.
 

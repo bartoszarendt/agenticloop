@@ -1,7 +1,7 @@
 /**
  * Codex host adapter.
  *
- * Status: experimental.
+ * Status: supported.
  *
  * Codex MVP support focuses on repo-local TUI activation:
  *   - One public repo-local skill discovered from .agents/skills/agenticloop/SKILL.md.
@@ -541,7 +541,7 @@ function buildPluginManifest(version) {
   return {
     name: 'agenticloop',
     version,
-    description: 'Agentic Loop workflow toolkit (Codex plugin distribution, experimental)',
+    description: 'Agentic Loop workflow toolkit (Codex plugin distribution)',
     skills: './skills/',
   };
 }

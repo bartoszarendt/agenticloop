@@ -1582,15 +1582,15 @@ describe('Adapter-aware validation', () => {
       `expected missing engineer error, got: ${JSON.stringify(errors)}`);
   });
 
-  it('does not require Codex output when it is absent and adapter is experimental', () => {
+  it('does not require Codex output when it is absent and adapter is not enabled', () => {
     const d = mkdtempSync(join(tmpDir, 'adapter-aware-codex-absent-'));
     seedTargetLayout(REPO_ROOT, d);
-    // No .codex/agents/ present. Codex adapter is experimental in the base.
+    // No .codex/agents/ present. Codex adapter is not explicitly enabled in the base.
 
     const { errors } = validateConfig(d);
     const codexErrors = errors.filter(e => /Codex adapter/.test(e));
     assert.deepEqual(codexErrors, [],
-      `expected no codex errors when output is absent and adapter is experimental, got: ${JSON.stringify(codexErrors)}`);
+      `expected no codex errors when output is absent and adapter is not enabled, got: ${JSON.stringify(codexErrors)}`);
   });
 
   it('forces Codex validation when --adapter codex is passed', () => {
@@ -1686,14 +1686,14 @@ describe('Adapter-aware validation', () => {
     );
   });
 
-  it('does not require Copilot output when it is absent and adapter is experimental', () => {
+  it('does not require Copilot output when it is absent and adapter is not enabled', () => {
     const d = mkdtempSync(join(tmpDir, 'adapter-aware-copilot-absent-'));
     seedTargetLayout(REPO_ROOT, d);
 
     const { errors } = validateConfig(d);
     const copilotErrors = errors.filter(e => /Copilot adapter/.test(e));
     assert.deepEqual(copilotErrors, [],
-      `expected no copilot errors when output is absent and adapter is experimental, got: ${JSON.stringify(copilotErrors)}`);
+      `expected no copilot errors when output is absent and adapter is not enabled, got: ${JSON.stringify(copilotErrors)}`);
   });
 
   it('forces Copilot validation when --adapter copilot is passed', () => {
@@ -1829,14 +1829,14 @@ describe('Adapter-aware validation', () => {
       `expected no cursor adapter errors with a complete output, got: ${JSON.stringify(cursorErrors)}`);
   });
 
-  it('does not require Cursor output when it is absent and adapter is experimental', () => {
+  it('does not require Cursor output when it is absent and adapter is not enabled', () => {
     const d = mkdtempSync(join(tmpDir, 'adapter-aware-cursor-absent-'));
     seedTargetLayout(REPO_ROOT, d);
 
     const { errors } = validateConfig(d);
     const cursorErrors = errors.filter(e => /Cursor adapter/.test(e));
     assert.deepEqual(cursorErrors, [],
-      `expected no cursor errors when output is absent and adapter is experimental, got: ${JSON.stringify(cursorErrors)}`);
+      `expected no cursor errors when output is absent and adapter is not enabled, got: ${JSON.stringify(cursorErrors)}`);
   });
 
   it('forces Cursor validation when --adapter cursor is passed', () => {

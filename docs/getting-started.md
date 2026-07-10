@@ -73,8 +73,7 @@ npx agenticloop init --adapter cursor
 
 Adapter init additionally creates `agenticloop.json`,
 `agenticloop/config.json`, and artifacts for the selected host. Use
-`--adapter all` only when you intentionally want every implemented host adapter,
-including experimental adapters.
+`--adapter all` to generate artifacts for every supported host adapter.
 
 For Claude Code, `init --adapter claude-code` is the repo-local Mode B adapter:
 it generates `.claude/commands/agenticloop.md`, `.claude/agents/`, and one public
@@ -85,14 +84,14 @@ That local settings file is gitignored automatically. If you want one shared
 Claude Code install across many target projects, use the separate root plugin
 packaging flow in [docs/claude-code-setup.md](claude-code-setup.md).
 
-For Copilot, `init --adapter copilot` is experimental. It generates
+For Copilot, `init --adapter copilot` generates
 `.github/agents/*.agent.md`, one public `.github/skills/agenticloop/SKILL.md`
 with internal `references/skills/<name>/reference.md` procedure copies and
 backend references, plus `.github/prompts/agenticloop.prompt.md` for Copilot
 IDE prompt-file surfaces. In Copilot CLI, activation is explicit with
 `/agenticloop`. It does not generate `.github/copilot-instructions.md`.
 
-For Cursor, `init --adapter cursor` is experimental. It generates
+For Cursor, `init --adapter cursor` generates
 `.cursor/agents/*.md` plus one public `.cursor/skills/agenticloop/SKILL.md`
 with internal `references/skills/<name>/reference.md` procedure copies and
 backend references. Activation is explicit with `/agenticloop`. It does not
@@ -363,7 +362,7 @@ and [docs/workflow-examples.md](workflow-examples.md) for a concrete software
 delivery example.
 
 - [OpenCode setup](opencode-setup.md) - supported.
-- [Codex setup](codex-setup.md) - experimental.
+- [Codex setup](codex-setup.md) - supported.
 - [Claude Code setup](claude-code-setup.md) - supported.
-- [Copilot setup](copilot-setup.md) - experimental.
-- [Cursor setup](cursor-setup.md) - experimental.
+- [Copilot setup](copilot-setup.md) - supported.
+- [Cursor setup](cursor-setup.md) - supported.

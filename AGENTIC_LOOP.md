@@ -969,7 +969,4 @@ important skills are:
 Skills are workflows, not background reading. Follow the procedure and
 verification steps when a skill applies.
 
-For a concrete end-to-end example, see
-[docs/workflow-examples.md](docs/workflow-examples.md).
-
 For definitions of Agentic Loop terms, see the Glossary section in this file.

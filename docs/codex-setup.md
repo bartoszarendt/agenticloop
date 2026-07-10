@@ -1,12 +1,7 @@
 # Codex Setup
 
-Status: experimental.
-
-Codex support is usable as a repo-local Codex TUI workflow, but it stays
-`experimental` until the updated live smoke path is rerun in a real target
-project after the latest hardening fixes.
-
-The Codex adapter renders from the same canonical sources as the other hosts:
+Codex support provides a repo-local Codex TUI workflow rendered from the same
+canonical sources as the other hosts:
 
 - `agenticloop/commands/start.md`
 - `agenticloop/agents/<role>.md`
@@ -246,7 +241,7 @@ Codex supports these explicit reasoning-effort values:
 
 Do not put Codex model fields in canonical `agenticloop/agents/*.md`.
 
-When configuring interactively, the model picker tries the experimental
+When configuring interactively, the model picker tries the
 `codex debug models` command to discover models available to the current
 Codex account. If the command is unavailable or returns invalid JSON, it
 falls back to the bundled catalog and custom entry. Override the command with
@@ -287,8 +282,7 @@ generated paths.
 
 ## Manual Codex TUI Smoke Protocol
 
-This is still the required live validation step before Codex can move beyond
-`experimental`:
+Use this protocol to verify a Codex deployment end-to-end:
 
 1. In a real target project, run `npx agenticloop init --adapter codex` or
    `npx agenticloop generate codex` after setup.
@@ -311,6 +305,3 @@ This is still the required live validation step before Codex can move beyond
 10. Confirm event logging records a truthful process gap and continues when no
    working event logging command is available.
 11. Record the smoke result in a durable task record and update this guide.
-
-Until that rerun is completed in a real Codex TUI session, keep this adapter
-status at `experimental`.

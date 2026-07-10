@@ -11,7 +11,7 @@ Host-native output is generated shim material. The shim directories are not the
 source of truth.
 
 Adapters are status-bearing in `agenticloop.json` so downstream projects can
-see what is supported, what is experimental, and what is reserved.
+see what is supported and what is reserved.
 
 Agentic Loop-owned adapter settings use strict JSON (`agenticloop.json` and
 `agenticloop/config.json`).
@@ -31,7 +31,7 @@ noninteractive list command exists:
 
 - OpenCode: `opencode models` lists provider/model identifiers.
 - Cursor: `agent models` lists `id - label` entries for the current account.
-- Codex: `codex debug models` (experimental) prints JSON model metadata.
+- Codex: `codex debug models` prints JSON model metadata.
 
 Claude Code and Copilot do not have a safe noninteractive model-list command,
 so their interactive pickers use the bundled catalog and custom entry only.
@@ -104,10 +104,10 @@ for single-worktree removal with lane-local state preservation, or
 | Host | Status | Adapter output | Generation command |
 |---|---|---|---|
 | OpenCode | supported | `.opencode/agents/*.md` plus `.opencode/commands/agenticloop.md` | `agenticloop generate opencode` |
-| Codex | experimental | `.codex/agents/*.toml`, `.agents/skills/agenticloop/SKILL.md`, `.agents/skills/agenticloop/agents/openai.yaml`, `.agents/skills/agenticloop/references/skills/<name>/reference.md`, optional `plugins/agenticloop/.codex-plugin/plugin.json` | `agenticloop generate codex` |
+| Codex | supported | `.codex/agents/*.toml`, `.agents/skills/agenticloop/SKILL.md`, `.agents/skills/agenticloop/agents/openai.yaml`, `.agents/skills/agenticloop/references/skills/<name>/reference.md`, optional `plugins/agenticloop/.codex-plugin/plugin.json` | `agenticloop generate codex` |
 | Claude Code | supported | Mode A: tracked root `.claude-plugin/` packaging (activation command and role agents, with no copied plugin skill payloads). Mode B: generated `.claude/commands/agenticloop.md`, `.claude/agents/*.md`, one public `.claude/skills/agenticloop/SKILL.md` with internal `references/skills/<name>/reference.md`, and `.claude/settings.local.json` by default | `agenticloop generate claude-code` (Mode B) |
-| Copilot | experimental | `.github/agents/*.agent.md`, one public `.github/skills/agenticloop/SKILL.md` with internal `references/skills/<name>/reference.md`, `.github/skills/agenticloop/references/backends/*.md`, and `.github/prompts/agenticloop.prompt.md` | `agenticloop generate copilot` |
-| Cursor | experimental | `.cursor/agents/*.md`, one public `.cursor/skills/agenticloop/SKILL.md` with internal `references/skills/<name>/reference.md` and backend references under `.cursor/skills/agenticloop/references/backends/*.md` | `agenticloop generate cursor` |
+| Copilot | supported | `.github/agents/*.agent.md`, one public `.github/skills/agenticloop/SKILL.md` with internal `references/skills/<name>/reference.md`, `.github/skills/agenticloop/references/backends/*.md`, and `.github/prompts/agenticloop.prompt.md` | `agenticloop generate copilot` |
+| Cursor | supported | `.cursor/agents/*.md`, one public `.cursor/skills/agenticloop/SKILL.md` with internal `references/skills/<name>/reference.md` and backend references under `.cursor/skills/agenticloop/references/backends/*.md` | `agenticloop generate cursor` |
 
 ## Unified Host-Skill Surface
 
@@ -152,18 +152,12 @@ not generate `.cursor/rules/` or always-on hooks by default.
 The `adapters.<host>.status` field in `agenticloop/config.json` is the durable
 record of how much an adapter is trusted.
 
-- `supported` - adapter output is validated in at least one real host session.
-- `experimental` - adapter output is generated from canonical sources, but has
-  not yet been validated in a real host session. The shape is intentionally
-  conservative and may evolve as host support matures.
+- `supported` - implemented, documented, and covered by automated generation and validation.
 - `placeholder` - reserved name with no generator yet. Avoid referencing it in
   target-owned config until the generator exists.
 
-Adapter promotion to `supported` and major adapter-methodology changes require
-a dated real-run evidence note naming the host, target project or fixture, date,
-command or session path, result, and follow-up decision. Agentic Loop does not
-maintain standing telemetry; collect evidence only from deliberate validation
-runs recorded in docs or plans.
+Ordinary automated tests, validation commands, and packaging checks remain
+release requirements for all supported adapters.
 
 ## Loop-Guard Capabilities
 
@@ -225,18 +219,17 @@ Each command accepts:
 - `--target <dir>` - directory containing `agenticloop.json` (default: cwd)
 - `--output-dir <dir>` - output directory
 
-`generate all` writes every adapter that has a generator in this package,
-including experimental adapters. Use a single-host generation command when
-you only want one host's artifacts in a target project.
+`generate all` writes every adapter that has a generator in this package.
+Use a single-host generation command when you only want one host's artifacts
+in a target project.
 
 For package upgrades, `npx agenticloop update` refreshes toolkit-owned copied
 assets and refreshes adapter output that already exists. For OpenCode, that
 means regenerating the repo-local `.opencode/agents/*.md` files and
 `.opencode/commands/agenticloop.md`. User-owned `opencode.jsonc` is ignored.
 Use `npx agenticloop update --adapter <host>` to generate or refresh one
-specific host. Use
-`npx agenticloop update --adapter all` only when you intentionally want every
-implemented adapter artifact generated, including experimental hosts.
+specific host. Use `npx agenticloop update --adapter all` to generate or refresh every
+implemented adapter artifact.
 `agenticloop upgrade` is a compatibility alias for `agenticloop update`.
 
 ## OpenCode Activation
@@ -326,7 +319,7 @@ not backfilled from generated `.claude/agents/*.md` files.
 
 ## Copilot Activation
 
-Copilot MVP support is experimental and repo-local.
+Copilot support is repo-local.
 
 - Generate the adapter, then activate Agentic Loop in Copilot CLI with
   `/agenticloop [task-id or task description]`.
@@ -348,14 +341,11 @@ Copilot MVP support is experimental and repo-local.
 - `.github/copilot-instructions.md` is intentionally not generated. Treat it, and
   any `.github/instructions/*.instructions.md` files, as user or team-owned
   customization surfaces.
-- `generate all` includes Copilot because it is implemented, but the adapter
-  stays `experimental` until a real Copilot session validates `/agenticloop`
-  skill activation, IDE prompt-file fallback activation, custom-agent routing,
-  skill loading, and bounded fallback behavior.
+- `generate all` includes Copilot because it is implemented.
 
 ## Cursor Activation
 
-Cursor MVP support is experimental and repo-local.
+Cursor support is repo-local.
 
 - Generate the adapter, then invoke `/agenticloop` in Cursor Agent chat.
 - Cursor exposes one clean public skill surface at

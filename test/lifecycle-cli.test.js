@@ -257,10 +257,13 @@ describe('lifecycle CLI', () => {
       'agenticloop.json',
       '.opencode',
       '.codex',
-      '.claude',
     ]) {
       assert.ok(!existsSync(join(d, rel)), `${rel} should be removed`);
     }
+    // .claude/ may still exist if it contains non-generated files (e.g. settings.local.json)
+    assert.ok(!existsSync(join(d, '.claude', 'agents')), 'generated .claude/agents should be removed');
+    assert.ok(!existsSync(join(d, '.claude', 'commands')), 'generated .claude/commands should be removed');
+    assert.ok(!existsSync(join(d, '.claude', 'skills', 'agenticloop')), 'generated .claude/skills/agenticloop should be removed');
     assert.ok(existsSync(join(d, '.agenticloop')), '.agenticloop should be preserved by default');
     assert.ok(existsSync(join(d, 'opencode.jsonc')), 'user-owned opencode.jsonc should not be removed');
     assert.ok(!existsSync(join(d, '.agents', 'skills', 'agenticloop')), 'generated Codex public skill should be removed');

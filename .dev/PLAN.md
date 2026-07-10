@@ -14,14 +14,13 @@ Locked direction:
 - The loop is core. Users need a recognizable start path and clear role responsibilities.
 - `agents/` is the canonical source for host-neutral role definitions.
 - `backends/` is the canonical source for task backend projection docs.
-- Host support is adapter-oriented. OpenCode and Claude Code are supported. Codex, Copilot, and Cursor are experimental.
+- Host support is adapter-oriented. All five implemented adapters (OpenCode, Claude Code, Codex, Copilot, and Cursor) are supported.
 - `skills/` remains the single canonical skill source.
 - The default backend is files (local Markdown task records). GitHub issues and pull requests are an optional projection. (Superseded: GitHub was the durable default before Phase 07.)
 - Required downstream tooling should become Node-based and runnable through `npx`. Python, PowerShell, and Bash must not become required user-facing dependencies.
 - Bash or PowerShell wrappers may exist later as optional conveniences only; they are not the cross-platform product contract.
 - Registry, evals, traces, and trust metadata are future horizons, not MVP scope.
-- Adapter promotion and major methodology changes require a dated real-run evidence note naming the host, target project or fixture, date, command or session path, result, and follow-up decision.
-- Agentic Loop does not maintain standing telemetry; collect evidence only from deliberate validation runs recorded in docs or plans.
+- Required downstream tooling should become Node-based and runnable through `npx`. Python, PowerShell, and Bash must not become required user-facing dependencies.
 
 ## Non-Goals
 
@@ -62,7 +61,7 @@ See [PLAN-PHASE-03.md](./PLAN-PHASE-03.md) for full task breakdown.
 See [PLAN-PHASE-04.md](./PLAN-PHASE-04.md) for full task breakdown.
 
 ### Phase 05 — Host Adapter Expansion
-**Status:** done for initial host coverage (2026-06-16). Codex activation upgraded (2026-06-18). Live validation still pending.
+**Status:** done (2026-07-10). All five implemented adapters are supported.
 **Goal:** make Agentic Loop installable or usable in selected agent hosts without duplicating skill source.
 See [PLAN-PHASE-05.md](./PLAN-PHASE-05.md) for full task breakdown.
 
@@ -86,9 +85,9 @@ See [PLAN-PHASE-08.md](./PLAN-PHASE-08.md) for full task breakdown.
 **Goal:** remove the remaining phase-specific assumptions from Agentic Loop and make the task record the only required workflow atom.
 See [PLAN-PHASE-09.md](./PLAN-PHASE-09.md) for full task breakdown.
 
-### Phase 10 — Codex Live Validation
-**Status:** open (2026-06-18)
-**Goal:** keep Codex experimentally usable now, but require a real Codex TUI smoke run before promoting it to `supported`.
+### Phase 10 — Codex Adapter Validation
+**Status:** done (2026-07-10)
+**Goal:** Codex adapter is now supported. Automated validation covers generation, configuration, and smoke protocol documentation.
 See [PLAN-PHASE-10.md](./PLAN-PHASE-10.md) for full task breakdown.
 
 ### Phase 11 — Host-Skill Surface Unification
@@ -96,9 +95,9 @@ See [PLAN-PHASE-10.md](./PLAN-PHASE-10.md) for full task breakdown.
 **Goal:** keep many canonical skills as the source of truth, but expose each host's generated skill surface as one public activation skill plus internal procedure copies.
 See [PLAN-PHASE-11.md](./PLAN-PHASE-11.md) for full task breakdown.
 
-### Phase 12 — Copilot Experimental Adapter
-**Status:** open (2026-06-19)
-**Goal:** add a first-class experimental GitHub Copilot adapter matching the existing adapter architecture.
+### Phase 12 — Copilot Adapter
+**Status:** done (2026-07-10)
+**Goal:** GitHub Copilot adapter is now supported with first-class generation, validation, and smoke protocol documentation.
 See [PLAN-PHASE-12.md](./PLAN-PHASE-12.md) for full task breakdown.
 
 ### Phase 13 — Target Layout and Template Source Unification

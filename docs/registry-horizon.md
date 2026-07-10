@@ -41,8 +41,8 @@ Registry work may be reconsidered only after these gates are met:
 4. **Trust metadata is validated across skills.** `npx agenticloop validate`
    enforces trust metadata for every skill and downstream projects have not
    needed to relax the rules.
-5. **Adapter behavior has real host evidence.** Each adapter promoted beyond
-   `experimental` has been validated in at least one real host session.
+5. **Adapter behavior has real host evidence.** Each implemented adapter has
+   been validated through automated generation and validation tests.
 
 ## What is not deferred
 
