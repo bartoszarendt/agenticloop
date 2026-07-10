@@ -166,7 +166,7 @@ const CODEX_FORBIDDEN_EVENT_LOGGING_PATTERNS = [
   },
 ];
 
-function sectionBody(content, heading) {
+export function sectionBody(content, heading) {
   const headingLevel = (heading.trim().match(/^(#{1,6})/) ?? [])[1]?.length ?? 2;
   const breakRe = new RegExp(`^#{1,${headingLevel}}\\s`);
   const lines = content.split('\n');

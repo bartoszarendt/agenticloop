@@ -53,7 +53,14 @@ import {
   generatedCursorArtifactsPresent,
 } from './adapters/cursor.js';
 import { validateSharedAgenticLoopPluginCompatibility } from './adapter-plugin-compatibility.js';
+import { preflightGeneration, formatPreflightResult } from './adapter-output-plan.js';
 import { loadAgenticLoopConfig } from './json.js';
+import {
+  recordFileArtifact,
+  recordDirectoryArtifact,
+  removeEntriesForAdapter,
+  loadManifest,
+} from './generated-artifacts.js';
 import { loadProjectMap } from './project-map.js';
 import { resolveTaskBackend } from './task-backend.js';
 import { cmdTask } from './task-cli.js';
@@ -86,6 +93,7 @@ import {
   validateEventLogs,
 } from './event-logging.js';
 import { runValidation } from './validate-runner.js';
+import { validateLinks, formatLinkErrors } from './link-validator.js';
 import { runPreflight, PreflightError } from './github-preflight.js';
 import {
   cleanupAgenticLoopWorktrees,
@@ -515,6 +523,36 @@ function validateAdapterListGenerationPreflight(adapters, alConfig) {
   return [];
 }
 
+/**
+ * Record generated artifacts in the ownership manifest.
+ * Called after a successful generation to track what was produced.
+ *
+ * @param {string} target  Target root directory
+ * @param {string} adapter Adapter name
+ * @param {string[]} files  List of generated file paths (relative to outputDir)
+ * @param {string} outputDir  Output directory
+ */
+function recordGeneration(target, adapter, files, outputDir) {
+  // Clear previous entries for this adapter.
+  removeEntriesForAdapter(target, adapter);
+  const pkg = loadManifest(target)?.packageVersion ?? '0.0.0';
+  for (const file of files) {
+    // file is relative to outputDir; normalize to repo-relative.
+    const relPath = file.replace(/\\/g, '/');
+    try {
+      const entry = recordFileArtifact(target, {
+        adapter,
+        relPath,
+        outputRoot: '.',
+        packageVersion: pkg,
+      });
+      // entry recorded
+    } catch {
+      // Non-fatal: manifest recording failure should not block generation.
+    }
+  }
+}
+
 function printPreservationResult(preservation) {
   for (const w of preservation.warnings) console.warn(`  WARN: ${w}`);
   for (const e of preservation.errors) console.error(`  ERROR: ${e}`);
@@ -532,6 +570,8 @@ async function generateAdapterTarget(sub, { opts, target, alConfig, preserveExis
     process.exitCode = 1;
     return;
   }
+
+  const forceGenerated = Boolean(opts.forceGenerated);
 
   if (sub === 'opencode') {
     if (opts.output) {
@@ -554,6 +594,7 @@ async function generateAdapterTarget(sub, { opts, target, alConfig, preserveExis
     }
 
     const { files } = generateOpencodeArtifacts(effectiveConfig, target, outputDir);
+    recordGeneration(target, 'opencode', files, outputDir);
     console.log(`Generated ${files.length} OpenCode artifact(s) under ${outputDir}:`);
     for (const file of files) console.log(`  ${file}`);
     return;
@@ -562,6 +603,7 @@ async function generateAdapterTarget(sub, { opts, target, alConfig, preserveExis
   if (sub === 'codex') {
     const outputDir = resolveOutputDir(opts, target);
     const { files } = generateCodexArtifacts(alConfig, target, outputDir);
+    recordGeneration(target, 'codex', files, outputDir);
     console.log(`Generated ${files.length} Codex artifact(s) under ${outputDir}:`);
     for (const f of files) console.log(`  ${f}`);
     return;
@@ -570,6 +612,7 @@ async function generateAdapterTarget(sub, { opts, target, alConfig, preserveExis
   if (sub === 'claude-code') {
     const outputDir = resolveOutputDir(opts, target);
     const { files } = generateClaudeCodeArtifacts(alConfig, target, outputDir);
+    recordGeneration(target, 'claude-code', files, outputDir);
     console.log(`Generated ${files.length} Claude Code artifact(s) under ${outputDir}:`);
     for (const f of files) console.log(`  ${f}`);
     return;
@@ -578,6 +621,7 @@ async function generateAdapterTarget(sub, { opts, target, alConfig, preserveExis
   if (sub === 'copilot') {
     const outputDir = resolveOutputDir(opts, target);
     const { files } = generateCopilotArtifacts(alConfig, target, outputDir);
+    recordGeneration(target, 'copilot', files, outputDir);
     console.log(`Generated ${files.length} GitHub Copilot artifact(s) under ${outputDir}:`);
     for (const f of files) console.log(`  ${f}`);
     return;
@@ -586,6 +630,7 @@ async function generateAdapterTarget(sub, { opts, target, alConfig, preserveExis
   if (sub === 'cursor') {
     const outputDir = resolveOutputDir(opts, target);
     const { files } = generateCursorArtifacts(alConfig, target, outputDir);
+    recordGeneration(target, 'cursor', files, outputDir);
     console.log(`Generated ${files.length} Cursor artifact(s) under ${outputDir}:`);
     for (const f of files) console.log(`  ${f}`);
     return;
@@ -618,6 +663,11 @@ async function generateAdapterTarget(sub, { opts, target, alConfig, preserveExis
     total += copilot.files.length;
     const cursor = generateCursorArtifacts(effectiveConfig, target, outputDir);
     total += cursor.files.length;
+    recordGeneration(target, 'opencode', opencode.files, outputDir);
+    recordGeneration(target, 'codex', codex.files, outputDir);
+    recordGeneration(target, 'claude-code', cc.files, outputDir);
+    recordGeneration(target, 'copilot', copilot.files, outputDir);
+    recordGeneration(target, 'cursor', cursor.files, outputDir);
     console.log(`Total artifacts: ${total}`);
     return;
   }
@@ -795,10 +845,30 @@ async function cmdRemove(args) {
 
 async function cmdValidate(args) {
   const { opts } = parseArgs(args);
-  warnUnknownOptions(opts, ['target', 'adapter'], 'validate');
+  warnUnknownOptions(opts, ['target', 'adapter', 'links'], 'validate');
   const target = opts.target ? resolve(opts.target) : process.cwd();
   const forcedAdapters = Array.isArray(opts.adapter) ? opts.adapter : (opts.adapter ? [opts.adapter] : []);
   const result = runValidation(target, { adapters: forcedAdapters });
+
+  // Link validation
+  const doLinkValidation = opts.links !== 'false' && opts.links !== 'no';
+  if (doLinkValidation) {
+    const linkResult = validateLinks(target);
+    const allLinkErrors = [...linkResult.packageErrors];
+    for (const err of allLinkErrors) {
+      console.warn(`  LINK BROKEN: ${err.file}:${err.line} — ${err.message}`);
+    }
+    if (linkResult.installedErrors.length > 0 &&
+      allLinkErrors.length === linkResult.packageErrors.length) {
+      // Only show installed-layout errors if distinct from package errors
+      for (const err of linkResult.installedErrors) {
+        if (!linkResult.packageErrors.some(pe => pe.file === err.file && pe.line === err.line)) {
+          console.warn(`  LINK BROKEN (installed): ${err.file}:${err.line} — ${err.message}`);
+        }
+      }
+    }
+  }
+
   if (result.totalErrors > 0) {
     process.exitCode = 1;
   }
@@ -1697,7 +1767,7 @@ async function cmdGenerate(subArgs) {
     return;
   }
   const { opts } = parseArgs(subArgs.slice(1));
-  warnUnknownOptions(opts, ['target', 'outputDir', 'output'], `generate ${sub}`);
+  warnUnknownOptions(opts, ['target', 'outputDir', 'output', 'forceGenerated'], `generate ${sub}`);
   const target = opts.target ? resolve(opts.target) : process.cwd();
 
   const alConfig = loadAlConfigOrExit(target);

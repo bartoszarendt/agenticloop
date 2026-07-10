@@ -130,8 +130,10 @@ describe('task CLI', () => {
     assertOk(lint);
     assert.match(lint.stdout, /T-001\.md: ok/);
 
-    const status = run(['task', 'status', 'T-001', 'in-progress', '--note', 'Started implementation', '--target', target]);
+    const status = run(['task', 'status', 'T-001', 'agent-ready', '--target', target]);
     assertOk(status);
+    const status2 = run(['task', 'status', 'T-001', 'in-progress', '--note', 'Started implementation', '--target', target]);
+    assertOk(status2);
     const content = readFileSync(taskPath(target, 'T-001'), 'utf-8');
     assert.match(content, /^status: in-progress$/m);
     assert.match(content, /Started implementation/);
@@ -217,5 +219,94 @@ describe('task CLI', () => {
     assertOk(result);
     assert.match(result.stderr, /WARN: task list ignoring unknown option\(s\): --bogus/);
     assert.match(result.stdout, /T-001/);
+  });
+
+  // --- Lifecycle transition enforcement ---
+
+  it('allows draft -> agent-ready', () => {
+    const target = makeTarget('trans-dr-ar');
+    assertOk(run(['task', 'new', 'Test', '--target', target]));
+    const result = run(['task', 'status', 'T-001', 'agent-ready', '--target', target]);
+    assertOk(result);
+  });
+
+  it('allows draft -> blocked with --note', () => {
+    const target = makeTarget('trans-dr-bl');
+    assertOk(run(['task', 'new', 'Test', '--target', target]));
+    const result = run(['task', 'status', 'T-001', 'blocked', '--block-category', 'dependency', '--note', 'Waiting on API', '--target', target]);
+    assertOk(result);
+  });
+
+  it('rejects draft -> in-progress', () => {
+    const target = makeTarget('trans-dr-ip');
+    assertOk(run(['task', 'new', 'Test', '--target', target]));
+    const result = run(['task', 'status', 'T-001', 'in-progress', '--target', target]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Cannot transition from 'draft' to 'in-progress'/);
+  });
+
+  it('rejects draft -> accepted', () => {
+    const target = makeTarget('trans-dr-ac');
+    assertOk(run(['task', 'new', 'Test', '--target', target]));
+    const result = run(['task', 'status', 'T-001', 'accepted', '--target', target]);
+    assert.notEqual(result.status, 0);
+    // Should fail on both transition and acceptance gate
+  });
+
+  it('rejects draft -> closed', () => {
+    const target = makeTarget('trans-dr-cl');
+    assertOk(run(['task', 'new', 'Test', '--target', target]));
+    const result = run(['task', 'status', 'T-001', 'closed', '--target', target]);
+    assert.notEqual(result.status, 0);
+  });
+
+  it('allows agent-ready -> in-progress', () => {
+    const target = makeTarget('trans-ar-ip');
+    assertOk(run(['task', 'new', 'Test', '--target', target]));
+    assertOk(run(['task', 'status', 'T-001', 'agent-ready', '--target', target]));
+    const result = run(['task', 'status', 'T-001', 'in-progress', '--note', 'Starting', '--target', target]);
+    assertOk(result);
+  });
+
+  it('allows in-progress -> accepted with proper evidence', () => {
+    const target = makeTarget('trans-ip-ac');
+    assertOk(run(['task', 'new', 'Test', '--target', target]));
+    assertOk(run(['task', 'status', 'T-001', 'agent-ready', '--target', target]));
+    assertOk(run(['task', 'status', 'T-001', 'in-progress', '--target', target]));
+
+    // Write required evidence into the task record
+    let content = readFileSync(taskPath(target, 'T-001'), 'utf-8');
+    content = content.replace('review_status:', 'review_status: accepted');
+    content = content.replace('implementation_artifact:', 'implementation_artifact: commit:abc123');
+    // Add the required sections that the template doesn't include
+    content += '\n## Scope Completed\nDone.\n';
+    content += '\n## Evidence\n- npm test passed.\n';
+    writeFileSync(taskPath(target, 'T-001'), content, 'utf-8');
+
+    const result = run(['task', 'status', 'T-001', 'accepted', '--target', target]);
+    assertOk(result);
+  });
+
+  it('rejects accepted -> in-progress (terminal without reopen)', () => {
+    const target = makeTarget('trans-ac-ip');
+    writeAcceptedTask(target, 'T-001');
+    const result = run(['task', 'status', 'T-001', 'in-progress', '--target', target]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Cannot transition from 'accepted' to 'in-progress'/);
+  });
+
+  it('allows accepted -> closed', () => {
+    const target = makeTarget('trans-ac-cl');
+    writeAcceptedTask(target, 'T-001');
+    const result = run(['task', 'status', 'T-001', 'closed', '--target', target]);
+    assertOk(result);
+  });
+
+  it('rejects agent-ready -> closed', () => {
+    const target = makeTarget('trans-ar-cl');
+    assertOk(run(['task', 'new', 'Test', '--target', target]));
+    assertOk(run(['task', 'status', 'T-001', 'agent-ready', '--target', target]));
+    const result = run(['task', 'status', 'T-001', 'closed', '--target', target]);
+    assert.notEqual(result.status, 0);
   });
 });

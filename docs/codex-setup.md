@@ -282,6 +282,9 @@ generated paths.
 
 ## Manual Codex TUI Smoke Protocol
 
+This protocol is **optional and advisory**. It is not a support-status gate
+and does not require recording results or updating this guide.
+
 Use this protocol to verify a Codex deployment end-to-end:
 
 1. In a real target project, run `npx agenticloop init --adapter codex` or
@@ -304,4 +307,3 @@ Use this protocol to verify a Codex deployment end-to-end:
    is configured.
 10. Confirm event logging records a truthful process gap and continues when no
    working event logging command is available.
-11. Record the smoke result in a durable task record and update this guide.

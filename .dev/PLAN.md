@@ -20,7 +20,6 @@ Locked direction:
 - Required downstream tooling should become Node-based and runnable through `npx`. Python, PowerShell, and Bash must not become required user-facing dependencies.
 - Bash or PowerShell wrappers may exist later as optional conveniences only; they are not the cross-platform product contract.
 - Registry, evals, traces, and trust metadata are future horizons, not MVP scope.
-- Required downstream tooling should become Node-based and runnable through `npx`. Python, PowerShell, and Bash must not become required user-facing dependencies.
 
 ## Non-Goals
 
@@ -36,7 +35,35 @@ Locked direction:
 
 ## Active Phases
 
-_Currently proposed or in-progress. Implemented phases are listed under Completed._
+### Phase 04 — Minimal Node CLI (track 2)
+**Status:** live delegation tests still pending (CLI scaffold complete 2026-06-15; guardrail hardening 2026-06-17)
+**Goal:** replace maintenance-only Python/PowerShell entry points with a small cross-platform CLI for setup and validation.
+See [PLAN-PHASE-04.md](./PLAN-PHASE-04.md) for full task breakdown.
+
+### Phase 17 — Unified Work-Unit Summary Contract
+**Status:** approved (2026-06-22)
+**Goal:** replace three divergent summary templates with one scope-parameterized work-unit summary contract.
+See [PLAN-PHASE-17.md](./PLAN-PHASE-17.md) for full task breakdown.
+
+### Phase 19 — Proof Pressure and Output Refs (Track 2)
+**Status:** Track 2 deferred (Track 1 landed 2026-06-27)
+**Goal:** strengthen task proof, scope evidence, and slice-sizing language.
+See [PLAN-PHASE-19.md](./PLAN-PHASE-19.md) for full task breakdown.
+
+### Phase 20 — Adoption Map and Context Discipline (Remainder)
+**Status:** remainder proposed (T-02, T-09, T-10 implemented 2026-06-27)
+**Goal:** improve adoption map and context-discipline for delegated agents.
+See [PLAN-PHASE-20.md](./PLAN-PHASE-20.md) for full task breakdown.
+
+### Phase 21 — Concurrency And Subagent Liveness
+**Status:** partially implemented (2026-06-23)
+**Goal:** keep Agentic Loop serial by default with narrow explicit parallel exceptions.
+See [PLAN-PHASE-21.md](./PLAN-PHASE-21.md) for full task breakdown.
+
+### Phase 24 — Evidence-Driven Loop Improvement (Track 2)
+**Status:** Track 2 deferred (Track 1 implemented 2026-06-27)
+**Goal:** let Agentic Loop turn recurring process friction into reviewed, auditable improvement proposals.
+See [PLAN-PHASE-24.md](./PLAN-PHASE-24.md) for full task breakdown.
 
 ## Completed Phases
 
@@ -56,7 +83,7 @@ See [PLAN-PHASE-02.md](./PLAN-PHASE-02.md) for full task breakdown.
 See [PLAN-PHASE-03.md](./PLAN-PHASE-03.md) for full task breakdown.
 
 ### Phase 04 — Minimal Node CLI
-**Status:** CLI scaffold complete (2026-06-15). Guardrail hardening landed (2026-06-17). Live delegation tests still pending.
+**Status:** CLI scaffold complete (2026-06-15); guardrail hardening landed (2026-06-17)
 **Goal:** replace maintenance-only Python/PowerShell entry points with a small cross-platform CLI for setup and validation.
 See [PLAN-PHASE-04.md](./PLAN-PHASE-04.md) for full task breakdown.
 
@@ -120,30 +147,10 @@ See [PLAN-PHASE-15.md](./PLAN-PHASE-15.md) for full task breakdown.
 **Goal:** remove the decision-only index in favor of contextual decision discovery.
 See [PLAN-PHASE-16.md](./PLAN-PHASE-16.md) for full task breakdown.
 
-### Phase 17 — Unified Work-Unit Summary Contract
-**Status:** approved (2026-06-22)
-**Goal:** replace three divergent summary templates with one scope-parameterized work-unit summary contract.
-See [PLAN-PHASE-17.md](./PLAN-PHASE-17.md) for full task breakdown.
-
 ### Phase 18 — Guided Setup and Model Onboarding
 **Status:** done (2026-06-22)
 **Goal:** make onboarding a new target repository friendly, inspectable, and recoverable.
 See [PLAN-PHASE-18.md](./PLAN-PHASE-18.md) for full task breakdown.
-
-### Phase 19 — Proof Pressure and Output Refs
-**Status:** Track 1 landed (2026-06-27). Track 2 deferred.
-**Goal:** strengthen task proof, scope evidence, and slice-sizing language.
-See [PLAN-PHASE-19.md](./PLAN-PHASE-19.md) for full task breakdown.
-
-### Phase 20 — Adoption Map and Context Discipline
-**Status:** T-02, T-09, T-10 implemented (2026-06-27). Remainder proposed.
-**Goal:** improve adoption map and context-discipline for delegated agents.
-See [PLAN-PHASE-20.md](./PLAN-PHASE-20.md) for full task breakdown.
-
-### Phase 21 — Concurrency And Subagent Liveness
-**Status:** partially implemented (2026-06-23)
-**Goal:** keep Agentic Loop serial by default with narrow explicit parallel exceptions.
-See [PLAN-PHASE-21.md](./PLAN-PHASE-21.md) for full task breakdown.
 
 ### Phase 22 — Field-Finding Remediation
 **Status:** complete (2026-06-24)
@@ -154,11 +161,6 @@ See [PLAN-PHASE-22.md](./PLAN-PHASE-22.md) for full task breakdown.
 **Status:** complete (2026-06-24)
 **Goal:** make per-task inline summary the single summary surface; turn closeout into verify-and-mark gate; park loop-retrospective.
 See [PLAN-PHASE-23.md](./PLAN-PHASE-23.md) for full task breakdown.
-
-### Phase 24 — Evidence-Driven Loop Improvement
-**Status:** Track 1 implemented (2026-06-27). Track 2 deferred.
-**Goal:** let Agentic Loop turn recurring process friction into reviewed, auditable improvement proposals.
-See [PLAN-PHASE-24.md](./PLAN-PHASE-24.md) for full task breakdown.
 
 ---
 

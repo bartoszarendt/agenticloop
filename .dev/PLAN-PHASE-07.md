@@ -41,4 +41,4 @@ Acceptance criteria:
 - The glossary and source-document vocabulary are available to downstream agents through `docs/glossary.md` without requiring a toolkit-owned root context file.
 - Public docs explain the difference between toolkit-owned refreshable assets, target-owned docs/config, and generated host output.
 - CI verifies tests, validation, and package contents before release.
-- Claude Code plugin packaging is an explicit experimental surface at the toolkit root; repo-local Claude Code adapter output remains separate and does not generate `.claude-plugin/` into target repos.
+- Claude Code plugin packaging is a controlled surface at the toolkit root; repo-local Claude Code adapter output remains separate and does not generate `.claude-plugin/` into target repos.

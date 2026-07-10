@@ -575,13 +575,23 @@ function writeMarketplaceFile(outputDir, version) {
 
   let marketplace = { plugins: [] };
   if (existsSync(marketplacePath)) {
+    const text = readFileSync(marketplacePath, 'utf-8');
     try {
-      const parsed = JSON.parse(readFileSync(marketplacePath, 'utf-8'));
+      const parsed = JSON.parse(text);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         marketplace = parsed;
+      } else {
+        // Not a JSON object — fail closed rather than silently replacing.
+        throw new Error(
+          'Existing .agents/plugins/marketplace.json is not a JSON object; refusing to overwrite'
+        );
       }
-    } catch {
-      marketplace = { plugins: [] };
+    } catch (error) {
+      if (error.message.includes('refusing to overwrite')) throw error;
+      // Malformed JSON — fail closed rather than silently replacing.
+      throw new Error(
+        `Existing .agents/plugins/marketplace.json contains malformed JSON: ${error.message}; refusing to overwrite`
+      );
     }
   }
 

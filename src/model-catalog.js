@@ -11,7 +11,7 @@
 import { spawnSync } from 'node:child_process';
 import { CODEX_SUPPORTED_REASONING_EFFORTS } from './codex-models.js';
 
-const CATALOG_OBSERVED_AT = '2025-08';
+const CATALOG_OBSERVED_AT = '2026-07';
 const CATALOG_SOURCE = 'bundled-fallback';
 const MODEL_DISCOVERY_TIMEOUT_MS = 3000;
 const ALL_ROLES = ['orchestrator', 'maintainer', 'engineer'];

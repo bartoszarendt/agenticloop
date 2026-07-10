@@ -18,6 +18,7 @@ import { isValidTaskId, loadProjectMap, PROJECT_MAP_DEFAULTS } from './project-m
 import { resolveTaskBackend } from './task-backend.js';
 import {
   FILES_TASK_STATUSES,
+  sectionBody,
   validateFilesTaskRecord,
   validateTaskRecord,
 } from './validate-config.js';
@@ -197,6 +198,109 @@ function printLintResults(results, json) {
   }
 }
 
+/**
+ * Legal task status transitions for the files backend.
+ *
+ * Key rules:
+ * - draft cannot jump directly to accepted or closed
+ * - agent-ready cannot jump directly to closed
+ * - accepted is terminal (requires explicit reopen to go back)
+ * - blocked/needs_context require a note
+ */
+const LEGAL_TRANSITIONS = {
+  'draft':         new Set(['agent-ready', 'blocked', 'needs_context']),
+  'agent-ready':   new Set(['in-progress', 'blocked', 'needs_context']),
+  'in-progress':   new Set(['needs_revision', 'blocked', 'needs_context', 'accepted']),
+  'needs_revision': new Set(['in-progress', 'blocked', 'needs_context']),
+  'blocked':       new Set(['agent-ready', 'in-progress']),
+  'needs_context': new Set(['agent-ready', 'in-progress']),
+  'accepted':      new Set(['closed']),
+  'closed':        new Set(),
+};
+
+/**
+ * Validate a task status transition.
+ *
+ * @param {string} currentStatus
+ * @param {string} nextStatus
+ * @param {string|boolean} note
+ * @returns {string|null} Error message, or null if transition is valid.
+ */
+function validateTransition(currentStatus, nextStatus, note) {
+  if (!currentStatus) {
+    // No current status — allow setting any status (new task record).
+    return null;
+  }
+
+  if (currentStatus === nextStatus) {
+    return null; // Same status is always allowed (idempotent).
+  }
+
+  const allowed = LEGAL_TRANSITIONS[currentStatus];
+  if (!allowed) {
+    return null; // Unknown current status — don't block.
+  }
+
+  if (!allowed.has(nextStatus)) {
+    const allowedList = [...allowed].join(', ');
+    return `Cannot transition from '${currentStatus}' to '${nextStatus}'. Allowed transitions: ${allowedList}`;
+  }
+
+  // Require note for blocked and needs_context transitions.
+  if ((nextStatus === 'blocked' || nextStatus === 'needs_context') && (!note || note === true)) {
+    return `Transition to '${nextStatus}' requires --note explaining the reason`;
+  }
+
+  return null;
+}
+
+/**
+ * Validate the acceptance gate: a task cannot be accepted or closed without
+ * meeting minimum evidence requirements.
+ *
+ * @param {string} content  Full task record content
+ * @param {string} filePath  Path for error messages
+ * @param {object} projectConfig
+ * @returns {string[]} Error messages (empty if gate passes)
+ */
+function validateAcceptanceGate(content, filePath, projectConfig) {
+  const filename = filePath.replace(/\\/g, '/');
+  const [frontmatter] = parseFrontmatter(content);
+  const errors = [];
+
+  if (!frontmatter) {
+    errors.push(`Task '${filename}' cannot be accepted: missing YAML frontmatter`);
+    return errors;
+  }
+
+  const reviewStatus = frontmatterString(frontmatter.review_status);
+  const implementationArtifact = frontmatterString(frontmatter.implementation_artifact);
+
+  // 1. review_status must be 'accepted'
+  if (reviewStatus !== 'accepted') {
+    errors.push(`Task '${filename}' cannot be accepted: review_status must be 'accepted' (currently '${reviewStatus || '(empty)'}')`);
+  }
+
+  // 2. implementation_artifact must be non-empty
+  if (!implementationArtifact) {
+    errors.push(`Task '${filename}' cannot be accepted: implementation_artifact is empty`);
+  }
+
+  // 3. Scope Completed must be non-empty
+  const scopeBody = sectionBody(content, '## Scope Completed');
+  if (!scopeBody) {
+    errors.push(`Task '${filename}' cannot be accepted: '## Scope Completed' section is empty`);
+  }
+
+  // 4. Evidence must be non-empty
+  const evidenceBody = sectionBody(content, '## Evidence');
+  if (!evidenceBody) {
+    errors.push(`Task '${filename}' cannot be accepted: '## Evidence' section is empty`);
+  }
+
+  return errors;
+}
+
 export async function cmdTask(args) {
   const sub = args[0];
   const { opts, positional } = parseArgs(args.slice(1));
@@ -285,7 +389,7 @@ export async function cmdTask(args) {
     }
 
     if (sub === 'status') {
-      warnUnknownOptions(opts, ['target', 'note', 'blockCategory', 'json'], 'task status');
+      warnUnknownOptions(opts, ['target', 'note', 'blockCategory', 'json', 'accept'], 'task status');
       const [taskId, nextStatus] = positional;
       if (!taskId || !nextStatus) {
         console.error('task status requires <id> and <status>');
@@ -310,6 +414,31 @@ export async function cmdTask(args) {
         return;
       }
       let content = readFileSync(filePath, 'utf-8');
+
+      // --- Lifecycle transition enforcement ---
+      const { content: parsedContent, frontmatter } = readTaskRecord(filePath);
+      const currentStatus = frontmatterString(frontmatter.status);
+
+      const transitionError = validateTransition(currentStatus, nextStatus, opts.note);
+      if (transitionError) {
+        console.error(transitionError);
+        process.exitCode = 1;
+        return;
+      }
+
+      // --- Acceptance gate for accepted/closed ---
+      // Skip the gate when transitioning from accepted to closed;
+      // the gate was already checked when the task first became accepted.
+      if ((nextStatus === 'accepted' || nextStatus === 'closed') &&
+          !(currentStatus === 'accepted' && nextStatus === 'closed')) {
+        const gateErrors = validateAcceptanceGate(parsedContent, filePath, projectConfig);
+        if (gateErrors.length > 0) {
+          for (const err of gateErrors) console.error(err);
+          process.exitCode = 1;
+          return;
+        }
+      }
+
       content = replaceFrontmatterField(content, 'status', nextStatus);
       content = nextStatus === 'blocked'
         ? replaceFrontmatterField(content, 'block_category', blockCategory)
