@@ -25,7 +25,7 @@ export function loadJsonFile(filePath) {
  * @param {unknown} override
  * @returns {unknown}
  */
-function deepMerge(base, override) {
+export function deepMerge(base, override) {
   if (override === undefined) return base;
   if (base === undefined || base === null) return override;
   if (Array.isArray(override)) return override;

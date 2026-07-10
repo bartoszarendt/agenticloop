@@ -38,6 +38,7 @@ import {
   buildRoleRecord,
   readCanonicalSkillEntries,
   resolveRoleModel,
+  planReferenceTree,
 } from './shared.js';
 
 const COPILOT_START_COMMAND = bundledToolkitPath('agenticloop/commands/start.md');
@@ -655,4 +656,109 @@ export function generateCopilotArtifacts(alConfig, repoRoot, outputDir) {
   files.push(relative(outputDir, promptPath).replace(/\\/g, '/'));
 
   return { files };
+}
+
+/**
+ * Plan Copilot adapter artifacts without writing to the filesystem.
+ *
+ * @param {object} alConfig
+ * @param {string} repoRoot
+ * @param {string} outputDir
+ * @returns {{ actions: Array, files: string[], adapter: string }}
+ */
+export function planCopilotArtifacts(alConfig, repoRoot, outputDir) {
+  const copilotAdapter = alConfig.adapters?.copilot ?? {};
+  const roles = alConfig.roles ?? {};
+  const roleBindings = copilotAdapter.roleBindings ?? {};
+  const agentNames = Object.fromEntries(
+    Object.keys(roles).map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
+  );
+  const skillEntries = readCanonicalSkillEntries(repoRoot, alConfig);
+  const backendEntries = readCanonicalBackendEntries(repoRoot, alConfig);
+  const relativeSkillReferenceMap = buildSkillReferenceMap(
+    skillEntries, copilotSkillReferenceRelativePath
+  );
+  addBackendReferencesToMap(relativeSkillReferenceMap, backendEntries, copilotBackendReferenceRelativePath);
+  const absoluteSkillReferenceMap = buildSkillReferenceMap(
+    skillEntries, copilotSkillReferenceAbsolutePath
+  );
+  addBackendReferencesToMap(absoluteSkillReferenceMap, backendEntries, copilotBackendReferenceAbsolutePath);
+
+  const actions = [];
+  const files = [];
+
+  actions.push({ type: 'clear-owned-directory', adapter: 'copilot', relPath: '.github/agents' });
+  actions.push({ type: 'clear-owned-directory', adapter: 'copilot', relPath: '.github/prompts' });
+
+  // .github/agents/<name>.agent.md
+  for (const roleName of Object.keys(roles)) {
+    const agentName = agentNames[roleName] ?? roleName;
+    const roleRecord = buildRoleRecord(alConfig, repoRoot, roleName);
+    const modelSettings = resolveRoleModel(alConfig, 'copilot', roleName, copilotAdapter);
+    const md = renderCopilotAgentMarkdown(
+      agentName, roleName, roleRecord, modelSettings, absoluteSkillReferenceMap, agentNames
+    );
+    const relPath = `.github/agents/${agentName}.agent.md`;
+    actions.push({
+      type: 'write-file',
+      adapter: 'copilot',
+      relPath,
+      content: md,
+      marker: COPILOT_GENERATED_MARKER,
+    });
+    files.push(relPath);
+  }
+
+  // Public skill directory.
+  const skillDirRelPath = `.github/skills/${COPILOT_PUBLIC_SKILL_NAME}`;
+  actions.push({
+    type: 'clear-owned-directory',
+    adapter: 'copilot',
+    relPath: skillDirRelPath,
+  });
+
+  // SKILL.md
+  actions.push({
+    type: 'write-file',
+    adapter: 'copilot',
+    relPath: `${skillDirRelPath}/SKILL.md`,
+    content: renderCopilotPublicSkill(relativeSkillReferenceMap, agentNames, backendEntries),
+    marker: COPILOT_GENERATED_MARKER,
+  });
+  files.push(`${skillDirRelPath}/SKILL.md`);
+
+  // Skill reference trees.
+  for (const entry of skillEntries) {
+    const refActions = planReferenceTree(
+      entry.sourceDir,
+      `${skillDirRelPath}/references/skills/${entry.canonicalName}`,
+      'copilot',
+      (content) => renderReferenceMarkdown(content, relativeSkillReferenceMap),
+      COPILOT_GENERATED_MARKER
+    );
+    actions.push(...refActions);
+    files.push(...refActions.map(a => a.relPath));
+  }
+
+  // Backend references.
+  for (const entry of backendEntries) {
+    const relPath = `${skillDirRelPath}/references/backends/${entry.filename}`;
+    const content = renderCopilotGeneratedText(
+      readFileSync(entry.sourceFile, 'utf-8'), relativeSkillReferenceMap
+    );
+    actions.push({ type: 'write-file', adapter: 'copilot', relPath, content });
+    files.push(relPath);
+  }
+
+  // Prompt file.
+  actions.push({
+    type: 'write-file',
+    adapter: 'copilot',
+    relPath: COPILOT_PROMPT_RELATIVE_PATH,
+    content: renderCopilotPromptMarkdown(agentNames.orchestrator ?? 'orchestrator', agentNames),
+    marker: COPILOT_GENERATED_MARKER,
+  });
+  files.push(COPILOT_PROMPT_RELATIVE_PATH);
+
+  return { actions, files, adapter: 'copilot' };
 }

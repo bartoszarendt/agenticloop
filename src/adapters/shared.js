@@ -212,3 +212,58 @@ export function readCanonicalSkillEntries(repoRoot, alConfig) {
 export function relPath(p) {
   return relative('.', p).replace(/\\/g, '/');
 }
+
+/**
+ * Walk a source skill tree and produce write-file plan actions.
+ * SKILL.md files are transformed via transformFn (renamed to reference.md);
+ * all other files are copied as-is.
+ *
+ * @param {string} sourceDir     Absolute path to the source skill directory.
+ * @param {string} destRelPath   Relative path prefix for the destination.
+ * @param {string} adapter       Adapter name for the actions.
+ * @param {(content: string, srcPath: string) => string} [transformFn]  Transforms SKILL.md content.
+ * @param {string} [marker]      Generated marker text.
+ * @param {string} [currentSrc]  Current source directory (for recursion).
+ * @param {string} [currentDest] Current destination rel path (for recursion).
+ * @returns {Array<{ type: 'write-file', adapter: string, relPath: string, content: string, marker?: string }>}
+ */
+export function planReferenceTree(sourceDir, destRelPath, adapter, transformFn, marker, currentSrc, currentDest) {
+  const actions = [];
+  const src = currentSrc ?? sourceDir;
+  const dest = currentDest ?? destRelPath;
+
+  for (const entry of readdirSync(src)) {
+    const srcEntry = join(src, entry);
+    const entryStat = statSync(srcEntry);
+
+    if (entryStat.isDirectory()) {
+      actions.push(...planReferenceTree(
+        sourceDir, destRelPath, adapter, transformFn, marker, srcEntry, `${dest}/${entry}`
+      ));
+      continue;
+    }
+
+    const destName = entry === 'SKILL.md' ? 'reference.md' : entry;
+    const destRel = `${dest}/${destName}`;
+    const content = readFileSync(srcEntry, 'utf-8');
+
+    if (entry === 'SKILL.md' && transformFn) {
+      actions.push({
+        type: 'write-file',
+        adapter,
+        relPath: destRel,
+        content: transformFn(content, srcEntry),
+        marker,
+      });
+    } else {
+      actions.push({
+        type: 'write-file',
+        adapter,
+        relPath: destRel,
+        content,
+      });
+    }
+  }
+
+  return actions;
+}

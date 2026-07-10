@@ -64,6 +64,7 @@
     "docs/skill-anatomy.md",
     "docs/workflow-examples.md",
     "docs/registry-horizon.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "devDependencies": {

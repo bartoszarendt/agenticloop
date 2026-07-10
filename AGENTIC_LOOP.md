@@ -4,9 +4,10 @@ Agentic Loop is a supervised implementation workflow for AI coding agents. It
 turns a vague request into a durable task record, a scoped implementation,
 evidence, review, and closeout.
 
-The methodology is host-neutral. OpenCode is the first supported host, but the
-workflow should read naturally in any agent that can follow Markdown
-instructions and load skills.
+The methodology is host-neutral. All five implemented host adapters — OpenCode,
+Codex, Claude Code, GitHub Copilot, and Cursor — are supported. The workflow
+should read naturally in any agent that can follow Markdown instructions and
+load skills.
 
 ## Core Objects
 

@@ -90,7 +90,7 @@ describe('update preserves adapter artifact model settings', () => {
       'body',
     ]);
 
-    const out = runAgenticLoop(['upgrade', '--target', d]);
+    const out = runAgenticLoop(['upgrade', '--target', d, '--force-generated']);
 
     assert.match(out, /preserved: adapters\.opencode\.roleSettings\.orchestrator\.model/);
     const cfg = loadJsonFile(join(d, 'agenticloop.json'));
@@ -298,7 +298,7 @@ describe('update preserves adapter artifact model settings', () => {
       '',
     ].join('\n'), 'utf-8');
 
-    runAgenticLoop(['update', '--target', d]);
+    runAgenticLoop(['update', '--target', d, '--force-generated']);
 
     const cfg = loadJsonFile(join(d, 'agenticloop.json'));
     assert.equal(cfg.adapters.codex.roleSettings.engineer.model, 'target/codex-engineer');
@@ -321,7 +321,7 @@ describe('update preserves adapter artifact model settings', () => {
       '',
     ].join('\n'), 'utf-8');
 
-    runAgenticLoop(['update', '--target', d]);
+    runAgenticLoop(['update', '--target', d, '--force-generated']);
 
     const cfg = loadJsonFile(join(d, 'agenticloop.json'));
     assert.equal(cfg.adapters.codex.roleSettings.engineer.model, 'gpt-5.4');
@@ -345,7 +345,7 @@ describe('update preserves adapter artifact model settings', () => {
       '',
     ].join('\n'), 'utf-8');
 
-    runAgenticLoop(['update', '--target', d]);
+    runAgenticLoop(['update', '--target', d, '--force-generated']);
 
     const cfg = loadJsonFile(join(d, 'agenticloop.json'));
     assert.equal(cfg.adapters['claude-code'].roleSettings.maintainer.model, 'target-claude-maintainer');
@@ -372,7 +372,7 @@ describe('update preserves adapter artifact model settings', () => {
       '',
     ].join('\n'), 'utf-8');
 
-    runAgenticLoop(['update', '--target', d]);
+    runAgenticLoop(['update', '--target', d, '--force-generated']);
 
     const cfg = loadJsonFile(join(d, 'agenticloop.json'));
     assert.equal(cfg.adapters.copilot.roleSettings.maintainer.model, 'target-copilot-maintainer');
@@ -401,7 +401,7 @@ describe('update preserves adapter artifact model settings', () => {
       '',
     ].join('\n'), 'utf-8');
 
-    runAgenticLoop(['update', '--target', d]);
+    runAgenticLoop(['update', '--target', d, '--force-generated']);
 
     const cfg = loadJsonFile(join(d, 'agenticloop.json'));
     assert.equal(cfg.adapters.cursor.roleSettings.maintainer.model, 'target-cursor-maintainer');

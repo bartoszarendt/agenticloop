@@ -192,3 +192,43 @@ export function generateOpencodeArtifacts(alConfig, repoRoot, outputDir) {
 
   return { files };
 }
+
+/**
+ * Plan OpenCode adapter artifacts without writing to the filesystem.
+ *
+ * @param {object} alConfig
+ * @param {string} repoRoot
+ * @param {string} outputDir
+ * @returns {{ actions: Array, files: string[], adapter: string }}
+ */
+export function planOpencodeArtifacts(alConfig, repoRoot, outputDir) {
+  const records = generateOpencodeAgentRecords(alConfig, repoRoot);
+  const actions = [];
+  const files = [];
+
+  actions.push({ type: 'clear-owned-directory', adapter: 'opencode', relPath: '.opencode/agents' });
+  actions.push({ type: 'clear-owned-directory', adapter: 'opencode', relPath: '.opencode/commands' });
+
+  for (const roleName of OPENCODE_ROLE_NAMES) {
+    const relPath = OPENCODE_AGENT_RELATIVE_PATHS[roleName];
+    actions.push({
+      type: 'write-file',
+      adapter: 'opencode',
+      relPath,
+      content: renderOpencodeAgentMarkdown(records[roleName], roleName),
+      marker: GENERATED_BANNER,
+    });
+    files.push(relPath);
+  }
+
+  actions.push({
+    type: 'write-file',
+    adapter: 'opencode',
+    relPath: OPENCODE_COMMAND_RELATIVE_PATH,
+    content: renderOpencodeCommandMarkdown(),
+    marker: GENERATED_BANNER,
+  });
+  files.push(OPENCODE_COMMAND_RELATIVE_PATH);
+
+  return { actions, files, adapter: 'opencode' };
+}

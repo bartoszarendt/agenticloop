@@ -149,15 +149,16 @@ not generate `.cursor/rules/` or always-on hooks by default.
 
 ## Adapter Status
 
-The `adapters.<host>.status` field in `agenticloop/config.json` is the durable
-record of how much an adapter is trusted.
+The `adapters.<host>.status` field in `agenticloop/config.json` records adapter
+availability.
 
-- `supported` - implemented, documented, and covered by automated generation and validation.
-- `placeholder` - reserved name with no generator yet. Avoid referencing it in
+- `supported` — implemented, documented, and available for generation.
+- `placeholder` — reserved name with no generator yet. Avoid referencing it in
   target-owned config until the generator exists.
 
-Ordinary automated tests, validation commands, and packaging checks remain
-release requirements for all supported adapters.
+All five implemented adapters — OpenCode, Codex, Claude Code, Copilot, and
+Cursor — are supported. Tests, validation commands, and packaging checks remain
+development and release quality checks.
 
 ## Loop-Guard Capabilities
 
@@ -220,6 +221,13 @@ Each command accepts:
 - `--output-dir <dir>` - output directory
 
 `generate all` writes every adapter that has a generator in this package.
+
+Generation refuses to overwrite a changed generated artifact by default. Use
+`--force-generated` only to refresh an artifact whose manifest proves Agentic
+Loop owns it; it never overrides user-owned files or malformed shared config.
+It also never overrides a modified cross-adapter transfer: Codex-to-Cursor and
+Cursor-to-Codex plugin switching is atomic only when every transferred file is
+an exact, unmodified owned output.
 Use a single-host generation command when you only want one host's artifacts
 in a target project.
 
@@ -260,6 +268,10 @@ Codex MVP support is repo-local and skill-first.
   `adapters.codex.plugin.enabled: true` only when you intentionally want
   generated `plugins/agenticloop/` packaging plus
   `.agents/plugins/marketplace.json`.
+- Codex and Cursor plugin modes cannot be enabled together because they share
+  `plugins/agenticloop/`. A single `generate all` or update can switch the
+  enabled host atomically when the prior generated files are unchanged;
+  `--force-generated` does not weaken that transfer safety check.
 
 ## Claude Code Modes
 

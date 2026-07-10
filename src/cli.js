@@ -3,7 +3,7 @@
  *
  * Commands:
  *   agenticloop init [--target <dir>] [--adapter <host>]
- *   agenticloop update [--target <dir>] [--adapter <host>]
+ *   agenticloop update [--target <dir>] [--adapter <host>] [--force-generated]
  *   agenticloop upgrade [--target <dir>] [--adapter <host>]
  *   agenticloop remove [--target <dir>] [--dry-run|--yes]
  *   agenticloop validate [--target <dir>]
@@ -24,7 +24,7 @@
  *   agenticloop worktree resolve-state <task-id|path> [--target <dir>] [--strategy <strategy>] [--dry-run|--yes] [--json]
  *   agenticloop worktree prune [--target <dir>] [--dry-run|--yes] [--json]
  *   agenticloop bootstrap-labels [--repo <r>] [--dry-run] [--group <g>] [--task-id <id>] [--force]
- *   agenticloop generate opencode     [--target <dir>] [--output-dir <dir>]
+ *   agenticloop generate opencode     [--target <dir>] [--output-dir <dir>] [--force-generated]
  *   agenticloop generate codex        [--target <dir>] [--output-dir <dir>]
  *   agenticloop generate claude-code  [--target <dir>] [--output-dir <dir>]
  *   agenticloop generate copilot      [--target <dir>] [--output-dir <dir>]
@@ -38,29 +38,18 @@ import { parseArgs, warnUnknownOptions } from './cli-args.js';
 import { init } from './init.js';
 import { bootstrapLabels } from './bootstrap-labels.js';
 import {
-  generateOpencodeArtifacts,
   OPENCODE_AGENT_RELATIVE_PATHS,
   OPENCODE_COMMAND_RELATIVE_PATH,
 } from './adapters/opencode.js';
-import { generateCodexArtifacts } from './adapters/codex.js';
-import { generateClaudeCodeArtifacts } from './adapters/claude-code.js';
 import {
-  generateCopilotArtifacts,
   generatedCopilotArtifactsPresent,
 } from './adapters/copilot.js';
 import {
-  generateCursorArtifacts,
   generatedCursorArtifactsPresent,
 } from './adapters/cursor.js';
 import { validateSharedAgenticLoopPluginCompatibility } from './adapter-plugin-compatibility.js';
-import { preflightGeneration, formatPreflightResult } from './adapter-output-plan.js';
-import { loadAgenticLoopConfig } from './json.js';
-import {
-  recordFileArtifact,
-  recordDirectoryArtifact,
-  removeEntriesForAdapter,
-  loadManifest,
-} from './generated-artifacts.js';
+import { generateAdapterArtifacts } from './adapter-generation.js';
+import { deepMerge, loadAgenticLoopConfig } from './json.js';
 import { loadProjectMap } from './project-map.js';
 import { resolveTaskBackend } from './task-backend.js';
 import { cmdTask } from './task-cli.js';
@@ -378,10 +367,11 @@ Options (worktree prune):
 
 Options (update):
   --target <dir>        Target directory (default: current directory).
-  --adapter <host>      Generate or refresh one adapter. 'all' means every implemented adapter.
-                        Without this, existing generated artifacts are refreshed.
-                        Existing adapter model settings are backfilled into
-                        agenticloop.json when missing before regeneration.
+   --adapter <host>      Generate or refresh one adapter. 'all' means every implemented adapter.
+                         Without this, existing generated artifacts are refreshed.
+                         Existing adapter model settings are backfilled into
+                         agenticloop.json when missing before regeneration.
+   --force-generated     Refresh only a modified artifact already proven owned by Agentic Loop.
 
 Options (remove):
   --target <dir>        Target directory (default: current directory).
@@ -464,11 +454,13 @@ Options (bootstrap-labels):
 
 Options (generate opencode):
   --target <dir>        Directory containing agenticloop.json (default: current).
-  --output-dir <dir>    Output directory (default: <target>).
+   --output-dir <dir>    Output directory (default: <target>).
+   --force-generated     Refresh only a modified artifact already proven owned by Agentic Loop.
 
 Options (generate codex | generate claude-code | generate copilot | generate cursor | generate all):
   --target <dir>        Directory containing agenticloop.json (default: current).
-  --output-dir <dir>    Output directory (default: <target>).
+   --output-dir <dir>    Output directory (default: <target>).
+   --force-generated     Refresh only a modified artifact already proven owned by Agentic Loop.
   `.trim());
 }
 
@@ -523,36 +515,6 @@ function validateAdapterListGenerationPreflight(adapters, alConfig) {
   return [];
 }
 
-/**
- * Record generated artifacts in the ownership manifest.
- * Called after a successful generation to track what was produced.
- *
- * @param {string} target  Target root directory
- * @param {string} adapter Adapter name
- * @param {string[]} files  List of generated file paths (relative to outputDir)
- * @param {string} outputDir  Output directory
- */
-function recordGeneration(target, adapter, files, outputDir) {
-  // Clear previous entries for this adapter.
-  removeEntriesForAdapter(target, adapter);
-  const pkg = loadManifest(target)?.packageVersion ?? '0.0.0';
-  for (const file of files) {
-    // file is relative to outputDir; normalize to repo-relative.
-    const relPath = file.replace(/\\/g, '/');
-    try {
-      const entry = recordFileArtifact(target, {
-        adapter,
-        relPath,
-        outputRoot: '.',
-        packageVersion: pkg,
-      });
-      // entry recorded
-    } catch {
-      // Non-fatal: manifest recording failure should not block generation.
-    }
-  }
-}
-
 function printPreservationResult(preservation) {
   for (const w of preservation.warnings) console.warn(`  WARN: ${w}`);
   for (const e of preservation.errors) console.error(`  ERROR: ${e}`);
@@ -564,117 +526,46 @@ function shouldPreserveExistingModels(preserveExistingModels, outputDir, target)
 }
 
 async function generateAdapterTarget(sub, { opts, target, alConfig, preserveExistingModels = true }) {
-  const preflightErrors = validateAdapterGenerationPreflight(sub, alConfig);
-  if (preflightErrors.length > 0) {
-    for (const error of preflightErrors) console.error(error);
+  const forceGenerated = Boolean(opts.forceGenerated);
+  const outputDir = resolveOutputDir(opts, target);
+
+  let effectiveConfig = alConfig;
+  let preservation;
+  if (shouldPreserveExistingModels(preserveExistingModels, outputDir, target)) {
+    const adapterList = sub === 'all'
+      ? ['opencode', 'codex', 'claude-code', 'copilot', 'cursor']
+      : (Array.isArray(sub) ? sub : [sub]);
+    preservation = preserveExistingAdapterModelSettings(target, adapterList, { write: false });
+    if (preservation.errors.length > 0) {
+      for (const e of preservation.errors) console.error(`  ERROR: ${e}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (preservation.updated.length > 0) effectiveConfig = deepMerge(effectiveConfig, preservation.config);
+  }
+
+  const result = generateAdapterArtifacts({
+    target,
+    alConfig: effectiveConfig,
+    adapter: sub,
+    outputDirOpt: opts.outputDir,
+    forceGenerated,
+    extraWrites: preservation?.content ? [{ relPath: 'agenticloop.json', content: preservation.content }] : undefined,
+  });
+
+  if (!result.ok) {
+    for (const error of result.errors) console.error(`  ERROR: ${error}`);
     process.exitCode = 1;
     return;
   }
 
-  const forceGenerated = Boolean(opts.forceGenerated);
+  // Print preservation messages only after successful commit (Defect 14).
+  if (preservation) printPreservationResult(preservation);
+  // Print stale warnings from the transaction.
+  for (const warning of result.errors) console.warn(`  WARN: ${warning}`);
 
-  if (sub === 'opencode') {
-    if (opts.output) {
-      console.error("OpenCode generation no longer accepts --output <file>; use '--output-dir <dir>' instead.");
-      process.exitCode = 1;
-      return;
-    }
-    const outputDir = resolveOutputDir(opts, target);
-    let effectiveConfig = alConfig;
-    if (shouldPreserveExistingModels(preserveExistingModels, outputDir, target)) {
-      const preservation = preserveExistingAdapterModelSettings(target, ['opencode']);
-      printPreservationResult(preservation);
-      if (preservation.errors.length > 0) {
-        process.exitCode = 1;
-        return;
-      }
-      if (preservation.updated.length > 0) {
-        effectiveConfig = loadAgenticLoopConfig(join(target, 'agenticloop.json'));
-      }
-    }
-
-    const { files } = generateOpencodeArtifacts(effectiveConfig, target, outputDir);
-    recordGeneration(target, 'opencode', files, outputDir);
-    console.log(`Generated ${files.length} OpenCode artifact(s) under ${outputDir}:`);
-    for (const file of files) console.log(`  ${file}`);
-    return;
-  }
-
-  if (sub === 'codex') {
-    const outputDir = resolveOutputDir(opts, target);
-    const { files } = generateCodexArtifacts(alConfig, target, outputDir);
-    recordGeneration(target, 'codex', files, outputDir);
-    console.log(`Generated ${files.length} Codex artifact(s) under ${outputDir}:`);
-    for (const f of files) console.log(`  ${f}`);
-    return;
-  }
-
-  if (sub === 'claude-code') {
-    const outputDir = resolveOutputDir(opts, target);
-    const { files } = generateClaudeCodeArtifacts(alConfig, target, outputDir);
-    recordGeneration(target, 'claude-code', files, outputDir);
-    console.log(`Generated ${files.length} Claude Code artifact(s) under ${outputDir}:`);
-    for (const f of files) console.log(`  ${f}`);
-    return;
-  }
-
-  if (sub === 'copilot') {
-    const outputDir = resolveOutputDir(opts, target);
-    const { files } = generateCopilotArtifacts(alConfig, target, outputDir);
-    recordGeneration(target, 'copilot', files, outputDir);
-    console.log(`Generated ${files.length} GitHub Copilot artifact(s) under ${outputDir}:`);
-    for (const f of files) console.log(`  ${f}`);
-    return;
-  }
-
-  if (sub === 'cursor') {
-    const outputDir = resolveOutputDir(opts, target);
-    const { files } = generateCursorArtifacts(alConfig, target, outputDir);
-    recordGeneration(target, 'cursor', files, outputDir);
-    console.log(`Generated ${files.length} Cursor artifact(s) under ${outputDir}:`);
-    for (const f of files) console.log(`  ${f}`);
-    return;
-  }
-
-  if (sub === 'all') {
-    const outputDir = resolveOutputDir(opts, target);
-    mkdirSync(outputDir, { recursive: true });
-    let total = 0;
-    let effectiveConfig = alConfig;
-    if (shouldPreserveExistingModels(preserveExistingModels, outputDir, target)) {
-      const preservation = preserveExistingAdapterModelSettings(target, ['opencode', 'codex', 'claude-code', 'copilot', 'cursor']);
-      printPreservationResult(preservation);
-      if (preservation.errors.length > 0) {
-        process.exitCode = 1;
-        return;
-      }
-      if (preservation.updated.length > 0) {
-        effectiveConfig = loadAgenticLoopConfig(join(target, 'agenticloop.json'));
-      }
-    }
-
-    const opencode = generateOpencodeArtifacts(effectiveConfig, target, outputDir);
-    total += opencode.files.length;
-    const codex = generateCodexArtifacts(effectiveConfig, target, outputDir);
-    total += codex.files.length;
-    const cc = generateClaudeCodeArtifacts(effectiveConfig, target, outputDir);
-    total += cc.files.length;
-    const copilot = generateCopilotArtifacts(effectiveConfig, target, outputDir);
-    total += copilot.files.length;
-    const cursor = generateCursorArtifacts(effectiveConfig, target, outputDir);
-    total += cursor.files.length;
-    recordGeneration(target, 'opencode', opencode.files, outputDir);
-    recordGeneration(target, 'codex', codex.files, outputDir);
-    recordGeneration(target, 'claude-code', cc.files, outputDir);
-    recordGeneration(target, 'copilot', copilot.files, outputDir);
-    recordGeneration(target, 'cursor', cursor.files, outputDir);
-    console.log(`Total artifacts: ${total}`);
-    return;
-  }
-
-  console.error(`Unknown generate target: ${sub}`);
-  console.error('Available: opencode | codex | claude-code | copilot | cursor | all');
-  process.exitCode = 1;
+  console.log(`Generated ${result.files.length} artifact(s) under ${result.outputDir}:`);
+  for (const file of result.files) console.log(`  ${file}`);
 }
 
 async function cmdInit(args) {
@@ -744,7 +635,7 @@ async function cmdInit(args) {
 
 async function cmdUpdate(args) {
   const { opts } = parseArgs(args);
-  warnUnknownOptions(opts, ['target', 'adapter'], 'update');
+  warnUnknownOptions(opts, ['target', 'adapter', 'forceGenerated'], 'update');
   const target = opts.target ? resolve(opts.target) : process.cwd();
   const { adapters: requestedAdapters, errors: adapterErrors } = normalizeAdapterTargets(opts.adapter);
 
@@ -754,21 +645,16 @@ async function cmdUpdate(args) {
     return;
   }
 
-  const { errors: initErrors } = await init({
-    target,
-    refreshAssets: true,
-  });
-
-  if (initErrors.length > 0) {
-    process.exitCode = 1;
-    return;
-  }
-
+  // Detect adapters and load config before refreshing toolkit assets (Defect 13).
+  // This ensures adapter preflight failures don't leave partially updated targets.
   const adapters = requestedAdapters.length > 0
     ? requestedAdapters
     : detectGeneratedAdapterTargets(target);
 
   if (adapters.length === 0) {
+    // Still run init to refresh assets, but no adapter output needed.
+    const { errors: initErrors } = await init({ target, refreshAssets: true });
+    if (initErrors.length > 0) { process.exitCode = 1; return; }
     console.log('  No existing generated adapter artifacts found.');
     console.log("  Use 'agenticloop update --adapter <host>' to generate a specific adapter.");
     process.exitCode = 0;
@@ -779,15 +665,7 @@ async function cmdUpdate(args) {
     console.log('  --adapter all selected: generating every implemented adapter artifact.');
   }
 
-  const preservation = preserveExistingAdapterModelSettings(target, adapters);
-  for (const w of preservation.warnings) console.warn(`  WARN: ${w}`);
-  for (const e of preservation.errors) console.error(`  ERROR: ${e}`);
-  for (const u of preservation.updated) console.log(`  preserved: ${u}`);
-  if (preservation.errors.length > 0) {
-    process.exitCode = 1;
-    return;
-  }
-
+  // Load config and run adapter preflight before modifying any files.
   const alConfig = loadAlConfigOrExit(target);
   if (!alConfig) return;
 
@@ -798,15 +676,23 @@ async function cmdUpdate(args) {
     return;
   }
 
-  for (const adapter of adapters) {
-    await generateAdapterTarget(adapter, {
-      opts: {},
-      target,
-      alConfig,
-      preserveExistingModels: false,
-    });
-    if (process.exitCode && process.exitCode !== 0) return;
+  // Now safe to refresh toolkit assets and regenerate.
+  const { errors: initErrors } = await init({
+    target,
+    refreshAssets: true,
+  });
+
+  if (initErrors.length > 0) {
+    process.exitCode = 1;
+    return;
   }
+
+  await generateAdapterTarget(adapters.includes('all') ? 'all' : adapters, {
+    opts: { forceGenerated: Boolean(opts.forceGenerated) },
+    target,
+    alConfig,
+    preserveExistingModels: true,
+  });
 }
 
 async function cmdRemove(args) {
@@ -823,24 +709,26 @@ async function cmdRemove(args) {
     return;
   }
 
-  const { removed, skipped, errors } = removeAgenticLoop({ target, dryRun, includeState });
+  const { removed, released = [], skipped, errors, cleanupErrors = [] } = removeAgenticLoop({ target, dryRun, includeState });
 
   console.log();
   console.log('agenticloop remove');
   console.log('='.repeat(50));
   if (dryRun) console.log('  (dry run - no changes will be made)');
 
-  if (removed.length === 0 && skipped.length === 0 && errors.length === 0) {
+  if (removed.length === 0 && released.length === 0 && skipped.length === 0 && errors.length === 0) {
     console.log('  No Agentic Loop assets found.');
   }
 
   const prefix = dryRun ? 'would remove' : 'removed';
   for (const f of removed) console.log(`  ${prefix}: ${f}`);
+  for (const f of released) console.log(`  ${dryRun ? 'would release' : 'released'}: ${f}`);
   for (const f of skipped) console.log(`  skipped: ${f}`);
   for (const e of errors) console.error(`  ERROR: ${e}`);
+  for (const e of cleanupErrors) console.error(`  CLEANUP ERROR: ${e}`);
   console.log();
 
-  process.exitCode = errors.length > 0 ? 1 : 0;
+  process.exitCode = errors.length > 0 || cleanupErrors.length > 0 ? 1 : 0;
 }
 
 async function cmdValidate(args) {
@@ -849,25 +737,6 @@ async function cmdValidate(args) {
   const target = opts.target ? resolve(opts.target) : process.cwd();
   const forcedAdapters = Array.isArray(opts.adapter) ? opts.adapter : (opts.adapter ? [opts.adapter] : []);
   const result = runValidation(target, { adapters: forcedAdapters });
-
-  // Link validation
-  const doLinkValidation = opts.links !== 'false' && opts.links !== 'no';
-  if (doLinkValidation) {
-    const linkResult = validateLinks(target);
-    const allLinkErrors = [...linkResult.packageErrors];
-    for (const err of allLinkErrors) {
-      console.warn(`  LINK BROKEN: ${err.file}:${err.line} — ${err.message}`);
-    }
-    if (linkResult.installedErrors.length > 0 &&
-      allLinkErrors.length === linkResult.packageErrors.length) {
-      // Only show installed-layout errors if distinct from package errors
-      for (const err of linkResult.installedErrors) {
-        if (!linkResult.packageErrors.some(pe => pe.file === err.file && pe.line === err.line)) {
-          console.warn(`  LINK BROKEN (installed): ${err.file}:${err.line} — ${err.message}`);
-        }
-      }
-    }
-  }
 
   if (result.totalErrors > 0) {
     process.exitCode = 1;
@@ -1754,7 +1623,7 @@ function loadAlConfigOrExit(target, hint = '') {
 
 function resolveOutputDir(opts, target) {
   if (opts.outputDir) {
-    return isAbsolute(opts.outputDir) ? opts.outputDir : resolve(opts.outputDir);
+    return isAbsolute(opts.outputDir) ? opts.outputDir : join(target, opts.outputDir);
   }
   return target;
 }

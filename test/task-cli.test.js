@@ -298,8 +298,21 @@ describe('task CLI', () => {
   it('allows accepted -> closed', () => {
     const target = makeTarget('trans-ac-cl');
     writeAcceptedTask(target, 'T-001');
+    // accepted -> closed revalidates acceptance gate: review_status must be 'accepted'
+    let content = readFileSync(taskPath(target, 'T-001'), 'utf-8');
+    content = content.replace('review_status: needs_revision', 'review_status: accepted');
+    writeFileSync(taskPath(target, 'T-001'), content, 'utf-8');
     const result = run(['task', 'status', 'T-001', 'closed', '--target', target]);
     assertOk(result);
+  });
+
+  it('rejects accepted -> closed when review_status is not accepted', () => {
+    const target = makeTarget('trans-ac-cl-rs');
+    writeAcceptedTask(target, 'T-001');
+    // review_status is needs_revision — closing should fail
+    const result = run(['task', 'status', 'T-001', 'closed', '--target', target]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /review_status must be 'accepted'/);
   });
 
   it('rejects agent-ready -> closed', () => {

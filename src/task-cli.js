@@ -427,10 +427,8 @@ export async function cmdTask(args) {
       }
 
       // --- Acceptance gate for accepted/closed ---
-      // Skip the gate when transitioning from accepted to closed;
-      // the gate was already checked when the task first became accepted.
       if ((nextStatus === 'accepted' || nextStatus === 'closed') &&
-          !(currentStatus === 'accepted' && nextStatus === 'closed')) {
+          currentStatus !== nextStatus) {
         const gateErrors = validateAcceptanceGate(parsedContent, filePath, projectConfig);
         if (gateErrors.length > 0) {
           for (const err of gateErrors) console.error(err);

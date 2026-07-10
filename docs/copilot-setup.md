@@ -1,5 +1,7 @@
 # Copilot Setup
 
+Status: supported.
+
 The GitHub Copilot adapter renders from the same canonical source as the other
 hosts:
 

@@ -1,5 +1,7 @@
 # Codex Setup
 
+Status: supported.
+
 Codex support provides a repo-local Codex TUI workflow rendered from the same
 canonical sources as the other hosts:
 

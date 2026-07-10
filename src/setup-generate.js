@@ -8,12 +8,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadAgenticLoopConfig } from './json.js';
-import { generateOpencodeArtifacts } from './adapters/opencode.js';
-import { generateCodexArtifacts } from './adapters/codex.js';
-import { generateClaudeCodeArtifacts } from './adapters/claude-code.js';
-import { generateCopilotArtifacts } from './adapters/copilot.js';
-import { generateCursorArtifacts } from './adapters/cursor.js';
-import { validateSharedAgenticLoopPluginCompatibility } from './adapter-plugin-compatibility.js';
+import { generateAdapterArtifacts } from './adapter-generation.js';
 import {
   CONFIG_RELATIVE_PATH,
   TARGET_CONFIG_TEMPLATE_RELATIVE_PATH,
@@ -66,63 +61,35 @@ export function ensureAdapterConfig(target, adapter) {
   return null;
 }
 
-const GENERATORS = {
-  opencode: generateOpencodeArtifacts,
-  codex: generateCodexArtifacts,
-  'claude-code': generateClaudeCodeArtifacts,
-  copilot: generateCopilotArtifacts,
-  cursor: generateCursorArtifacts,
-};
-
 /**
- * Generate adapter artifacts for the selected adapter(s).
+ * Generate adapter artifacts for the selected adapter(s) through the
+ * transactional generation service.
  *
  * @param {string} target  Target directory.
  * @param {string} adapter  Adapter host or 'all'.
- * @returns {Promise<{files: string[], errors: string[]}>}
+ * @returns {{files: string[], errors: string[]}}
  */
 export async function generateAdapters(target, adapter) {
-  const files = [];
-  const errors = [];
-
   const cfgPath = join(target, 'agenticloop.json');
   if (!existsSync(cfgPath)) {
-    errors.push('agenticloop.json not found; cannot generate adapter artifacts.');
-    return { files, errors };
+    return { files: [], errors: ['agenticloop.json not found; cannot generate adapter artifacts.'] };
   }
 
   let alConfig;
   try {
     alConfig = loadAgenticLoopConfig(cfgPath);
   } catch (e) {
-    errors.push(`Failed to parse agenticloop.json: ${e.message}`);
-    return { files, errors };
+    return { files: [], errors: [`Failed to parse agenticloop.json: ${e.message}`] };
   }
 
-  const hosts = adapter === 'all' ? IMPLEMENTED_ADAPTERS : [adapter];
+  const result = generateAdapterArtifacts({
+    target,
+    alConfig,
+    adapter,
+  });
 
-  for (const host of hosts) {
-    if (host === 'codex' || host === 'cursor' || adapter === 'all') {
-      const preflightErrors = validateSharedAgenticLoopPluginCompatibility(alConfig);
-      if (preflightErrors.length > 0) {
-        errors.push(...preflightErrors);
-        continue;
-      }
-    }
-
-    const generator = GENERATORS[host];
-    if (!generator) {
-      errors.push(`No generator for adapter: ${host}`);
-      continue;
-    }
-
-    try {
-      const result = generator(alConfig, target, target);
-      files.push(...result.files);
-    } catch (e) {
-      errors.push(`Failed to generate ${host} artifacts: ${e.message}`);
-    }
-  }
-
-  return { files, errors };
+  return {
+    files: result.ok ? result.files : [],
+    errors: result.errors,
+  };
 }

@@ -247,9 +247,10 @@ function effectiveConfiguredReasoningSetting(roleSettings) {
  *
  * @param {string} target
  * @param {string[]} adapters  Adapter targets, with optional "all".
- * @returns {{ updated: string[], warnings: string[], errors: string[] }}
+ * @param {{write?: boolean}} [options]
+ * @returns {{ updated: string[], warnings: string[], errors: string[], config?: object, content?: string }}
  */
-export function preserveExistingAdapterModelSettings(target, adapters) {
+export function preserveExistingAdapterModelSettings(target, adapters, options = {}) {
   const hosts = expandAdapters(adapters);
   const updated = [];
   const warnings = [];
@@ -289,13 +290,14 @@ export function preserveExistingAdapterModelSettings(target, adapters) {
     }
   }
 
-  if (updated.length > 0) {
+  const content = updated.length > 0 ? JSON.stringify(targetConfig, null, 2) + '\n' : undefined;
+  if (content && options.write !== false) {
     try {
-      writeFileSync(cfgPath, JSON.stringify(targetConfig, null, 2) + '\n', 'utf-8');
+      writeFileSync(cfgPath, content, 'utf-8');
     } catch (error) {
       errors.push(`Failed to write preserved adapter model settings to agenticloop.json: ${error.message}`);
     }
   }
 
-  return { updated, warnings, errors };
+  return { updated, warnings, errors, config: targetConfig, content };
 }

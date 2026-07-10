@@ -1,614 +1,391 @@
 /**
- * Generated-artifact ownership manifest.
- *
- * Tracks every file, directory, and shared-config mutation that an adapter
- * generator creates, so removal can be precise, reversible, and safe.
- *
- * The manifest lives at .agenticloop/generated-artifacts.json and is
- * versioned. Only non-sensitive ownership metadata is stored; no file
- * contents, credentials, or unrelated user configuration.
+ * Ownership manifest and containment primitives for generated adapter output.
+ * Manifest data is untrusted input: validate it before it controls any I/O.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
+  realpathSync,
+  renameSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, normalize, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { TARGET_STATE_DIRECTORY } from './layout.js';
 
 export const GENERATED_ARTIFACTS_FILENAME = 'generated-artifacts.json';
-export const GENERATED_ARTIFACTS_SCHEMA_VERSION = 1;
+export const GENERATED_ARTIFACTS_SCHEMA_VERSION = 3;
+const SUPPORTED_ADAPTERS = new Set(['opencode', 'claude-code', 'codex', 'copilot', 'cursor']);
+const KINDS = new Set(['file', 'shared-config', 'gitignore-line']);
+const MANIFEST_PATH = `${TARGET_STATE_DIRECTORY}/${GENERATED_ARTIFACTS_FILENAME}`;
+const SHA256 = /^[a-f0-9]{64}$/;
+const PACKAGE_JSON_PATH = fileURLToPath(new URL('../package.json', import.meta.url));
 
-const GENERATED_ARTIFACTS_PATH = join(TARGET_STATE_DIRECTORY, GENERATED_ARTIFACTS_FILENAME);
-
-// ---------------------------------------------------------------------------
-// Path validation helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Normalize a repo-relative path to forward-slash form.
- * @param {string} relPath
- * @returns {string}
- */
-function normalizeRelPath(relPath) {
-  return normalize(relPath).replace(/\\/g, '/');
-}
-
-/**
- * Ensure a path does not escape its declared output root.
- * @param {string} outputRoot  Normalized output root (e.g. ".")
- * @param {string} relPath     Normalized relative path
- */
-function assertInsideRoot(outputRoot, relPath) {
-  const resolved = resolve(outputRoot, relPath);
-  const rootResolved = resolve(outputRoot);
-  if (resolved !== rootResolved && !resolved.startsWith(`${rootResolved}${sep}`)) {
-    throw new Error(`Path escapes declared output root: ${relPath}`);
+export function loadPackageVersion() {
+  try {
+    const value = JSON.parse(readFileSync(PACKAGE_JSON_PATH, 'utf8')).version;
+    return typeof value === 'string' && value ? value : '0.0.0';
+  } catch {
+    return '0.0.0';
   }
 }
 
-/**
- * Assert a path is not absolute and has no traversal sequences.
- * @param {string} relPath
- */
-function assertSafeRelativePath(relPath) {
-  // Check raw input before normalization so backslash paths are rejected.
-  if (relPath.includes('\\')) {
-    throw new Error(`Path must use forward slashes: ${relPath}`);
-  }
-  if (relPath.startsWith('/') || /^[a-zA-Z]:/.test(relPath)) {
-    throw new Error(`Absolute path not allowed in manifest: ${relPath}`);
-  }
-  const segments = relPath.split('/');
-  for (const seg of segments) {
-    if (seg === '..') {
-      throw new Error(`Path traversal not allowed in manifest: ${relPath}`);
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// SHA-256 hashing
-// ---------------------------------------------------------------------------
-
-/**
- * Compute SHA-256 hash of a file.
- * @param {string} filePath
- * @returns {string} hex digest
- */
 export function hashFile(filePath) {
-  const data = readFileSync(filePath);
-  return createHash('sha256').update(data).digest('hex');
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
 }
 
-/**
- * Compute SHA-256 hash of a string.
- * @param {string} content
- * @returns {string} hex digest
- */
 export function hashContent(content) {
   return createHash('sha256').update(content).digest('hex');
 }
 
-// ---------------------------------------------------------------------------
-// Manifest I/O
-// ---------------------------------------------------------------------------
+function fail(message) {
+  throw new Error(`Ownership manifest: ${message}`);
+}
 
-/**
- * Load the ownership manifest from a target directory.
- * Returns null if the file does not exist.
- * @param {string} targetRoot
- * @returns {{ schemaVersion: number, packageVersion: string, entries: ManifestEntry[] } | null}
- */
-export function loadManifest(targetRoot) {
-  const manifestPath = join(targetRoot, GENERATED_ARTIFACTS_PATH);
-  if (!existsSync(manifestPath)) return null;
-  try {
-    const raw = readFileSync(manifestPath, 'utf-8');
-    const data = JSON.parse(raw);
-    if (!data || typeof data !== 'object') return null;
-    if (typeof data.schemaVersion !== 'number') return null;
-    if (!Array.isArray(data.entries)) return null;
-    return data;
-  } catch {
-    return null;
+function safeRelative(value, label) {
+  if (typeof value !== 'string' || !value) {
+    fail(`${label} must be a non-empty forward-slash relative path`);
   }
+  if (value.includes(String.fromCharCode(92))) {
+    fail(`${label} must use forward slashes`);
+  }
+  if (value.includes('\x00')) {
+    fail(`${label} contains NUL`);
+  }
+  if (isAbsolute(value) || /^[a-zA-Z]:/.test(value) || value.startsWith('/')) {
+    fail(`Absolute path not allowed in manifest: ${value}`);
+  }
+  const parts = value.split('/');
+  if (parts.some(part => !part || part === '.' || part === '..')) {
+    fail(`Path traversal not allowed in manifest: ${value}`);
+  }
+  return value;
+}
+
+export function normalizeOutputRoot(outputRoot = '.') {
+  if (outputRoot === '.') return '.';
+  return safeRelative(outputRoot, 'outputRoot');
 }
 
 /**
- * Save the ownership manifest to a target directory.
- * @param {string} targetRoot
- * @param {{ schemaVersion: number, packageVersion: string, entries: ManifestEntry[] }} manifest
+ * Resolve a managed destination and reject lexical escapes and symlink/junction
+ * traversal. Existing symlinks are never followed for generated artifacts.
  */
-export function saveManifest(targetRoot, manifest) {
-  const manifestDir = join(targetRoot, TARGET_STATE_DIRECTORY);
-  if (!existsSync(manifestDir)) {
-    mkdirSync(manifestDir, { recursive: true });
+export function resolveManagedPath(targetRoot, outputRoot = '.', relPath = '.') {
+  const target = resolve(targetRoot);
+  const root = normalizeOutputRoot(outputRoot);
+  const path = relPath === '.' ? '.' : safeRelative(relPath, 'relPath');
+  const destination = resolve(target, root === '.' ? '.' : root, path === '.' ? '.' : path);
+  if (destination !== target && !destination.startsWith(target + sep)) {
+    fail(`path escapes target: ${outputRoot}/${relPath}`);
   }
-  const manifestPath = join(targetRoot, GENERATED_ARTIFACTS_PATH);
-  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf-8');
-}
-
-/**
- * Remove the manifest if it exists and has no entries.
- * @param {string} targetRoot
- */
-export function removeManifestIfEmpty(targetRoot) {
-  const manifest = loadManifest(targetRoot);
-  if (manifest && manifest.entries.length === 0) {
-    const manifestPath = join(targetRoot, GENERATED_ARTIFACTS_PATH);
-    if (existsSync(manifestPath)) {
-      rmSync(manifestPath, { force: true });
+  const targetReal = existsSync(target) ? realpathSync.native(target) : target;
+  let current = target;
+  const segments = relative(target, destination).split(/[\\/]/).filter(Boolean);
+  for (const segment of segments) {
+    current = join(current, segment);
+    if (!existsSync(current)) break;
+    if (lstatSync(current).isSymbolicLink()) {
+      fail(`path crosses a symlink or junction: ${relative(target, current)}`);
     }
   }
+  if (existsSync(destination)) {
+    const actual = realpathSync.native(destination);
+    if (actual !== targetReal && !actual.startsWith(targetReal + sep)) fail(`path resolves outside target: ${relPath}`);
+  }
+  return destination;
 }
 
-/**
- * Get or create a blank manifest.
- * @param {string} [packageVersion]
- * @returns {{ schemaVersion: number, packageVersion: string, entries: ManifestEntry[] }}
- */
-export function createManifest(packageVersion = '0.0.0') {
+// Kind-specific allowed entry keys (Defect 16).
+const FILE_ENTRY_KEYS = new Set(['adapter', 'outputRoot', 'relPath', 'kind', 'hash', 'marker', 'existence', 'generatedAt']);
+const SHARED_CONFIG_ENTRY_KEYS = new Set(['adapter', 'outputRoot', 'relPath', 'kind', 'existence', 'generatedAt', 'mutations', 'createdFile', 'nonReversible', 'sharedConfigKey']);
+const GITIGNORE_ENTRY_KEYS = new Set(['adapter', 'outputRoot', 'relPath', 'kind', 'existence', 'generatedAt', 'line', 'occurrence', 'createdFile', 'ambiguous']);
+
+// Operation-specific mutation keys (Defect 16).
+const ARRAY_ADD_KEYS = new Set(['op', 'pointer', 'value', 'added', 'createdContainers']);
+const SET_IF_ABSENT_KEYS = new Set(['op', 'pointer', 'value', 'added', 'createdContainers']);
+const REPLACE_ARRAY_ELEMENT_KEYS = new Set(['op', 'pointer', 'value', 'added', 'previous', 'createdContainers', 'matchKey', 'matchValue']);
+
+function validateMutation(mutation, index) {
+  if (!mutation || typeof mutation !== 'object' || Array.isArray(mutation)) fail(`mutations[${index}] must be an object`);
+  if (!['array-add', 'set-if-absent', 'replace-array-element'].includes(mutation.op)) fail(`mutations[${index}].op is invalid`);
+  if (typeof mutation.pointer !== 'string' || !mutation.pointer.startsWith('/') || mutation.pointer.includes('~')) fail(`mutations[${index}].pointer is invalid`);
+  if (!Object.hasOwn(mutation, 'value')) fail(`mutations[${index}].value is required`);
+  if (typeof mutation.added !== 'boolean') fail(`mutations[${index}].added is required`);
+  if (mutation.op === 'replace-array-element') {
+    if (typeof mutation.matchKey !== 'string' || !mutation.matchKey.trim()) fail(`mutations[${index}].matchKey must be a non-empty string`);
+    if (!Object.hasOwn(mutation, 'matchValue')) fail(`mutations[${index}].matchValue is required`);
+  }
+  // Reject matchKey/matchValue/previous on operations that don't use them.
+  if (mutation.op === 'array-add') {
+    if (Object.hasOwn(mutation, 'matchKey')) fail(`mutations[${index}].matchKey is not valid for ${mutation.op}`);
+    if (Object.hasOwn(mutation, 'matchValue')) fail(`mutations[${index}].matchValue is not valid for ${mutation.op}`);
+    if (Object.hasOwn(mutation, 'previous')) fail(`mutations[${index}].previous is not valid for ${mutation.op}`);
+  }
+  if (mutation.op === 'set-if-absent') {
+    if (Object.hasOwn(mutation, 'matchKey')) fail(`mutations[${index}].matchKey is not valid for ${mutation.op}`);
+    if (Object.hasOwn(mutation, 'matchValue')) fail(`mutations[${index}].matchValue is not valid for ${mutation.op}`);
+    if (Object.hasOwn(mutation, 'previous')) fail(`mutations[${index}].previous is not valid for ${mutation.op}`);
+  }
+  if (mutation.createdContainers !== undefined) {
+    if (!Array.isArray(mutation.createdContainers)) fail(`mutations[${index}].createdContainers must be an array`);
+    for (const [ci, container] of mutation.createdContainers.entries()) {
+      if (typeof container !== 'string' || !container.startsWith('/')) fail(`mutations[${index}].createdContainers[${ci}] must be a valid JSON pointer`);
+    }
+  }
+  // Use operation-specific key allowlist.
+  const allowedKeys = mutation.op === 'array-add' ? ARRAY_ADD_KEYS
+    : mutation.op === 'set-if-absent' ? SET_IF_ABSENT_KEYS
+    : REPLACE_ARRAY_ELEMENT_KEYS;
+  for (const key of Object.keys(mutation)) {
+    if (!allowedKeys.has(key)) fail(`mutations[${index}] has unknown key for ${mutation.op}: ${key}`);
+  }
+  return { ...mutation };
+}
+
+// Legacy global key set removed; kind-specific sets are used below.
+
+export function validateManifestEntry(raw, { migrate = false } = {}) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('entry must be an object');
+  if (!SUPPORTED_ADAPTERS.has(raw.adapter)) fail(`Manifest entry requires a non-empty supported adapter: ${raw.adapter}`);
+  const outputRoot = normalizeOutputRoot(raw.outputRoot ?? '.');
+  const relPath = safeRelative(raw.relPath, 'relPath');
+  const kind = raw.kind;
+  if (!KINDS.has(kind)) fail(`entry kind is invalid: ${kind}`);
+  if (!['created', 'refreshed', 'merged'].includes(raw.existence ?? 'created')) fail(`entry existence is invalid: ${raw.existence}`);
+  if (raw.hash !== undefined && (typeof raw.hash !== 'string' || !SHA256.test(raw.hash))) fail(`entry hash is invalid for ${relPath}`);
+  if (raw.marker !== undefined && typeof raw.marker !== 'string') fail(`entry marker is invalid for ${relPath}`);
+  if (raw.generatedAt !== undefined && (typeof raw.generatedAt !== 'string' || Number.isNaN(Date.parse(raw.generatedAt)))) fail(`entry generatedAt is invalid for ${relPath}`);
+  if (kind === 'file' && !raw.hash && !migrate) fail(`file entry requires a hash: ${relPath}`);
+  if (kind === 'shared-config') {
+    if (!Array.isArray(raw.mutations)) {
+      if (!migrate) fail(`shared-config entry requires mutations: ${relPath}`);
+    } else {
+      raw.mutations.forEach(validateMutation);
+    }
+    if (raw.createdFile !== undefined && typeof raw.createdFile !== 'boolean') fail(`createdFile is invalid for ${relPath}`);
+  }
+  if (kind === 'gitignore-line') {
+    if (typeof raw.line !== 'string' || !raw.line.trim()) fail(`gitignore line is invalid for ${relPath}`);
+    if (!Number.isInteger(raw.occurrence) || raw.occurrence < 0) fail(`gitignore occurrence is invalid for ${relPath}`);
+    if (typeof raw.createdFile !== 'boolean') fail(`gitignore createdFile is invalid for ${relPath}`);
+    if (raw.ambiguous !== undefined && typeof raw.ambiguous !== 'boolean') fail(`gitignore ambiguous is invalid for ${relPath}`);
+  }
+  // Kind-specific field validation (Defect 16).
+  const allowedKeys = kind === 'file' ? FILE_ENTRY_KEYS
+    : kind === 'shared-config' ? SHARED_CONFIG_ENTRY_KEYS
+    : GITIGNORE_ENTRY_KEYS;
+  for (const key of Object.keys(raw)) {
+    if (!allowedKeys.has(key)) fail(`entry has unknown key for ${kind} kind: ${key}`);
+  }
   return {
-    schemaVersion: GENERATED_ARTIFACTS_SCHEMA_VERSION,
-    packageVersion,
-    entries: [],
+    ...raw,
+    outputRoot,
+    relPath,
+    existence: raw.existence ?? 'created',
+    generatedAt: raw.generatedAt ?? new Date().toISOString(),
+    ...(kind === 'shared-config' && !raw.mutations ? { nonReversible: true, mutations: [] } : {}),
   };
 }
 
-/**
- * Get the manifest, creating a blank one if needed.
- * @param {string} targetRoot
- * @param {string} [packageVersion]
- * @returns {{ schemaVersion: number, packageVersion: string, entries: ManifestEntry[] }}
- */
+function migrateManifest(data) {
+  if (data.schemaVersion === 3) return data;
+  if (typeof data.schemaVersion !== 'number') fail('invalid or missing schemaVersion');
+  if (data.schemaVersion !== 1 && data.schemaVersion !== 2) fail(`unsupported schemaVersion ${data.schemaVersion}`);
+  if (!Array.isArray(data.entries)) fail('entries must be an array');
+  return {
+    schemaVersion: 3,
+    packageVersion: typeof data.packageVersion === 'string' && data.packageVersion ? data.packageVersion : '0.0.0',
+    generatedAt: data.generatedAt,
+    entries: data.entries.map(entry => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+      if (entry.kind === 'directory') return null;
+      if (entry.kind === 'shared-config') return { ...entry, mutations: [], nonReversible: true };
+      if (entry.kind === 'gitignore-line') return { ...entry, occurrence: 0, createdFile: Boolean(entry.createdFile) };
+      return entry.hash ? entry : null;
+    }).filter(Boolean),
+  };
+}
+
+const MANIFEST_KNOWN_KEYS = new Set(['schemaVersion', 'packageVersion', 'generatedAt', 'entries']);
+
+export function validateManifest(manifest) {
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) fail('document must be an object');
+  if (manifest.schemaVersion !== 3) fail(`unsupported schemaVersion ${manifest.schemaVersion}`);
+  if (typeof manifest.packageVersion !== 'string' || !manifest.packageVersion) fail('packageVersion must be a non-empty string');
+  if (manifest.generatedAt !== undefined && (typeof manifest.generatedAt !== 'string' || Number.isNaN(Date.parse(manifest.generatedAt)))) fail('generatedAt is invalid');
+  if (!Array.isArray(manifest.entries)) fail('entries must be an array');
+  for (const key of Object.keys(manifest)) {
+    if (!MANIFEST_KNOWN_KEYS.has(key)) fail(`manifest has unknown key: ${key}`);
+  }
+  const identities = new Set();
+  const entries = manifest.entries.map((entry, index) => {
+    try {
+      const validated = validateManifestEntry(entry);
+      const identity = entryIdentity(validated);
+      if (identities.has(identity)) fail(`duplicate entry identity at index ${index}`);
+      identities.add(identity);
+      return validated;
+    } catch (error) {
+      throw new Error(`Ownership manifest entry ${index}: ${error.message}`);
+    }
+  });
+  return { schemaVersion: 3, packageVersion: manifest.packageVersion, generatedAt: manifest.generatedAt, entries };
+}
+
+export function loadManifest(targetRoot) {
+  const manifestPath = resolveManagedPath(targetRoot, '.', MANIFEST_PATH);
+  if (!existsSync(manifestPath)) return null;
+  let data;
+  try {
+    data = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`Ownership manifest at ${MANIFEST_PATH} is malformed JSON: ${error.message}`);
+  }
+  return validateManifest(migrateManifest(data));
+}
+
+export function createManifest(packageVersion = loadPackageVersion()) {
+  return { schemaVersion: 3, packageVersion, generatedAt: new Date().toISOString(), entries: [] };
+}
+
 export function getOrCreateManifest(targetRoot, packageVersion) {
   return loadManifest(targetRoot) ?? createManifest(packageVersion);
 }
 
-// ---------------------------------------------------------------------------
-// Entry types
-// ---------------------------------------------------------------------------
-
-/**
- * @typedef {Object} ManifestEntry
- * @property {string} adapter          Adapter name (opencode, codex, claude-code, copilot, cursor)
- * @property {string} outputRoot       Normalized output root (e.g. ".")
- * @property {string} relPath          Normalized repo-relative path
- * @property {'file'|'directory'|'shared-config'} kind  Artifact kind
- * @property {string} [hash]           SHA-256 hash of file content (files only)
- * @property {string} [marker]         Expected generated marker text
- * @property {'created'|'merged'} existence  Whether file was created new or merged
- * @property {string} [sharedConfigKey] For shared-config entries: the JSON key or path mutated
- * @property {boolean} [createdFile]   For shared-config: whether Agentic Loop created the entire file
- * @property {string[]} [children]     For directories: list of owned child relative paths
- * @property {string} [childHashes]    For directories: JSON map of child path -> hash
- * @property {string} generatedAt      ISO timestamp
- */
-
-// ---------------------------------------------------------------------------
-// Entry recording
-// ---------------------------------------------------------------------------
-
-/**
- * Validate and normalize a manifest entry.
- * @param {Partial<ManifestEntry>} entry
- * @param {string} [packageVersion]
- * @returns {ManifestEntry}
- */
-function validateEntry(entry, packageVersion) {
-  if (!entry.adapter || typeof entry.adapter !== 'string') {
-    throw new Error('Manifest entry requires a non-empty adapter string');
-  }
-  if (!entry.relPath || typeof entry.relPath !== 'string') {
-    throw new Error('Manifest entry requires a non-empty relPath string');
-  }
-  if (!entry.kind || !['file', 'directory', 'shared-config'].includes(entry.kind)) {
-    throw new Error(`Manifest entry has invalid kind: ${entry.kind}`);
-  }
-
-  // Validate raw input before normalization.
-  assertSafeRelativePath(entry.relPath || '');
-  const outputRoot = normalizeRelPath(entry.outputRoot || '.');
-  const relPath = normalizeRelPath(entry.relPath);
-  assertInsideRoot(outputRoot, relPath);
-
-  return {
-    adapter: entry.adapter,
-    outputRoot,
-    relPath,
-    kind: entry.kind,
-    hash: entry.hash || undefined,
-    marker: entry.marker || undefined,
-    existence: entry.existence || 'created',
-    sharedConfigKey: entry.sharedConfigKey || undefined,
-    createdFile: typeof entry.createdFile === 'boolean' ? entry.createdFile : undefined,
-    children: entry.children || undefined,
-    childHashes: entry.childHashes || undefined,
-    generatedAt: entry.generatedAt || new Date().toISOString(),
-  };
+export function entryIdentity(entry) {
+  const mutation = entry.kind === 'gitignore-line' ? `${entry.line}:${entry.occurrence}` : (entry.sharedConfigKey ?? '');
+  return [entry.adapter, entry.outputRoot, entry.relPath, entry.kind, mutation].join('\u0000');
 }
 
-/**
- * Record a generated file artifact in the manifest.
- *
- * @param {string} targetRoot
- * @param {object} params
- * @param {string} params.adapter
- * @param {string} params.relPath
- * @param {string} params.outputRoot
- * @param {string} [params.marker]
- * @param {string} [params.packageVersion]
- * @returns {{ entry: ManifestEntry, manifest: object }}
- */
+export function saveManifest(targetRoot, manifest) {
+  const valid = validateManifest(manifest);
+  const manifestPath = resolveManagedPath(targetRoot, '.', MANIFEST_PATH);
+  mkdirSync(dirname(manifestPath), { recursive: true });
+  const temporary = `${manifestPath}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, JSON.stringify({ ...valid, generatedAt: new Date().toISOString() }, null, 2) + '\n', 'utf8');
+  try {
+    renameSync(temporary, manifestPath);
+  } finally {
+    if (existsSync(temporary)) rmSync(temporary, { force: true });
+  }
+}
+
+export function removeManifestIfEmpty(targetRoot) {
+  const manifest = loadManifest(targetRoot);
+  if (manifest && manifest.entries.length === 0) rmSync(resolveManagedPath(targetRoot, '.', MANIFEST_PATH), { force: true });
+}
+
+export function createFileEntry(params) {
+  return validateManifestEntry({
+    adapter: params.adapter, outputRoot: params.outputRoot ?? '.', relPath: params.relPath,
+    kind: 'file', hash: params.hash ?? hashContent(params.content ?? ''), marker: params.marker,
+    existence: params.existence ?? 'created', generatedAt: params.generatedAt,
+  });
+}
+
+export function createSharedConfigEntry(params) {
+  return validateManifestEntry({
+    adapter: params.adapter, outputRoot: params.outputRoot ?? '.', relPath: params.relPath,
+    kind: 'shared-config', mutations: params.mutations ?? [], createdFile: Boolean(params.createdFile),
+    existence: 'merged', generatedAt: params.generatedAt,
+  });
+}
+
+export function createGitignoreEntry(params) {
+  return validateManifestEntry({
+    adapter: params.adapter, outputRoot: params.outputRoot ?? '.', relPath: params.relPath,
+    kind: 'gitignore-line', line: params.line.trim(), occurrence: params.occurrence,
+    createdFile: Boolean(params.createdFile), ...(params.ambiguous ? { ambiguous: true } : {}), existence: params.createdFile ? 'created' : 'merged', generatedAt: params.generatedAt,
+  });
+}
+
+// Compatibility writers remain for external consumers; transaction code builds
+// entries in memory and calls saveManifest exactly once.
 export function recordFileArtifact(targetRoot, params) {
   const manifest = getOrCreateManifest(targetRoot, params.packageVersion);
-  const fullPath = join(targetRoot, params.relPath);
-  const hash = existsSync(fullPath) ? hashFile(fullPath) : undefined;
-  const existedBefore = existsSync(fullPath);
-
-  const entry = validateEntry({
-    adapter: params.adapter,
-    outputRoot: params.outputRoot || '.',
-    relPath: params.relPath,
-    kind: 'file',
-    hash,
-    marker: params.marker,
-    existence: existedBefore ? 'merged' : 'created',
-  }, params.packageVersion);
-
-  // Replace any existing entry for the same path
-  manifest.entries = manifest.entries.filter(e => e.relPath !== entry.relPath);
-  manifest.entries.push(entry);
-  saveManifest(targetRoot, manifest);
-  return { entry, manifest };
+  const path = resolveManagedPath(targetRoot, params.outputRoot ?? '.', params.relPath);
+  const existed = existsSync(path);
+  const entry = createFileEntry({ ...params, hash: params.hash ?? (params.content === undefined && existed ? hashFile(path) : undefined), existence: params.existence ?? (existed ? 'merged' : 'created') });
+  manifest.entries = manifest.entries.filter(value => entryIdentity(value) !== entryIdentity(entry));
+  manifest.entries.push(entry); saveManifest(targetRoot, manifest); return { entry, manifest };
 }
 
-/**
- * Record a pre-registered entry (for external callers who constructed
- * a manifest entry and want to atomically add it and persist).
- *
- * @param {string} targetRoot
- * @param {Partial<ManifestEntry>} rawEntry
- * @param {string} [packageVersion]
- * @returns {{ entry: ManifestEntry, manifest: object }}
- */
-export function recordEntry(targetRoot, rawEntry, packageVersion) {
-  const manifest = getOrCreateManifest(targetRoot, packageVersion);
-  const entry = validateEntry(rawEntry, packageVersion);
-  manifest.entries = manifest.entries.filter(e => e.relPath !== entry.relPath);
-  manifest.entries.push(entry);
-  saveManifest(targetRoot, manifest);
-  return { entry, manifest };
-}
-
-/**
- * Record a generated directory artifact in the manifest.
- * Records every child file with its hash.
- *
- * @param {string} targetRoot
- * @param {object} params
- * @param {string} params.adapter
- * @param {string} params.relPath   Relative path to the directory
- * @param {string} params.outputRoot
- * @param {string} [params.marker]
- * @param {string} [params.packageVersion]
- * @returns {{ entry: ManifestEntry, manifest: object }}
- */
-export function recordDirectoryArtifact(targetRoot, params) {
-  const manifest = getOrCreateManifest(targetRoot, params.packageVersion);
-  const fullDir = join(targetRoot, params.relPath);
-  const children = [];
-  const childHashes = {};
-
-  if (existsSync(fullDir) && statSync(fullDir).isDirectory()) {
-    collectChildFiles(fullDir, fullDir, children, childHashes);
-  }
-
-  const entry = validateEntry({
-    adapter: params.adapter,
-    outputRoot: params.outputRoot || '.',
-    relPath: params.relPath,
-    kind: 'directory',
-    marker: params.marker,
-    children,
-    childHashes: JSON.stringify(childHashes),
-    existence: 'created',
-  }, params.packageVersion);
-
-  manifest.entries = manifest.entries.filter(e => e.relPath !== entry.relPath);
-  manifest.entries.push(entry);
-  saveManifest(targetRoot, manifest);
-  return { entry, manifest };
-}
-
-/**
- * Recursively collect all files under a directory.
- * @param {string} baseDir
- * @param {string} currentDir
- * @param {string[]} children
- * @param {Record<string, string>} childHashes
- */
-function collectChildFiles(baseDir, currentDir, children, childHashes) {
-  for (const entry of readdirSync(currentDir)) {
-    const full = join(currentDir, entry);
-    const relFromBase = relative(baseDir, full).replace(/\\/g, '/');
-    if (statSync(full).isDirectory()) {
-      collectChildFiles(baseDir, full, children, childHashes);
-    } else {
-      children.push(relFromBase);
-      childHashes[relFromBase] = hashFile(full);
-    }
-  }
-}
-
-/**
- * Record a shared-config mutation in the manifest.
- *
- * @param {string} targetRoot
- * @param {object} params
- * @param {string} params.adapter
- * @param {string} params.relPath      Path to the shared config file
- * @param {string} params.outputRoot
- * @param {string} params.sharedConfigKey  The key or entry path that was added
- * @param {boolean} params.createdFile  Whether Agentic Loop created the entire file
- * @param {string} [params.marker]
- * @param {string} [params.packageVersion]
- * @returns {{ entry: ManifestEntry, manifest: object }}
- */
 export function recordSharedConfigArtifact(targetRoot, params) {
   const manifest = getOrCreateManifest(targetRoot, params.packageVersion);
-  const fullPath = join(targetRoot, params.relPath);
-  const hash = existsSync(fullPath) ? hashFile(fullPath) : undefined;
-
-  const entry = validateEntry({
-    adapter: params.adapter,
-    outputRoot: params.outputRoot || '.',
-    relPath: params.relPath,
-    kind: 'shared-config',
-    hash,
-    marker: params.marker,
-    sharedConfigKey: params.sharedConfigKey,
-    createdFile: params.createdFile,
-    existence: existsSync(fullPath) ? 'merged' : 'created',
-  }, params.packageVersion);
-
-  // For shared-config, allow multiple entries for the same file (different keys)
-  const existing = manifest.entries.findIndex(
-    e => e.relPath === entry.relPath && e.sharedConfigKey === entry.sharedConfigKey
-  );
-  if (existing >= 0) {
-    manifest.entries[existing] = entry;
-  } else {
-    manifest.entries.push(entry);
-  }
-  saveManifest(targetRoot, manifest);
-  return { entry, manifest };
+  const entry = createSharedConfigEntry({ ...params, mutations: params.mutations ?? [] });
+  if (params.sharedConfigKey) entry.sharedConfigKey = params.sharedConfigKey;
+  manifest.entries = manifest.entries.filter(value => entryIdentity(value) !== entryIdentity(entry));
+  manifest.entries.push(entry); saveManifest(targetRoot, manifest); return { entry, manifest };
 }
 
-// ---------------------------------------------------------------------------
-// Entry queries
-// ---------------------------------------------------------------------------
-
-/**
- * Get all manifest entries for a given adapter.
- * @param {object} manifest
- * @param {string} adapter
- * @returns {ManifestEntry[]}
- */
-export function getEntriesForAdapter(manifest, adapter) {
-  return (manifest?.entries ?? []).filter(e => e.adapter === adapter);
+export function recordGitignoreLineArtifact(targetRoot, params) {
+  const manifest = getOrCreateManifest(targetRoot, params.packageVersion);
+  const entry = createGitignoreEntry({ ...params, occurrence: params.occurrence ?? 0 });
+  manifest.entries = manifest.entries.filter(value => entryIdentity(value) !== entryIdentity(entry));
+  manifest.entries.push(entry); saveManifest(targetRoot, manifest); return { entry, manifest };
 }
 
-/**
- * Get a manifest entry for a specific path.
- * @param {object} manifest
- * @param {string} relPath
- * @returns {ManifestEntry | undefined}
- */
-export function getEntryForPath(manifest, relPath) {
-  const normalized = normalizeRelPath(relPath);
-  return (manifest?.entries ?? []).find(e => e.relPath === normalized);
+export function recordEntry(targetRoot, rawEntry, packageVersion) {
+  const manifest = getOrCreateManifest(targetRoot, packageVersion);
+  const entry = validateManifestEntry(rawEntry);
+  manifest.entries = manifest.entries.filter(value => entryIdentity(value) !== entryIdentity(entry));
+  manifest.entries.push(entry); saveManifest(targetRoot, manifest); return { entry, manifest };
 }
 
-/**
- * Get all manifest entries for a specific path (shared-config may have multiple).
- * @param {object} manifest
- * @param {string} relPath
- * @returns {ManifestEntry[]}
- */
-export function getEntriesForPath(manifest, relPath) {
-  const normalized = normalizeRelPath(relPath);
-  return (manifest?.entries ?? []).filter(e => e.relPath === normalized);
+/** @deprecated Directory scans are unsafe. Ownership is file-granular. */
+export function recordDirectoryArtifact() {
+  throw new Error('Directory ownership is no longer recorded; record planned file entries instead');
 }
 
-// ---------------------------------------------------------------------------
-// Entry removal
-// ---------------------------------------------------------------------------
-
-/**
- * Remove a manifest entry by path.
- * @param {string} targetRoot
- * @param {string} relPath
- * @returns {ManifestEntry[]} the removed entries
- */
-export function removeEntry(targetRoot, relPath) {
-  const manifest = loadManifest(targetRoot);
-  if (!manifest) return [];
-  const normalized = normalizeRelPath(relPath);
-  const removed = manifest.entries.filter(e => e.relPath === normalized);
-  manifest.entries = manifest.entries.filter(e => e.relPath !== normalized);
-  if (manifest.entries.length === 0) {
-    // Delete the manifest file directly since there are no remaining entries.
-    const manifestPath = join(targetRoot, GENERATED_ARTIFACTS_PATH);
-    if (existsSync(manifestPath)) {
-      rmSync(manifestPath, { force: true });
-    }
-  } else {
-    saveManifest(targetRoot, manifest);
+export function getEntriesForAdapter(manifest, adapter, outputRoot) {
+  return (manifest?.entries ?? []).filter(entry => entry.adapter === adapter && (outputRoot === undefined || entry.outputRoot === outputRoot));
+}
+export function getEntryForPath(manifest, relPath, outputRoot = '.', adapter) {
+  return (manifest?.entries ?? []).find(entry => entry.relPath === relPath && entry.outputRoot === outputRoot && (adapter === undefined || entry.adapter === adapter));
+}
+export function getEntriesForPath(manifest, relPath, outputRoot = '.') {
+  return (manifest?.entries ?? []).filter(entry => entry.relPath === relPath && entry.outputRoot === outputRoot);
+}
+export function removeEntry(targetRoot, relPath, outputRoot = '.', adapter) {
+  const manifest = loadManifest(targetRoot); if (!manifest) return [];
+  const removed = manifest.entries.filter(entry => entry.relPath === relPath && entry.outputRoot === outputRoot && (adapter === undefined || entry.adapter === adapter));
+  manifest.entries = manifest.entries.filter(entry => !removed.includes(entry));
+  if (manifest.entries.length) saveManifest(targetRoot, manifest);
+  else {
+    const path = resolveManagedPath(targetRoot, '.', MANIFEST_PATH);
+    if (existsSync(path)) rmSync(path, { force: true });
   }
   return removed;
 }
-
-/**
- * Remove all manifest entries for a given adapter.
- * @param {string} targetRoot
- * @param {string} adapter
- * @returns {ManifestEntry[]} the removed entries
- */
-export function removeEntriesForAdapter(targetRoot, adapter) {
-  const manifest = loadManifest(targetRoot);
-  if (!manifest) return [];
-  const removed = manifest.entries.filter(e => e.adapter === adapter);
-  manifest.entries = manifest.entries.filter(e => e.adapter !== adapter);
-  if (manifest.entries.length === 0) {
-    removeManifestIfEmpty(targetRoot);
-  } else {
-    saveManifest(targetRoot, manifest);
-  }
-  return removed;
+export function removeEntriesForAdapter(targetRoot, adapter, outputRoot) {
+  const manifest = loadManifest(targetRoot); if (!manifest) return [];
+  const removed = manifest.entries.filter(entry => entry.adapter === adapter && (outputRoot === undefined || entry.outputRoot === outputRoot));
+  manifest.entries = manifest.entries.filter(entry => !removed.includes(entry));
+  if (manifest.entries.length) saveManifest(targetRoot, manifest); else removeManifestIfEmpty(targetRoot); return removed;
 }
 
-// ---------------------------------------------------------------------------
-// Ownership verification
-// ---------------------------------------------------------------------------
-
-/**
- * Classification of a file against the ownership manifest.
- * @typedef {Object} OwnershipClassification
- * @property {'exact-owned'|'owned-modified'|'unowned'|'unrecognized'|'manifest-missing'|'malformed-manifest'} status
- * @property {ManifestEntry} [entry]
- * @property {string} [currentHash]
- * @property {string} [expectedHash]
- * @property {string} [message]
- */
-
-/**
- * Classify a file against the manifest to determine if it can be safely removed.
- *
- * @param {string} targetRoot
- * @param {string} relPath
- * @returns {OwnershipClassification}
- */
-export function classifyFile(targetRoot, relPath) {
+export function classifyFile(targetRoot, relPath, outputRoot = '.', adapter) {
   const manifest = loadManifest(targetRoot);
-  if (!manifest) {
-    return { status: 'manifest-missing' };
-  }
-  if (typeof manifest.schemaVersion !== 'number' || !Array.isArray(manifest.entries)) {
-    return { status: 'malformed-manifest', message: 'Manifest has invalid structure' };
-  }
-
-  const normalized = normalizeRelPath(relPath);
-  const entry = manifest.entries.find(e => e.relPath === normalized);
-  if (!entry) {
-    return { status: 'unrecognized' };
-  }
-
-  const fullPath = join(targetRoot, relPath);
-  if (!existsSync(fullPath)) {
-    return { status: 'exact-owned', entry, message: 'File missing from disk but recorded in manifest' };
-  }
-
-  if (entry.kind === 'file' && entry.hash) {
-    const currentHash = hashFile(fullPath);
-    if (currentHash === entry.hash) {
-      return { status: 'exact-owned', entry, currentHash };
-    }
-    return {
-      status: 'owned-modified',
-      entry,
-      currentHash,
-      expectedHash: entry.hash,
-      message: 'File has been modified since generation',
-    };
-  }
-
-  return { status: 'exact-owned', entry };
+  if (!manifest) return { status: 'manifest-missing' };
+  const entry = getEntryForPath(manifest, relPath, outputRoot, adapter);
+  if (!entry || entry.kind !== 'file') return { status: 'unrecognized' };
+  const path = resolveManagedPath(targetRoot, outputRoot, relPath);
+  if (!existsSync(path)) return { status: 'exact-owned', entry, message: 'File missing from disk but recorded in manifest' };
+  const currentHash = hashFile(path);
+  return currentHash === entry.hash ? { status: 'exact-owned', entry, currentHash } : { status: 'owned-modified', entry, currentHash, expectedHash: entry.hash, message: 'File has been modified since generation' };
 }
 
-/**
- * Classify a directory against the manifest.
- * For directories, checks if every child file is owned and unmodified.
- *
- * @param {string} targetRoot
- * @param {string} relPath  Relative path to the directory
- * @returns {{ status: 'exact-owned'|'owned-modified'|'unrecognized'|'manifest-missing',
- *             entry?: ManifestEntry,
- *             unknownChildren?: string[],
- *             modifiedChildren?: string[] }}
- */
-export function classifyDirectory(targetRoot, relPath) {
+/** Compatibility classification: directories are intentionally never removed as units. */
+export function classifyDirectory(targetRoot, relPath, outputRoot = '.', adapter) {
   const manifest = loadManifest(targetRoot);
-  if (!manifest) {
-    return { status: 'manifest-missing' };
-  }
-
-  const normalized = normalizeRelPath(relPath);
-  const entry = manifest.entries.find(e => e.relPath === normalized && e.kind === 'directory');
-  if (!entry) {
-    return { status: 'unrecognized' };
-  }
-
-  const fullDir = join(targetRoot, relPath);
-  if (!existsSync(fullDir) || !statSync(fullDir).isDirectory()) {
-    return { status: 'exact-owned', entry };
-  }
-
-  const ownedChildren = new Set(entry.children ?? []);
-  let parsedChildHashes = {};
-  try {
-    parsedChildHashes = entry.childHashes ? JSON.parse(entry.childHashes) : {};
-  } catch {
-    return { status: 'owned-modified', entry, unknownChildren: ['(malformed child hashes)'] };
-  }
-
-  const unknownChildren = [];
-  const modifiedChildren = [];
-
-  // Walk actual children
-  const actualChildren = [];
-  collectChildFileNames(fullDir, fullDir, actualChildren);
-
-  for (const child of actualChildren) {
-    if (!ownedChildren.has(child)) {
-      unknownChildren.push(child);
-    } else if (parsedChildHashes[child]) {
-      const childPath = join(fullDir, child);
-      const currentHash = hashFile(childPath);
-      if (currentHash !== parsedChildHashes[child]) {
-        modifiedChildren.push(child);
-      }
-    }
-  }
-
-  if (unknownChildren.length > 0 || modifiedChildren.length > 0) {
-    return { status: 'owned-modified', entry, unknownChildren, modifiedChildren };
-  }
-
-  return { status: 'exact-owned', entry };
-}
-
-/**
- * Collect child file names relative to baseDir (non-recursive contents).
- * @param {string} baseDir
- * @param {string} currentDir
- * @param {string[]} result
- */
-function collectChildFileNames(baseDir, currentDir, result) {
-  for (const entry of readdirSync(currentDir)) {
-    const full = join(currentDir, entry);
-    const relFromBase = relative(baseDir, full).replace(/\\/g, '/');
-    if (statSync(full).isDirectory()) {
-      collectChildFileNames(baseDir, full, result);
-    } else {
-      result.push(relFromBase);
-    }
-  }
+  if (!manifest) return { status: 'manifest-missing' };
+  const prefix = `${relPath.replace(/\/$/, '')}/`;
+  const children = manifest.entries.filter(entry => entry.outputRoot === outputRoot && (!adapter || entry.adapter === adapter) && entry.kind === 'file' && entry.relPath.startsWith(prefix));
+  return children.length ? { status: 'owned-modified', unknownChildren: [], modifiedChildren: [] } : { status: 'unrecognized' };
 }

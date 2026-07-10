@@ -1,5 +1,7 @@
 # Cursor Setup
 
+Status: supported.
+
 The Cursor adapter stays repo-local and explicit-activation first. It renders
 from the same canonical source as the other hosts:
 

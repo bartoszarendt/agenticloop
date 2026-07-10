@@ -190,7 +190,7 @@ export function warningCount(report) {
   return n;
 }
 
-export function printReport(report, skillsDir, repoRoot, output = process.stdout) {
+export function printReport(report, skillsDir, repoRoot, output = process.stdout, linkErrorCount = 0) {
   const write = (line = '') => output.write(`${line}\n`);
   const label = repoRoot
     ? relative(repoRoot, skillsDir).replace(/\\/g, '/')
@@ -224,10 +224,15 @@ export function printReport(report, skillsDir, repoRoot, output = process.stdout
   write(`  Skills:   ${Object.keys(report.skills).length}`);
   write(`  Errors:   ${ec}`);
   write(`  Warnings: ${wc}`);
-  if (ec === 0) {
+  if (linkErrorCount > 0) {
+    write(`  Link errors: ${linkErrorCount}`);
+  }
+  if (ec === 0 && linkErrorCount === 0) {
     write(`\n  ALL CHECKS PASSED${wc ? ` (${wc} warnings)` : ''}`);
-  } else {
+  } else if (ec > 0) {
     write(`\n  ${ec} ERROR(S) - fix before any interactive agent session`);
+  } else {
+    write(`\n  ${linkErrorCount} LINK ERROR(S) - fix broken Markdown links`);
   }
   write();
 }

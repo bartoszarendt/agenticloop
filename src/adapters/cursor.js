@@ -39,6 +39,7 @@ import {
   buildRoleRecord,
   readCanonicalSkillEntries,
   resolveRoleModel,
+  planReferenceTree,
 } from './shared.js';
 
 const CURSOR_START_COMMAND = bundledToolkitPath('agenticloop/commands/start.md');
@@ -745,4 +746,163 @@ export function generateCursorArtifacts(alConfig, repoRoot, outputDir) {
   }
 
   return { files };
+}
+
+/**
+ * Plan Cursor adapter artifacts without writing to the filesystem.
+ *
+ * @param {object} alConfig
+ * @param {string} repoRoot
+ * @param {string} outputDir
+ * @returns {{ actions: Array, files: string[], adapter: string }}
+ */
+export function planCursorArtifacts(alConfig, repoRoot, outputDir) {
+  const cursorAdapter = alConfig.adapters?.cursor ?? {};
+  const roleBindings = cursorAdapter.roleBindings ?? {};
+  const agentNames = Object.fromEntries(
+    Object.keys(alConfig.roles ?? {}).map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
+  );
+  const skillEntries = readCanonicalSkillEntries(repoRoot, alConfig);
+  const backendEntries = readCanonicalBackendEntries(repoRoot, alConfig);
+  const relativeSkillReferenceMap = buildSkillReferenceMap(
+    skillEntries, cursorSkillReferenceRelativePath
+  );
+  addBackendReferencesToMap(relativeSkillReferenceMap, backendEntries, cursorBackendReferenceRelativePath);
+  const absoluteSkillReferenceMap = buildSkillReferenceMap(
+    skillEntries, cursorSkillReferenceAbsolutePath
+  );
+  addBackendReferencesToMap(absoluteSkillReferenceMap, backendEntries, cursorBackendReferenceAbsolutePath);
+  const pluginAbsoluteSkillReferenceMap = buildSkillReferenceMap(
+    skillEntries, cursorPluginSkillReferenceAbsolutePath
+  );
+  addBackendReferencesToMap(pluginAbsoluteSkillReferenceMap, backendEntries, cursorPluginBackendReferenceAbsolutePath);
+  const version = loadPackageVersion();
+
+  const actions = [];
+  const files = [];
+
+  actions.push({ type: 'clear-owned-directory', adapter: 'cursor', relPath: '.cursor/agents' });
+  // This adapter-scoped root removes only exact Cursor-owned plugin files.
+  actions.push({ type: 'clear-owned-directory', adapter: 'cursor', relPath: 'plugins/agenticloop' });
+
+  // .cursor/agents/<name>.md
+  for (const roleName of Object.keys(alConfig.roles ?? {})) {
+    const agentName = agentNames[roleName] ?? roleName;
+    const roleRecord = buildRoleRecord(alConfig, repoRoot, roleName);
+    const modelSettings = resolveRoleModel(alConfig, 'cursor', roleName, cursorAdapter);
+    const md = renderCursorAgentMarkdown(
+      agentName, roleName, roleRecord, modelSettings, absoluteSkillReferenceMap, agentNames,
+      backendEntries, cursorBackendReferenceAbsolutePath, cursorSkillReferenceAbsolutePath
+    );
+    const relPath = `.cursor/agents/${agentName}.md`;
+    actions.push({
+      type: 'write-file',
+      adapter: 'cursor',
+      relPath,
+      content: md,
+      marker: CURSOR_GENERATED_MARKER,
+    });
+    files.push(relPath);
+  }
+
+  // Public skill directory.
+  const skillDirRelPath = `.cursor/skills/${CURSOR_PUBLIC_SKILL_NAME}`;
+  actions.push({
+    type: 'clear-owned-directory',
+    adapter: 'cursor',
+    relPath: skillDirRelPath,
+  });
+
+  actions.push({
+    type: 'write-file',
+    adapter: 'cursor',
+    relPath: `${skillDirRelPath}/SKILL.md`,
+    content: renderCursorPublicSkill(relativeSkillReferenceMap, agentNames, backendEntries, { agentRootDisplay: '.cursor/agents' }),
+    marker: CURSOR_GENERATED_MARKER,
+  });
+  files.push(`${skillDirRelPath}/SKILL.md`);
+
+  for (const entry of skillEntries) {
+    const refActions = planReferenceTree(
+      entry.sourceDir,
+      `${skillDirRelPath}/references/skills/${entry.canonicalName}`,
+      'cursor',
+      (content) => renderReferenceMarkdown(content, relativeSkillReferenceMap),
+      CURSOR_GENERATED_MARKER
+    );
+    actions.push(...refActions);
+    files.push(...refActions.map(a => a.relPath));
+  }
+
+  for (const entry of backendEntries) {
+    const relPath = `${skillDirRelPath}/references/backends/${entry.filename}`;
+    const content = renderCursorGeneratedText(
+      readFileSync(entry.sourceFile, 'utf-8'), relativeSkillReferenceMap
+    );
+    actions.push({ type: 'write-file', adapter: 'cursor', relPath, content });
+    files.push(relPath);
+  }
+
+  // Optional plugin distribution.
+  if (cursorAdapter.plugin?.enabled === true) {
+    const pluginRoot = 'plugins/agenticloop';
+
+    actions.push({
+      type: 'write-file',
+      adapter: 'cursor',
+      relPath: `${pluginRoot}/.cursor-plugin/plugin.json`,
+      content: JSON.stringify(buildCursorPluginManifest(version), null, 2) + '\n',
+    });
+    files.push(`${pluginRoot}/.cursor-plugin/plugin.json`);
+
+    // Plugin agents.
+    for (const roleName of Object.keys(alConfig.roles ?? {})) {
+      const agentName = agentNames[roleName] ?? roleName;
+      const roleRecord = buildRoleRecord(alConfig, repoRoot, roleName);
+      const modelSettings = resolveRoleModel(alConfig, 'cursor', roleName, cursorAdapter);
+      const md = renderCursorAgentMarkdown(
+        agentName, roleName, roleRecord, modelSettings, pluginAbsoluteSkillReferenceMap, agentNames,
+        backendEntries, cursorPluginBackendReferenceAbsolutePath, cursorPluginSkillReferenceAbsolutePath
+      );
+      const relPath = `${pluginRoot}/agents/${agentName}.md`;
+      actions.push({ type: 'write-file', adapter: 'cursor', relPath, content: md, marker: CURSOR_GENERATED_MARKER });
+      files.push(relPath);
+    }
+
+    // Plugin skill surface.
+    const pluginSkillDir = `${pluginRoot}/skills/${CURSOR_PUBLIC_SKILL_NAME}`;
+    actions.push({ type: 'clear-owned-directory', adapter: 'cursor', relPath: pluginSkillDir });
+
+    actions.push({
+      type: 'write-file',
+      adapter: 'cursor',
+      relPath: `${pluginSkillDir}/SKILL.md`,
+      content: renderCursorPublicSkill(relativeSkillReferenceMap, agentNames, backendEntries, { agentRootDisplay: 'plugins/agenticloop/agents' }),
+      marker: CURSOR_GENERATED_MARKER,
+    });
+    files.push(`${pluginSkillDir}/SKILL.md`);
+
+    for (const entry of skillEntries) {
+      const refActions = planReferenceTree(
+        entry.sourceDir,
+        `${pluginSkillDir}/references/skills/${entry.canonicalName}`,
+        'cursor',
+        (content) => renderReferenceMarkdown(content, relativeSkillReferenceMap),
+        CURSOR_GENERATED_MARKER
+      );
+      actions.push(...refActions);
+      files.push(...refActions.map(a => a.relPath));
+    }
+
+    for (const entry of backendEntries) {
+      const relPath = `${pluginSkillDir}/references/backends/${entry.filename}`;
+      const content = renderCursorGeneratedText(
+        readFileSync(entry.sourceFile, 'utf-8'), relativeSkillReferenceMap
+      );
+      actions.push({ type: 'write-file', adapter: 'cursor', relPath, content });
+      files.push(relPath);
+    }
+  }
+
+  return { actions, files, adapter: 'cursor' };
 }

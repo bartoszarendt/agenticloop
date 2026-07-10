@@ -27,6 +27,7 @@ import {
   validateSkills,
   warningCount,
 } from './validate-skills.js';
+import { validateLinks, formatLinkErrors } from './link-validator.js';
 
 /**
  * @param {{ write(s: string): void }} output
@@ -71,6 +72,7 @@ function formatValidationOptions(options = {}) {
  *   configWarnings: string[],
  *   eventLogErrors: string[],
  *   eventLogWarnings: string[],
+ *   linkErrors: object[],
  * }}
  */
 export function runValidation(target, options = {}) {
@@ -94,7 +96,21 @@ export function runValidation(target, options = {}) {
   }
 
   const skillReport = validateSkills(skillsDir);
-  printReport(skillReport, skillsDir, target, /** @type {any} */ (output));
+
+  // Run link validation early so we can include link errors in the summary.
+  const linkResult = validateLinks(target);
+  const linkErrors = linkResult.errors;
+
+  // Print link errors with actionable details (Defect 15).
+  if (linkErrors.length > 0) {
+    writeLine(output, '='.repeat(70));
+    writeLine(output, ' Link Validation');
+    writeLine(output, '='.repeat(70));
+    for (const line of formatLinkErrors(linkResult)) writeLine(output, `  ${line}`);
+    writeLine(output);
+  }
+
+  printReport(skillReport, skillsDir, target, /** @type {any} */ (output), linkErrors.length);
 
   let activationErrors = [];
   let activationWarnings = [];
@@ -176,7 +192,7 @@ export function runValidation(target, options = {}) {
   const totalWarnings = warningCount(skillReport) + configWarnings.length + activationWarnings.length + eventLogWarnings.length;
 
   return {
-    totalErrors,
+    totalErrors: totalErrors + linkErrors.length,
     totalWarnings,
     skillReport,
     activationErrors,
@@ -185,5 +201,6 @@ export function runValidation(target, options = {}) {
     configWarnings,
     eventLogErrors,
     eventLogWarnings,
+    linkErrors,
   };
 }

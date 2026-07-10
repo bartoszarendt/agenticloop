@@ -42,11 +42,9 @@ let tmpBase;
 before(() => {
   tmpBase = mkdtempSync(join(tmpdir(), 'al-manifest-test-'));
 });
-
 after(() => {
   rmSync(tmpBase, { recursive: true, force: true });
 });
-
 function makeTarget() {
   return mkdtempSync(join(tmpBase, 'target-'));
 }
@@ -56,7 +54,15 @@ function makeTarget() {
 // ---------------------------------------------------------------------------
 
 describe('generated-artifacts: schema and I/O', () => {
-  it('createManifest produces a valid blank manifest', () => {
+  it('createManifest produces a valid blank manifest with real package version', () => {
+    const m = createManifest();
+    assert.equal(m.schemaVersion, GENERATED_ARTIFACTS_SCHEMA_VERSION);
+    // Default version comes from package.json (0.1.0), not '0.0.0'
+    assert.equal(m.packageVersion, '0.1.0');
+    assert.deepEqual(m.entries, []);
+  });
+
+  it('createManifest accepts explicit version', () => {
     const m = createManifest('1.0.0');
     assert.equal(m.schemaVersion, GENERATED_ARTIFACTS_SCHEMA_VERSION);
     assert.equal(m.packageVersion, '1.0.0');
@@ -79,21 +85,50 @@ describe('generated-artifacts: schema and I/O', () => {
     assert.deepEqual(loaded.entries, []);
   });
 
-  it('loadManifest returns null for malformed JSON', () => {
+  it('loadManifest throws on malformed JSON', () => {
     const t = makeTarget();
     mkdirSync(join(t, '.agenticloop'), { recursive: true });
     writeFileSync(join(t, '.agenticloop', 'generated-artifacts.json'), 'not json');
-    assert.equal(loadManifest(t), null);
+    assert.throws(() => loadManifest(t), /malformed JSON/);
   });
 
-  it('loadManifest returns null for invalid schema', () => {
+  it('loadManifest throws on invalid schemaVersion', () => {
     const t = makeTarget();
     mkdirSync(join(t, '.agenticloop'), { recursive: true });
     writeFileSync(
       join(t, '.agenticloop', 'generated-artifacts.json'),
       JSON.stringify({ schemaVersion: 'wrong', entries: [] })
     );
-    assert.equal(loadManifest(t), null);
+    assert.throws(() => loadManifest(t), /invalid or missing schemaVersion/);
+  });
+
+  it('loadManifest throws on unsupported schema version', () => {
+    const t = makeTarget();
+    mkdirSync(join(t, '.agenticloop'), { recursive: true });
+    writeFileSync(
+      join(t, '.agenticloop', 'generated-artifacts.json'),
+      JSON.stringify({ schemaVersion: 99, entries: [] })
+    );
+    assert.throws(() => loadManifest(t), /unsupported schemaVersion 99/);
+  });
+
+  it('loadManifest migrates schema v1 to v2', () => {
+    const t = makeTarget();
+    mkdirSync(join(t, '.agenticloop'), { recursive: true });
+    writeFileSync(
+      join(t, '.agenticloop', 'generated-artifacts.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        packageVersion: '0.1.0',
+        entries: [
+          { adapter: 'opencode', outputRoot: '.', relPath: 'a.txt', kind: 'file', hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', existence: 'created', generatedAt: '2026-01-01T00:00:00.000Z' },
+        ],
+      })
+    );
+    const loaded = loadManifest(t);
+    assert.ok(loaded);
+    assert.equal(loaded.schemaVersion, GENERATED_ARTIFACTS_SCHEMA_VERSION);
+    assert.equal(loaded.entries.length, 1);
   });
 
   it('getOrCreateManifest creates when missing', () => {
@@ -114,10 +149,11 @@ describe('generated-artifacts: schema and I/O', () => {
     const t = makeTarget();
     const m = createManifest('1.0.0');
     m.entries.push({
-      adapter: 'test',
+      adapter: 'opencode',
       outputRoot: '.',
       relPath: 'foo.txt',
       kind: 'file',
+      hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       existence: 'created',
       generatedAt: new Date().toISOString(),
     });
@@ -126,7 +162,6 @@ describe('generated-artifacts: schema and I/O', () => {
     assert.ok(loadManifest(t));
   });
 });
-
 // ---------------------------------------------------------------------------
 // Hashing
 // ---------------------------------------------------------------------------
@@ -179,9 +214,9 @@ describe('generated-artifacts: recordFileArtifact', () => {
     assert.equal(entry.relPath, '.opencode/agents/orchestrator.md');
     assert.equal(entry.kind, 'file');
     assert.equal(entry.marker, '<!-- Generated -->');
-    // File does not exist yet, so hash is undefined and existence is created
+    // File does not exist yet, so the compatibility recorder uses the intended empty content hash.
     assert.equal(entry.existence, 'created');
-    assert.equal(entry.hash, undefined);
+    assert.equal(entry.hash, hashContent(''));
 
     const loaded = loadManifest(t);
     assert.equal(loaded.entries.length, 1);
@@ -267,7 +302,7 @@ describe('generated-artifacts: recordFileArtifact', () => {
         relPath: 'test.txt',
         outputRoot: '.',
       }),
-      /requires a non-empty adapter/
+      /requires a non-empty supported adapter/
     );
   });
 
@@ -285,48 +320,6 @@ describe('generated-artifacts: recordFileArtifact', () => {
 
     assert.ok(entry.hash);
     assert.equal(entry.existence, 'merged');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Record directory artifacts
-// ---------------------------------------------------------------------------
-
-describe('generated-artifacts: recordDirectoryArtifact', () => {
-  it('records directory with child files and hashes', () => {
-    const t = makeTarget();
-    const skillDir = join(t, '.claude', 'skills', 'agenticloop');
-    mkdirSync(join(skillDir, 'references', 'skills', 'role-delegation'), { recursive: true });
-    writeFileSync(join(skillDir, 'SKILL.md'), '# Skill');
-    writeFileSync(join(skillDir, 'references', 'skills', 'role-delegation', 'reference.md'), '# Ref');
-
-    const { entry } = recordDirectoryArtifact(t, {
-      adapter: 'claude-code',
-      relPath: '.claude/skills/agenticloop',
-      outputRoot: '.',
-    });
-
-    assert.equal(entry.kind, 'directory');
-    assert.ok(entry.children);
-    assert.ok(entry.children.includes('SKILL.md'));
-    assert.ok(entry.children.includes('references/skills/role-delegation/reference.md'));
-    assert.ok(entry.childHashes);
-    const hashes = JSON.parse(entry.childHashes);
-    assert.ok(hashes['SKILL.md']);
-  });
-
-  it('records empty directory with no children', () => {
-    const t = makeTarget();
-    mkdirSync(join(t, '.claude', 'skills', 'agenticloop'), { recursive: true });
-
-    const { entry } = recordDirectoryArtifact(t, {
-      adapter: 'claude-code',
-      relPath: '.claude/skills/agenticloop',
-      outputRoot: '.',
-    });
-
-    assert.deepEqual(entry.children, []);
-    assert.equal(entry.childHashes, '{}');
   });
 });
 
@@ -579,7 +572,8 @@ describe('generated-artifacts: classifyFile', () => {
     const t = makeTarget();
     const m = createManifest('1.0.0');
     m.entries.push({
-      adapter: 'test', outputRoot: '.', relPath: 'test.txt', kind: 'file',
+        adapter: 'opencode', outputRoot: '.', relPath: 'test.txt', kind: 'file',
+        hash: hashContent('content'),
       existence: 'created', generatedAt: new Date().toISOString(),
     });
     saveManifest(t, m);
@@ -588,79 +582,5 @@ describe('generated-artifacts: classifyFile', () => {
 
     const cls = classifyFile(t, 'test.txt');
     assert.equal(cls.status, 'exact-owned');
-  });
-});
-
-describe('generated-artifacts: classifyDirectory', () => {
-  it('classifies exact-owned when all children match', () => {
-    const t = makeTarget();
-    const dir = join(t, '.claude', 'skills', 'agenticloop');
-    mkdirSync(join(dir, 'refs'), { recursive: true });
-    writeFileSync(join(dir, 'SKILL.md'), '# Skill');
-    writeFileSync(join(dir, 'refs', 'a.md'), '# A');
-
-    recordDirectoryArtifact(t, {
-      adapter: 'claude-code',
-      relPath: '.claude/skills/agenticloop',
-      outputRoot: '.',
-    });
-
-    const cls = classifyDirectory(t, '.claude/skills/agenticloop');
-    assert.equal(cls.status, 'exact-owned');
-  });
-
-  it('classifies owned-modified when unknown children exist', () => {
-    const t = makeTarget();
-    const dir = join(t, '.claude', 'skills', 'agenticloop');
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'SKILL.md'), '# Skill');
-
-    recordDirectoryArtifact(t, {
-      adapter: 'claude-code',
-      relPath: '.claude/skills/agenticloop',
-      outputRoot: '.',
-    });
-
-    // Add an unknown file
-    writeFileSync(join(dir, 'user-added.md'), '# User');
-
-    const cls = classifyDirectory(t, '.claude/skills/agenticloop');
-    assert.equal(cls.status, 'owned-modified');
-    assert.ok(cls.unknownChildren.includes('user-added.md'));
-  });
-
-  it('classifies owned-modified when child is modified', () => {
-    const t = makeTarget();
-    const dir = join(t, '.claude', 'skills', 'agenticloop');
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'SKILL.md'), '# Original');
-
-    recordDirectoryArtifact(t, {
-      adapter: 'claude-code',
-      relPath: '.claude/skills/agenticloop',
-      outputRoot: '.',
-    });
-
-    // Modify the file
-    writeFileSync(join(dir, 'SKILL.md'), '# Modified');
-
-    const cls = classifyDirectory(t, '.claude/skills/agenticloop');
-    assert.equal(cls.status, 'owned-modified');
-    assert.ok(cls.modifiedChildren.includes('SKILL.md'));
-  });
-
-  it('classifies unrecognized when no directory entry exists', () => {
-    const t = makeTarget();
-    saveManifest(t, createManifest('1.0.0'));
-    mkdirSync(join(t, 'userdir'), { recursive: true });
-
-    const cls = classifyDirectory(t, 'userdir');
-    assert.equal(cls.status, 'unrecognized');
-  });
-
-  it('classifies manifest-missing when no manifest', () => {
-    const t = makeTarget();
-    const cls = classifyDirectory(t, 'nonexistent');
-    assert.equal(cls.status, 'manifest-missing');
   });
 });

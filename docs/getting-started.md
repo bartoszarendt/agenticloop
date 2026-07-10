@@ -118,6 +118,19 @@ npx agenticloop remove --yes
 npx agenticloop remove --yes --include-state
 ```
 
+Removal is transactional. If final quarantine cleanup cannot complete after a
+successful removal, the command reports the cleanup error without restoring
+already committed output and leaves its `.agenticloop-remove-*` journal in the
+target root. Remove that journal only after confirming the committed removal is
+the intended final state.
+
+If rollback itself cannot restore every path, the command reports that rollback
+is incomplete and retains the quarantine journal instead of deleting recovery
+data. Its `transaction.json` maps original target paths to the remaining backup
+files. Resolve the reported filesystem obstruction and recover those paths from
+the journal before removing it; an incomplete rollback is not a completed
+removal.
+
 ## Adoption Modes
 
 Agentic Loop supports two adoption paths.

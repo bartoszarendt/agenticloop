@@ -44,7 +44,7 @@ import {
   readFileSync,
   rmSync,
 } from 'node:fs';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { parseFrontmatter } from '../frontmatter.js';
 import { PROCESS_DOC_RELATIVE_PATH, bundledToolkitPath } from '../layout.js';
 import {
@@ -667,9 +667,6 @@ export function generateClaudeCodeArtifacts(alConfig, repoRoot, outputDir) {
   );
   const resolvedPermissions = resolveClaudeCodePermissions(ccAdapter);
 
-  // Canonical skills are read once and exposed two ways: relative reference
-  // paths inside the public skill, and repo-root-relative paths inside the
-  // generated agents that live outside the skill directory.
   const skillEntries = readCanonicalSkillEntries(repoRoot, alConfig);
   const relativeSkillReferenceMap = buildClaudeSkillReferenceMap(
     skillEntries,
@@ -683,11 +680,9 @@ export function generateClaudeCodeArtifacts(alConfig, repoRoot, outputDir) {
   mkdirSync(outputDir, { recursive: true });
   const files = [];
 
-  // .claude/commands/agenticloop.md copy of the canonical start command
   const commandsDir = join(outputDir, '.claude', 'commands');
   files.push(copyClaudeCodeCommand(commandsDir, outputDir));
 
-  // .claude/agents/<role>.md
   const agentsDir = join(outputDir, '.claude', 'agents');
   mkdirSync(agentsDir, { recursive: true });
   for (const [roleName] of Object.entries(roles)) {
@@ -707,10 +702,219 @@ export function generateClaudeCodeArtifacts(alConfig, repoRoot, outputDir) {
     files.push(relative(outputDir, mdPath).replace(/\\/g, '/'));
   }
 
-  // One public .claude/skills/agenticloop/SKILL.md plus internal procedure
-  // copies under references/skills/<name>/reference.md
   files.push(...writeClaudePublicSkill(skillEntries, relativeSkillReferenceMap, agentNames, outputDir));
   files.push(...writeClaudeCodeSettings(outputDir, resolvedPermissions));
 
   return { files };
+}
+
+/**
+ * Plan Claude Code settings mutations as a json-merge action.
+ *
+ * @param {string} outputDir
+ * @param {object} resolvedPermissions
+ * @returns {Array} Plan actions for settings + gitignore.
+ */
+function planClaudeCodeSettings(outputDir, resolvedPermissions) {
+  const actions = [];
+  if (resolvedPermissions === null) {
+    return actions;
+  }
+
+  const settingsRelPath = claudeCodeSettingsRelativePath(resolvedPermissions.scope);
+  const mutations = [];
+
+  // Compute array-add mutations for each permission entry.
+  for (const entry of resolvedPermissions.allow) {
+    mutations.push({ op: 'array-add', pointer: 'permissions/allow', value: entry });
+  }
+  for (const entry of resolvedPermissions.deny) {
+    mutations.push({ op: 'array-add', pointer: 'permissions/deny', value: entry });
+  }
+
+  actions.push({
+    type: 'json-merge',
+    adapter: 'claude-code',
+    relPath: settingsRelPath,
+    mutations,
+  });
+
+  // .gitignore line for local settings.
+  if (resolvedPermissions.scope === 'local') {
+    actions.push({
+      type: 'gitignore-append',
+      adapter: 'claude-code',
+      relPath: '.gitignore',
+      line: '.claude/settings.local.json',
+    });
+  }
+
+  return actions;
+}
+
+/**
+ * Plan the Claude Code skill reference tree as write-file actions.
+ *
+ * @param {string} sourceDir
+ * @param {string} destRelPath  Relative path prefix for destination
+ * @param {Map} skillReferenceMap
+ * @returns {Array} Write-file actions.
+ */
+function planClaudeReferenceTree(sourceDir, destRelPath, skillReferenceMap) {
+  const actions = [];
+
+  for (const entry of readdirSync(sourceDir)) {
+    const srcEntry = join(sourceDir, entry);
+    const entryStat = statSync(srcEntry);
+
+    if (entryStat.isDirectory()) {
+      actions.push(...planClaudeReferenceTree(
+        srcEntry,
+        `${destRelPath}/${entry}`,
+        skillReferenceMap
+      ));
+      continue;
+    }
+
+    const destName = entry === 'SKILL.md' ? 'reference.md' : entry;
+    const destRel = `${destRelPath}/${destName}`;
+
+    if (entry === 'SKILL.md') {
+      const rewritten = rewriteClaudeSkillReferences(
+        readFileSync(srcEntry, 'utf-8'),
+        skillReferenceMap
+      );
+      actions.push({
+        type: 'write-file',
+        adapter: 'claude-code',
+        relPath: destRel,
+        content: rewritten,
+      });
+    } else {
+      actions.push({
+        type: 'write-file',
+        adapter: 'claude-code',
+        relPath: destRel,
+        content: readFileSync(srcEntry, 'utf-8'),
+      });
+    }
+  }
+
+  return actions;
+}
+
+/**
+ * Plan Claude Code adapter artifacts without writing to the filesystem.
+ *
+ * @param {object} alConfig
+ * @param {string} repoRoot
+ * @param {string} outputDir
+ * @returns {{ actions: Array, files: string[], adapter: string }}
+ */
+export function planClaudeCodeArtifacts(alConfig, repoRoot, outputDir) {
+  const ccAdapter = alConfig.adapters?.['claude-code'] ?? {};
+  const roles = alConfig.roles ?? {};
+  const roleBindings = ccAdapter.roleBindings ?? {};
+  const agentNames = Object.fromEntries(
+    Object.keys(roles).map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
+  );
+  const resolvedPermissions = resolveClaudeCodePermissions(ccAdapter);
+
+  const skillEntries = readCanonicalSkillEntries(repoRoot, alConfig);
+  const relativeSkillReferenceMap = buildClaudeSkillReferenceMap(
+    skillEntries,
+    claudeSkillReferenceRelativePath
+  );
+  const absoluteSkillReferenceMap = buildClaudeSkillReferenceMap(
+    skillEntries,
+    claudeSkillReferenceAbsolutePath
+  );
+
+  const actions = [];
+  const files = [];
+
+  actions.push({ type: 'clear-owned-directory', adapter: 'claude-code', relPath: '.claude/commands' });
+  actions.push({ type: 'clear-owned-directory', adapter: 'claude-code', relPath: '.claude/agents' });
+
+  // .claude/commands/agenticloop.md
+  const commandContent = renderClaudeCommandContent();
+  actions.push({
+    type: 'write-file',
+    adapter: 'claude-code',
+    relPath: '.claude/commands/agenticloop.md',
+    content: commandContent,
+    marker: '<!-- Generated by: agenticloop generate claude-code. Do not edit by hand. -->',
+  });
+  files.push('.claude/commands/agenticloop.md');
+
+  // .claude/agents/<role>.md
+  for (const [roleName] of Object.entries(roles)) {
+    const agentName = roleBindings[roleName]?.agent ?? roleName;
+    const { description, promptBody, requiredSkills } = buildRoleRecord(alConfig, repoRoot, roleName);
+    const modelSettings = resolveRoleModel(alConfig, 'claude-code', roleName, ccAdapter);
+    const permissionMode = resolveRolePermissionMode(ccAdapter, roleName);
+    const md = roleToAgentMarkdown(
+      agentName,
+      { description, promptBody, requiredSkills },
+      modelSettings,
+      permissionMode,
+      absoluteSkillReferenceMap
+    );
+    const relPath = `.claude/agents/${agentName}.md`;
+    actions.push({
+      type: 'write-file',
+      adapter: 'claude-code',
+      relPath,
+      content: md,
+      marker: 'Generated by: agenticloop generate claude-code',
+    });
+    files.push(relPath);
+  }
+
+  // Clear the skill directory of previously-owned children, then write new content.
+  const skillDirRelPath = `.claude/skills/${CLAUDE_PUBLIC_SKILL_NAME}`;
+  actions.push({
+    type: 'clear-owned-directory',
+    adapter: 'claude-code',
+    relPath: skillDirRelPath,
+  });
+
+  // .claude/skills/agenticloop/SKILL.md
+  const skillContent = renderClaudePublicSkill(relativeSkillReferenceMap, agentNames);
+  actions.push({
+    type: 'write-file',
+    adapter: 'claude-code',
+    relPath: `${skillDirRelPath}/SKILL.md`,
+    content: skillContent,
+    marker: '<!-- Generated by: agenticloop generate claude-code. Do not edit by hand. -->',
+  });
+  files.push(`${skillDirRelPath}/SKILL.md`);
+
+  // Reference trees.
+  const referencesRoot = `${skillDirRelPath}/references/skills`;
+  for (const entry of skillEntries) {
+    const refActions = planClaudeReferenceTree(
+      entry.sourceDir,
+      `${referencesRoot}/${entry.canonicalName}`,
+      relativeSkillReferenceMap
+    );
+    actions.push(...refActions);
+    files.push(...refActions.map(a => a.relPath));
+  }
+
+  // Settings + gitignore.
+  const settingsActions = planClaudeCodeSettings(outputDir, resolvedPermissions);
+  actions.push(...settingsActions);
+  files.push(...settingsActions.map(a => a.relPath));
+
+  return { actions, files, adapter: 'claude-code' };
+}
+
+function renderClaudeCommandContent() {
+  const source = readFileSync(CLAUDE_CODE_START_COMMAND, 'utf-8');
+  const marker = '<!-- Generated by: agenticloop generate claude-code. Do not edit by hand. -->';
+  const [frontmatter, body] = splitFrontmatterForMarker(source);
+  return frontmatter
+    ? `${frontmatter}\n${marker}\n${body}`
+    : `${marker}\n${source}`;
 }

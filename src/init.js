@@ -37,6 +37,7 @@ import { generateCodexArtifacts } from './adapters/codex.js';
 import { generateCopilotArtifacts } from './adapters/copilot.js';
 import { generateCursorArtifacts } from './adapters/cursor.js';
 import { generateOpencodeArtifacts } from './adapters/opencode.js';
+import { generateAdapterArtifacts } from './adapter-generation.js';
 import { loadAgenticLoopConfig } from './json.js';
 import {
   CONFIG_RELATIVE_PATH,
@@ -439,49 +440,15 @@ export async function init(options = {}) {
       }
 
       if (alConfig) {
-        if (selectedAdapter === 'opencode' || selectedAdapter === 'all') {
-          try {
-            const { files } = generateOpencodeArtifacts(alConfig, target, target);
-            created.push(...files);
-          } catch (error) {
-            errors.push(`Failed to generate OpenCode artifacts: ${error.message}`);
-          }
-        }
-
-        if (selectedAdapter === 'codex' || selectedAdapter === 'all') {
-          try {
-            const { files } = generateCodexArtifacts(alConfig, target, target);
-            created.push(...files);
-          } catch (error) {
-            errors.push(`Failed to generate Codex artifacts: ${error.message}`);
-          }
-        }
-
-        if (selectedAdapter === 'claude-code' || selectedAdapter === 'all') {
-          try {
-            const { files } = generateClaudeCodeArtifacts(alConfig, target, target);
-            created.push(...files);
-          } catch (error) {
-            errors.push(`Failed to generate Claude Code artifacts: ${error.message}`);
-          }
-        }
-
-        if (selectedAdapter === 'copilot' || selectedAdapter === 'all') {
-          try {
-            const { files } = generateCopilotArtifacts(alConfig, target, target);
-            created.push(...files);
-          } catch (error) {
-            errors.push(`Failed to generate GitHub Copilot artifacts: ${error.message}`);
-          }
-        }
-
-        if (selectedAdapter === 'cursor' || selectedAdapter === 'all') {
-          try {
-            const { files } = generateCursorArtifacts(alConfig, target, target);
-            created.push(...files);
-          } catch (error) {
-            errors.push(`Failed to generate Cursor artifacts: ${error.message}`);
-          }
+        const result = generateAdapterArtifacts({
+          target,
+          alConfig,
+          adapter: selectedAdapter,
+        });
+        if (!result.ok) {
+          errors.push(...result.errors);
+        } else {
+          created.push(...result.files);
         }
       }
     }

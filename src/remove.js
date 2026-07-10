@@ -1,18 +1,29 @@
 /**
  * Remove Agentic Loop overlay files from a target directory.
  *
- * This command removes toolkit-owned source and generated adapter artifacts.
+ * Manifest-first reconciliation: when a manifest exists, only exact owned
+ * artifacts are removed; modified, unowned, and malformed artifacts are
+ * preserved. When no manifest exists, conservative marker-based recognition
+ * is used as a legacy fallback.
+ *
  * Target-owned .agenticloop/ state is preserved by default.
  */
 
-import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import {
   INSTALLED_TOOLKIT_ROOT_DIRECTORY,
   TARGET_STATE_DIRECTORY,
   isPackageSourceRepositoryRoot,
 } from './layout.js';
 import { inspectLegacyCanonicalAssets } from './layout-migration.js';
+import {
+  loadManifest,
+  hashFile,
+  resolveManagedPath,
+  saveManifest,
+} from './generated-artifacts.js';
 import {
   OPENCODE_ROLE_NAMES,
   OPENCODE_AGENT_RELATIVE_PATHS,
@@ -85,7 +96,7 @@ function removeEmptyParents(targetRoot, startDir, removed, dryRun) {
   while (current !== targetRoot && current.startsWith(`${targetRoot}${sep}`)) {
     if (!isEmptyDir(current)) return;
     const rel = toDisplayPath(current.slice(targetRoot.length + 1));
-    if (!dryRun) rmSync(current, { recursive: true, force: true });
+    if (!dryRun) removePath(current);
     removed.push(rel);
     current = dirname(current);
   }
@@ -99,174 +110,343 @@ function readTextIfExists(path) {
   }
 }
 
-function isGeneratedCodexSkillDir(entry, fullPath) {
-  const skillPath = join(fullPath, 'SKILL.md');
-  const skillText = readTextIfExists(skillPath);
-  if (!skillText) return false;
-  if (skillText.includes(CODEX_GENERATED_MARKER)) return true;
+function writeAtomically(path, content) {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try { writeFileSync(temporary, content); renameSync(temporary, path); } finally { if (existsSync(temporary)) rmSync(temporary, { force: true }); }
+}
 
-  // Public skill: require both the generated marker AND the exact known structure.
-  if (entry === CODEX_PUBLIC_SKILL_NAME) {
-    return (
-      /name:\s*["']?agenticloop["']?/i.test(skillText) &&
-      existsSync(join(fullPath, 'agents', 'openai.yaml')) &&
-      existsSync(join(fullPath, 'references', 'skills'))
+function atomicWrite(path, content) {
+  if (activeRemovalTransaction) activeRemovalTransaction.write(path, content);
+  else writeAtomically(path, content);
+}
+
+let activeRemovalTransaction = null;
+
+class RemovalTransaction {
+  constructor(targetRoot, hooks = {}) {
+    this.targetRoot = targetRoot;
+    this.hooks = hooks;
+    this.journal = join(targetRoot, `.agenticloop-remove-${randomUUID()}`);
+    this.undo = [];
+    this.state = 'active';
+    this.createdAt = new Date().toISOString();
+    mkdirSync(this.journal, { recursive: true });
+    this.persistMetadata();
+  }
+
+  metadata(state = this.state, rollbackErrors = []) {
+    return {
+      schemaVersion: 1,
+      state,
+      createdAt: this.createdAt,
+      targetRoot: this.targetRoot,
+      rollbackErrors,
+      operations: this.undo.map(entry => ({
+        kind: entry.kind,
+        originalPath: relative(this.targetRoot, entry.path).replaceAll('\\', '/'),
+        ...(entry.backup ? { backup: relative(this.journal, entry.backup).replaceAll('\\', '/') } : {}),
+        ...(entry.quarantine ? { quarantine: relative(this.journal, entry.quarantine).replaceAll('\\', '/') } : {}),
+        ...(entry.existed !== undefined ? { existed: entry.existed } : {}),
+      })),
+    };
+  }
+
+  persistMetadata(state = this.state, rollbackErrors = []) {
+    writeAtomically(
+      join(this.journal, 'transaction.json'),
+      JSON.stringify(this.metadata(state, rollbackErrors), null, 2) + '\n'
     );
   }
 
-  // Legacy skills: require a strong marker or exact generated structure.
-  // Do NOT delete based on directory name alone — a hand-authored skill
-  // using one of these names must survive.
-  if (!GENERATED_LEGACY_CODEX_SKILL_NAMES.has(entry)) return false;
-  const hasStrongMarker = skillText.includes(CODEX_GENERATED_MARKER);
-  const hasLegacyStructure =
-    existsSync(join(fullPath, 'agents', 'openai.yaml')) &&
-    existsSync(join(fullPath, 'references', 'skills'));
-  return hasStrongMarker || hasLegacyStructure;
+  missingParentDirectories(path) {
+    const directories = [];
+    let current = dirname(path);
+    while (current !== this.targetRoot && current.startsWith(`${this.targetRoot}${sep}`)) {
+      if (!existsSync(current)) directories.push(current);
+      current = dirname(current);
+    }
+    return directories;
+  }
+
+  write(path, content) {
+    this.mutateFile(path, () => writeAtomically(path, content));
+  }
+
+  mutateFile(path, mutation) {
+    if (this.state !== 'active') throw new Error(`Removal transaction is ${this.state}`);
+    const existed = existsSync(path);
+    const bytes = existed ? readFileSync(path) : null;
+    const createdDirectories = this.missingParentDirectories(path);
+    const backup = existed ? join(this.journal, 'writes', `${this.undo.length}.bin`) : null;
+    if (backup) {
+      mkdirSync(dirname(backup), { recursive: true });
+      writeFileSync(backup, bytes);
+    }
+    try {
+      mutation();
+    } catch (error) {
+      for (const directory of createdDirectories) {
+        try { if (isEmptyDir(directory)) rmSync(directory, { recursive: true, force: true }); } catch { /* Preserve the original mutation error. */ }
+      }
+      throw error;
+    }
+    const entry = {
+      kind: 'write',
+      path,
+      existed,
+      backup,
+      undo: () => {
+        if (existed) writeAtomically(path, readFileSync(backup));
+        else if (existsSync(path)) rmSync(path, { recursive: true, force: true });
+        for (const directory of createdDirectories) if (isEmptyDir(directory)) rmSync(directory, { recursive: true, force: true });
+      },
+    };
+    this.undo.push(entry);
+    this.persistMetadata();
+  }
+
+  remove(path) {
+    if (!existsSync(path)) return;
+    if (this.state !== 'active') throw new Error(`Removal transaction is ${this.state}`);
+    assertInsideTarget(this.targetRoot, path);
+    const quarantine = join(this.journal, 'deleted', String(this.undo.length));
+    mkdirSync(dirname(quarantine), { recursive: true });
+    renameSync(path, quarantine);
+    const entry = {
+      kind: 'quarantine',
+      path,
+      quarantine,
+      undo: () => {
+        if (existsSync(path)) rmSync(path, { recursive: true, force: true });
+        mkdirSync(dirname(path), { recursive: true });
+        renameSync(quarantine, path);
+      },
+    };
+    this.undo.push(entry);
+    this.persistMetadata();
+    this.hooks.afterQuarantine?.(path);
+  }
+
+  rollback() {
+    if (this.state === 'committed' || this.state === 'cleanup-failed') {
+      return { completed: false, errors: ['rollback is not permitted after logical commit'], journalPath: existsSync(this.journal) ? this.journal : null };
+    }
+    this.state = 'rolling-back';
+    const errors = [];
+    for (const entry of [...this.undo].reverse()) try {
+      entry.undo();
+    } catch (error) { errors.push(`rollback ${entry.path}: ${error.message}`); }
+    if (errors.length > 0) {
+      this.state = 'rollback-failed';
+      try { this.persistMetadata(this.state, errors); } catch (error) { errors.push(`rollback recovery metadata: ${error.message}`); }
+      return { completed: false, errors, journalPath: existsSync(this.journal) ? this.journal : null };
+    }
+    try {
+      if (existsSync(this.journal)) rmSync(this.journal, { recursive: true, force: true });
+    } catch (error) {
+      this.state = 'rollback-cleanup-failed';
+      return { completed: true, errors: [`rollback journal cleanup: ${error.message}`], journalPath: existsSync(this.journal) ? this.journal : null };
+    }
+    this.state = 'rolled-back';
+    return { completed: true, errors: [], journalPath: null };
+  }
+
+  markCommitted() {
+    if (this.state !== 'active') throw new Error(`Removal transaction is ${this.state}`);
+    this.persistMetadata('committed');
+    this.state = 'committed';
+  }
+
+  abort() {
+    if (this.state !== 'active') throw new Error(`Removal transaction is ${this.state}`);
+    if (this.undo.length > 0) throw new Error('Cannot abort a removal transaction after mutations have started');
+    this.state = 'aborted';
+    try {
+      if (existsSync(this.journal)) rmSync(this.journal, { recursive: true, force: true });
+      return [];
+    } catch (error) {
+      return [`Removal transaction abort cleanup failed; journal retained at ${this.journal}: ${error.message}`];
+    }
+  }
+
+  cleanupQuarantine() {
+    if (this.state !== 'committed') throw new Error(`Quarantine cleanup requires a committed transaction, received ${this.state}`);
+    try {
+      if (this.hooks.cleanupQuarantine) this.hooks.cleanupQuarantine(this.journal, () => rmSync(this.journal, { recursive: true, force: true }));
+      else if (existsSync(this.journal)) rmSync(this.journal, { recursive: true, force: true });
+      return [];
+    } catch (error) {
+      this.state = 'cleanup-failed';
+      const retained = existsSync(this.journal) ? `; quarantine journal retained at ${this.journal}` : '';
+      return [`Quarantine cleanup failed after logical commit${retained}: ${error.message}`];
+    }
+  }
 }
 
-function removeGeneratedCodexSkillDirs(targetRoot, removed, skipped, errors, dryRun) {
-  const skillsRoot = join(targetRoot, '.agents', 'skills');
-  if (!existsSync(skillsRoot) || !statSync(skillsRoot).isDirectory()) return;
+function removePath(path) {
+  if (activeRemovalTransaction) activeRemovalTransaction.remove(path);
+  else if (existsSync(path)) rmSync(path, { recursive: true, force: true });
+}
 
-  for (const entry of readdirSync(skillsRoot)) {
-    if (entry !== CODEX_PUBLIC_SKILL_NAME && !entry.startsWith(CODEX_SKILL_PREFIX)) continue;
-    const fullPath = join(skillsRoot, entry);
-    if (!statSync(fullPath).isDirectory()) continue;
-    if (!isGeneratedCodexSkillDir(entry, fullPath)) {
-      skipped.push(`.agents/skills/${entry} (not recognized as generated Agentic Loop Codex output)`);
+// ---------------------------------------------------------------------------
+// Manifest-first removal
+// ---------------------------------------------------------------------------
+
+/**
+ * Remove artifacts using the ownership manifest.
+ * Returns { used, retained, valid } where:
+ *   used=true, valid=true   — manifest found and used successfully
+ *   used=true, valid=false  — manifest malformed; removal refused
+ *   used=false              — no manifest found
+ */
+function removeWithManifest(targetRoot, dryRun, options = {}) {
+  const removed = [];
+  const released = [];
+  const skipped = [];
+  const errors = [];
+  let manifest;
+  try {
+    manifest = loadManifest(targetRoot);
+  } catch (error) {
+    errors.push(`Ownership manifest is malformed: ${error instanceof Error ? error.message : String(error)}. Refusing to remove with unsafe heuristic fallback.`);
+    return { used: true, retained: [], valid: false, committed: false, removed, released, skipped, errors };
+  }
+  if (!manifest) return { used: false, retained: [], valid: true, committed: false, removed, released, skipped, errors };
+
+  const retained = [];
+  const writes = new Map();
+  const deletes = [];
+  const emptyCandidates = [];
+
+  const pointerParts = (path) => path.slice(1).split('/').map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'));
+  const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+
+  for (const entry of manifest.entries) {
+    let fullPath;
+    try { fullPath = resolveManagedPath(targetRoot, entry.outputRoot, entry.relPath); } catch (error) {
+      errors.push(`${entry.relPath}: ${error.message}`); retained.push(entry); continue;
+    }
+    if (entry.kind === 'file') {
+      if (!existsSync(fullPath) || hashFile(fullPath) === entry.hash) {
+        deletes.push(fullPath); emptyCandidates.push(fullPath); removed.push(entry.relPath);
+      } else {
+        retained.push(entry); skipped.push(`${entry.relPath} (modified since generation; preserved)`);
+      }
       continue;
     }
-    try {
-      assertInsideTarget(targetRoot, fullPath);
-      if (!dryRun) rmSync(fullPath, { recursive: true, force: true });
-      removed.push(`.agents/skills/${entry}`);
-      removeEmptyParents(targetRoot, dirname(fullPath), removed, dryRun);
-    } catch (error) {
-      errors.push(`.agents/skills/${entry}: ${error.message}`);
+    if (entry.kind === 'gitignore-line') {
+      if (!existsSync(fullPath)) { removed.push(`${entry.relPath} (already absent)`); continue; }
+      const original = writes.get(fullPath) ?? readFileSync(fullPath, 'utf8');
+      const ending = original.includes('\r\n') ? '\r\n' : '\n';
+      const lines = original.split(/\r?\n/);
+      const matchCount = lines.filter(v => v.trim() === entry.line).length;
+      if (matchCount === 0) {
+        // Owned line is absent — already removed or modified.
+        removed.push(`${entry.relPath} (already absent)`); continue;
+      }
+      if (entry.ambiguous || matchCount > 1) {
+        // Ambiguous: more than one matching line. Preserve all, retain ownership, and warn.
+        retained.push(entry); skipped.push(`${entry.relPath} (ambiguous duplicate gitignore lines; preserved)`); continue;
+      }
+      // Exactly one match.
+      let seen = 0; let index = -1;
+      for (let i = 0; i < lines.length; i++) if (lines[i].trim() === entry.line) { if (seen++ === entry.occurrence) { index = i; break; } }
+      if (index < 0) {
+        // Occurrence index doesn't match — treat as already absent.
+        removed.push(`${entry.relPath} (already absent)`); continue;
+      }
+      lines.splice(index, 1); writes.set(fullPath, lines.join(ending));
+      if (entry.createdFile && lines.every(line => line === '')) deletes.push(fullPath); else removed.push(`${entry.relPath} (owned gitignore line removed)`);
+      continue;
     }
+    if (entry.nonReversible || !Array.isArray(entry.mutations) || !entry.mutations.length) {
+      retained.push(entry); skipped.push(`${entry.relPath} (legacy shared mutation metadata is incomplete; preserved)`); continue;
+    }
+    if (!existsSync(fullPath)) { removed.push(`${entry.relPath} (already absent)`); continue; }
+    try {
+      const original = writes.get(fullPath) ?? readFileSync(fullPath, 'utf8');
+      const ending = original.includes('\r\n') ? '\r\n' : '\n';
+      const json = JSON.parse(original);
+      if (!isPlainObject(json)) throw new Error('expected a JSON object');
+      let reversible = true;
+      let changed = false;
+      for (const mutation of entry.mutations) {
+        const parts = pointerParts(mutation.pointer);
+        let parent = json;
+        for (const part of parts.slice(0, -1)) parent = parent?.[part];
+        const key = parts.at(-1);
+        if (!parent || typeof parent !== 'object') { reversible = false; break; }
+        if (mutation.op === 'array-add') {
+          if (!Array.isArray(parent[key])) { reversible = false; break; }
+          // Only reverse mutations that actually changed the file (added !== false).
+          // Mutations with added: false were recorded for lineage but the value
+          // was already present — removing it would delete user-owned content.
+          if (mutation.added === false) continue;
+          const index = parent[key].findIndex(value => same(value, mutation.value));
+          if (index < 0) { reversible = false; break; }
+          parent[key].splice(index, 1);
+          changed = true;
+        } else if (mutation.op === 'set-if-absent') {
+          if (mutation.added === false) continue;
+          if (!same(parent[key], mutation.value)) { reversible = false; break; }
+          delete parent[key];
+          changed = true;
+        } else if (mutation.op === 'replace-array-element') {
+          // A matching value that pre-existed generation was never owned.
+          if (mutation.added === false) continue;
+          if (!Array.isArray(parent[key])) { reversible = false; break; }
+          const index = parent[key].findIndex(value => same(value, mutation.value));
+          if (index < 0) { reversible = false; break; }
+          if (Object.hasOwn(mutation, 'previous')) parent[key][index] = mutation.previous;
+          else parent[key].splice(index, 1);
+          changed = true;
+        }
+      }
+      if (!reversible) { retained.push(entry); skipped.push(`${entry.relPath} (owned shared value modified; preserved)`); continue; }
+      // Clean up createdContainers in reverse order (Defect 4).
+      if (Array.isArray(entry.mutations)) {
+        for (const mutation of [...entry.mutations].reverse()) {
+          if (mutation.added === false) continue;
+          if (!Array.isArray(mutation.createdContainers)) continue;
+          for (const containerPointer of [...mutation.createdContainers].reverse()) {
+            const parts = pointerParts(containerPointer);
+            let parent = json;
+            for (const part of parts.slice(0, -1)) parent = parent?.[part];
+            const key = parts.at(-1);
+            if (!parent || typeof parent !== 'object' || !(key in parent)) continue;
+            const value = parent[key];
+            const isEmpty = (isPlainObject(value) && Object.keys(value).length === 0) || (Array.isArray(value) && value.length === 0);
+            if (isEmpty) { delete parent[key]; changed = true; }
+          }
+        }
+      }
+      const rendered = JSON.stringify(json, null, 2).replace(/\n/g, ending) + ending;
+      // Delete the file only when Agentic Loop created it (createdFile: true)
+      // and all mutations were reversed leaving no user content.
+      // If the file pre-existed (even as {}), restore it to {} and preserve.
+      if (changed && Object.keys(json).length === 0 && entry.createdFile) deletes.push(fullPath);
+      else if (changed) writes.set(fullPath, rendered);
+      if (changed) removed.push(`${entry.relPath} (owned shared mutation removed)`);
+      else released.push(`${entry.relPath} (ownership released; pre-existing shared value preserved)`);
+    } catch (error) { retained.push(entry); errors.push(`${entry.relPath}: ${error.message}`); }
   }
+  if (dryRun) return { used: true, retained, valid: true, committed: false, removed, released, skipped, errors };
+  const manifestPath = resolveManagedPath(targetRoot, '.', '.agenticloop/generated-artifacts.json');
+  for (const path of deletes) if (existsSync(path)) removePath(path);
+  for (const [path, content] of writes) if (!deletes.includes(path)) atomicWrite(path, content);
+  if (retained.length) {
+    if (activeRemovalTransaction) activeRemovalTransaction.mutateFile(manifestPath, () => saveManifest(targetRoot, { ...manifest, entries: retained }));
+    else saveManifest(targetRoot, { ...manifest, entries: retained });
+  }
+  else if (existsSync(manifestPath)) removePath(manifestPath);
+  for (const path of emptyCandidates) removeEmptyParents(targetRoot, dirname(path), removed, false);
+  return { used: true, retained, valid: true, committed: true, removed, released, skipped, errors };
 }
 
-function removeAgenticLoopMarketplaceEntry(targetRoot, removed, skipped, errors, dryRun) {
-  const marketplacePath = join(targetRoot, '.agents', 'plugins', 'marketplace.json');
-  if (!existsSync(marketplacePath)) return;
-
-  let parsed;
-  try {
-    parsed = JSON.parse(readFileSync(marketplacePath, 'utf-8'));
-  } catch (error) {
-    errors.push(`.agents/plugins/marketplace.json: ${error.message}`);
-    return;
-  }
-
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    // Malformed marketplace JSON: preserve byte-for-byte.
-    errors.push('.agents/plugins/marketplace.json: malformed JSON (preserved)');
-    return;
-  }
-
-  const plugins = Array.isArray(parsed.plugins) ? parsed.plugins : [];
-  if (!plugins.some(plugin => plugin?.name === 'agenticloop')) return;
-
-  const remainingPlugins = plugins.filter(plugin => plugin?.name !== 'agenticloop');
-  const otherKeys = Object.keys(parsed).filter(key => key !== 'plugins');
-  const generatedInterface =
-    parsed.interface &&
-    typeof parsed.interface === 'object' &&
-    !Array.isArray(parsed.interface) &&
-    parsed.interface.displayName === 'Agentic Loop Local' &&
-    Object.keys(parsed.interface).length === 1;
-  const generatedOnly =
-    remainingPlugins.length === 0 &&
-    otherKeys.every(key => key === 'name' || key === 'description' || key === 'interface') &&
-    parsed.name === GENERATED_CODEX_MARKETPLACE_NAME &&
-    (!parsed.interface || generatedInterface);
-
-  if (!dryRun) {
-    if (generatedOnly) {
-      rmSync(marketplacePath, { force: true });
-    } else {
-      const updated = { ...parsed, plugins: remainingPlugins };
-      writeFileSync(marketplacePath, JSON.stringify(updated, null, 2) + '\n', 'utf-8');
-    }
-  }
-
-  removed.push(generatedOnly ? '.agents/plugins/marketplace.json' : '.agents/plugins/marketplace.json (agenticloop entry)');
-  if (generatedOnly) {
-    removeEmptyParents(targetRoot, dirname(marketplacePath), removed, dryRun);
-  }
-}
-
-function removeGeneratedCopilotArtifacts(targetRoot, removed, skipped, errors, dryRun) {
-  for (const fullPath of listGeneratedCopilotAgentFiles(targetRoot)) {
-    try {
-      assertInsideTarget(targetRoot, fullPath);
-      if (!dryRun) rmSync(fullPath, { force: true });
-      removed.push(toDisplayPath(fullPath.slice(targetRoot.length + 1)));
-      removeEmptyParents(targetRoot, dirname(fullPath), removed, dryRun);
-    } catch (error) {
-      errors.push(`${toDisplayPath(fullPath.slice(targetRoot.length + 1))}: ${error.message}`);
-    }
-  }
-
-  const skillPath = resolveCopilotPublicSkillPath(targetRoot);
-  const skillDir = dirname(skillPath);
-  if (isGeneratedCopilotSkill(targetRoot)) {
-    try {
-      assertInsideTarget(targetRoot, skillDir);
-      if (!dryRun) rmSync(skillDir, { recursive: true, force: true });
-      removed.push(toDisplayPath(skillDir.slice(targetRoot.length + 1)));
-      removeEmptyParents(targetRoot, dirname(skillDir), removed, dryRun);
-    } catch (error) {
-      errors.push(`${toDisplayPath(skillDir.slice(targetRoot.length + 1))}: ${error.message}`);
-    }
-  } else if (existsSync(skillDir)) {
-    skipped.push('.github/skills/agenticloop (not recognized as generated Agentic Loop Copilot output)');
-  }
-
-  const promptPath = resolveCopilotPromptPath(targetRoot);
-  if (isGeneratedCopilotPrompt(targetRoot)) {
-    try {
-      assertInsideTarget(targetRoot, promptPath);
-      if (!dryRun) rmSync(promptPath, { force: true });
-      removed.push(toDisplayPath(promptPath.slice(targetRoot.length + 1)));
-      removeEmptyParents(targetRoot, dirname(promptPath), removed, dryRun);
-    } catch (error) {
-      errors.push(`${toDisplayPath(promptPath.slice(targetRoot.length + 1))}: ${error.message}`);
-    }
-  } else if (existsSync(promptPath)) {
-    skipped.push('.github/prompts/agenticloop.prompt.md (not recognized as generated Agentic Loop Copilot output)');
-  }
-}
-
-function removeGeneratedCursorArtifacts(targetRoot, removed, skipped, errors, dryRun) {
-  for (const fullPath of listGeneratedCursorAgentFiles(targetRoot)) {
-    try {
-      assertInsideTarget(targetRoot, fullPath);
-      if (!dryRun) rmSync(fullPath, { force: true });
-      removed.push(toDisplayPath(fullPath.slice(targetRoot.length + 1)));
-      removeEmptyParents(targetRoot, dirname(fullPath), removed, dryRun);
-    } catch (error) {
-      errors.push(`${toDisplayPath(fullPath.slice(targetRoot.length + 1))}: ${error.message}`);
-    }
-  }
-
-  const skillPath = resolveCursorPublicSkillPath(targetRoot);
-  const skillDir = dirname(skillPath);
-  if (isGeneratedCursorSkill(targetRoot)) {
-    try {
-      assertInsideTarget(targetRoot, skillDir);
-      if (!dryRun) rmSync(skillDir, { recursive: true, force: true });
-      removed.push(toDisplayPath(skillDir.slice(targetRoot.length + 1)));
-      removeEmptyParents(targetRoot, dirname(skillDir), removed, dryRun);
-    } catch (error) {
-      errors.push(`${toDisplayPath(skillDir.slice(targetRoot.length + 1))}: ${error.message}`);
-    }
-  } else if (existsSync(skillDir)) {
-    skipped.push('.cursor/skills/agenticloop (not recognized as generated Agentic Loop Cursor output)');
-  }
-}
+// ---------------------------------------------------------------------------
+// Legacy marker-based removal (fallback when no manifest exists)
+// ---------------------------------------------------------------------------
 
 const CODEX_AGENT_GENERATED_MARKER = '# Generated by: agenticloop generate codex';
 const CLAUDE_CODE_GENERATED_MARKER = 'Generated by: agenticloop generate claude-code';
@@ -289,8 +469,160 @@ function fileContainsMarker(filePath, marker) {
   return text.includes(marker);
 }
 
+function isGeneratedCodexSkillDir(entry, fullPath) {
+  const skillPath = join(fullPath, 'SKILL.md');
+  const skillText = readTextIfExists(skillPath);
+  if (!skillText) return false;
+  if (skillText.includes(CODEX_GENERATED_MARKER)) return true;
+  if (entry === CODEX_PUBLIC_SKILL_NAME) {
+    return (
+      /name:\s*["']?agenticloop["']?/i.test(skillText) &&
+      existsSync(join(fullPath, 'agents', 'openai.yaml')) &&
+      existsSync(join(fullPath, 'references', 'skills'))
+    );
+  }
+  if (!GENERATED_LEGACY_CODEX_SKILL_NAMES.has(entry)) return false;
+  const hasStrongMarker = skillText.includes(CODEX_GENERATED_MARKER);
+  const hasLegacyStructure =
+    existsSync(join(fullPath, 'agents', 'openai.yaml')) &&
+    existsSync(join(fullPath, 'references', 'skills'));
+  return hasStrongMarker || hasLegacyStructure;
+}
+
+function removeGeneratedCodexSkillDirs(targetRoot, removed, skipped, errors, dryRun) {
+  const skillsRoot = join(targetRoot, '.agents', 'skills');
+  if (!existsSync(skillsRoot) || !statSync(skillsRoot).isDirectory()) return;
+  for (const entry of readdirSync(skillsRoot)) {
+    if (entry !== CODEX_PUBLIC_SKILL_NAME && !entry.startsWith(CODEX_SKILL_PREFIX)) continue;
+    const fullPath = join(skillsRoot, entry);
+    if (!statSync(fullPath).isDirectory()) continue;
+    if (!isGeneratedCodexSkillDir(entry, fullPath)) {
+      skipped.push(`.agents/skills/${entry} (not recognized as generated Agentic Loop Codex output)`);
+      continue;
+    }
+    try {
+      assertInsideTarget(targetRoot, fullPath);
+      if (!dryRun) removePath(fullPath);
+      removed.push(`.agents/skills/${entry}`);
+      removeEmptyParents(targetRoot, dirname(fullPath), removed, dryRun);
+    } catch (error) {
+      errors.push(`.agents/skills/${entry}: ${error.message}`);
+    }
+  }
+}
+
+function removeAgenticLoopMarketplaceEntry(targetRoot, removed, skipped, errors, dryRun) {
+  const marketplacePath = join(targetRoot, '.agents', 'plugins', 'marketplace.json');
+  if (!existsSync(marketplacePath)) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(marketplacePath, 'utf-8'));
+  } catch (error) {
+    errors.push(`.agents/plugins/marketplace.json: ${error.message}`);
+    return;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    errors.push('.agents/plugins/marketplace.json: malformed JSON (preserved)');
+    return;
+  }
+  const plugins = Array.isArray(parsed.plugins) ? parsed.plugins : [];
+  if (!plugins.some(plugin => plugin?.name === 'agenticloop')) return;
+  const remainingPlugins = plugins.filter(plugin => plugin?.name !== 'agenticloop');
+  const otherKeys = Object.keys(parsed).filter(key => key !== 'plugins');
+  const generatedInterface =
+    parsed.interface &&
+    typeof parsed.interface === 'object' &&
+    !Array.isArray(parsed.interface) &&
+    parsed.interface.displayName === 'Agentic Loop Local' &&
+    Object.keys(parsed.interface).length === 1;
+  const generatedOnly =
+    remainingPlugins.length === 0 &&
+    otherKeys.every(key => key === 'name' || key === 'description' || key === 'interface') &&
+    parsed.name === GENERATED_CODEX_MARKETPLACE_NAME &&
+    (!parsed.interface || generatedInterface);
+
+  if (!dryRun) {
+    if (generatedOnly) {
+      removePath(marketplacePath);
+    } else {
+      const updated = { ...parsed, plugins: remainingPlugins };
+      atomicWrite(marketplacePath, JSON.stringify(updated, null, 2) + '\n');
+    }
+  }
+  removed.push(generatedOnly ? '.agents/plugins/marketplace.json' : '.agents/plugins/marketplace.json (agenticloop entry)');
+  if (generatedOnly) {
+    removeEmptyParents(targetRoot, dirname(marketplacePath), removed, dryRun);
+  }
+}
+
+function removeGeneratedCopilotArtifacts(targetRoot, removed, skipped, errors, dryRun) {
+  for (const fullPath of listGeneratedCopilotAgentFiles(targetRoot)) {
+    try {
+      assertInsideTarget(targetRoot, fullPath);
+      if (!dryRun) removePath(fullPath);
+      removed.push(toDisplayPath(fullPath.slice(targetRoot.length + 1)));
+      removeEmptyParents(targetRoot, dirname(fullPath), removed, dryRun);
+    } catch (error) {
+      errors.push(`${toDisplayPath(fullPath.slice(targetRoot.length + 1))}: ${error.message}`);
+    }
+  }
+  const skillPath = resolveCopilotPublicSkillPath(targetRoot);
+  const skillDir = dirname(skillPath);
+  if (isGeneratedCopilotSkill(targetRoot)) {
+    try {
+      assertInsideTarget(targetRoot, skillDir);
+      if (!dryRun) removePath(skillDir);
+      removed.push(toDisplayPath(skillDir.slice(targetRoot.length + 1)));
+      removeEmptyParents(targetRoot, dirname(skillDir), removed, dryRun);
+    } catch (error) {
+      errors.push(`${toDisplayPath(skillDir.slice(targetRoot.length + 1))}: ${error.message}`);
+    }
+  } else if (existsSync(skillDir)) {
+    skipped.push('.github/skills/agenticloop (not recognized as generated Agentic Loop Copilot output)');
+  }
+  const promptPath = resolveCopilotPromptPath(targetRoot);
+  if (isGeneratedCopilotPrompt(targetRoot)) {
+    try {
+      assertInsideTarget(targetRoot, promptPath);
+      if (!dryRun) removePath(promptPath);
+      removed.push(toDisplayPath(promptPath.slice(targetRoot.length + 1)));
+      removeEmptyParents(targetRoot, dirname(promptPath), removed, dryRun);
+    } catch (error) {
+      errors.push(`${toDisplayPath(promptPath.slice(targetRoot.length + 1))}: ${error.message}`);
+    }
+  } else if (existsSync(promptPath)) {
+    skipped.push('.github/prompts/agenticloop.prompt.md (not recognized as generated Agentic Loop Copilot output)');
+  }
+}
+
+function removeGeneratedCursorArtifacts(targetRoot, removed, skipped, errors, dryRun) {
+  for (const fullPath of listGeneratedCursorAgentFiles(targetRoot)) {
+    try {
+      assertInsideTarget(targetRoot, fullPath);
+      if (!dryRun) removePath(fullPath);
+      removed.push(toDisplayPath(fullPath.slice(targetRoot.length + 1)));
+      removeEmptyParents(targetRoot, dirname(fullPath), removed, dryRun);
+    } catch (error) {
+      errors.push(`${toDisplayPath(fullPath.slice(targetRoot.length + 1))}: ${error.message}`);
+    }
+  }
+  const skillPath = resolveCursorPublicSkillPath(targetRoot);
+  const skillDir = dirname(skillPath);
+  if (isGeneratedCursorSkill(targetRoot)) {
+    try {
+      assertInsideTarget(targetRoot, skillDir);
+      if (!dryRun) removePath(skillDir);
+      removed.push(toDisplayPath(skillDir.slice(targetRoot.length + 1)));
+      removeEmptyParents(targetRoot, dirname(skillDir), removed, dryRun);
+    } catch (error) {
+      errors.push(`${toDisplayPath(skillDir.slice(targetRoot.length + 1))}: ${error.message}`);
+    }
+  } else if (existsSync(skillDir)) {
+    skipped.push('.cursor/skills/agenticloop (not recognized as generated Agentic Loop Cursor output)');
+  }
+}
+
 function removeGeneratedOpencodeFiles(targetRoot, removed, skipped, errors, dryRun) {
-  // Remove only recognized generated agent files.
   for (const roleName of OPENCODE_ROLE_NAMES) {
     const relPath = OPENCODE_AGENT_RELATIVE_PATHS[roleName];
     const fullPath = join(targetRoot, relPath);
@@ -298,7 +630,7 @@ function removeGeneratedOpencodeFiles(targetRoot, removed, skipped, errors, dryR
     if (fileContainsMarker(fullPath, OPENCODE_GENERATED_BANNER)) {
       try {
         assertInsideTarget(targetRoot, fullPath);
-        if (!dryRun) rmSync(fullPath, { force: true });
+        if (!dryRun) removePath(fullPath);
         removed.push(toDisplayPath(relPath));
         removeEmptyParents(targetRoot, dirname(fullPath), removed, dryRun);
       } catch (error) {
@@ -308,15 +640,13 @@ function removeGeneratedOpencodeFiles(targetRoot, removed, skipped, errors, dryR
       skipped.push(`${toDisplayPath(relPath)} (not recognized as generated Agentic Loop OpenCode output)`);
     }
   }
-
-  // Remove only the recognized generated command file.
   const commandRelPath = OPENCODE_COMMAND_RELATIVE_PATH;
   const commandFullPath = join(targetRoot, commandRelPath);
   if (existsSync(commandFullPath)) {
     if (fileContainsMarker(commandFullPath, OPENCODE_GENERATED_BANNER)) {
       try {
         assertInsideTarget(targetRoot, commandFullPath);
-        if (!dryRun) rmSync(commandFullPath, { force: true });
+        if (!dryRun) removePath(commandFullPath);
         removed.push(toDisplayPath(commandRelPath));
         removeEmptyParents(targetRoot, dirname(commandFullPath), removed, dryRun);
       } catch (error) {
@@ -331,7 +661,6 @@ function removeGeneratedOpencodeFiles(targetRoot, removed, skipped, errors, dryR
 function removeGeneratedCodexAgentFiles(targetRoot, removed, skipped, errors, dryRun) {
   const agentsDir = join(targetRoot, '.codex', 'agents');
   if (!existsSync(agentsDir) || !statSync(agentsDir).isDirectory()) return;
-
   for (const entry of readdirSync(agentsDir)) {
     if (!entry.endsWith('.toml')) continue;
     const fullPath = join(agentsDir, entry);
@@ -340,7 +669,7 @@ function removeGeneratedCodexAgentFiles(targetRoot, removed, skipped, errors, dr
     if (fileContainsMarker(fullPath, CODEX_AGENT_GENERATED_MARKER)) {
       try {
         assertInsideTarget(targetRoot, fullPath);
-        if (!dryRun) rmSync(fullPath, { force: true });
+        if (!dryRun) removePath(fullPath);
         removed.push(toDisplayPath(relPath));
         removeEmptyParents(targetRoot, dirname(fullPath), removed, dryRun);
       } catch (error) {
@@ -353,8 +682,6 @@ function removeGeneratedCodexAgentFiles(targetRoot, removed, skipped, errors, dr
 }
 
 function removeGeneratedClaudeCodeFiles(targetRoot, removed, skipped, errors, dryRun) {
-  // Scan ALL .md files in .claude/agents/ for the generated marker.
-  // This supports custom roleBindings filenames, not just the default names.
   const agentsDir = join(targetRoot, '.claude', 'agents');
   if (existsSync(agentsDir) && statSync(agentsDir).isDirectory()) {
     for (const entry of readdirSync(agentsDir)) {
@@ -365,7 +692,7 @@ function removeGeneratedClaudeCodeFiles(targetRoot, removed, skipped, errors, dr
       if (fileContainsMarker(agentPath, CLAUDE_CODE_GENERATED_MARKER)) {
         try {
           assertInsideTarget(targetRoot, agentPath);
-          if (!dryRun) rmSync(agentPath, { force: true });
+          if (!dryRun) removePath(agentPath);
           removed.push(toDisplayPath(relPath));
           removeEmptyParents(targetRoot, dirname(agentPath), removed, dryRun);
         } catch (error) {
@@ -376,15 +703,13 @@ function removeGeneratedClaudeCodeFiles(targetRoot, removed, skipped, errors, dr
       }
     }
   }
-
-  // Remove only the recognized generated command file.
   const commandPath = join(targetRoot, '.claude', 'commands', 'agenticloop.md');
   if (existsSync(commandPath)) {
     const relPath = '.claude/commands/agenticloop.md';
     if (fileContainsMarker(commandPath, CLAUDE_CODE_GENERATED_MARKER)) {
       try {
         assertInsideTarget(targetRoot, commandPath);
-        if (!dryRun) rmSync(commandPath, { force: true });
+        if (!dryRun) removePath(commandPath);
         removed.push(toDisplayPath(relPath));
         removeEmptyParents(targetRoot, dirname(commandPath), removed, dryRun);
       } catch (error) {
@@ -394,15 +719,13 @@ function removeGeneratedClaudeCodeFiles(targetRoot, removed, skipped, errors, dr
       skipped.push(`${toDisplayPath(relPath)} (not recognized as generated Agentic Loop Claude Code output)`);
     }
   }
-
-  // Remove only the recognized generated public skill directory.
   const skillDir = join(targetRoot, '.claude', 'skills', 'agenticloop');
   if (existsSync(skillDir) && statSync(skillDir).isDirectory()) {
     const skillPath = join(skillDir, 'SKILL.md');
     if (fileContainsMarker(skillPath, CLAUDE_CODE_GENERATED_MARKER)) {
       try {
         assertInsideTarget(targetRoot, skillDir);
-        if (!dryRun) rmSync(skillDir, { recursive: true, force: true });
+        if (!dryRun) removePath(skillDir);
         removed.push('.claude/skills/agenticloop');
         removeEmptyParents(targetRoot, dirname(skillDir), removed, dryRun);
       } catch (error) {
@@ -442,14 +765,12 @@ function removeGeneratedClaudeCodeFiles(targetRoot, removed, skipped, errors, dr
 
       if (hadOnlyAgenticLoopEntries && Object.keys(parsed).length === 1 &&
         Object.keys(parsed.permissions).filter(k => k !== 'allow' && k !== 'deny').length === 0) {
-        // Agentic Loop created the entire file; remove it.
-        if (!dryRun) rmSync(settingsPath, { force: true });
+        if (!dryRun) removePath(settingsPath);
         removed.push(toDisplayPath(settingsEntry));
         removeEmptyParents(targetRoot, dirname(settingsPath), removed, dryRun);
       } else if (filteredAllow.length !== originalAllow.length) {
-        // Remove only the Agentic Loop entries.
         parsed.permissions.allow = filteredAllow;
-        if (!dryRun) writeFileSync(settingsPath, JSON.stringify(parsed, null, 2) + '\n', 'utf-8');
+        if (!dryRun) atomicWrite(settingsPath, JSON.stringify(parsed, null, 2) + '\n');
         removed.push(`${settingsEntry} (Agentic Loop permission entries removed)`);
       } else {
         skipped.push(`${settingsEntry} (no Agentic Loop permission entries found)`);
@@ -460,17 +781,25 @@ function removeGeneratedClaudeCodeFiles(targetRoot, removed, skipped, errors, dr
   }
 }
 
-function removeKnownPaths(targetRoot, removed, skipped, errors, dryRun) {
+function removeKnownPaths(targetRoot, removed, skipped, errors, dryRun, retainedEntries = []) {
   for (const relPath of DEFAULT_REMOVABLE_PATHS) {
     const fullPath = resolve(targetRoot, relPath);
     try {
       assertInsideTarget(targetRoot, fullPath);
       if (!existsSync(fullPath)) continue;
-
-      // plugins/agenticloop: only remove if it contains only recognized
-      // generated content (Codex/Cursor plugin artifacts). Preserve any
-      // unknown or user-added files.
       if (relPath === 'plugins/agenticloop' && statSync(fullPath).isDirectory()) {
+        // In manifest-backed mode, check if any retained manifest entries live
+        // under this directory before deleting it (Defect 3).
+        const hasRetainedContent = retainedEntries.some(entry => {
+          try {
+            const entryPath = resolveManagedPath(targetRoot, entry.outputRoot, entry.relPath);
+            return entryPath.startsWith(fullPath + sep) || entryPath === fullPath;
+          } catch { return false; }
+        });
+        if (hasRetainedContent) {
+          skipped.push(`${toDisplayPath(relPath)} (preserved; contains files with active manifest ownership)`);
+          continue;
+        }
         const children = readdirSync(fullPath);
         const hasUnknownContent = children.some(child => {
           const childPath = join(fullPath, child);
@@ -484,8 +813,7 @@ function removeKnownPaths(targetRoot, removed, skipped, errors, dryRun) {
           continue;
         }
       }
-
-      if (!dryRun) rmSync(fullPath, { recursive: true, force: true });
+      if (!dryRun) removePath(fullPath);
       removed.push(toDisplayPath(relPath));
       if (relPath === 'plugins/agenticloop') {
         removeEmptyParents(targetRoot, dirname(fullPath), removed, dryRun);
@@ -505,7 +833,7 @@ function removeOwnedLegacyCanonicalAssets(targetRoot, removed, skipped, errors, 
     }
     try {
       assertInsideTarget(targetRoot, fullPath);
-      if (!dryRun) rmSync(fullPath, { recursive: true, force: true });
+      if (!dryRun) removePath(fullPath);
       removed.push(toDisplayPath(asset.legacyPath));
     } catch (error) {
       errors.push(`${asset.legacyPath}: ${error.message}`);
@@ -522,7 +850,7 @@ function maybeRemoveTargetState(targetRoot, removed, skipped, errors, dryRun, in
   }
   try {
     assertInsideTarget(targetRoot, statePath);
-    if (!dryRun) rmSync(statePath, { recursive: true, force: true });
+    if (!dryRun) removePath(statePath);
     removed.push('.agenticloop');
   } catch (error) {
     errors.push(`.agenticloop: ${error.message}`);
@@ -532,37 +860,97 @@ function maybeRemoveTargetState(targetRoot, removed, skipped, errors, dryRun, in
 /**
  * Remove known Agentic Loop assets.
  *
+ * Manifest-first: when a manifest exists, uses it for precise removal.
+ * Legacy fallback: marker-based recognition for pre-manifest installations.
+ *
  * @param {object} options
  * @param {string} options.target
  * @param {boolean} options.dryRun
  * @param {boolean} [options.includeState=false]
- * @returns {{ removed: string[], skipped: string[], errors: string[] }}
+ * @returns {{ removed: string[], released: string[], skipped: string[], errors: string[], committed: boolean, cleanupErrors: string[], rollbackIncomplete: boolean, recoveryJournal: string|null }}
  */
-export function removeAgenticLoop(options) {
-  const targetRoot = resolve(options.target ?? process.cwd());
-  const dryRun = Boolean(options.dryRun);
-  const includeState = Boolean(options.includeState);
+export function executeRemovalPlan(targetRoot, { dryRun = false, includeState = false } = {}, hooks = {}) {
   const removed = [];
+  const released = [];
   const skipped = [];
   const errors = [];
-
-  if (isPackageSourceRepositoryRoot(targetRoot)) {
-    errors.push(
-      `Refusing to mutate the Agentic Loop package source repository at ${targetRoot}. Use --target to point at a downstream project directory.`
-    );
-    return { removed, skipped, errors };
+  if (activeRemovalTransaction) {
+    return {
+      removed, released, skipped, committed: false, cleanupErrors: [],
+      rollbackIncomplete: false, recoveryJournal: null,
+      errors: ['A removal transaction is already active for this process; nested removal is not supported.'],
+    };
   }
+  const transaction = dryRun ? null : new RemovalTransaction(targetRoot, hooks);
+  activeRemovalTransaction = transaction;
+  try {
+    // A malformed manifest is a hard planning failure; no heuristic cleanup is
+    // permitted after it, even in the command-wide transaction.
+    const manifestResult = removeWithManifest(targetRoot, dryRun);
+    const { used: manifestUsed, retained, valid: manifestValid } = manifestResult;
+    removed.push(...manifestResult.removed);
+    released.push(...manifestResult.released);
+    skipped.push(...manifestResult.skipped);
+    errors.push(...manifestResult.errors);
+    if (manifestUsed && !manifestValid) {
+      const cleanupErrors = transaction?.abort() ?? [];
+      return { removed, released, skipped, errors, committed: false, cleanupErrors, rollbackIncomplete: false, recoveryJournal: null };
+    }
 
-  removeKnownPaths(targetRoot, removed, skipped, errors, dryRun);
-  removeGeneratedOpencodeFiles(targetRoot, removed, skipped, errors, dryRun);
-  removeGeneratedCodexAgentFiles(targetRoot, removed, skipped, errors, dryRun);
-  removeGeneratedClaudeCodeFiles(targetRoot, removed, skipped, errors, dryRun);
-  removeOwnedLegacyCanonicalAssets(targetRoot, removed, skipped, errors, dryRun);
-  removeGeneratedCodexSkillDirs(targetRoot, removed, skipped, errors, dryRun);
-  removeAgenticLoopMarketplaceEntry(targetRoot, removed, skipped, errors, dryRun);
-  removeGeneratedCopilotArtifacts(targetRoot, removed, skipped, errors, dryRun);
-  removeGeneratedCursorArtifacts(targetRoot, removed, skipped, errors, dryRun);
-  maybeRemoveTargetState(targetRoot, removed, skipped, errors, dryRun, includeState);
+    hooks.afterOutputWrites?.();
+    if (manifestUsed) {
+      removeKnownPaths(targetRoot, removed, skipped, errors, dryRun, retained);
+    } else {
+      removeKnownPaths(targetRoot, removed, skipped, errors, dryRun);
+      removeGeneratedOpencodeFiles(targetRoot, removed, skipped, errors, dryRun);
+      removeGeneratedCodexAgentFiles(targetRoot, removed, skipped, errors, dryRun);
+      removeGeneratedClaudeCodeFiles(targetRoot, removed, skipped, errors, dryRun);
+      removeOwnedLegacyCanonicalAssets(targetRoot, removed, skipped, errors, dryRun);
+      removeGeneratedCodexSkillDirs(targetRoot, removed, skipped, errors, dryRun);
+      removeAgenticLoopMarketplaceEntry(targetRoot, removed, skipped, errors, dryRun);
+      removeGeneratedCopilotArtifacts(targetRoot, removed, skipped, errors, dryRun);
+      removeGeneratedCursorArtifacts(targetRoot, removed, skipped, errors, dryRun);
+    }
+    hooks.afterKnownPathStaging?.();
+    maybeRemoveTargetState(targetRoot, removed, skipped, errors, dryRun, includeState);
+    hooks.beforeFinalize?.();
+    if (errors.length) throw new Error(errors.join('; '));
+    transaction?.markCommitted();
+    const cleanupErrors = transaction?.cleanupQuarantine() ?? [];
+    return { removed, released, skipped, errors, committed: !dryRun, cleanupErrors, rollbackIncomplete: false, recoveryJournal: null };
+  } catch (error) {
+    const rollback = transaction?.rollback() ?? { completed: true, errors: [], journalPath: null };
+    const recovery = rollback.journalPath ? `; recovery journal retained at ${rollback.journalPath}` : '';
+    const summary = rollback.completed
+      ? `Removal transaction failed and rolled back: ${error.message}`
+      : `Removal transaction failed and rollback is incomplete${recovery}: ${error.message}`;
+    return {
+      removed: [],
+      released: [],
+      skipped: [],
+      committed: false,
+      cleanupErrors: [],
+      rollbackIncomplete: !rollback.completed,
+      recoveryJournal: rollback.journalPath,
+      errors: [summary, ...rollback.errors],
+    };
+  } finally {
+    activeRemovalTransaction = null;
+  }
+}
 
-  return { removed, skipped, errors };
+export function removeAgenticLoop(options = {}) {
+  const targetRoot = resolve(options.target ?? process.cwd());
+  if (isPackageSourceRepositoryRoot(targetRoot)) {
+    return {
+      removed: [], released: [], skipped: [],
+      committed: false, cleanupErrors: [],
+      rollbackIncomplete: false, recoveryJournal: null,
+      errors: [`Refusing to mutate the Agentic Loop package source repository at ${targetRoot}. Use --target to point at a downstream project directory.`],
+    };
+  }
+  return executeRemovalPlan(targetRoot, {
+    dryRun: Boolean(options.dryRun),
+    includeState: Boolean(options.includeState),
+  });
 }
