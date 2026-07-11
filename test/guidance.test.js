@@ -36,6 +36,17 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 const rules = (name = 'AGENTS.md') => join(dir, name);
 const read = (name = 'AGENTS.md') => readFileSync(rules(name), 'utf8');
 
+describe('canonical guidance formatting', () => {
+  it('keeps each prose paragraph on one physical line', () => {
+    const prose = GUIDANCE_BLOCK
+      .slice(GUIDANCE_BLOCK.indexOf('\n\n') + 2, GUIDANCE_BLOCK.lastIndexOf(`\n${GUIDANCE_END_MARKER}`))
+      .split('\n\n');
+
+    assert.ok(prose.length > 0);
+    assert.ok(prose.every(paragraph => !paragraph.includes('\n')));
+  });
+});
+
 describe('marker-block reconciler: apply', () => {
   it('creates the rules document when absent', () => {
     const r = applyGuidance(dir);
