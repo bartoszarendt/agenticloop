@@ -423,9 +423,9 @@ describe('generateClaudeCodeArtifacts', () => {
     generateClaudeCodeArtifacts(cfg, fx, out);
     const md = readClaudeAgent(out, 'engineer');
     const canonical = readFileSync(join(fx, 'agenticloop', 'agents', 'engineer.md'), 'utf-8');
-    assert.ok(canonical.includes('The engineer changes files for one task record at a time'),
+    assert.ok(canonical.includes('The engineer implements bounded engineering work'),
       'precondition: canonical role file still has expected body text');
-    assert.ok(md.includes('The engineer changes files for one task record at a time'),
+    assert.ok(md.includes('The engineer implements bounded engineering work'),
       'expected canonical role body in generated agent body');
     assert.ok(md.includes('<!-- adapter:'),
       'agent file should include an adapter-generated trailer');

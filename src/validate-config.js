@@ -1736,13 +1736,15 @@ function validateCodexPublicSkill(skillDir, errors, label = 'Codex adapter', age
   }
 
   const description = frontmatterString(frontmatter.description);
-  if (!description || !description.includes('Operate in Agentic Loop mode')) {
-    errors.push(`${skillPath.replace(/\\/g, '/')}: frontmatter description must clearly describe Agentic Loop mode`);
+  if (!description || !/use only when the user explicitly asks to activate agentic loop/i.test(description)) {
+    errors.push(`${skillPath.replace(/\\/g, '/')}: frontmatter description must require explicit Agentic Loop activation`);
   }
 
   const maintainerAgent = agentNames.maintainer ?? 'maintainer';
   const engineerAgent = agentNames.engineer ?? 'engineer';
   const requiredSnippets = [
+    'Use this skill only when the user explicitly asks to activate Agentic Loop.',
+    'does not activate it',
     'Read `.agenticloop/project.md` first.',
     '`setup_status`',
     `\`${PROCESS_DOC_RELATIVE_PATH}\``,
@@ -1856,8 +1858,9 @@ function validateCodexAgentToml(config, roleName, agentName, tomlPath, errors, a
     requiredSnippets.push('Stay within maintainer boundaries');
     requiredSnippets.push('Do not implement code changes');
   } else if (roleName === 'engineer') {
-    requiredSnippets.push('Stay within engineer boundaries');
-    requiredSnippets.push('Do not accept tasks or perform final maintainer review');
+    requiredSnippets.push('otherwise operate as a standalone engineer');
+    requiredSnippets.push('requires no task ID or task record');
+    requiredSnippets.push('Do not perform final maintainer acceptance');
   }
 
   for (const snippet of requiredSnippets) {
@@ -2039,8 +2042,8 @@ function validateClaudeCodePublicSkill(skillDir, errors, agentNames = {}) {
   }
 
   const description = frontmatterString(frontmatter.description);
-  if (!description || !description.includes('Operate in Agentic Loop mode')) {
-    errors.push(`${skillPath.replace(/\\/g, '/')}: frontmatter description must clearly describe Agentic Loop mode`);
+  if (!description || !/use only when the user explicitly asks to activate agentic loop/i.test(description)) {
+    errors.push(`${skillPath.replace(/\\/g, '/')}: frontmatter description must require explicit Agentic Loop activation`);
   }
 
   const maintainerAgent = agentNames.maintainer ?? 'maintainer';
@@ -2426,8 +2429,9 @@ function validateCopilotAgent(config, repoRoot, roleName, agentName, mdPath, err
     if (disableModelInvocation !== 'false') {
       errors.push(`${mdPath.replace(/\\/g, '/')}: engineer must set disable-model-invocation: false so the orchestrator can invoke it as a subagent`);
     }
-    requiredSnippets.push('Stay within engineer boundaries');
-    requiredSnippets.push('Do not accept tasks or perform final maintainer review');
+    requiredSnippets.push('otherwise operate as a standalone engineer');
+    requiredSnippets.push('requires no task ID or task record');
+    requiredSnippets.push('Do not perform final maintainer acceptance');
   }
 
   for (const snippet of requiredSnippets) {
@@ -2658,8 +2662,9 @@ function validateCursorAgent(config, repoRoot, roleName, agentName, mdPath, erro
     requiredSnippets.push('Stay within maintainer boundaries');
     requiredSnippets.push('Do not implement code changes');
   } else if (roleName === 'engineer') {
-    requiredSnippets.push('Stay within engineer boundaries');
-    requiredSnippets.push('Do not accept tasks or perform final maintainer review');
+    requiredSnippets.push('otherwise operate as a standalone engineer');
+    requiredSnippets.push('requires no task ID or task record');
+    requiredSnippets.push('Do not perform final maintainer acceptance');
   }
 
   for (const snippet of requiredSnippets) {

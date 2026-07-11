@@ -304,8 +304,12 @@ Teams that intentionally want shared Claude Code settings may set
 `adapters.claude-code.permissions.defaultMode`.
 
 Claude Code is explicitly activated by command: use `/agenticloop:start` for
-Mode A and `/agenticloop` for Mode B. It does not rely on hooks or a managed
-`CLAUDE.md` block.
+Mode A and `/agenticloop` for Mode B. It does not rely on hooks, and it never
+uses `CLAUDE.md` as an activation mechanism. If Agentic Loop's repository-rules
+resolver selects `CLAUDE.md` as the rules document, that file may still carry the
+one informational activation-boundary guidance block (see
+[Repository-rules activation guidance](#repository-rules-activation-guidance));
+that block is informational only and does not activate the methodology.
 
 Mode B detection keys on `.claude/agents/`. Validation expects the repo-local
 command at `.claude/commands/agenticloop.md` plus the generated skill namespace
@@ -354,6 +358,32 @@ Copilot support is repo-local.
   any `.github/instructions/*.instructions.md` files, as user or team-owned
   customization surfaces.
 - `generate all` includes Copilot because it is implemented.
+
+## Repository-rules activation guidance
+
+Independent of any host adapter, `init` and `setup` install one clearly marked,
+manifest-owned activation-guidance block into the selected repository-rules
+document. The rules document is resolved with a guidance-specific precedence:
+
+1. an explicit `documents.rules` selection in `.agenticloop/project.md`;
+2. an explicitly configured target-project `documents.rules` path, when the file
+   exists;
+3. the first existing candidate from the rules document-role registry
+   (`AGENTS.md`, then `CLAUDE.md`, then `GEMINI.md`);
+4. `AGENTS.md` as the default path to create when no rules document exists.
+
+Non-Markdown destinations, paths outside the repository, and paths that cross a
+symlink or junction are rejected. Only the region between `<!-- AGENTICLOOP_START -->`
+and `<!-- AGENTICLOOP_END -->` is owned; everything else in the file is
+target-owned and preserved byte-for-byte. A modified owned block or an unowned
+manual marker block is preserved and reported rather than overwritten or adopted.
+`update` refreshes only a block Agentic Loop already owns and never enrolls an
+existing installation that has no owned block. Opt out with
+`--no-agents-guidance`, inspect with `agenticloop guidance check`, and remove with
+`agenticloop guidance remove`. Because the block is informational, it does not
+activate the methodology. `guidance remove --force` removes only the managed
+marker region from an edited file. A configured rules-path change is reported as
+ownership drift; update does not silently add a second block at the new path.
 
 ## Cursor Activation
 

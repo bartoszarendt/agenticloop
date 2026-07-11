@@ -104,6 +104,21 @@ README.md
 agenticloop.json
 ```
 
+The one exception is a single clearly marked, manifest-owned activation-guidance
+block that Agentic Loop may create or maintain inside your selected
+repository-rules document (`AGENTS.md`, `CLAUDE.md`, or `GEMINI.md`). Only the
+region between `<!-- AGENTICLOOP_START -->` and `<!-- AGENTICLOOP_END -->` is
+owned; everything else in that file stays target-owned and is preserved
+byte-for-byte. Installing or discovering Agentic Loop does not activate the
+methodology -- the block only records that boundary. Existing installations are
+never silently enrolled by `update`, a modified owned block is preserved and
+reported rather than overwritten, and an unowned manual marker block is never
+adopted automatically. Opt out with `--no-agents-guidance`, or manage the block
+with `agenticloop guidance check | apply | remove`. `guidance remove --force`
+removes an edited managed region only. If rules-document configuration changes,
+automatic lifecycle commands preserve the old owned block and report the path
+drift rather than creating a second block.
+
 ### Toolkit-owned refreshable assets
 
 These assets are maintained by the Agentic Loop toolkit and can be refreshed in

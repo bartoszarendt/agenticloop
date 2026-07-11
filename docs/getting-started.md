@@ -103,9 +103,24 @@ To refresh an existing overlay after upgrading the package:
 npx agenticloop update
 ```
 
+`init` and `setup` also install one clearly marked, manifest-owned
+activation-guidance block into your repository-rules document (resolved as the
+explicit `documents.rules` selection, else the first existing `AGENTS.md` /
+`CLAUDE.md` / `GEMINI.md`, else a newly created `AGENTS.md`). Installing Agentic
+Loop does not activate the methodology; the block just states that boundary.
+Opt out with `--no-agents-guidance`, inspect with `agenticloop guidance check`,
+and remove with `agenticloop guidance remove`. Only the region between the
+markers and separators inserted with it is owned; the rest of the file stays
+target-owned byte-for-byte. `guidance remove --force` removes only an edited
+managed region, never surrounding target content. If the configured rules path
+changes, check reports the existing owned path and update does not add a second
+block.
+
 `update` preserves target-owned `.agenticloop/project.md`, task records,
 summaries, decisions, logs, and `.agenticloop/tmp/`, leaves existing
-`agenticloop.json` alone, and refreshes adapter output that already exists. For OpenCode,
+`agenticloop.json` alone, refreshes adapter output that already exists, and
+refreshes an activation-guidance block it already owns (without enrolling an
+installation that has none or overwriting a modified block). For OpenCode,
 update regenerates the repo-local `.opencode/agents/*.md` files and
 `.opencode/commands/agenticloop.md`. User-owned `opencode.jsonc` is ignored.
 Use `update

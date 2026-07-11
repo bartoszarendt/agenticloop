@@ -19,9 +19,20 @@ import { fileURLToPath } from 'node:url';
 import { TARGET_STATE_DIRECTORY } from './layout.js';
 
 export const GENERATED_ARTIFACTS_FILENAME = 'generated-artifacts.json';
-export const GENERATED_ARTIFACTS_SCHEMA_VERSION = 3;
+export const GENERATED_ARTIFACTS_SCHEMA_VERSION = 4;
 const SUPPORTED_ADAPTERS = new Set(['opencode', 'claude-code', 'codex', 'copilot', 'cursor']);
-const KINDS = new Set(['file', 'shared-config', 'gitignore-line']);
+// Host-neutral owners for core installation artifacts that are not one of the
+// five host adapters (for example the shared repository-rules guidance block).
+const CORE_OWNERS = new Set(['core']);
+// Owners allowed for a given entry kind. marker-block is a core installation
+// artifact and must never be attributed to a host adapter.
+const KIND_OWNERS = {
+  'file': SUPPORTED_ADAPTERS,
+  'shared-config': SUPPORTED_ADAPTERS,
+  'gitignore-line': SUPPORTED_ADAPTERS,
+  'marker-block': CORE_OWNERS,
+};
+const KINDS = new Set(['file', 'shared-config', 'gitignore-line', 'marker-block']);
 const MANIFEST_PATH = `${TARGET_STATE_DIRECTORY}/${GENERATED_ARTIFACTS_FILENAME}`;
 const SHA256 = /^[a-f0-9]{64}$/;
 const PACKAGE_JSON_PATH = fileURLToPath(new URL('../package.json', import.meta.url));
@@ -105,6 +116,18 @@ export function resolveManagedPath(targetRoot, outputRoot = '.', relPath = '.') 
 const FILE_ENTRY_KEYS = new Set(['adapter', 'outputRoot', 'relPath', 'kind', 'hash', 'marker', 'existence', 'generatedAt']);
 const SHARED_CONFIG_ENTRY_KEYS = new Set(['adapter', 'outputRoot', 'relPath', 'kind', 'existence', 'generatedAt', 'mutations', 'createdFile', 'nonReversible', 'sharedConfigKey']);
 const GITIGNORE_ENTRY_KEYS = new Set(['adapter', 'outputRoot', 'relPath', 'kind', 'existence', 'generatedAt', 'line', 'occurrence', 'createdFile', 'ambiguous']);
+// marker-block manages a single owned region inside a shared Markdown file
+// (currently the repository-rules activation-guidance block). The startMarker
+// and endMarker define the reversible region. Optional separators record the
+// exact bytes inserted around an appended block so removal restores the target
+// document rather than normalizing its whitespace.
+const MARKER_BLOCK_ENTRY_KEYS = new Set(['adapter', 'outputRoot', 'relPath', 'kind', 'existence', 'generatedAt', 'startMarker', 'endMarker', 'hash', 'createdFile', 'ownedPrefix', 'ownedSuffix']);
+// Separator metadata is read from an untrusted manifest and later expands the
+// range removed around a managed block. Restrict it to the exact newline-only
+// values the guidance renderer can generate so forged metadata cannot claim
+// adjacent target-owned rules text.
+const MARKER_BLOCK_OWNED_PREFIXES = new Set(['', '\n', '\n\n', '\r\n', '\r\n\r\n']);
+const MARKER_BLOCK_OWNED_SUFFIXES = new Set(['', '\n', '\r\n']);
 
 // Operation-specific mutation keys (Defect 16).
 const ARRAY_ADD_KEYS = new Set(['op', 'pointer', 'value', 'added', 'createdContainers']);
@@ -152,11 +175,16 @@ function validateMutation(mutation, index) {
 
 export function validateManifestEntry(raw, { migrate = false } = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('entry must be an object');
-  if (!SUPPORTED_ADAPTERS.has(raw.adapter)) fail(`Manifest entry requires a non-empty supported adapter: ${raw.adapter}`);
-  const outputRoot = normalizeOutputRoot(raw.outputRoot ?? '.');
-  const relPath = safeRelative(raw.relPath, 'relPath');
   const kind = raw.kind;
   if (!KINDS.has(kind)) fail(`entry kind is invalid: ${kind}`);
+  const allowedOwners = KIND_OWNERS[kind];
+  if (!allowedOwners.has(raw.adapter)) {
+    fail(kind === 'marker-block'
+      ? `Manifest ${kind} entry requires a core owner: ${raw.adapter}`
+      : `Manifest entry requires a non-empty supported adapter: ${raw.adapter}`);
+  }
+  const outputRoot = normalizeOutputRoot(raw.outputRoot ?? '.');
+  const relPath = safeRelative(raw.relPath, 'relPath');
   if (!['created', 'refreshed', 'merged'].includes(raw.existence ?? 'created')) fail(`entry existence is invalid: ${raw.existence}`);
   if (raw.hash !== undefined && (typeof raw.hash !== 'string' || !SHA256.test(raw.hash))) fail(`entry hash is invalid for ${relPath}`);
   if (raw.marker !== undefined && typeof raw.marker !== 'string') fail(`entry marker is invalid for ${relPath}`);
@@ -176,9 +204,30 @@ export function validateManifestEntry(raw, { migrate = false } = {}) {
     if (typeof raw.createdFile !== 'boolean') fail(`gitignore createdFile is invalid for ${relPath}`);
     if (raw.ambiguous !== undefined && typeof raw.ambiguous !== 'boolean') fail(`gitignore ambiguous is invalid for ${relPath}`);
   }
+  if (kind === 'marker-block') {
+    if (typeof raw.startMarker !== 'string' || !raw.startMarker.trim()) fail(`marker-block startMarker is invalid for ${relPath}`);
+    if (typeof raw.endMarker !== 'string' || !raw.endMarker.trim()) fail(`marker-block endMarker is invalid for ${relPath}`);
+    if (raw.startMarker === raw.endMarker) fail(`marker-block markers must be distinct for ${relPath}`);
+    if (raw.startMarker.includes('\n') || raw.startMarker.includes('\r') || raw.endMarker.includes('\n') || raw.endMarker.includes('\r')) fail(`marker-block markers must be single-line for ${relPath}`);
+    if (typeof raw.hash !== 'string' || !SHA256.test(raw.hash)) fail(`marker-block requires a valid hash for ${relPath}`);
+    if (typeof raw.createdFile !== 'boolean') fail(`marker-block createdFile is invalid for ${relPath}`);
+    if (raw.ownedPrefix !== undefined && !MARKER_BLOCK_OWNED_PREFIXES.has(raw.ownedPrefix)) {
+      fail(`marker-block ownedPrefix must be an exact generated newline separator for ${relPath}`);
+    }
+    if (raw.ownedSuffix !== undefined && !MARKER_BLOCK_OWNED_SUFFIXES.has(raw.ownedSuffix)) {
+      fail(`marker-block ownedSuffix must be an exact generated newline separator for ${relPath}`);
+    }
+    if (
+      raw.ownedPrefix && raw.ownedSuffix &&
+      raw.ownedPrefix.includes('\r\n') !== raw.ownedSuffix.includes('\r\n')
+    ) {
+      fail(`marker-block owned separators must use one newline style for ${relPath}`);
+    }
+  }
   // Kind-specific field validation (Defect 16).
   const allowedKeys = kind === 'file' ? FILE_ENTRY_KEYS
     : kind === 'shared-config' ? SHARED_CONFIG_ENTRY_KEYS
+    : kind === 'marker-block' ? MARKER_BLOCK_ENTRY_KEYS
     : GITIGNORE_ENTRY_KEYS;
   for (const key of Object.keys(raw)) {
     if (!allowedKeys.has(key)) fail(`entry has unknown key for ${kind} kind: ${key}`);
@@ -194,12 +243,18 @@ export function validateManifestEntry(raw, { migrate = false } = {}) {
 }
 
 function migrateManifest(data) {
-  if (data.schemaVersion === 3) return data;
+  if (data.schemaVersion === 4) return data;
   if (typeof data.schemaVersion !== 'number') fail('invalid or missing schemaVersion');
-  if (data.schemaVersion !== 1 && data.schemaVersion !== 2) fail(`unsupported schemaVersion ${data.schemaVersion}`);
+  if (![1, 2, 3].includes(data.schemaVersion)) fail(`unsupported schemaVersion ${data.schemaVersion}`);
   if (!Array.isArray(data.entries)) fail('entries must be an array');
+  // v3 -> v4 adds the marker-block kind and the `core` owner without changing
+  // any existing adapter entries; bump the version and keep entries verbatim.
+  if (data.schemaVersion === 3) {
+    return { ...data, schemaVersion: 4 };
+  }
+  // v1/v2 -> v4: normalize legacy entries, then land on the current version.
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     packageVersion: typeof data.packageVersion === 'string' && data.packageVersion ? data.packageVersion : '0.0.0',
     generatedAt: data.generatedAt,
     entries: data.entries.map(entry => {
@@ -216,7 +271,7 @@ const MANIFEST_KNOWN_KEYS = new Set(['schemaVersion', 'packageVersion', 'generat
 
 export function validateManifest(manifest) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) fail('document must be an object');
-  if (manifest.schemaVersion !== 3) fail(`unsupported schemaVersion ${manifest.schemaVersion}`);
+  if (manifest.schemaVersion !== 4) fail(`unsupported schemaVersion ${manifest.schemaVersion}`);
   if (typeof manifest.packageVersion !== 'string' || !manifest.packageVersion) fail('packageVersion must be a non-empty string');
   if (manifest.generatedAt !== undefined && (typeof manifest.generatedAt !== 'string' || Number.isNaN(Date.parse(manifest.generatedAt)))) fail('generatedAt is invalid');
   if (!Array.isArray(manifest.entries)) fail('entries must be an array');
@@ -235,7 +290,7 @@ export function validateManifest(manifest) {
       throw new Error(`Ownership manifest entry ${index}: ${error.message}`);
     }
   });
-  return { schemaVersion: 3, packageVersion: manifest.packageVersion, generatedAt: manifest.generatedAt, entries };
+  return { schemaVersion: 4, packageVersion: manifest.packageVersion, generatedAt: manifest.generatedAt, entries };
 }
 
 export function loadManifest(targetRoot) {
@@ -251,7 +306,7 @@ export function loadManifest(targetRoot) {
 }
 
 export function createManifest(packageVersion = loadPackageVersion()) {
-  return { schemaVersion: 3, packageVersion, generatedAt: new Date().toISOString(), entries: [] };
+  return { schemaVersion: 4, packageVersion, generatedAt: new Date().toISOString(), entries: [] };
 }
 
 export function getOrCreateManifest(targetRoot, packageVersion) {
@@ -259,7 +314,10 @@ export function getOrCreateManifest(targetRoot, packageVersion) {
 }
 
 export function entryIdentity(entry) {
-  const mutation = entry.kind === 'gitignore-line' ? `${entry.line}:${entry.occurrence}` : (entry.sharedConfigKey ?? '');
+  let mutation;
+  if (entry.kind === 'gitignore-line') mutation = `${entry.line}:${entry.occurrence}`;
+  else if (entry.kind === 'marker-block') mutation = `${entry.startMarker} ${entry.endMarker}`;
+  else mutation = entry.sharedConfigKey ?? '';
   return [entry.adapter, entry.outputRoot, entry.relPath, entry.kind, mutation].join('\u0000');
 }
 
@@ -294,6 +352,17 @@ export function createSharedConfigEntry(params) {
     adapter: params.adapter, outputRoot: params.outputRoot ?? '.', relPath: params.relPath,
     kind: 'shared-config', mutations: params.mutations ?? [], createdFile: Boolean(params.createdFile),
     existence: 'merged', generatedAt: params.generatedAt,
+  });
+}
+
+export function createMarkerBlockEntry(params) {
+  return validateManifestEntry({
+    adapter: params.owner ?? 'core', outputRoot: params.outputRoot ?? '.', relPath: params.relPath,
+    kind: 'marker-block', startMarker: params.startMarker, endMarker: params.endMarker,
+    hash: params.hash ?? hashContent(params.content ?? ''), createdFile: Boolean(params.createdFile),
+    ...(params.ownedPrefix !== undefined ? { ownedPrefix: params.ownedPrefix } : {}),
+    ...(params.ownedSuffix !== undefined ? { ownedSuffix: params.ownedSuffix } : {}),
+    existence: params.existence ?? 'created', generatedAt: params.generatedAt,
   });
 }
 

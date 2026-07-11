@@ -18,6 +18,7 @@ import {
   validateHost,
 } from './configure-models.js';
 import { parseFrontmatter } from './frontmatter.js';
+import { applyGuidance, checkGuidance } from './guidance.js';
 import {
   PROJECT_MAP_RELATIVE_PATH,
   hasCurrentLayout,
@@ -109,6 +110,7 @@ export async function setup(options) {
     target,
     adapter: preselectedAdapter,
     nonInteractive = false,
+    agentsGuidance = true,
     input = process.stdin,
     output = process.stdout,
   } = options;
@@ -116,6 +118,11 @@ export async function setup(options) {
   const errors = [];
   const warnings = [];
   const write = (msg) => output.write(msg + '\n');
+  // Capture this before setup scaffolds anything. A repeat setup must not turn
+  // an installed target that opted out into a guidance-enrolled target.
+  const installationExisted = hasCurrentLayout(target) ||
+    existsSync(join(target, PROJECT_MAP_RELATIVE_PATH)) ||
+    existsSync(join(target, '.agenticloop', 'generated-artifacts.json'));
 
   if (nonInteractive && !preselectedAdapter) {
     errors.push('Non-interactive setup requires --adapter <host>.');
@@ -365,6 +372,36 @@ export async function setup(options) {
       }
     }
 
+    // Step 8b: New installations receive guidance by default. Repeated setup
+    // only refreshes a block that is already manifest-owned.
+    if (agentsGuidance) {
+      const configResult = loadGuidanceConfig(target);
+      if (configResult.error) {
+        write(`\nActivation guidance: ${configResult.error}`);
+        errors.push(configResult.error);
+      } else {
+        const priorGuidance = checkGuidance(target, { alConfig: configResult.config });
+        if (!installationExisted || priorGuidance.owned === true) {
+          const guidance = applyGuidance(target, {
+            alConfig: configResult.config,
+            refreshOnly: installationExisted,
+          });
+          if (guidance.changed) {
+            write(`\nActivation guidance: ${guidance.action} in ${guidance.relPath}.`);
+          } else if (guidance.status === 'current') {
+            write(`\nActivation guidance: current in ${guidance.relPath}.`);
+          } else if (!guidance.ok) {
+            write(`\nActivation guidance: ${guidance.message}`);
+            errors.push(guidance.message);
+          }
+          for (const warning of guidance.warnings) {
+            write(`  WARN: ${warning}`);
+            warnings.push(warning);
+          }
+        }
+      }
+    }
+
     // Step 9: Final status
     const finalState = detectSetupState(target, { includeValidation: true });
     write('\n' + formatSetupChecklist(finalState));
@@ -415,12 +452,16 @@ export async function setup(options) {
   return { errors, warnings };
 }
 
-function loadAlConfig(target) {
+function loadGuidanceConfig(target) {
   const cfgPath = join(target, 'agenticloop.json');
-  if (!existsSync(cfgPath)) return null;
+  if (!existsSync(cfgPath)) return { config: null, error: null };
   try {
-    return loadAgenticLoopConfig(cfgPath);
-  } catch {
-    return null;
+    return { config: loadAgenticLoopConfig(cfgPath), error: null };
+  } catch (error) {
+    return { config: null, error: `agenticloop.json is malformed: ${error.message}` };
   }
+}
+
+function loadAlConfig(target) {
+  return loadGuidanceConfig(target).config;
 }

@@ -9,6 +9,7 @@ import {
   createManifest,
   createSharedConfigEntry,
   entryIdentity,
+  GENERATED_ARTIFACTS_SCHEMA_VERSION,
   hashFile,
   loadManifest,
   loadPackageVersion,
@@ -463,7 +464,7 @@ export function executeGenerationPlan(targetRoot, plan, options = {}) {
   ]);
   const removedStale = new Set(removableStale.map(entry => entryIdentity(entry)));
   const retained = current.entries.filter(entry => !refreshed.has(entryKey(entry.adapter, entry.outputRoot, entry.relPath, entry.kind)) && !removedStale.has(entryIdentity(entry)));
-  const next = { ...current, schemaVersion: 3, packageVersion: loadPackageVersion(), entries: retained };
+  const next = { ...current, schemaVersion: GENERATED_ARTIFACTS_SCHEMA_VERSION, packageVersion: loadPackageVersion(), entries: retained };
   for (const action of ordinary) {
     const p = outputPath(targetRoot, plan, action.relPath);
     next.entries.push(createFileEntry({ adapter: action.adapter, outputRoot, relPath: action.relPath, content: action.content, marker: action.marker, existence: existedBefore.get(p) ? 'refreshed' : 'created' }));

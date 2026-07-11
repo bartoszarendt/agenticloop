@@ -4,7 +4,7 @@
 
 AI coding agents are useful, but they are unreliable at sustained software work. They drift scope, skip verification, repeat failing approaches, and lose context between sessions. The problem is not that the models are not smart enough. The problem is that they lack process: a clear task contract, role boundaries, verification rules, and durable project memory.
 
-Agentic Loop adds that layer. It installs as a lightweight overlay in an existing project -- your `README.md`, `AGENTS.md`, implementation plan, and architecture docs stay untouched. It gives agents the scaffolding they need to stay in scope, produce evidence, and respect review gates.
+Agentic Loop adds that layer. It installs as a lightweight overlay in an existing project. It never replaces your target-owned repository contract documents: your `README.md`, implementation plan, and architecture docs stay untouched. The one exception is a single clearly marked, manifest-owned, removable activation-guidance block it may create or maintain inside your selected repository-rules document (`AGENTS.md`, `CLAUDE.md`, or `GEMINI.md`) -- everything outside that block stays target-owned, existing installations are never silently enrolled, and you can opt out (`--no-agents-guidance`) or remove it (`agenticloop guidance remove`). It gives agents the scaffolding they need to stay in scope, produce evidence, and respect review gates.
 
 ![Version: 0.1.0](https://img.shields.io/badge/version-0.1.0-blue)
 ![Node.js >=20](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
@@ -346,6 +346,9 @@ npx agenticloop generate <host|all>                  Generate host adapter artif
 npx agenticloop configure models --adapter <host>    Configure per-role models (requires agenticloop.json)
 npx agenticloop bootstrap-labels                     Create GitHub labels via the gh CLI (needs gh auth + repo)
 npx agenticloop event-logging <event> [options]      Append/validate/audit/report optional workflow-gate events
+npx agenticloop guidance check                       Report the repository-rules activation-guidance block status
+npx agenticloop guidance apply                       Create/append/refresh the activation-guidance block (idempotent)
+npx agenticloop guidance remove                      Remove the owned activation-guidance block
 npx agenticloop remove --dry-run                     Preview overlay removal
 npx agenticloop remove --yes                         Remove toolkit assets and generated shims
 npx agenticloop remove --yes --include-state         Also remove target-owned `.agenticloop/` state
@@ -367,6 +370,46 @@ conflicts. resolve-state does not remove worktrees or branches.
 Event logging is **disabled by default**. Enable it in `.agenticloop/project.md` with `event_logging: enabled`. `event_logging_command` can stay blank; agents test `npx agenticloop --help` once when enabled. Writes require `--task` and `--summary`; `validate`/`audit`/`report` inspect existing logs. Per-task completion summaries are always written inline into `.agenticloop/tasks/<TASK-ID>.md` (the `## Scope Completed` section). There is no separate `.agenticloop/summaries/` directory; closeout is a verify-and-mark gate that confirms those inline summaries and posts a status marker.
 
 Normal downstream use does not require Python, PowerShell, Bash scripts, API keys, or framework setup for the toolkit itself.
+
+## Repository-rules activation guidance
+
+Installing Agentic Loop does not activate the methodology. To make that boundary
+explicit to agents, `init` and `setup` add one clearly marked, manifest-owned
+block to your selected repository-rules document (resolved as the explicit
+`documents.rules` selection, else the first existing `AGENTS.md` / `CLAUDE.md` /
+`GEMINI.md`, else a newly created `AGENTS.md`):
+
+```md
+<!-- AGENTICLOOP_START -->
+## Agentic Loop
+...
+<!-- AGENTICLOOP_END -->
+```
+
+Guarantees:
+
+- Agentic Loop never replaces target-owned repository contract documents. Only
+  the region between the two markers is owned; everything outside stays yours,
+  byte-for-byte.
+- A user-modified owned block is preserved and reported, never silently
+  overwritten. An unowned marker block you wrote yourself is never adopted
+  automatically.
+- Existing installations are not silently enrolled: `update` only refreshes a
+  block it already owns, and repeat `init`/`setup` follows the same policy.
+- Opt out with `--no-agents-guidance` on `init`/`setup`, or remove a managed
+  block later with `agenticloop guidance remove` (which deletes an
+  Agentic-Loop-created file only when nothing but the block remains).
+- `guidance remove --force` removes an edited managed marker region only; it
+  never replaces or truncates content outside that region. If the configured
+  rules path changes while a block is owned elsewhere, `guidance check` reports
+  the drift and automatic refresh does not create a second block.
+
+The block also states that the main agent may invoke the generated **engineer**
+as an ordinary bounded subagent. That **standalone engineer** delegation does not
+activate Agentic Loop and needs no task ID or task record; full Agentic Loop
+engineer mode is selected only by explicit activation or a named durable task
+record. See [`AGENTIC_LOOP.md`](AGENTIC_LOOP.md) and
+[`agents/engineer.md`](agents/engineer.md).
 
 ## Repository layout
 

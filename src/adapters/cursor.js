@@ -36,6 +36,7 @@ import {
 } from '../layout.js';
 import {
   AGENTIC_LOOP_OPERATION_DESCRIPTION,
+  STANDALONE_ENGINEER_PREAMBLE_LINES,
   buildRoleRecord,
   readCanonicalSkillEntries,
   resolveRoleModel,
@@ -401,9 +402,8 @@ function buildCursorAgentBody(
     lines.push('Honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, collision, or no-progress budget requires it.');
     lines.push('Do not implement code changes. Stop and hand control back after producing maintainer-owned output for the orchestrator or human.');
   } else if (roleName === 'engineer') {
-    lines.push('Stay within engineer boundaries: implement only the scoped task-record work, run checks, and publish fresh evidence.');
-    lines.push('Honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, wrong branch/worktree, collision, or no-progress budget requires it.');
-    lines.push('Do not accept tasks or perform final maintainer review. Stop and hand control back once implementation evidence is ready for maintainer review.');
+    lines.push(...STANDALONE_ENGINEER_PREAMBLE_LINES);
+    lines.push('In Agentic Loop mode, honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, wrong branch/worktree, collision, or no-progress budget requires it. Stop and hand control back once implementation evidence is ready for maintainer review.');
   }
 
   lines.push('');

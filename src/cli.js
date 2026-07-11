@@ -65,6 +65,7 @@ import {
 import { printAdapterDiscovery, printDoctor } from './adapter-discovery.js';
 import { setup } from './setup.js';
 import { removeAgenticLoop } from './remove.js';
+import { applyGuidance, checkGuidance, removeGuidance } from './guidance.js';
 import { preserveExistingAdapterModelSettings } from './adapter-model-preservation.js';
 import {
   appendEventLog,
@@ -289,6 +290,7 @@ Commands:
   update                Refresh Agentic Loop-owned assets and existing adapter output.
   upgrade               Compatibility alias for update.
   remove                Remove Agentic Loop assets from a target directory.
+  guidance              Manage the repository-rules activation-guidance block (apply, check, remove).
   validate              Validate skills, config, links, and host setup.
   github-preflight      Pre-review gate: verify a GitHub PR body carries final-state
                         evidence for every required check, tied to the current head.
@@ -313,6 +315,7 @@ Options (init):
   --adapter <host>      Scaffold and generate output for one host: opencode, codex, claude-code, copilot, cursor, all.
   --opencode            Compatibility alias for --adapter opencode.
   --setup               Prompt for model settings after scaffolding (requires one concrete --adapter).
+  --no-agents-guidance  Skip installing the repository-rules activation-guidance block.
 
 Options (setup):
   --target <dir>        Target directory (default: current directory).
@@ -392,6 +395,12 @@ Options (remove):
   --dry-run             Print files/directories that would be removed.
   --yes                 Actually remove files/directories.
   --include-state       Also remove target-owned .agenticloop/ state.
+
+Options (guidance apply | guidance check | guidance remove):
+  --target <dir>        Target directory (default: current directory).
+  --force               apply: refresh a modified owned block or adopt an unowned
+                        marker block. remove: remove a modified owned block.
+                        Never adopts or overwrites an unowned block without this flag.
 
 Options (validate):
   --target <dir>        Directory containing agenticloop.json (default: current).
@@ -584,10 +593,14 @@ async function generateAdapterTarget(sub, { opts, target, alConfig, preserveExis
 
 async function cmdInit(args) {
   const { opts } = parseArgs(args);
-  warnUnknownOptions(opts, ['target', 'adapter', 'setup', 'opencode', 'updateAssets'], 'init');
+  warnUnknownOptions(opts, ['target', 'adapter', 'setup', 'opencode', 'updateAssets', 'agentsGuidance', 'noAgentsGuidance'], 'init');
   const target = opts.target ? resolve(opts.target) : process.cwd();
   const adapter = Array.isArray(opts.adapter) ? opts.adapter[0] : opts.adapter;
   const setup = Boolean(opts.setup);
+  const guidanceEnabled = !opts.noAgentsGuidance && opts.agentsGuidance !== false;
+  const installationExisted = existsSync(join(target, 'agenticloop')) ||
+    existsSync(join(target, '.agenticloop', 'project.md')) ||
+    existsSync(join(target, '.agenticloop', 'generated-artifacts.json'));
 
   if (opts.updateAssets) {
     console.error("init --update-assets has been removed. Use 'agenticloop update' instead.");
@@ -621,6 +634,30 @@ async function cmdInit(args) {
 
   const errors = [...initErrors];
 
+  // New installation: install the repository-rules activation-guidance block by
+  // default. --no-agents-guidance opts out. The block is informational and does
+  // not activate Agentic Loop.
+  if (errors.length === 0 && guidanceEnabled) {
+    const configResult = loadOptionalAlConfig(target);
+    if (configResult.error) {
+      console.error(`  ERROR: ${configResult.error}`);
+      errors.push(configResult.error);
+    } else {
+      const priorGuidance = checkGuidance(target, { alConfig: configResult.config });
+      // Repeat init follows the same no-silent-enrollment rule as update/setup.
+      if (!installationExisted || priorGuidance.owned === true) {
+        const guidance = applyGuidance(target, { alConfig: configResult.config, refreshOnly: installationExisted });
+        if (guidance.changed) {
+          console.log(`  guidance: ${guidance.action} in ${guidance.relPath}`);
+        } else if (guidance.status === 'current') {
+          console.log(`  guidance: already current in ${guidance.relPath}`);
+        }
+        for (const warning of guidance.warnings) console.warn(`  WARN: ${warning}`);
+        if (!guidance.ok) errors.push(guidance.message);
+      }
+    }
+  }
+
   if (setup && errors.length === 0 && adapter && adapter !== 'all') {
     const alConfig = loadAlConfigOrExit(target);
     if (alConfig) {
@@ -651,6 +688,17 @@ async function cmdUpdate(args) {
   const { opts } = parseArgs(args);
   warnUnknownOptions(opts, ['target', 'adapter', 'forceGenerated'], 'update');
   const target = opts.target ? resolve(opts.target) : process.cwd();
+  const configResult = loadOptionalAlConfig(target);
+  if (configResult.error) {
+    console.error(`  ERROR: ${configResult.error}`);
+    process.exitCode = 1;
+    return;
+  }
+  const guidanceConfig = configResult.config;
+  // Determine whether this installation already owns a guidance block BEFORE any
+  // asset refresh, so a file created during this command cannot be mistaken for
+  // prior ownership. Existing installations are never silently enrolled.
+  const guidanceOwnedBeforeUpdate = checkGuidance(target, { alConfig: guidanceConfig }).owned === true;
   const { adapters: requestedAdapters, errors: adapterErrors } = normalizeAdapterTargets(opts.adapter);
 
   for (const e of adapterErrors) console.error(e);
@@ -669,6 +717,7 @@ async function cmdUpdate(args) {
     // Still run init to refresh assets, but no adapter output needed.
     const { errors: initErrors } = await init({ target, refreshAssets: true });
     if (initErrors.length > 0) { process.exitCode = 1; return; }
+    refreshOwnedGuidance(target, guidanceOwnedBeforeUpdate, guidanceConfig);
     console.log('  No existing generated adapter artifacts found.');
     console.log("  Use 'agenticloop update --adapter <host>' to generate a specific adapter.");
     process.exitCode = 0;
@@ -707,6 +756,23 @@ async function cmdUpdate(args) {
     alConfig,
     preserveExistingModels: true,
   });
+
+  refreshOwnedGuidance(target, guidanceOwnedBeforeUpdate, alConfig);
+}
+
+// Existing-installation update refreshes only an already-owned, unchanged
+// guidance block. It never enrolls a target that has no owned block and never
+// adopts an unowned manual marker block.
+function refreshOwnedGuidance(target, ownedBeforeUpdate, alConfig = null) {
+  if (!ownedBeforeUpdate) return;
+  const guidance = applyGuidance(target, { alConfig, refreshOnly: true });
+  if (guidance.changed) {
+    console.log(`  guidance: ${guidance.action} in ${guidance.relPath}`);
+  }
+  for (const warning of guidance.warnings) console.warn(`  WARN: ${warning}`);
+  if (!guidance.ok && guidance.warnings.length === 0) {
+    console.warn(`  WARN: ${guidance.message}`);
+  }
 }
 
 async function cmdRemove(args) {
@@ -743,6 +809,76 @@ async function cmdRemove(args) {
   console.log();
 
   process.exitCode = errors.length > 0 || cleanupErrors.length > 0 ? 1 : 0;
+}
+
+function loadOptionalAlConfig(target) {
+  const alCfgPath = join(target, 'agenticloop.json');
+  if (!existsSync(alCfgPath)) return { config: null, error: null };
+  try {
+    return { config: loadAgenticLoopConfig(alCfgPath), error: null };
+  } catch (error) {
+    return { config: null, error: `agenticloop.json is malformed: ${error.message}` };
+  }
+}
+
+function guidanceStatusLabel(status) {
+  switch (status) {
+    case 'current': return 'current and owned';
+    case 'stale': return 'stale and refreshable';
+    case 'modified': return 'owned block modified';
+    case 'manual': return 'manual/unowned marker block';
+    case 'malformed': return 'malformed markers';
+    case 'unsafe-path': return 'unsafe rules path';
+    case 'malformed-manifest': return 'malformed ownership manifest';
+    case 'path-mismatch': return 'owned guidance at a previous rules path';
+    case 'multiple-owned': return 'multiple owned guidance entries';
+    case 'absent': return 'absent';
+    default: return status;
+  }
+}
+
+async function cmdGuidance(args) {
+  const sub = args[0];
+  if (!sub || !['apply', 'check', 'remove'].includes(sub)) {
+    console.error('guidance requires a subcommand: apply | check | remove');
+    process.exitCode = 1;
+    return;
+  }
+  const { opts } = parseArgs(args.slice(1));
+  warnUnknownOptions(opts, ['target', 'force'], `guidance ${sub}`);
+  const target = opts.target ? resolve(opts.target) : process.cwd();
+  const configResult = loadOptionalAlConfig(target);
+  if (configResult.error) {
+    console.error(`  ERROR: ${configResult.error}`);
+    process.exitCode = 1;
+    return;
+  }
+  const alConfig = configResult.config;
+  const force = Boolean(opts.force);
+
+  console.log();
+  console.log(`agenticloop guidance ${sub}`);
+  console.log('='.repeat(50));
+
+  if (sub === 'check') {
+    const result = checkGuidance(target, { alConfig });
+    console.log(`  rules document: ${result.relPath ?? '(unresolved)'}`);
+    console.log(`  status: ${guidanceStatusLabel(result.status)}`);
+    console.log(`  ${result.message}`);
+    console.log();
+    process.exitCode = ['unsafe-path', 'malformed', 'malformed-manifest', 'path-mismatch', 'multiple-owned'].includes(result.status) ? 1 : 0;
+    return;
+  }
+
+  const result = sub === 'apply'
+    ? applyGuidance(target, { alConfig, force })
+    : removeGuidance(target, { alConfig, force });
+
+  console.log(`  rules document: ${result.relPath ?? '(unresolved)'}`);
+  console.log(`  ${result.action}: ${result.message}`);
+  for (const warning of result.warnings) console.warn(`  WARN: ${warning}`);
+  console.log();
+  process.exitCode = result.ok ? 0 : 1;
 }
 
 async function cmdValidate(args) {
@@ -1377,10 +1513,11 @@ async function cmdConfigureModels(args) {
 
 async function cmdSetup(args) {
   const { opts } = parseArgs(args);
-  warnUnknownOptions(opts, ['target', 'adapter', 'yes', 'nonInteractive'], 'setup');
+  warnUnknownOptions(opts, ['target', 'adapter', 'yes', 'nonInteractive', 'agentsGuidance', 'noAgentsGuidance'], 'setup');
   const target = opts.target ? resolve(opts.target) : process.cwd();
   const adapter = Array.isArray(opts.adapter) ? opts.adapter[0] : opts.adapter;
   const nonInteractive = Boolean(opts.yes) || Boolean(opts.nonInteractive);
+  const agentsGuidance = !opts.noAgentsGuidance && opts.agentsGuidance !== false;
 
   if (adapter) {
     const validAdapters = new Set(['opencode', 'codex', 'claude-code', 'copilot', 'cursor', 'all']);
@@ -1395,6 +1532,7 @@ async function cmdSetup(args) {
     target,
     adapter,
     nonInteractive,
+    agentsGuidance,
   });
 
   process.exitCode = errors.length > 0 ? 1 : 0;
@@ -1730,6 +1868,9 @@ switch (command) {
     break;
   case 'remove':
     await cmdRemove(rest);
+    break;
+  case 'guidance':
+    await cmdGuidance(rest);
     break;
   case 'validate':
     await cmdValidate(rest);

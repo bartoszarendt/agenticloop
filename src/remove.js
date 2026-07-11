@@ -24,6 +24,7 @@ import {
   resolveManagedPath,
   saveManifest,
 } from './generated-artifacts.js';
+import { computeGuidanceRemoval } from './guidance.js';
 import {
   OPENCODE_ROLE_NAMES,
   OPENCODE_AGENT_RELATIVE_PATHS,
@@ -358,6 +359,21 @@ function removeWithManifest(targetRoot, dryRun, options = {}) {
       }
       lines.splice(index, 1); writes.set(fullPath, lines.join(ending));
       if (entry.createdFile && lines.every(line => line === '')) deletes.push(fullPath); else removed.push(`${entry.relPath} (owned gitignore line removed)`);
+      continue;
+    }
+    if (entry.kind === 'marker-block') {
+      if (!existsSync(fullPath)) { removed.push(`${entry.relPath} (already absent)`); continue; }
+      const original = writes.get(fullPath) ?? readFileSync(fullPath, 'utf8');
+      const plan = computeGuidanceRemoval(original, entry);
+      if (plan.outcome === 'absent') { removed.push(`${entry.relPath} (guidance block already absent)`); continue; }
+      if (plan.outcome === 'modified') { retained.push(entry); skipped.push(`${entry.relPath} (guidance block modified since generation; preserved)`); continue; }
+      if (plan.outcome === 'malformed') { retained.push(entry); skipped.push(`${entry.relPath} (guidance markers malformed; preserved)`); continue; }
+      if (plan.outcome === 'delete') { deletes.push(fullPath); emptyCandidates.push(fullPath); removed.push(`${entry.relPath} (guidance block removed; created file deleted)`); continue; }
+      if (plan.outcome === 'rewrite') {
+        writes.set(fullPath, plan.content); removed.push(`${entry.relPath} (owned guidance block removed)`);
+      } else {
+        retained.push(entry); errors.push(`${entry.relPath}: unknown guidance removal plan '${plan.outcome}'`);
+      }
       continue;
     }
     if (entry.nonReversible || !Array.isArray(entry.mutations) || !entry.mutations.length) {

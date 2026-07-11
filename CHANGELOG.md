@@ -3,6 +3,29 @@
 ## 0.1.0 (Unreleased)
 
 ### Added
+- Activation boundary and standalone engineer: `AGENTIC_LOOP.md` now states that
+  installing, discovering, or reading the methodology does not activate it — full
+  operation requires explicit activation. The canonical `engineer` role is
+  restructured into two modes (standalone and Agentic Loop); the main agent may
+  invoke the generated engineer as an ordinary bounded subagent with no task ID,
+  task record, or Agentic Loop bookkeeping. Generated engineer surfaces for all
+  five hosts and the Codex public skill body carry the same boundary.
+- Repository-rules activation guidance: `init`/`setup` install one clearly
+  marked, manifest-owned, removable guidance block into the resolved
+  repository-rules document (`AGENTS.md`/`CLAUDE.md`/`GEMINI.md`, created as
+  `AGENTS.md` when absent). New `agenticloop guidance apply|check|remove`
+  commands and an `--no-agents-guidance` install flag. Everything outside the
+  markers stays target-owned; modified owned blocks and unowned manual blocks are
+  preserved, not overwritten or adopted; `update` never enrolls an existing
+   installation that has no owned block. The ownership manifest gains schema
+   version 4 with a host-neutral `core` owner and a `marker-block` entry kind
+   (v3 manifests migrate automatically; existing adapter entries are unchanged).
+   Marker-block entries record generated separators so apply/remove restores an
+   existing rules document byte-for-byte; forced removal removes only the edited
+   marker region and never truncates surrounding target-owned content. Configured
+   rules paths are used consistently by lifecycle and guidance commands; path
+   drift is reported and never silently creates a duplicate block.
+
 - Regression coverage for review markers posted in PR review bodies (GraphQL `reviews`)
   and for language-tagged Markdown fences.
 - Tool-neutral bounded implementation discovery: `AGENTIC_LOOP.md` Context Read Discipline now

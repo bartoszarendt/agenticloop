@@ -22,12 +22,15 @@ import { seedTargetLayout } from './helpers/layout-fixture.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const TOLERANCE = 0.05;
+// agentDefinitions baselines were deliberately raised when the canonical
+// engineer role gained its dual-mode (standalone / Agentic Loop) structure and
+// the Codex/Copilot/Cursor engineer preamble gained the mode-selection wording.
 const ADAPTERS = [
-  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 6742, agentDefinitions: 6163, activationSurface: 579 } },
-  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 38606, agentDefinitions: 6545, activationSurface: 820, referenceLibrary: 31241 } },
-  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 30781, agentDefinitions: 5753, activationSurface: 1308, referenceLibrary: 23720 } },
-  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 36857, agentDefinitions: 6281, activationSurface: 848, referenceLibrary: 29728 } },
-  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 36684, agentDefinitions: 6278, activationSurface: 678, referenceLibrary: 29728 } },
+  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 7319, agentDefinitions: 6740, activationSurface: 579 } },
+  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 38606, agentDefinitions: 7171, activationSurface: 869, referenceLibrary: 31241 } },
+  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 30781, agentDefinitions: 6330, activationSurface: 1308, referenceLibrary: 23720 } },
+  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 36857, agentDefinitions: 6928, activationSurface: 848, referenceLibrary: 29728 } },
+  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 36684, agentDefinitions: 6925, activationSurface: 678, referenceLibrary: 29728 } },
 ];
 
 let tmpDir;

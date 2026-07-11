@@ -9,6 +9,33 @@ Codex, Claude Code, GitHub Copilot, and Cursor — are supported. The workflow
 should read naturally in any agent that can follow Markdown instructions and
 load skills.
 
+## Activation Boundary
+
+Full Agentic Loop operation requires explicit activation. Discovering the
+installed toolkit or reading this document does not activate the methodology.
+
+Activate the full loop — adopt the roles, create or continue a durable task
+record, run backend operations, worktrees, event logging, review, and closeout
+— only when at least one of these is true:
+
+- The user explicitly asks to use Agentic Loop.
+- The user invokes the host's Agentic Loop activation command, prompt, or skill.
+- The user explicitly asks to implement, continue, review, accept, or close a
+  tracked Agentic Loop work unit.
+
+The following do not activate the methodology: merely discovering `agenticloop/`,
+reading this document, mentioning a task ID without operational intent, or asking
+for status, orientation, explanation, or discussion. For that ordinary work,
+follow the target repository's rules document directly. Reading this document to
+answer a question about the methodology is expected and allowed; adopting it as
+the current process is not.
+
+**Standalone engineer delegation is not activation.** The main agent may invoke
+the generated engineer as an ordinary bounded subagent for a normal engineering
+subtask. Standalone engineer use requires no activation, task ID, or task record
+and creates no Agentic Loop workflow state. See the Glossary entries for
+**Activation** and **Standalone engineer**.
+
 ## Core Objects
 
 | Object | Meaning |
@@ -29,6 +56,16 @@ Stable Agentic Loop vocabulary lives in this installed process document so
 target projects do not need toolkit-root `docs/` files at runtime.
 
 - **Agentic Loop**: the supervised workflow methodology in this repository.
+- **Activation**: the point at which the full methodology becomes the current
+  process. Activation is explicit only: the user asks to use Agentic Loop,
+  invokes the host activation surface, or asks to implement, continue, review,
+  accept, or close a tracked work unit. Installation, discovery, reading the
+  methodology, or mentioning a task ID for discussion does not activate it.
+- **Standalone engineer**: the generated engineer invoked as an ordinary bounded
+  subagent without activating Agentic Loop. Standalone delegation takes its scope
+  from the parent request and repository rules, requires no task ID or task
+  record, and creates no Agentic Loop task records, events, worktrees, review, or
+  closeout state. See `agenticloop/agents/engineer.md` for the two engineer modes.
 - **Agent role**: a host-neutral role definition installed under
   `agenticloop/agents/<role>.md`.
 - **Skill**: a focused procedure installed under

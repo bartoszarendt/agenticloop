@@ -29,7 +29,16 @@ import {
 import { loadProjectMap } from '../project-map.js';
 
 export const AGENTIC_LOOP_OPERATION_DESCRIPTION =
-  'Operate in Agentic Loop mode: create or refine the durable task record, route maintainer and engineer roles, verify evidence, and close out according to the project backend.';
+  'Use only when the user explicitly asks to activate Agentic Loop: create or refine the durable task record, route maintainer and engineer roles, verify evidence, and close out according to the project backend.';
+
+// Dual-mode engineer preamble prepended by host adapters that customize the
+// engineer developer instructions (Codex, Copilot, Cursor). Kept compact for
+// payload budgets. The canonical role body carries the full contract.
+export const STANDALONE_ENGINEER_PREAMBLE_LINES = Object.freeze([
+  'Engineer mode selection: use full Agentic Loop mode only when the delegation explicitly activates Agentic Loop or names a durable Agentic Loop task record as the contract; otherwise operate as a standalone engineer.',
+  'A bare task ID does not force Agentic Loop mode. Standalone engineer work requires no task ID or task record and creates no Agentic Loop task records, events, worktrees, pull requests, review, or closeout state.',
+  'Do not perform final maintainer acceptance in either mode. Stay within engineer boundaries: implement the delegated scope, run checks, and return fresh evidence.',
+]);
 
 /**
  * Read a role source file and return its frontmatter description and body.
