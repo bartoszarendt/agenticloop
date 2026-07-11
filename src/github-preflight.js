@@ -16,6 +16,7 @@
  *   - parsePrEvidence(prBody)
  *   - extractHeadMarker(text)
  *   - normalizeCheckText(text)
+ *   - extractCheckId(text)
  *   - isSuccessfulStatusCheck(check) / statusCheckName(check)
  *   - evaluatePreflight({ prData, issueData })
  *
@@ -24,6 +25,7 @@
  */
 
 import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
+import { markdownSection, topLevelListItems } from './markdown.js';
 
 export class PreflightError extends Error {
   constructor(message) {
@@ -51,24 +53,7 @@ const ISSUE_FIELDS = ['number', 'body', 'title'].join(',');
  * line so leading indentation does not matter.
  */
 export function extractSectionBody(markdown, heading) {
-  const text = String(markdown ?? '');
-  const trimmedHeading = heading.trim();
-  const headingLevel = (trimmedHeading.match(/^(#{1,6})/) ?? [])[1]?.length ?? 2;
-  const breakRe = new RegExp(`^#{1,${headingLevel}}\\s`);
-  const lines = text.split('\n');
-  let inSection = false;
-  const bodyLines = [];
-  for (const line of lines) {
-    if (line.trim() === trimmedHeading) {
-      inSection = true;
-      continue;
-    }
-    if (inSection) {
-      if (breakRe.test(line.trim())) break;
-      bodyLines.push(line);
-    }
-  }
-  return inSection ? bodyLines.join('\n').trim() : null;
+  return markdownSection(String(markdown ?? ''), heading)?.body ?? null;
 }
 
 /**
@@ -84,6 +69,11 @@ export function normalizeCheckText(text) {
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
+}
+
+/** Return an optional stable check id written as `[RC-<number>]`. */
+export function extractCheckId(text) {
+  return String(text ?? '').match(/^\s*\[(RC-\d+)\]\s*/i)?.[1].toUpperCase() ?? null;
 }
 
 /**
@@ -105,21 +95,17 @@ export function extractCommand(text) {
  * reporting; a normalized form is added for comparison, and `command` holds the
  * backtick command when the check is written as one (null for manual checks).
  *
- * @returns {{ text: string, normalized: string, command: string|null }[]}
+ * @returns {{ text: string, normalized: string, command: string|null, id: string|null }[]}
  */
 export function parseRequiredChecks(issueBody) {
   const section = extractSectionBody(issueBody, '## Required Checks');
   if (section === null) return [];
-  const checks = [];
-  for (const rawLine of section.split('\n')) {
-    const line = rawLine.trim();
-    const match = line.match(/^[-*]\s+(.*\S)\s*$/);
-    if (!match) continue;
-    const text = match[1].trim();
-    if (!text) continue;
-    checks.push({ text, normalized: normalizeCheckText(text), command: extractCommand(text) });
-  }
-  return checks;
+  return topLevelListItems(section).map(text => ({
+    text,
+    normalized: normalizeCheckText(text),
+    command: extractCommand(text),
+    id: extractCheckId(text),
+  }));
 }
 
 /**
@@ -146,7 +132,7 @@ export function extractHeadMarker(text) {
  *     Evidence: <concise output excerpt or status-check reference>
  *
  * @returns {{ section: string|null, headSha: string|null,
- *             entries: { check: string, verdict: string|null, evidence: string|null }[] }}
+ *             entries: { check: string, verdict: string|null, evidence: string|null, id?: string|null }[] }}
  */
 export function parsePrEvidence(prBody) {
   const section = extractSectionBody(prBody, '## Evidence');
@@ -157,25 +143,39 @@ export function parsePrEvidence(prBody) {
     const verdictRe = /^Verdict:\s*(.+?)\s*$/i;
     const evidenceRe = /^Evidence:\s*(.+?)\s*$/i;
     let current = null;
+    let currentField = null;
+    let entryIndent = null;
+    const append = value => {
+      if (!current || !currentField) return;
+      current[currentField] = `${current[currentField] ?? ''} ${value}`.replace(/\s+/g, ' ').trim();
+    };
     for (const rawLine of section.split('\n')) {
       const line = rawLine.trim();
-      const reqMatch = line.match(reqRe);
-      if (reqMatch) {
+      const rawRequest = rawLine.match(/^( {0,3})[-*]\s*Required check:\s*(.+?)\s*$/i);
+      const reqMatch = rawRequest ? line.match(reqRe) : null;
+      if (reqMatch && (entryIndent === null || rawRequest[1].length === entryIndent)) {
+        if (entryIndent === null) entryIndent = rawRequest[1].length;
         if (current) entries.push(current);
         current = { check: reqMatch[1].trim(), verdict: null, evidence: null };
+        const id = extractCheckId(current.check);
+        if (id) current.id = id;
+        currentField = 'check';
         continue;
       }
       if (current) {
         const verdictMatch = line.match(verdictRe);
         if (verdictMatch) {
           current.verdict = verdictMatch[1].trim();
+          currentField = 'verdict';
           continue;
         }
         const evidenceMatch = line.match(evidenceRe);
         if (evidenceMatch) {
           current.evidence = evidenceMatch[1].trim();
+          currentField = 'evidence';
           continue;
         }
+        if (/^[ \t]+\S/.test(rawLine)) append(line);
       }
     }
     if (current) entries.push(current);
@@ -254,7 +254,9 @@ export function compareRequiredChecksToEvidence(requiredChecks, evidenceEntries,
   const warnings = [];
 
   for (const rc of requiredChecks) {
-    const entry = evidenceEntries.find(e => normalizeCheckText(e.check) === rc.normalized);
+    const entry = evidenceEntries.find(e =>
+      rc.id ? extractCheckId(e.check) === rc.id : normalizeCheckText(e.check) === rc.normalized
+    );
     if (entry) {
       const verdict = (entry.verdict ?? '').toLowerCase().trim();
       const hasEvidence = Boolean((entry.evidence ?? '').trim());
@@ -277,6 +279,9 @@ export function compareRequiredChecksToEvidence(requiredChecks, evidenceEntries,
       if (verdict === 'failed' || verdict === 'blocked') {
         warnings.push(`Required check '${rc.text}' reports verdict '${verdict}'`);
       }
+      if (rc.id && normalizeCheckText(entry.check) !== rc.normalized) {
+        warnings.push(`Evidence for ${rc.id} matched by stable id but its displayed check text differs from the issue`);
+      }
       matches.push({ check: rc.text, via: 'pr-body', verdict });
       continue;
     }
@@ -293,11 +298,20 @@ export function compareRequiredChecksToEvidence(requiredChecks, evidenceEntries,
         `Multiple successful status checks match required check '${rc.text}'; require explicit PR-body evidence instead`
       );
     }
+    const normalizedCandidates = evidenceEntries.map(candidate => ({
+      text: candidate.check,
+      normalized: normalizeCheckText(candidate.check),
+    }));
+    const near = normalizedCandidates.find(candidate =>
+      candidate.normalized.length >= 12 &&
+      (candidate.normalized.startsWith(rc.normalized) || rc.normalized.startsWith(candidate.normalized))
+    );
+    const nearHint = near ? `; closest parsed PR-body entry is '${near.text}'` : '';
     missing.push({
       check: rc.text,
       reason: rc.command
-        ? 'command check has no PR-body evidence entry and no exact-match successful status check'
-        : 'manual check requires explicit PR-body evidence (a Verdict and Evidence excerpt); a status check cannot substitute',
+        ? `command check has no PR-body evidence entry and no exact-match successful status check${nearHint}`
+        : `manual check requires explicit PR-body evidence (a Verdict and Evidence excerpt); a status check cannot substitute${nearHint}`,
     });
   }
 
@@ -332,12 +346,25 @@ export function evaluatePreflight({ prData, issueData }) {
         : "Linked issue has no non-empty '## Required Checks' section; the task record is incomplete"
     );
   }
+  const requiredIds = requiredChecks.map(check => check.id).filter(Boolean);
+  for (const id of new Set(requiredIds)) {
+    if (requiredIds.filter(candidate => candidate === id).length > 1) {
+      const label = issueNumber ? `Issue #${issueNumber}` : 'Linked issue';
+      errors.push(`${label} uses duplicate required-check id '${id}'`);
+    }
+  }
 
   const evidence = parsePrEvidence(prData?.body);
   if (evidence.section === null) {
     errors.push("PR body has no '## Evidence' section");
   } else if (evidence.entries.length === 0 && evidence.section.trim() === '') {
     errors.push("PR body '## Evidence' section is empty");
+  }
+  const evidenceIds = evidence.entries.map(entry => extractCheckId(entry.check)).filter(Boolean);
+  for (const id of new Set(evidenceIds)) {
+    if (evidenceIds.filter(candidate => candidate === id).length > 1) {
+      errors.push(`PR body uses duplicate evidence check id '${id}'`);
+    }
   }
 
   if (!evidence.headSha) {

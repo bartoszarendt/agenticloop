@@ -198,10 +198,10 @@ Expected PR `## Evidence` shape:
 ## Evidence
 Current PR head: <headRefOid>
 
-- Required check: `npm test`
+- Required check: [RC-1] `npm test`
   Verdict: passed
   Evidence: 128 passing, 0 failing (exit 0)
-- Required check: `npm run lint`
+- Required check: [RC-2] `npm run lint`
   Verdict: passed
   Evidence: no errors reported
 ```

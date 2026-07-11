@@ -3,6 +3,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { INSTALLED_TOOLKIT_ROOT_DIRECTORY, isPackageSourceRepositoryRoot, toPackageSourcePath, TOOLKIT_SOURCE_RELATIVE_PATHS } from './layout.js';
+import { markdownLinks } from './markdown.js';
 
 const EXCLUDED = new Set(['node_modules', '.git', '.codegraph', 'tmp', '.agenticloop']);
 const EXTERNAL = /^(https?:\/\/|mailto:|#)/i;
@@ -32,14 +33,7 @@ function destination(raw) {
 }
 
 function links(content) {
-  const found = []; let fenced = false;
-  for (const [index, line] of content.split(/\r?\n/).entries()) {
-    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue; }
-    if (fenced) continue;
-    const visible = line.replace(/`[^`]*`/g, '');
-    for (const match of visible.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) found.push({ url: destination(match[1]), line: index + 1 });
-  }
-  return found;
+  return markdownLinks(content).map(link => ({ ...link, url: destination(link.url) }));
 }
 
 function error(root, file, link, target, context) {

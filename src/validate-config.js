@@ -90,6 +90,7 @@ import {
   resolveToolkitAssetLayout,
 } from './layout.js';
 import { validateLayoutState } from './layout-migration.js';
+import { hasMarkdownHeading, markdownProseBlocks, markdownSection } from './markdown.js';
 import { validateCanonicalTemplates } from './template-contract.js';
 import {
   isValidTaskId,
@@ -183,22 +184,7 @@ const CODEX_FORBIDDEN_EVENT_LOGGING_PATTERNS = [
 ];
 
 export function sectionBody(content, heading) {
-  const headingLevel = (heading.trim().match(/^(#{1,6})/) ?? [])[1]?.length ?? 2;
-  const breakRe = new RegExp(`^#{1,${headingLevel}}\\s`);
-  const lines = content.split('\n');
-  let inSection = false;
-  const bodyLines = [];
-  for (const line of lines) {
-    if (line.trim() === heading.trim()) {
-      inSection = true;
-      continue;
-    }
-    if (inSection) {
-      if (breakRe.test(line)) break;
-      bodyLines.push(line);
-    }
-  }
-  return bodyLines.join('\n').trim();
+  return markdownSection(content, heading)?.body ?? '';
 }
 
 function normalizePath(value) {
@@ -353,9 +339,11 @@ function sentenceHasHumanOrManualException(sentence) {
 }
 
 function claimsUnauthorizedPrOrMerge(content) {
-  // Split on sentence terminators and line breaks so the human/manual exception
-  // check is localized to the same sentence as the PR/merge claim.
-  const sentences = content.split(/(?<=[.!?])\s+|\r?\n+/);
+  // Join Markdown hard wraps before splitting sentences. Headings, blank lines,
+  // fences, and new list items remain block boundaries, so a human exception in
+  // a different logical block cannot suppress an agent PR/merge claim.
+  const sentences = markdownProseBlocks(content)
+    .flatMap(block => block.split(/(?<=[.!?])\s+/));
   return sentences.some(
     sentence => sentenceClaimsPrOrMerge(sentence) && !sentenceHasHumanOrManualException(sentence)
   );
@@ -369,11 +357,11 @@ function hasRecordedImplementationArtifact(content, implementationArtifact) {
 function validateWorkUnitSummarySkeleton(content, filename) {
   const errors = [];
   for (const heading of WORK_UNIT_SUMMARY_SECTION_HEADINGS) {
-    if (!content.includes(heading)) {
+    if (!hasMarkdownHeading(content, heading)) {
       errors.push(`Task record '${filename}' missing work-unit summary section '${heading}'`);
     }
   }
-  if (content.includes('## Scope Completed') && !sectionBody(content, '## Scope Completed')) {
+  if (hasMarkdownHeading(content, '## Scope Completed') && !sectionBody(content, '## Scope Completed')) {
     errors.push(`Task record '${filename}' has empty work-unit summary section '## Scope Completed'`);
   }
   return errors;
@@ -383,7 +371,7 @@ export function validateTaskRecord(content, filename) {
   const errors = [];
 
   for (const section of TASK_REQUIRED_SECTION_HEADINGS) {
-    if (!content.includes(section)) {
+    if (!hasMarkdownHeading(content, section)) {
       errors.push(`Task record '${filename}' missing required section '${section}'`);
     }
   }
@@ -406,7 +394,7 @@ export function validateTaskRecord(content, filename) {
     errors.push(`Task record '${filename}' has empty '## Reviewer Checklist' section`);
   }
 
-  if (content.includes('## Proof Pressure') && !sectionBody(content, '## Proof Pressure')) {
+  if (hasMarkdownHeading(content, '## Proof Pressure') && !sectionBody(content, '## Proof Pressure')) {
     errors.push(`Task record '${filename}' has empty '## Proof Pressure' section`);
   }
 
@@ -646,7 +634,7 @@ export function validateFilesTaskRecord(content, filename, options = {}) {
   }
 
   if (status === 'accepted' || status === 'closed') {
-    const hasWorkUnitSummary = content.includes('## Scope Completed');
+    const hasWorkUnitSummary = hasMarkdownHeading(content, '## Scope Completed');
     const hasLegacyImplSummary = !!sectionBody(content, '## Implementation Summary');
     if (!hasWorkUnitSummary && !hasLegacyImplSummary) {
       errors.push(`Task record '${filename}' must include a non-empty '## Scope Completed' section (or legacy '## Implementation Summary') when status is '${status}'`);

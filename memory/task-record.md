@@ -68,8 +68,11 @@ Name nearby work that must not be bundled into this task.
 - One observable outcome per bullet.
 
 ## Required Checks
-- Exact command(s) the engineer must run on the final state.
-- Include linked verification decisions when a check has a known non-obvious execution strategy.
+- [RC-1] Exact command the engineer must run on the final state.
+- [RC-2] Additional command or specific manual check when independently required.
+
+Use one stable `[RC-N]` id per bullet. Include linked verification decisions
+when a check has a known non-obvious execution strategy.
 
 ## Proof Pressure
 

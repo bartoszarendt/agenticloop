@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { parseFrontmatter } from './frontmatter.js';
+import { hasMarkdownHeading, markdownLines, markdownSection, parseAtxHeading } from './markdown.js';
 import {
   BACKENDS_SOURCE_DIRECTORY,
   DECISION_RECORD_TEMPLATE_RELATIVE_PATH,
@@ -40,7 +41,14 @@ function renderHeadingBlock(headings) {
 }
 
 function indexOfHeading(content, heading, startIndex = 0) {
-  return content.indexOf(heading, startIndex);
+  const wanted = parseAtxHeading(heading);
+  if (!wanted) return -1;
+  for (const item of markdownLines(content)) {
+    if (!item.live || item.line - 1 < startIndex) continue;
+    const parsed = parseAtxHeading(item.raw);
+    if (parsed && parsed.level === wanted.level && parsed.text === wanted.text) return item.line - 1;
+  }
+  return -1;
 }
 
 function validateOrderedHeadings(content, headings, label) {
@@ -52,16 +60,16 @@ function validateOrderedHeadings(content, headings, label) {
       errors.push(`${label} missing required heading '${heading}'`);
       continue;
     }
-    cursor = position + heading.length;
+    cursor = position + 1;
   }
   return errors;
 }
 
 function validateTraceBulletLabels(content, relPath) {
-  if (!content.includes('## Trace')) {
+  if (!hasMarkdownHeading(content, '## Trace')) {
     return [];
   }
-  const traceSection = content.slice(content.indexOf('## Trace'));
+  const traceSection = markdownSection(content, '## Trace')?.body ?? '';
   const errors = [];
   for (const label of TRACE_SUMMARY_BULLET_LABELS) {
     if (!traceSection.includes(`**${label}**`)) {
@@ -204,7 +212,7 @@ export function validateCanonicalTemplates(repoRoot, assetLayout = resolveToolki
     const text = readFileSync(taskTemplatePath, 'utf-8');
     errors.push(...validateOrderedHeadings(text, TASK_REQUIRED_SECTION_HEADINGS, taskTemplateLabel));
     for (const heading of TASK_OPTIONAL_SECTION_HEADINGS) {
-      if (!text.includes(heading)) {
+      if (!hasMarkdownHeading(text, heading)) {
         warnings.push(`${taskTemplateLabel} is missing optional section example '${heading}'`);
       }
     }

@@ -105,6 +105,24 @@ describe('parseRequiredChecks', () => {
     assert.equal(checks[0].command, 'npm test -- focused');
     assert.equal(checks[1].command, null);
   });
+
+  it('joins wrapped check text and does not promote nested bullets', () => {
+    const checks = parseRequiredChecks([
+      '## Required Checks',
+      '- Manual check: compare the final design',
+      '  against the role matrix.',
+      '  - supporting detail',
+      '- `npm test`',
+    ].join('\n'));
+    assert.equal(checks.length, 2);
+    assert.equal(checks[0].text, 'Manual check: compare the final design against the role matrix. - supporting detail');
+  });
+
+  it('extracts optional stable check ids', () => {
+    const checks = parseRequiredChecks(issueBody(['[RC-1] `npm test`', '`npm run lint`']));
+    assert.equal(checks[0].id, 'RC-1');
+    assert.equal(checks[1].id, null);
+  });
 });
 
 describe('extractCommand', () => {
@@ -145,6 +163,24 @@ describe('parsePrEvidence', () => {
     const parsed = parsePrEvidence('## Scope Completed\nx');
     assert.equal(parsed.section, null);
     assert.equal(parsed.entries.length, 0);
+  });
+
+  it('joins wrapped check and evidence fields', () => {
+    const body = [
+      '## Evidence',
+      `Current PR head: ${HEAD}`,
+      '- Required check: Manual check: compare the final design',
+      '  against the role matrix.',
+      '  Verdict: passed',
+      '  Evidence: roles and capabilities were compared;',
+      '    no inconsistencies remain.',
+    ].join('\n');
+    const parsed = parsePrEvidence(body);
+    assert.deepEqual(parsed.entries[0], {
+      check: 'Manual check: compare the final design against the role matrix.',
+      verdict: 'passed',
+      evidence: 'roles and capabilities were compared; no inconsistencies remain.',
+    });
   });
 });
 
@@ -192,6 +228,32 @@ describe('headMatches', () => {
 });
 
 describe('evaluatePreflight', () => {
+  it('matches a reworded evidence label by stable check id', () => {
+    const prData = {
+      number: 42,
+      headRefOid: HEAD,
+      body: prBody({ entries: [{ check: '[RC-1] test suite', verdict: 'passed', evidence: '128 passing' }] }),
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['[RC-1] `npm test`']) };
+    const result = evaluatePreflight({ prData, issueData });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.ok(result.warnings.some(warning => warning.includes('displayed check text differs')));
+  });
+
+  it('rejects duplicate stable check ids', () => {
+    const prData = {
+      number: 42,
+      headRefOid: HEAD,
+      body: prBody({ entries: [{ check: '[RC-1] first', verdict: 'passed', evidence: 'ok' }] }),
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['[RC-1] first', '[RC-1] second']) };
+    const result = evaluatePreflight({ prData, issueData });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(error => error.includes('duplicate required-check id')));
+  });
+
   it('passes when every required check has exact matching PR-body evidence', () => {
     const prData = {
       number: 42,
@@ -222,6 +284,19 @@ describe('evaluatePreflight', () => {
     const result = evaluatePreflight({ prData, issueData });
     assert.equal(result.ok, false);
     assert.ok(result.missing.some(m => m.check === '`npm run lint`'));
+  });
+
+  it('reports a parsed prefix candidate for mismatched wrapped evidence', () => {
+    const prData = {
+      number: 42,
+      headRefOid: HEAD,
+      body: prBody({ entries: [{ check: 'Manual check: compare design', verdict: 'passed', evidence: 'ok' }] }),
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['Manual check: compare design against policy']) };
+    const result = evaluatePreflight({ prData, issueData });
+    assert.equal(result.ok, false);
+    assert.ok(result.missing[0].reason.includes("closest parsed PR-body entry is 'Manual check: compare design'"));
   });
 
   it('fails when the PR body cites a stale head', () => {

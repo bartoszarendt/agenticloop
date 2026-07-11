@@ -15,7 +15,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { validateConfig } from '../src/validate-config.js';
+import { validateConfig, validateTaskRecord } from '../src/validate-config.js';
 import { loadAgenticLoopConfig, loadJsonFile } from '../src/json.js';
 import {
   generateOpencodeArtifacts,
@@ -23,6 +23,7 @@ import {
 import { generateCodexArtifacts } from '../src/adapters/codex.js';
 import { generateClaudeCodeArtifacts } from '../src/adapters/claude-code.js';
 import { generateCopilotArtifacts } from '../src/adapters/copilot.js';
+import { TASK_REQUIRED_SECTION_HEADINGS } from '../src/layout.js';
 import { generateCursorArtifacts } from '../src/adapters/cursor.js';
 import { AGENTIC_LOOP_OPERATION_DESCRIPTION } from '../src/adapters/shared.js';
 import { seedScratch, seedTargetLayout, seedToolkitSource } from './helpers/layout-fixture.js';
@@ -2852,6 +2853,25 @@ describe('dotted toolkit path warnings', () => {
 // Field-finding fixes: files-backend PR/merge guard
 // ---------------------------------------------------------------------------
 
+describe('task-record Markdown structure validation', () => {
+  it('does not accept a required heading that appears only inside a fence', () => {
+    const content = TASK_REQUIRED_SECTION_HEADINGS
+      .filter(heading => heading !== '## Scope')
+      .map(heading => `${heading}\ncontent`)
+      .join('\n\n') + '\n\n```md\n## Scope\nexample only\n```\n';
+    const errors = validateTaskRecord(content, 'T-001.md');
+    assert.ok(errors.some(error => error.includes("missing required section '## Scope'")));
+  });
+
+  it('accepts canonical headings with optional closing hashes', () => {
+    const content = TASK_REQUIRED_SECTION_HEADINGS
+      .map(heading => `${heading} ##\ncontent`)
+      .join('\n\n');
+    const errors = validateTaskRecord(content, 'T-001.md');
+    assert.ok(!errors.some(error => error.includes('missing required section')));
+  });
+});
+
 describe('files-backend PR/merge guard', () => {
   it('errors when a files-backend task claims agent opened a PR', () => {
     const d = mkdtempSync(join(tmpDir, 'prguard-'));
@@ -2989,6 +3009,16 @@ describe('files-backend PR/merge guard', () => {
       );
     });
   }
+
+  it('detects an agent PR claim split by a Markdown hard wrap', () => {
+    const scope = 'The engineer opened a\npull request for the changes.';
+    const d = seedAcceptedFilesTask('prguard-wrapped-', scope);
+    const { errors } = validateConfig(d);
+    assert.ok(
+      errors.some(e => e.includes(GUARD_MESSAGE) && e.includes('T-001.md')),
+      `expected guard error for a hard-wrapped claim, got: ${JSON.stringify(errors)}`
+    );
+  });
 
   for (const scope of [
     'The human opened a pull request outside Agentic Loop.',

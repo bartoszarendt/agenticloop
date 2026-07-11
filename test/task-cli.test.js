@@ -141,6 +141,23 @@ describe('task CLI', () => {
     assert.match(content, /Started implementation/);
   });
 
+  it('appends notes to the live Comments section, not a fenced example', () => {
+    const target = makeTarget('comments-fence');
+    writeAcceptedTask(target, 'T-001', { reviewStatus: 'accepted' });
+    const path = taskPath(target, 'T-001');
+    const original = readFileSync(path, 'utf-8').replace(
+      '## Outcome\n',
+      '## Outcome\n\n```md\n## Comments\nexample only\n```\n'
+    );
+    writeFileSync(path, original, 'utf-8');
+
+    const result = run(['task', 'status', 'T-001', 'closed', '--note', 'Live note', '--target', target]);
+    assertOk(result);
+    const content = readFileSync(path, 'utf-8');
+    assert.match(content, /```md\n## Comments\nexample only\n```/);
+    assert.match(content, /## Comments\n- \d{4}-\d{2}-\d{2}: Live note/);
+  });
+
   it('allocates the next default id after gaps', () => {
     const target = makeTarget('gaps');
     assertOk(run(['task', 'new', 'First', '--id', 'T-001', '--target', target]));

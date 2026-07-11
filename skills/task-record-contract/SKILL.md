@@ -215,14 +215,15 @@ required check has a known non-obvious execution strategy.
 
 Example:
 
-- `npm test`; see `.agenticloop/decisions/D-YYYY-MM-DD-001.md` for execution strategy.
+- [RC-1] `npm test`; see `.agenticloop/decisions/D-YYYY-MM-DD-001.md` for execution strategy.
 
 Each Required Check must be concrete enough that an engineer's implementation
 evidence can map back to it one-to-one. For GitHub-backed work the pre-review
-gate (`npx agenticloop github-preflight --pr <number>`) matches each required
-check against a PR-body `## Evidence` entry keyed by the same text, so the
-required-check wording must be a specific command or a specific manual check,
-not a vague aspiration. Avoid bundling several distinct proofs into one bullet;
+gate (`npx agenticloop github-preflight --pr <number>`) matches each check to a
+PR-body `## Evidence` entry. Prefix new checks with a unique `[RC-N]` id and
+repeat it in evidence; legacy checks match by normalized text. Wording must
+still name a specific command or manual check, not a vague aspiration.
+Avoid bundling several distinct proofs into one bullet;
 a generic "tests pass" line cannot stand in for multiple distinct required
 checks.
 

@@ -9,6 +9,7 @@ import {
 import { dirname, join, relative, resolve } from 'node:path';
 import { parseArgs, warnUnknownOptions } from './cli-args.js';
 import { parseFrontmatter } from './frontmatter.js';
+import { markdownSection } from './markdown.js';
 import {
   TASK_RECORD_TEMPLATE_RELATIVE_PATH,
   resolveToolkitAssetLayout,
@@ -182,8 +183,12 @@ function replaceFrontmatterField(content, key, value) {
 function appendComment(content, note) {
   const date = new Date().toISOString().slice(0, 10);
   const entry = `- ${date}: ${note.trim()}`;
-  if (content.includes('## Comments')) {
-    return content.replace(/## Comments[ \t]*(?:\r?\n)?/, match => `${match}${entry}\n`);
+  const comments = markdownSection(content, '## Comments');
+  if (comments) {
+    const eol = content.includes('\r\n') ? '\r\n' : '\n';
+    const lines = content.split(/\r?\n/);
+    lines.splice(comments.startLine, 0, entry);
+    return lines.join(eol);
   }
   return `${content.trimEnd()}\n\n## Comments\n${entry}\n`;
 }

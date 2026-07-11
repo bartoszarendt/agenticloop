@@ -168,7 +168,9 @@ The PR-body `## Evidence` section must record the current head explicitly with a
 `Current PR head: <headRefOid>` marker, so the evidence is mechanically tied to
 the revision under review. For engineer-owned `check.run` events, include the
 `pr_head` field (or equivalent) so the recorded check is bound to the head it ran
-against. For GitHub-backed work, run `npx agenticloop github-preflight --pr
+against. When a required check has a stable `[RC-N]` id, repeat that id after
+`Required check:` in the PR evidence entry. Wrapped Markdown continuation lines
+are allowed. For GitHub-backed work, run `npx agenticloop github-preflight --pr
 <number>` before requesting review; it fails when the `## Evidence` section is
 missing, incomplete, or cites a head other than the current `headRefOid`.
 

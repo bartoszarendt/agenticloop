@@ -48,6 +48,29 @@ describe('parseFrontmatter', () => {
       },
     });
   });
+
+  it('parses folded and literal block scalars plus scalar lists', () => {
+    const content = [
+      '---',
+      'description: >-',
+      '  Use when a description is',
+      '  intentionally wrapped.',
+      'notes: |-',
+      '  first line',
+      '  second line',
+      'paths:',
+      '  - src/example.js',
+      '  - "test/example.test.js"',
+      'inline: [one, "two"]',
+      '---',
+      'body',
+    ].join('\n');
+    const [fm] = parseFrontmatter(content);
+    assert.equal(fm.description, 'Use when a description is intentionally wrapped.');
+    assert.equal(fm.notes, 'first line\nsecond line');
+    assert.deepEqual(fm.paths, ['src/example.js', 'test/example.test.js']);
+    assert.deepEqual(fm.inline, ['one', 'two']);
+  });
 });
 
 describe('Skill validator on real skills', () => {
