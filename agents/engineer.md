@@ -151,11 +151,9 @@ comfortably within budget.
 
 ## Event Logging
 
-Event logging is optional. If `.agenticloop/project.md` has
-`event_logging: enabled`, resolve the event logging command first: use the
-configured `event_logging_command`, or test `npx agenticloop --help` once and
-use `npx agenticloop` only if that check succeeds when no command is configured.
-Use the resolved command for engineer-owned gates:
+Event logging is optional and off by default. When `event_logging: enabled`,
+resolve the command per [[event-logging]]. Use the resolved command for
+engineer-owned gates:
 `task.started` before implementation or revision work, `check.run` after each
 required or cited verification command, and `blocked` or `needs_context` when
 work cannot continue. Include `--task <TASK-ID>`, `--role engineer`, the

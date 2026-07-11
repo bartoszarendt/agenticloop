@@ -14,26 +14,102 @@ The maintainer reviews the implementation artifact against the task record.
 
 ## Recording the review outcome
 
-Review has exactly two outcomes:
+Review has exactly two outcomes, and every recorded outcome carries its
+provenance (`review_mode`):
 
 ```text
 AGENT_REVIEW_STATUS: accepted
-AGENT_REVIEW_STATUS: needs_revision
+AGENT_REVIEW_MODE: host_subagent
+AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
 ```
+
+```text
+AGENT_REVIEW_STATUS: needs_revision
+AGENT_REVIEW_MODE: host_subagent
+AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+```
+
+`review_mode` records how the current artifact revision was reviewed. It is
+required whenever a review outcome is recorded. `reviewed_artifact` is required
+for files-backed work and must exactly equal `implementation_artifact`; GitHub
+uses the full current PR head in `AGENT_REVIEW_ARTIFACT`. Valid modes are:
+
+- `host_subagent` — a separate host subagent performed the review;
+- `explicit_agent_invocation` — a separately invoked review agent;
+- `single_agent_fallback` — same-session review by the acting agent;
+- `independent_human` — a human review or confirmation with an explicit reference.
+
+When implementation changes, clear or replace mutable current review fields.
+Historical review sections remain append-only. A stale outcome never accepts.
 
 When posting `needs_revision`, the maintainer may include a short numbered
 revision plan in the review body or comment (a "revision packet"), consistent
 with the ≤3-revision churn-classification rule in [[role-delegation]].
 
+### Independent-review enforcement
+
+When the task record sets `independent_review_required: true`, final acceptance
+cannot rest on `review_mode: single_agent_fallback`. `host_subagent`,
+`explicit_agent_invocation`, and `independent_human` satisfy the requirement;
+same-session fallback does not. High-assurance tasks that lack an independent
+review must stop with a clear status explaining that separate execution or human
+review is required, rather than accepting.
+
+`independent_human` must include `human_review_ref` for files (presence is
+validated, not externally verified) or `AGENT_HUMAN_REVIEW_REF` for GitHub. The
+GitHub audit resolves the latter to an approved current-head review by a
+different human account. An agent-authored marker does not itself prove human
+independence.
+
+Ordinary tasks without `independent_review_required` may still be accepted
+through an explicitly recorded `single_agent_fallback`. This does not introduce
+blanket provisional acceptance; the two outcomes remain `accepted` and
+`needs_revision`.
+
+Set `independent_review_required: true` (a single boolean gate, not a generic
+task-risk field) before implementation for tasks involving:
+
+- security or authorization boundaries;
+- secrets, credentials, or permissions;
+- destructive or irreversible data operations;
+- production or release controls;
+- public API or schema migrations;
+- any project policy requiring independent review.
+
+A human or project rule may also set it. For the files backend, `agenticloop
+validate`, `task lint`, and the `task status` acceptance gate mechanically reject
+unknown `review_mode`, malformed `independent_review_required`, unbound or stale
+review artifacts, accepted/closed state without an accepted review and valid
+mode, and accepted/closed state that uses `single_agent_fallback` when
+independent review is required.
+
 ### Neutral rule
 
-Record one durable review outcome for the current artifact revision. A later valid outcome for a
-newer artifact revision supersedes an earlier one.
+Record one review outcome for the current artifact revision. A later valid
+outcome for a newer artifact revision supersedes an earlier one.
 
 ### GitHub projection
 
-Post exactly one marker in the review comment and end with the attribution trailer from
-[[github-attribution]].
+Post exactly one status, mode, and artifact marker in a review comment or a PR
+review body and end with the attribution trailer from [[github-attribution]].
+Before final GitHub acceptance or merge, run `npx agenticloop github-review-audit
+--pr <number>` when GitHub access is available. The default audit expects an
+accepted outcome; use `--expect-status needs_revision` for revision audits. If it
+cannot run, report that limitation and follow the backend's blocked or exception
+path; do not claim mechanical validation.
+
+The audit discovers loop markers from both PR issue comments and PR review
+bodies, verifies marker authorship against the authenticated loop account, and
+requires the maintainer attribution trailer on the same filtered live body as the
+markers. It binds the issue to the PR's closing references, and for
+`independent_human` mode resolves `AGENT_HUMAN_REVIEW_REF` against live native
+GitHub reviews from the REST API by a different explicit `User`. GraphQL review
+bodies are used only as marker sources; normalized REST reviews are used only as
+independent-human evidence. `independent_human` accepted outcomes require an
+`APPROVED` review; `needs_revision` outcomes require a `CHANGES_REQUESTED` review.
+Missing API data or identity fails conservatively. A login ending in `[bot]` is
+treated as a bot indicator regardless of declared type. Quoted or example markers
+inside fenced code blocks, blockquotes, or indented code are ignored.
 
 Avoid duplicate review noise:
 
@@ -53,18 +129,16 @@ Avoid duplicate review noise:
 
 ### Files projection
 
-Set `review_status` in the task file frontmatter and append the maintainer review section to the
-task file. `review_status` is mutable current state; review detail sections are append-only
-history per round.
+Set `review_status`, `reviewed_artifact`, and `review_mode` in task frontmatter;
+copy the canonical `implementation_artifact` value into `reviewed_artifact`.
+These are mutable current state; review detail sections are append-only history.
+Accepted or closed tasks require an accepted, artifact-matched review.
 
 ## Event Logging
 
-If `.agenticloop/project.md` has `event_logging: enabled`, resolve the event
-logging command before writing the event: use a non-empty
-`event_logging_command`, or run `npx agenticloop --help` once and use
-`npx agenticloop` only if it succeeds. Do not attempt event logging when
-`event_logging` is disabled, and do not block the workflow if no working
-command is available.
+Event logging is optional and off by default. When `event_logging: enabled`,
+resolve the command and honor the disabled/non-blocking rules in
+[[event-logging]] before writing events.
 
 When a real maintainer review pass begins, emit `review.started`. After the durable backend state
 is recorded as accepted or needs_revision, emit `review.result` with the matching outcome.

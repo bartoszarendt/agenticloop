@@ -133,12 +133,8 @@ concurrency plan grants exclusive ownership.
      changes project behavior.
 5. Validate discoverability: the decision record must be linked from at least
    one durable source. Do not create or maintain a decision index.
-6. If `.agenticloop/project.md` has `event_logging: enabled`, resolve the
-   event logging command before writing the event: use a non-empty
-   `event_logging_command`, or run `npx agenticloop --help` once and use
-   `npx agenticloop` only if it succeeds. Do not attempt event logging when
-   `event_logging` is disabled, and do not block the workflow if no working
-   command is available.
+6. When `event_logging: enabled`, emit `decision.recorded` per [[event-logging]],
+   which owns command resolution and the disabled/non-blocking rules.
 
 ## Proposed vs Accepted
 

@@ -89,12 +89,9 @@ Then append dated notes or questions under `## Comments` or a dedicated blocker 
 
 ## Event Logging
 
-If `.agenticloop/project.md` has `event_logging: enabled`, resolve the event
-logging command before writing the event: use a non-empty
-`event_logging_command`, or run `npx agenticloop --help` once and use
-`npx agenticloop` only if it succeeds. Do not attempt event logging when
-`event_logging` is disabled, and do not block the workflow if no working
-command is available.
+Event logging is optional and off by default. When `event_logging: enabled`,
+resolve the command and honor the disabled/non-blocking rules in
+[[event-logging]] before writing events.
 
 After writing the durable backend state, emit `needs_context` or `blocked` with the same task id
 and a short reason. Put only small structured facts, such as `block_category`, into event data.

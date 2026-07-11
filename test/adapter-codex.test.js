@@ -310,13 +310,24 @@ describe('generateCodexArtifacts', () => {
       );
     }
 
+    // The canonical event-logging skill reference carries the resolution recipe
+    // plus the injected Codex event-logging override.
+    const eventLogging = readFileSync(
+      join(out, '.agents', 'skills', 'agenticloop', 'references', 'skills', 'event-logging', 'reference.md'),
+      'utf-8'
+    );
+    assert.match(eventLogging, /resolve the event logging command/i);
+    assert.match(eventLogging, /npx agenticloop --help/);
+    assert.match(eventLogging, /Codex event logging override:/);
+
+    // role-delegation now points at the event-logging skill but still receives
+    // the Codex override because it references event logging.
     const roleDelegation = readFileSync(
       join(out, '.agents', 'skills', 'agenticloop', 'references', 'skills', 'role-delegation', 'reference.md'),
       'utf-8'
     );
-    assert.match(roleDelegation, /resolve the event\s+logging command/);
-    assert.match(roleDelegation, /npx agenticloop --help/);
     assert.match(roleDelegation, /Codex event logging override:/);
+    assert.match(roleDelegation, /npx agenticloop --help/);
   });
 
   it('copies canonical backend docs into repo-local references', () => {

@@ -104,17 +104,13 @@ files backend when `task_backend: github` is set.
 
 ## Event Logging
 
-Event logging is optional. If `.agenticloop/project.md` has
-`event_logging: enabled`, resolve the event logging command first: use the
-configured `event_logging_command`, or test `npx agenticloop --help` once and
-use `npx agenticloop` only if that check succeeds when no command is configured.
-Use the resolved command to record `role.invoked` for
-each delegation or fallback role assumption. Include `--task <TASK-ID>` when a
-task is known, `--role orchestrator`, and a short summary. Do not attempt event
-logging when `event_logging` is disabled, and do not log ordinary chat turns.
-When enabled, a completed or reviewed task must not end with zero required gate
-events; record any missed-event process gap truthfully instead of fabricating a
-backfilled sequence.
+Event logging is optional and off by default. When `event_logging: enabled`,
+resolve the command per [[event-logging]] and record `role.invoked` for each
+delegation or fallback role assumption, with `--task <TASK-ID>` when a task is
+known, `--role orchestrator`, and a short summary. Do not log ordinary chat
+turns. A completed or reviewed task that ends with zero required gate events is
+non-conformant; record any missed-event process gap truthfully instead of
+backfilling a sequence.
 
 ## Task Flow
 
@@ -143,22 +139,14 @@ the Authorized Work Units boundary in `agenticloop/AGENTIC_LOOP.md`.
 
 ## Output
 
-Use concise coordination updates. Include the delegation field on every update:
-
-```md
-## Current Task
-## Delegation
-- Role invoked: <role name>
-- Host delegation check: <tool/mechanism found and used | verified absent by ... | attempted and failed with ...>
-- Host delegation used: <yes | no>
-- Concurrency: <`serial -- reason: <concrete blocker>` | `parallel batch <id> -- lanes: <n>/3; join: <condition>`>
-- Lease: <none | observable-step checkpoint cadence, no-progress budget, and stop condition>
-- Fallback: <none | single-agent role assumption as maintainer | single-agent role assumption as engineer>
-- Consequence: <none | fallback limited to one role step and boundary enforcement relies on explicit self-policing until return>
-- Task record reference: <issue URL | file path | "none -- gap recorded">
-## Waiting On
-## Next Human Decision
-```
+Use concise coordination updates. Return the canonical delegation status shape
+defined in [[role-delegation]] (Orchestrator Output Requirements) on every
+update. It is the single owner of that template; do not maintain a second copy
+here. Every update must include the `## Delegation` field with the host
+delegation check, host delegation used, concurrency, fallback, consequence, and
+task-record reference lines, plus a lease line.
+The lease uses an observable-step checkpoint cadence with a no-progress budget
+and stop condition.
 
 ## Before Handing Back
 

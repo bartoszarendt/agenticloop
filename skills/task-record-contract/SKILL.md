@@ -22,12 +22,9 @@ Task records are stored in the configured backend:
 
 ## Event Logging
 
-If `.agenticloop/project.md` has `event_logging: enabled`, resolve the event
-logging command before writing the event: use a non-empty
-`event_logging_command`, or run `npx agenticloop --help` once and use
-`npx agenticloop` only if it succeeds. Do not attempt event logging when
-`event_logging` is disabled, and do not block the workflow if no working
-command is available.
+Event logging is optional and off by default. When `event_logging: enabled`,
+resolve the command and honor the disabled/non-blocking rules in
+[[event-logging]] before writing events.
 
 After creating a new durable task record, emit `task.created`. After materially updating an
 existing task record's scope, acceptance criteria, required checks, or backend linkage, emit
@@ -353,8 +350,11 @@ A bugfix without a confirmed or explicitly investigated reproduction starts from
 
 Task-file frontmatter carries machine-readable current state. Required fields:
 `task_id`, `status`, `backend`. Optional fields include `implementation_artifact`,
-`review_status`, `allowed_paths`, `minimalism`, `attempt_budget`,
-`review_budget`, `context_overflow_risk`, and `context_note`.
+`review_status`, `reviewed_artifact`, `review_mode`, `independent_review_required`, `human_review_ref`,
+`allowed_paths`, `minimalism`, `attempt_budget`, `review_budget`,
+`context_overflow_risk`, and `context_note`. Review provenance fields are owned
+by [[review-and-accept]]. Select `independent_review_required: true` before
+implementation when required by task assurance or project policy.
 
 ### minimalism
 
@@ -373,10 +373,8 @@ This is a discipline knob, not a scope reducer. Minimalism must never weaken
 task scope, acceptance criteria, out-of-scope boundaries, required checks, proof
 pressure, TDD, verification evidence, review, blocked-state, change-request
 gates, security, trust-boundary validation, accessibility basics, or explicit
-human requirements.
-
-This is documented and procedural enforcement; there is no new validator for
-the `minimalism` field.
+human requirements. It is procedural enforcement; there is no `minimalism`
+validator.
 
 ### effort bounds
 
@@ -402,8 +400,8 @@ When a budget is reached or is likely to be exceeded, the role returns status
 discovery, review, or revision pass. Effort bounds never override acceptance
 criteria, required checks, proof pressure, or review.
 
-This is documented and procedural enforcement; there is no new validator for the
-`attempt_budget` or `review_budget` fields.
+It is procedural enforcement; there is no `attempt_budget`/`review_budget`
+validator.
 
 ## Backend enforcement
 

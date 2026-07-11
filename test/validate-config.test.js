@@ -102,6 +102,8 @@ function taskRecord({
   backend = 'files',
   implementationArtifact = '',
   reviewStatus = '',
+  reviewMode = '',
+  reviewedArtifact = '',
   task = 'Implement the feature.',
   sourceDocs = 'AGENTS.md, IMPLEMENTATION_PLAN.md',
   currentState = 'Current behavior is documented.',
@@ -122,6 +124,8 @@ status: ${status}
 backend: ${backend}
 implementation_artifact: ${implementationArtifact}
 review_status: ${reviewStatus}
+reviewed_artifact: ${reviewedArtifact}
+review_mode: ${reviewMode}
 ---
 
 ` : '';
@@ -1037,6 +1041,8 @@ describe('Files-backed task-record frontmatter validation', () => {
       status: 'accepted',
       implementationArtifact: 'commit:abc123',
       reviewStatus: 'accepted',
+      reviewMode: 'single_agent_fallback',
+      reviewedArtifact: 'commit:abc123',
       scopeCompleted: 'Implemented the requested behavior.',
     }).replace(/\n\n## Artifacts[\s\S]*$/, '');
     writeFileSync(join(d, '.agenticloop', 'tasks', 'T-012.md'), partialSummary);
@@ -2954,6 +2960,8 @@ describe('files-backend PR/merge guard', () => {
       backend: 'files',
       implementationArtifact: 'branch:work',
       reviewStatus: 'accepted',
+      reviewMode: 'single_agent_fallback',
+      reviewedArtifact: 'branch:work',
       scope,
       scopeCompleted: 'Implemented the scoped change.',
     }));
@@ -3014,6 +3022,8 @@ describe('inline task summary requirement', () => {
       backend: 'files',
       implementationArtifact: 'branch:work',
       reviewStatus: 'accepted',
+      reviewMode: 'single_agent_fallback',
+      reviewedArtifact: 'branch:work',
       scopeCompleted: 'Implemented the scoped change.',
     }));
     const { errors, warnings } = validateConfig(d);

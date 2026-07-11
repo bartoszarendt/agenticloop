@@ -116,6 +116,7 @@ import {
   normalizeCodexModel,
   normalizeCodexReasoningEffort,
 } from './codex-models.js';
+import { validateReviewProvenance } from './review-provenance.js';
 
 const PLACEHOLDER_PATTERNS = [
   /\bTBD\b/i,
@@ -138,6 +139,21 @@ export const FILES_TASK_STATUSES = new Set([
 ]);
 
 const REVIEW_STATUSES = new Set(['accepted', 'needs_revision']);
+
+// Known configuration keys under roles.<role>. Unknown keys are warn-only for
+// now (loading stays permissive) and may become errors in a future major
+// version. Legacy model/reasoning fields (model, reasoningEffort, variant) and
+// the compatibility settings stay supported. The removed fields
+// (responsibilities, canEditDocs, canEditImplementationFiles) are intentionally
+// absent, so reintroducing them surfaces an unknown-key warning.
+const KNOWN_ROLE_KEYS = new Set([
+  'sourceFile',
+  'description',
+  'requiredSkills',
+  'model',
+  'reasoningEffort',
+  'variant',
+]);
 
 const CODEX_PUBLIC_SKILL_NAME = 'agenticloop';
 const CODEX_LEGACY_SKILL_PREFIX = 'agenticloop-';
@@ -554,6 +570,10 @@ export function validateFilesTaskRecord(content, filename, options = {}) {
   const status = frontmatterString(frontmatter.status);
   const implementationArtifact = frontmatterString(frontmatter.implementation_artifact);
   const reviewStatus = frontmatterString(frontmatter.review_status);
+  const reviewMode = frontmatterString(frontmatter.review_mode);
+  const reviewedArtifact = frontmatterString(frontmatter.reviewed_artifact);
+  const independentRaw = frontmatterString(frontmatter.independent_review_required);
+  const humanReviewRef = frontmatterString(frontmatter.human_review_ref);
   const blockCategory = frontmatterString(frontmatter.block_category);
   const expectedBackend = 'files';
 
@@ -607,6 +627,19 @@ export function validateFilesTaskRecord(content, filename, options = {}) {
       `Task record '${filename}' has invalid review_status '${reviewStatus}' (expected one of: ${[...REVIEW_STATUSES].join(', ')})`
     );
   }
+
+  errors.push(
+    ...validateReviewProvenance({
+      label: filename,
+      status,
+      reviewStatus,
+      reviewModeRaw: reviewMode,
+      implementationArtifact,
+      reviewedArtifact,
+      independentRaw,
+      humanReviewRef,
+    })
+  );
 
   if (status === 'blocked' && !blockCategory) {
     errors.push(`Task record '${filename}' has status 'blocked' but is missing required frontmatter field 'block_category'`);
@@ -1246,6 +1279,18 @@ function validateJsoncConfig(config, rawConfig, cfgPath, repoRoot, forced, error
     for (const skill of requiredSkills) {
       if (!existsSync(join(skillsDir, skill))) {
         errors.push(`Role '${roleName}' requiredSkill '${skill}' not found in ${skillsSrcDir}/`);
+      }
+    }
+
+    // Warn-only unknown-key check. Loading stays permissive.
+    if (roleCfg && typeof roleCfg === 'object' && !Array.isArray(roleCfg)) {
+      for (const key of Object.keys(roleCfg)) {
+        if (!KNOWN_ROLE_KEYS.has(key)) {
+          warnings.push(
+            `roles.${roleName}.${key} is not a recognized role configuration key and is ignored. ` +
+            `Unknown role keys are warn-only for now and may become errors in a future major version.`
+          );
+        }
       }
     }
   }

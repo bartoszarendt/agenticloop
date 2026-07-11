@@ -96,17 +96,29 @@ GitHub-backed work, they project to the linked PR and review markers.
 
 The orchestrator routes the implementation artifact to the maintainer. The
 maintainer uses `[[review-and-accept]]`, checks for an existing review marker on
-the current artifact revision, and posts exactly one review marker:
+the current artifact revision, and posts exactly one review outcome plus its
+provenance (`review_mode`):
 
 ```text
 AGENT_REVIEW_STATUS: accepted
+AGENT_REVIEW_MODE: host_subagent
+AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
 ```
 
 or
 
 ```text
 AGENT_REVIEW_STATUS: needs_revision
+AGENT_REVIEW_MODE: host_subagent
+AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
 ```
+
+The examples above are fenced only for documentation. A live marker must be posted
+outside any fenced code block, blockquote, or indented code so the audit discovers
+it; markers inside such regions are treated as quoted examples, not live state.
+
+For files-backed work the same values are set in task-file frontmatter
+(`review_status` and `review_mode`).
 
 ### 10. Closeout
 
@@ -125,3 +137,49 @@ When event logging is enabled and the task is complete, run a strict audit:
 ```text
 npx agenticloop event-logging audit --task T-001
 ```
+
+## Bounded implementation discovery
+
+The context set an agent starts from is closed: the project map, the task record,
+the selected source documents, linked decisions, and the active backend
+projection. Agents do not expand that normative set on their own.
+
+They may still discover how code fits together while implementing. Task-scoped
+discovery -- available repository indexing or language-aware symbol/reference
+and caller/callee lookup, exact identifier or known-path search, focused test
+discovery, relevant version-control history, and directly connected schemas,
+generated consumers, callers, or tests -- is permitted by default,
+bounded to one discovery pass and at most six previously unnamed paths or symbol
+bodies. A caller or test found this way can be inspected and, when needed to
+satisfy the task, changed with a recorded deviation. Broad repository dumps and
+indiscriminate full-file loading remain prohibited. Discovery that exceeds the
+bound, crosses into a new domain, or contradicts the task scope routes to
+`needs_context`. See Context Read Discipline in `agenticloop/AGENTIC_LOOP.md`.
+
+## Review provenance and independent review
+
+Every recorded review outcome carries a `review_mode` describing how it was
+performed:
+
+- `host_subagent` -- a separate host subagent reviewed it;
+- `explicit_agent_invocation` -- a separately invoked review agent;
+- `single_agent_fallback` -- same-session review by the acting agent;
+- `independent_human` -- a durable human review or confirmation.
+
+Ordinary tasks can be accepted through an honestly recorded
+`single_agent_fallback`. Set `independent_review_required: true` on the task
+record before implementation for higher-assurance work -- security or
+authorization boundaries; secrets, credentials, or permissions; destructive or
+irreversible data operations; production or release controls; or public API and
+schema migrations. When that flag is set, acceptance cannot rest on same-session
+fallback: use `host_subagent`, `explicit_agent_invocation`, or `independent_human`.
+`independent_human` must include a recorded reference (`human_review_ref` for the
+files backend, where presence is checked procedurally) or a GitHub review/approval
+reference resolved by the GitHub audit, not merely a supervising human in the
+session. The audit discovers markers from both PR issue comments and PR review
+bodies; independent-human evidence is resolved separately through the GitHub REST
+reviews endpoint. The audit fetches and normalizes live native reviews; only an
+explicit GitHub `User` identity counts as human, the review must be bound to the
+current PR head, and the required review state is outcome-sensitive (`APPROVED` for
+accepted, `CHANGES_REQUESTED` for needs_revision). Missing or malformed review data
+fails conservatively.

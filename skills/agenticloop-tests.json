@@ -52,6 +52,21 @@
       ],
       "nearMissTarget": "task-record-contract"
     },
+    "event-logging": {
+      "shouldTrigger": [
+        "Resolve the event logging command and emit the role.invoked workflow-gate event.",
+        "Event logging is enabled; write the check.run event with small structured data to the local JSONL log.",
+        "Emit the task.closed workflow-gate event through the resolved event logging command."
+      ],
+      "shouldNotTrigger": [
+        "Review the implementation artifact against the task record and decide accepted vs needs_revision.",
+        "Create the durable task record with scope and acceptance criteria."
+      ],
+      "nearMiss": [
+        "Emit the review.result workflow-gate event with a short summary after the review outcome is recorded."
+      ],
+      "nearMissTarget": "review-and-accept"
+    },
     "debugging-before-fixes": {
       "shouldTrigger": [
         "A required check fails; investigate the root cause before applying any fix.",

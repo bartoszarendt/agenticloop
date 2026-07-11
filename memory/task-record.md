@@ -4,6 +4,22 @@ status: agent-ready
 backend: files
 implementation_artifact:
 review_status:
+reviewed_artifact:
+review_mode:
+# reviewed_artifact: exact value copied from implementation_artifact for the
+# current review outcome. Required whenever review_status is set.
+# review_mode: see [[review-and-accept]].
+# independent_review_required: set true before implementation when final
+# acceptance must not use same-session single_agent_fallback (security or
+# authorization boundaries; secrets, credentials, or permissions; destructive or
+# irreversible data operations; production or release controls; public API or
+# schema migrations; or any project policy requiring independent review).
+# independent_review_required: true
+# human_review_ref: recorded reference required when review_mode is
+# independent_human; files validation checks presence only. The GitHub audit
+# verifies the referenced review is approved, on the current head, and by a
+# different human account.
+# human_review_ref:
 # Minimalism discipline: none | lite | full | ultra.
 # Omitted or none means no task-record-selected Ponytail.
 # lite/full activate Ponytail for maintainer/engineer roles.

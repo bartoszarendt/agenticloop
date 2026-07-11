@@ -140,21 +140,77 @@ glossary.
 
 ## Context Read Discipline
 
-Agents read only the closed context set named for a task. The default context
-set is:
+Agents work from a closed normative context set, extend it only through bounded
+task-scoped implementation discovery, and never load arbitrary repository
+material. This section is the canonical owner of that cross-cutting rule; role
+and skill files reference it rather than restating it.
 
-- `.agenticloop/project.md` for backend, naming, grouping, and selected source documents,
+### Normative context (closed)
+
+The normative context set is:
+
+- repository rules and the project map (`.agenticloop/project.md`) for backend, naming, grouping, and selected source documents,
 - the current task record,
 - the selected source documents listed in `.agenticloop/project.md` or the task record,
 - decision records explicitly linked from those sources,
 - the backend projection doc in `agenticloop/backends/` that matches `task_backend`.
 
-Do not expand the context set unless the task record, project map, or a human
-explicitly names an additional file. Do not scan the whole repository at runtime
-to "find relevant files". Do not treat `.agenticloop/logs/` as ambient context;
-read logs only through explicit event-log audit or report commands, or when a
-task-scoped need is stated in the task record or by the human. Do not treat
-`.agenticloop/tmp/` as source context; it is scratch space only.
+This set is closed. Do not add a document to it unless the task record, project
+map, or a human explicitly names that file.
+
+### Bounded implementation discovery (permitted by default)
+
+Implementation and review still need to see how code fits together. The
+following task-scoped discovery is permitted by default, without a new
+authorization, when it stays tied to the current task:
+
+- available repository indexing or language-aware symbol, reference, and
+  caller/callee lookup,
+- exact identifier or known-path search,
+- focused test discovery for the code under change,
+- relevant version-control history for the touched files,
+- directly connected schemas, generated consumers, configuration, callers, or
+  tests reached from the above.
+
+A previously unnamed caller or test found this way may be inspected and, when
+necessary to satisfy the existing task scope, changed with a recorded deviation.
+
+Default operational bound for one task:
+
+- one bounded discovery pass,
+- at most six previously unnamed paths or symbol bodies opened from discovery,
+- symbol-level or relevant-range inspection before loading a whole file.
+
+Normal reads already named by the task record or project map do not count
+against this bound.
+
+### Arbitrary context loading (prohibited)
+
+These remain prohibited:
+
+- broad repository dumps or scanning the whole tree at runtime to "find relevant files",
+- indiscriminate full-file loading when a symbol or range is enough,
+- unrelated documentation or logs,
+- repeated exploratory scans without progress.
+
+Do not treat `.agenticloop/logs/` as ambient context; read logs only through
+explicit event-log audit or report commands, or when a task-scoped need is
+stated in the task record or by the human. Do not treat `.agenticloop/tmp/` as
+source context; it is scratch space only.
+
+### Recording and escalation
+
+Use the existing implementation-summary `## Deviations` section to record
+discovery when it changes expected files or areas, exposes an unexpected
+dependency, requires an implementation-plan deviation, or materially affects
+review scope. Do not add a new mandatory task section for discovery.
+
+Return `needs_context` when discovery exceeds the default bound, crosses into a
+materially new product or architecture domain, contradicts task scope,
+out-of-scope rules, or an accepted decision, or shows that completing the task
+requires a broader contract. A directly connected discovered caller or test does
+not by itself require `needs_context`; a material scope expansion still uses the
+existing contract-change path.
 
 ## First-Run Bootstrap
 
@@ -479,34 +535,12 @@ Event logging is optional. Agents must not attempt CLI event logging unless
 When event logging is enabled, zero events for a completed or reviewed task is
 non-conformant.
 
-When event logging is enabled, resolve the command before the first event write
-in the current host session:
-
-1. If `event_logging_command` is non-empty, use that command.
-2. If `event_logging_command` is blank or omitted, run `npx agenticloop --help`
-   once. If it succeeds, use `npx agenticloop`.
-3. If no working event logging command is available, do not repeatedly retry
-   and do not block the workflow. Record a truthful process gap in the task
-   record, review, or closeout marker note, then continue.
-
-After resolution, event writes use:
-
-```text
-<resolved-command> event-logging <event_type>
-```
-
-`agenticloop event` remains a compatibility alias, but new instructions should
-use `event-logging`.
-
-The default event log directory is:
-
-```text
-.agenticloop/logs/
-  <TASK-ID>.jsonl
-```
-
-Default event writes require `--task <TASK-ID>`. Use `--output <file>` only
-for tests or an explicit local exception.
+The operational procedure -- resolving the command (including the one-time
+CLI-help fallback check), the disabled and non-blocking rules, the
+concise-summary and small-`data` rules, and command safety -- is owned by the
+[[event-logging]] skill. This section owns why event logging exists, the event
+taxonomy, and which lifecycle gates emit which events. Events default to
+`.agenticloop/logs/<TASK-ID>.jsonl` via `--task <TASK-ID>`.
 
 Do not backfill missed normal gate events as if they happened on time. If an
 agent discovers that events were missed, record the miss as a process gap in
@@ -838,6 +872,11 @@ Pass 2: code and documentation quality.
 
 If either pass fails, request revision. If review feedback is disputed, resolve
 the dispute with evidence rather than repeated assertion.
+
+Every review outcome records its mode and the exact artifact revision reviewed.
+Final acceptance requires current, non-stale provenance. Tasks requiring
+independent review cannot be accepted through same-session fallback. See
+[[review-and-accept]] and [[task-record-contract]].
 
 ## Blocked and Needs Context
 

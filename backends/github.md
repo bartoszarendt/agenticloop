@@ -41,11 +41,11 @@ template, grouping profile) stays in `.agenticloop/project.md`.
 | Task ID | Issue title prefix and `task:<TASK-ID>` label |
 | Grouping | Optional grouping label such as `phase:1` when the project uses grouping |
 | Implementation artifact | Pull request linked to the issue by a recognized closing keyword |
-| Evidence | PR body for normal implementation evidence; comments for status markers, later evidence updates, and documented exceptions |
-| Review status | Review comment marker |
+| Evidence | PR body for normal implementation evidence; comments and PR review bodies for status markers, later evidence updates, and documented exceptions |
+| Review status | Review comment or PR review body marker |
 | Blocked state | Issue label plus status marker comment |
 | Completion summary | Inline in the PR body (per task) |
-| Closeout | Status marker comment citing the covered task ids |
+| Closeout | Status marker comment or PR review body citing the covered task ids |
 
 ## Operations
 
@@ -289,14 +289,52 @@ GitHub-backend deltas:
 
 ### Record Review Status
 
-Post exactly one valid review marker in the maintainer review:
+Post exactly one valid review marker in a maintainer review comment or a PR review
+body, and record the review provenance alongside it:
 
 ```text
 AGENT_REVIEW_STATUS: accepted
-AGENT_REVIEW_STATUS: needs_revision
+AGENT_REVIEW_MODE: host_subagent
+AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
 ```
 
-A later valid marker supersedes an earlier one.
+```text
+AGENT_REVIEW_STATUS: needs_revision
+AGENT_REVIEW_MODE: host_subagent
+AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+```
+
+`AGENT_REVIEW_ARTIFACT` is the full current PR head SHA. The audit discovers loop
+markers from both PR issue comments and PR review bodies. The linked task issue
+uses `AGENT_INDEPENDENT_REVIEW_REQUIRED: true` when that pre-implementation
+constraint applies; add it before implementation, and treat later changes as a
+visible task-contract change. For `independent_human`, add
+`AGENT_HUMAN_REVIEW_REF: <GitHub-review-url-or-id>`; the audit resolves it against
+live native GitHub reviews from the GitHub REST API (`/repos/{owner}/{repo}/pulls/{pr}/reviews`).
+GraphQL PR review bodies are used only as marker sources; normalized REST reviews
+are used only as independent-human evidence. The REST response is normalized into
+an internal shape with stable review URL/ID, state, commit binding, and author
+identity. Only an explicit GitHub `User` author type counts as a human; a login
+ending in `[bot]` is treated as a bot indicator regardless of the declared type.
+Missing identity, state, URL/ID, or commit binding fails conservatively. Quoted
+or example markers and attribution trailers inside fenced code blocks,
+blockquotes, or indented code are ignored during marker parsing.
+
+Run `npx agenticloop github-review-audit --pr <number> [--repo <owner/name>]`
+before final acceptance or merge. The default audit expects an accepted outcome
+on the current head; use `--expect-status needs_revision` to audit a revision
+request. The audit verifies:
+
+- loop markers are discovered from both PR issue comments and PR review bodies;
+- marker authorship matches the authenticated loop GitHub account;
+- the maintainer attribution trailer is present on the same filtered live body as the markers;
+- the issue is one of the PR's closing references;
+- independent-human evidence is resolved separately from marker discovery through the REST reviews endpoint;
+- independent-human reviews are current-head reviews by a different explicit `User`;
+- accepted independent-human outcomes require an `APPROVED` review state;
+- `needs_revision` independent-human outcomes require a `CHANGES_REQUESTED` review state.
+
+See [[review-and-accept]] for shared semantics.
 
 For status comments that are meant to be mutable, prefer editing the latest
 agent-authored marker comment instead of adding another equivalent marker. For
@@ -443,6 +481,8 @@ Verdict: needs_revision
 - `gh pr diff 123`
 
 AGENT_REVIEW_STATUS: needs_revision
+AGENT_REVIEW_MODE: host_subagent
+AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
 
 [[agent: maintainer]]
 ```

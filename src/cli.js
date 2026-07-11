@@ -84,6 +84,7 @@ import {
 import { runValidation } from './validate-runner.js';
 import { validateLinks, formatLinkErrors } from './link-validator.js';
 import { runPreflight, PreflightError } from './github-preflight.js';
+import { runGitHubReviewAudit, GitHubReviewAuditError } from './github-review-audit.js';
 import {
   cleanupAgenticLoopWorktrees,
   createAgenticLoopWorktree,
@@ -291,6 +292,7 @@ Commands:
   validate              Validate skills, config, links, and host setup.
   github-preflight      Pre-review gate: verify a GitHub PR body carries final-state
                         evidence for every required check, tied to the current head.
+  github-review-audit   Verify artifact-bound GitHub review provenance for a PR.
   doctor                Show setup checklist, adapter state, and next commands.
   task                  Manage files-backed task records (list, lint, new, status).
   worktree              Manage guarded Agentic Loop Git worktrees (add, guard, list, remove, cleanup, resolve-state, prune).
@@ -321,6 +323,18 @@ Options (github-preflight):
   --pr <number>         Pull request number to check. Required.
   --issue <number>      Linked task issue number (default: inferred from PR closing references).
   --repo <owner/name>   Target repository (default: gh-resolved current repo).
+  --json                Emit machine-readable JSON instead of human-readable output.
+
+Options (github-review-audit):
+  --pr <number>         Pull request number to audit. Required.
+  --issue <number>      Linked task issue number (default: inferred from PR closing references).
+  --repo <owner/name>   Target repository (default: gh-resolved current repo).
+  --expect-status <accepted|needs_revision>
+                        Expected review status (default: accepted). For
+                        accepted, an independent_human review must be an
+                        APPROVED current-head native GitHub review. For
+                        needs_revision, it must be a CHANGES_REQUESTED
+                        current-head native GitHub review.
   --json                Emit machine-readable JSON instead of human-readable output.
 
 Options (doctor):
@@ -810,6 +824,57 @@ async function cmdGithubPreflight(args) {
   for (const error of result.errors) console.error(`    ERROR: ${error}`);
   console.log();
   process.exitCode = 1;
+}
+
+async function cmdGithubReviewAudit(args) {
+  const { opts } = parseArgs(args);
+  const asJson = Boolean(opts.json);
+  if (!opts.pr) {
+    const error = '--pr <number> is required';
+    if (asJson) console.log(JSON.stringify({ ok: false, errors: [error] }));
+    else console.error(`github-review-audit requires ${error}`);
+    process.exitCode = 1;
+    return;
+  }
+  const expectedStatus = opts.expectStatus ?? 'accepted';
+  let result;
+  try {
+    result = runGitHubReviewAudit({ pr: opts.pr, issue: opts.issue, repo: opts.repo, expectedStatus });
+  } catch (error) {
+    if (!(error instanceof GitHubReviewAuditError)) throw error;
+    if (asJson) console.log(JSON.stringify({ ok: false, errors: [error.message] }));
+    else console.error(`github-review-audit failed: ${error.message}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (asJson) {
+    console.log(JSON.stringify(result));
+  } else {
+    console.log();
+    console.log('agenticloop github-review-audit');
+    console.log('='.repeat(50));
+    console.log(`  PR: #${result.pr}`);
+    console.log(`  issue: ${result.issue === null ? 'none' : `#${result.issue}`}`);
+    console.log(`  current head: ${result.headRefOid || 'unknown'}`);
+    console.log(`  independent review required: ${result.independentReviewRequired}`);
+    console.log(`  expected status: ${result.expectedStatus}`);
+    if (result.outcome) console.log(`  outcome: ${result.outcome.status} via ${result.outcome.mode}`);
+    if (result.ok) {
+      console.log(`  provenance valid: yes`);
+      console.log(`  acceptance ready: ${result.acceptanceReady ? 'yes' : 'no'}`);
+      if (result.expectedStatus === 'needs_revision') {
+        console.log('  review audit passed (needs_revision confirmed)');
+      } else {
+        console.log('  review provenance passed');
+      }
+    } else {
+      console.log(`  provenance valid: ${result.provenanceValid ? 'yes' : 'no'}`);
+      console.log(`  acceptance ready: ${result.acceptanceReady ? 'yes' : 'no'}`);
+      for (const error of result.errors) console.error(`    ERROR: ${error}`);
+    }
+    console.log();
+  }
+  process.exitCode = result.ok ? 0 : 1;
 }
 
 async function cmdEvent(args, commandLabel = 'event-logging') {
@@ -1671,6 +1736,9 @@ switch (command) {
     break;
   case 'github-preflight':
     await cmdGithubPreflight(rest);
+    break;
+  case 'github-review-audit':
+    await cmdGithubReviewAudit(rest);
     break;
   case 'doctor':
     await cmdDoctor(rest);

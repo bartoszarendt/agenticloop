@@ -103,10 +103,9 @@ rules, join behavior, and parallel liveness details live in [[parallel-delegatio
 
 ## Event Logging
 
-If `.agenticloop/project.md` has `event_logging: enabled`, resolve the event
-logging command before writing: use non-empty `event_logging_command`, or run
-`npx agenticloop --help` once and use `npx agenticloop` only if it succeeds.
-Don't log when `event_logging` is disabled, and don't block if no command works.
+Event logging is optional and off by default. When `event_logging: enabled`,
+resolve the command and honor the disabled/non-blocking rules in
+[[event-logging]] before writing events.
 
 After a maintainer or engineer is actually invoked, emit `role.invoked`. If
 bounded single-agent fallback begins instead, emit the same event with a summary
@@ -182,19 +181,24 @@ Host-visible remaining tool-call counts, incidental runtime budget notes, or sim
 
 ## Context Read Discipline
 
-Treat `Source docs` as the closed context set. A delegated role may also read
-the named task record, `.agenticloop/project.md` for backend or document
-selection, the matching `agenticloop/backends/` projection, and files explicitly
-named by the human or task record. The engineer reads the task record's stepped
+`Source docs` are the closed normative set. A delegated role may also read the
+named task record, `.agenticloop/project.md` for backend or document selection,
+the matching `agenticloop/backends/` projection, and files explicitly named by
+the human or task record. The engineer reads the task record's stepped
 `## Implementation Notes` first, then the named `Source docs`; the orchestrator
 must not copy the plan text into the subagent prompt — the plan lives in the task
-record. Do not scan the repository for "related" files.
- Do not read `.agenticloop/logs/` as ambient context; use task-scoped
-event-log audit/report or an explicit task need. `.agenticloop/tmp/` is scratch,
-not source. This limits source/context expansion, not task execution tools:
-search, call graphs, git, tests, and host context-management tools stay available
-when scoped to the delegated task. Missing context returns `needs_context` or
-`blocked`.
+record.
+
+Bounded task-scoped implementation discovery -- available repository indexing or
+language-aware symbol/reference and caller/callee lookup, exact identifier or
+known-path search, focused tests, relevant version-control history, and directly
+connected callers, schemas, or generated consumers -- is permitted by default
+when scoped to the delegated task, following the canonical Context Read Discipline in
+`agenticloop/AGENTIC_LOOP.md` and its default discovery bound. Do not read
+`.agenticloop/logs/` as ambient context (`.agenticloop/tmp/` is scratch, not
+source), and do not scan the repository for "related" files or load arbitrary
+material. Expansion beyond the canonical bound, or a material scope change,
+returns `needs_context` (or `blocked`).
 
 If an Operating fact is wrong, record the gap in the task record, review, or status return and continue from the canonical document. Do not silently re-probe the same fact in a loop.
 

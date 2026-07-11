@@ -37,14 +37,16 @@ function taskPath(target, taskId) {
   return join(target, '.agenticloop', 'tasks', `${taskId}.md`);
 }
 
-function writeAcceptedTask(target, taskId, extraFrontmatter = '') {
+function writeAcceptedTask(target, taskId, { reviewStatus = 'needs_revision', extraFrontmatter = '' } = {}) {
   mkdirSync(join(target, '.agenticloop', 'tasks'), { recursive: true });
   writeFileSync(taskPath(target, taskId), `---
 task_id: ${taskId}
 status: accepted
 backend: files
 implementation_artifact: commit:abc123
-review_status: needs_revision
+review_status: ${reviewStatus}
+reviewed_artifact: commit:abc123
+review_mode: single_agent_fallback
 ${extraFrontmatter}---
 
 # ${taskId} - Accepted
@@ -201,7 +203,8 @@ describe('task CLI', () => {
 
   it('warns when accepted churn signals have empty Outcome', () => {
     const target = makeTarget('outcome-warning');
-    writeAcceptedTask(target, 'T-010');
+    // Accepted requires review_status: accepted; the Revision Log is the churn signal.
+    writeAcceptedTask(target, 'T-010', { reviewStatus: 'accepted' });
 
     const result = run(['task', 'lint', 'T-010', '--target', target, '--json']);
     assertOk(result);
@@ -277,6 +280,8 @@ describe('task CLI', () => {
     // Write required evidence into the task record
     let content = readFileSync(taskPath(target, 'T-001'), 'utf-8');
     content = content.replace('review_status:', 'review_status: accepted');
+    content = content.replace('review_mode:', 'review_mode: single_agent_fallback');
+    content = content.replace('reviewed_artifact:', 'reviewed_artifact: commit:abc123');
     content = content.replace('implementation_artifact:', 'implementation_artifact: commit:abc123');
     // Add the required sections that the template doesn't include
     content += '\n## Scope Completed\nDone.\n';

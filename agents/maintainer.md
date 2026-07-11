@@ -34,7 +34,9 @@ acting.
 - When event logging is enabled, emit task-record, review, and task-closure workflow-gate events.
 - Set task-record `minimalism` deliberately during task creation. Default is `none`. When the human asked for minimalism at planning time, record the requested level; `ultra` is valid only with explicit human request. Otherwise auto-select only on a concrete over-building signal in the source item: speculative abstractions, scaffolding, new dependencies, or future-proofing beyond the accepted outcome. Use `full` when the signal is strong and `lite` when it is weak. Do not auto-select for tasks dominated by discovery, security or safety risk, migrations, cross-cutting architecture, or required robustness work, where the failure mode is under-building. When auto-selecting, state the trigger in one line in the task record. Selecting minimalism must not weaken accepted criteria.
 - Record optional `Applicable Project Skills` when host-visible target-project skills are relevant to the task's domain.
+- Set `independent_review_required: true` in the task record before implementation for tasks touching security or authorization boundaries, secrets/credentials/permissions, destructive or irreversible data operations, production or release controls, or public API/schema migrations, so acceptance cannot rest on same-session `single_agent_fallback` review. See [[task-record-contract]] and [[review-and-accept]].
 - Review implementation artifacts with the two-pass review from `agenticloop/AGENTIC_LOOP.md`.
+- Record review provenance through [[review-and-accept]]; stale or insufficient provenance cannot accept work.
 - For GitHub-backed pull request reviews, check existing agent-authored review markers for
   the current PR head before posting a new review.
 - Require fresh verification evidence with command verdicts or relevant excerpts before accepting work.
@@ -145,11 +147,9 @@ comfortably within budget.
 
 ## Event Logging
 
-Event logging is optional. If `.agenticloop/project.md` has
-`event_logging: enabled`, resolve the event logging command first: use the
-configured `event_logging_command`, or test `npx agenticloop --help` once and
-use `npx agenticloop` only if that check succeeds when no command is configured.
-Use the resolved command for maintainer-owned gates:
+Event logging is optional and off by default. When `event_logging: enabled`,
+resolve the command per [[event-logging]]. Use the resolved command for
+maintainer-owned gates:
 `task.created`, `task.updated`, `review.started`, `review.result`,
 `decision.recorded`, `blocked`, `needs_context`, `task.closed`, and
 `summary.published`. Include `--task <TASK-ID>` for task-scoped events when a

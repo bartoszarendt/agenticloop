@@ -44,8 +44,46 @@ Locked direction:
 **Goal:** strengthen task proof, scope evidence, and slice-sizing language.
 
 ### Phase 20 — Adoption Map and Context Discipline (Remainder)
-**Status:** remainder proposed (T-02, T-09, T-10 implemented 2026-06-27)
+**Status:** remainder proposed (T-02, T-09, T-10 implemented 2026-06-27);
+context-discipline refined 2026-07-10 to permit bounded, task-scoped
+implementation discovery within a default bound while keeping the normative
+context set closed (see Phase 25).
 **Goal:** improve adoption map and context-discipline for delegated agents.
+
+### Phase 25 — Review Provenance and Contract Consolidation
+**Status:** complete (2026-07-10; follow-up audit passed 2026-07-11)
+**Goal:** record how each review was performed and gate acceptance on independent
+review when required; make bounded implementation discovery explicit without
+weakening context discipline; reduce duplicated runtime contract material by
+extracting a canonical `event-logging` skill and giving the delegation status
+template a single owner; and add unknown role-key warnings plus per-adapter
+generated adapter payload-size regression protection (not exact active prompt size).
+
+**Scope**
+- Bounded implementation discovery in `AGENTIC_LOOP.md` Context Read Discipline.
+- Artifact-bound review provenance and GitHub review audit, with files-backed
+  `reviewed_artifact` enforcement and PR-head markers.
+- Canonical `skills/event-logging/SKILL.md`; boilerplate deduplicated across
+  roles, skills, methodology, and backends.
+- Single-owner delegation status template in `role-delegation`.
+- Warn-only unknown `roles.<role>` key validation; generated adapter payload-size and
+  contract-ownership regression tests.
+
+**Acceptance**
+- `npx agenticloop validate` passes; `npm test` passes.
+- Same-session fallback acceptance remains legal unless independent review is
+  required; files-backed independent-human review requires a present recorded
+  reference, while GitHub audit resolves its review reference via the REST API.
+- Independent-human accepted audits require an `APPROVED` current-head review by
+  a different explicit GitHub `User`; `needs_revision` audits require a
+  `CHANGES_REQUESTED` current-head review by the same constraints.
+- Marker fields and the attribution trailer use the same filtered live body; quoted
+  markers and trailers inside fenced code blocks, blockquotes, or indented code are
+  ignored.
+- Follow-up (2026-07-11): markers are discovered from both PR issue comments and
+  PR review bodies; GraphQL review bodies are kept separate from normalized REST
+  human-review evidence; language-tagged Markdown fences are recognized.
+
 
 ### Phase 21 — Concurrency And Subagent Liveness
 **Status:** partially implemented (2026-06-23)

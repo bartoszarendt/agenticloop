@@ -22,6 +22,9 @@ import {
   validateFilesTaskRecord,
   validateTaskRecord,
 } from './validate-config.js';
+import {
+  validateReviewProvenance,
+} from './review-provenance.js';
 
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -91,12 +94,14 @@ function taskRecordFromFile(filePath) {
     task_id: frontmatterString(frontmatter.task_id),
     status: frontmatterString(frontmatter.status),
     review_status: frontmatterString(frontmatter.review_status),
+    review_mode: frontmatterString(frontmatter.review_mode),
     implementation_artifact: frontmatterString(frontmatter.implementation_artifact),
+    reviewed_artifact: frontmatterString(frontmatter.reviewed_artifact),
   };
 }
 
 function formatTable(rows) {
-  const headers = ['task_id', 'status', 'review_status', 'implementation_artifact'];
+  const headers = ['task_id', 'status', 'review_status', 'review_mode', 'implementation_artifact'];
   const widths = Object.fromEntries(headers.map(header => [header, header.length]));
   for (const row of rows) {
     for (const header of headers) {
@@ -281,6 +286,21 @@ function validateAcceptanceGate(content, filePath, projectConfig) {
     errors.push(`Task '${filename}' cannot be accepted: review_status must be 'accepted' (currently '${reviewStatus || '(empty)'}')`);
   }
 
+  // Shared validation keeps lint and acceptance behavior aligned.
+  const reviewMode = frontmatterString(frontmatter.review_mode);
+  const reviewedArtifact = frontmatterString(frontmatter.reviewed_artifact);
+  const humanReviewRef = frontmatterString(frontmatter.human_review_ref);
+  errors.push(...validateReviewProvenance({
+    label: filename,
+    status: 'accepted',
+    reviewStatus,
+    reviewModeRaw: reviewMode,
+    implementationArtifact,
+    reviewedArtifact,
+    independentRaw: frontmatterString(frontmatter.independent_review_required),
+    humanReviewRef,
+  }).map(error => error.replace(/^Task record/, 'Task')));
+
   // 2. implementation_artifact must be non-empty
   if (!implementationArtifact) {
     errors.push(`Task '${filename}' cannot be accepted: implementation_artifact is empty`);
@@ -325,7 +345,9 @@ export async function cmdTask(args) {
           task_id: row.task_id,
           status: row.status,
           review_status: row.review_status,
+          review_mode: row.review_mode,
           implementation_artifact: row.implementation_artifact,
+          reviewed_artifact: row.reviewed_artifact,
         }));
       if (opts.json) console.log(JSON.stringify(rows, null, 2));
       else console.log(rows.length > 0 ? formatTable(rows) : 'No task records found.');

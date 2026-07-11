@@ -71,8 +71,8 @@ are complete and records a status marker (see [[task-closeout]]).
 Event logging is disabled by default. When `.agenticloop/project.md` has
 `event_logging: enabled`, the local `.agenticloop/logs/<TASK-ID>.jsonl` event
 log may help confirm workflow gates, checks, decisions, and blockers. The task
-file remains the authoritative durable record. `event_logging_command` can stay
-blank; agents test `npx agenticloop --help` once when enabled.
+file remains the authoritative durable record. Command resolution and the
+disabled/non-blocking rules are owned by [[event-logging]].
 
 Use backend-specific values inside the canonical template. Keep the summary
 concise. Cite command output, file paths, and task ids. Do not copy raw agent
@@ -149,6 +149,16 @@ Optional frontmatter conventions:
 - `block_category: <category>` while the task is blocked.
 - `context_overflow_risk: medium|high` plus optional `context_note` when one
   engineer execution needs tighter active-context discipline.
+- `review_mode: <mode>` records how the current review was performed; required
+  when `review_status` is set.
+- `reviewed_artifact: <artifact>` is the exact current implementation artifact
+  reviewed for `review_status`.
+- `independent_review_required: true` before implementation when acceptance must
+  not use same-session `single_agent_fallback`.
+- `human_review_ref: <reference>` a recorded human review/confirmation reference,
+  required when `review_mode: independent_human`. Files validation checks
+  presence only; external verification is performed by the GitHub audit when
+  applicable.
 
 ## Operations
 
@@ -268,14 +278,21 @@ patch path if the project uses patch files.
 
 ### Record Review Status
 
-Set `review_status` and append the maintainer review section.
+Set `review_status`, copy `implementation_artifact` to `reviewed_artifact`, record
+`review_mode`, and append the maintainer review
+section.
 
 ```yaml
 review_status: accepted
-review_status: needs_revision
+reviewed_artifact: commit:abc123
+review_mode: host_subagent
 ```
 
-`review_status` should reflect the current implementation artifact, not a stale earlier revision.
+When `implementation_artifact` changes, clear or replace all mutable current
+review fields: `review_status`, `review_mode`, `reviewed_artifact`, and
+`human_review_ref` when applicable. The append-only review sections preserve
+earlier rounds. See [[review-and-accept]] for shared review semantics; files
+validation mechanically requires the two artifact fields to match exactly.
 
 ### Close Or Accept Task
 
