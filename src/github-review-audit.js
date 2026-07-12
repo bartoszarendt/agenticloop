@@ -2,7 +2,13 @@
 
 import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
 import { resolveIssueNumber } from './github-preflight.js';
-import { REVIEW_MODES, isValidReviewMode, satisfiesIndependentReview } from './review-provenance.js';
+import { parseFrontmatter } from './frontmatter.js';
+import {
+  REVIEW_MODES,
+  isValidReviewMode,
+  satisfiesIndependentReview,
+  parseIndependentReviewRequired,
+} from './review-provenance.js';
 
 export class GitHubReviewAuditError extends Error {
   constructor(message) {
@@ -266,13 +272,125 @@ function validateHumanReviewReference(ref, reviews, headRefOid, expectedAccount,
   return { valid: errors.length === 0, errors };
 }
 
+/**
+ * Coerce a frontmatter value into a string suitable for the shared boolean
+ * parser. A bare `key:` with no value parses to an empty object via the
+ * frontmatter parser; all structured values are invalid for this boolean.
+ *
+ * @param {unknown} value
+ * @returns {string|null} the scalar string, '' for an empty value, or null when
+ *   the value is structured and therefore not a well-formed boolean.
+ */
+function frontmatterScalarString(value) {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'object') {
+    return null;
+  }
+  return String(value);
+}
+
+/**
+ * Count canonical top-level independent-review fields in a valid leading
+ * frontmatter block. The generic frontmatter parser intentionally lets later
+ * duplicate keys win, but an assurance gate must reject ambiguous duplicates.
+ *
+ * @param {string} raw
+ * @returns {number|null} occurrence count, or null when the leading block is
+ *   absent or malformed.
+ */
+function independentReviewFrontmatterCount(raw) {
+  const match = raw.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (!match) return null;
+  return match[1]
+    .split(/\r?\n/)
+    .filter(line => /^independent_review_required[ \t]*:/.test(line))
+    .length;
+}
+
+/**
+ * Determine whether the linked task issue requires independent review.
+ *
+ * YAML frontmatter `independent_review_required: true|false` is the canonical
+ * representation. The legacy `AGENT_INDEPENDENT_REVIEW_REQUIRED: true` body
+ * marker remains a supported compatibility form. Both share the single boolean
+ * parser used by the files backend (`parseIndependentReviewRequired`) so the two
+ * surfaces cannot drift.
+ *
+ * Semantics:
+ *   - neither representation present -> not required;
+ *   - YAML true / marker true        -> required;
+ *   - YAML false                     -> not required;
+ *   - both present, same meaning     -> valid;
+ *   - both present, conflicting      -> fail closed;
+ *   - malformed YAML value           -> fail closed;
+ *   - malformed or multiple markers  -> fail closed.
+ *
+ * Marker-looking lines inside fenced code, blockquotes, or indented code are
+ * ignored exactly as elsewhere in this module (via `filterLiveLines`).
+ *
+ * @param {string} issueBody
+ * @returns {{ value: boolean, error: string|null }}
+ */
 export function taskRequiresIndependentReview(issueBody) {
-  const liveBody = filterLiveLines(String(issueBody ?? ''));
-  const values = markerValues(liveBody, 'AGENT_INDEPENDENT_REVIEW_REQUIRED');
-  if (values.length > 1 || (values.length === 1 && values[0] !== 'true')) {
+  const raw = String(issueBody ?? '');
+
+  // Canonical YAML frontmatter representation.
+  const [frontmatter] = parseFrontmatter(raw);
+  const startsWithFrontmatter = /^---[ \t]*\r?\n/.test(raw);
+  const fieldCount = independentReviewFrontmatterCount(raw);
+  if (startsWithFrontmatter && frontmatter === null && /^independent_review_required[ \t]*:/m.test(raw)) {
+    return {
+      value: false,
+      error: 'task issue has malformed YAML frontmatter containing independent_review_required',
+    };
+  }
+  if (fieldCount !== null && fieldCount > 1) {
+    return {
+      value: false,
+      error: 'task issue has duplicate independent_review_required frontmatter fields (expected exactly one true or false value)',
+    };
+  }
+
+  let yamlValue = null;
+  if (frontmatter && Object.prototype.hasOwnProperty.call(frontmatter, 'independent_review_required')) {
+    const candidate = frontmatterScalarString(frontmatter.independent_review_required);
+    const parsed = candidate === null ? { value: null, malformed: true } : parseIndependentReviewRequired(candidate);
+    if (parsed.malformed || parsed.value === null) {
+      return {
+        value: false,
+        error: 'task issue has malformed independent_review_required frontmatter value (expected true or false)',
+      };
+    }
+    yamlValue = parsed.value; // true | false | null (empty)
+  }
+
+  // Legacy compatibility marker. Only `true` is recognized; any other value, or
+  // more than one marker, is malformed and fails closed.
+  const liveBody = filterLiveLines(raw);
+  const markerRaw = markerValues(liveBody, 'AGENT_INDEPENDENT_REVIEW_REQUIRED');
+  let markerValue = null;
+  if (markerRaw.length > 1) {
     return { value: false, error: 'task issue has malformed AGENT_INDEPENDENT_REVIEW_REQUIRED marker (expected one true marker)' };
   }
-  return { value: values.length === 1, error: null };
+  if (markerRaw.length === 1) {
+    if (parseIndependentReviewRequired(markerRaw[0]).value === true) {
+      markerValue = true;
+    } else {
+      return { value: false, error: 'task issue has malformed AGENT_INDEPENDENT_REVIEW_REQUIRED marker (expected one true marker)' };
+    }
+  }
+
+  // Conflicting representations fail closed.
+  if (yamlValue !== null && markerValue !== null && yamlValue !== markerValue) {
+    return {
+      value: false,
+      error:
+        `task issue has conflicting independent-review signals: frontmatter independent_review_required is ${yamlValue} ` +
+        `but AGENT_INDEPENDENT_REVIEW_REQUIRED marker is ${markerValue}`,
+    };
+  }
+
+  return { value: yamlValue === true || markerValue === true, error: null };
 }
 
 const VALID_EXPECTED_STATUSES = new Set(['accepted', 'needs_revision']);

@@ -328,6 +328,7 @@ npx agenticloop upgrade                              Compatibility alias for upd
 npx agenticloop validate                             Validate skills, config, links, and host setup
 npx agenticloop status                               Show configured adapters, artifacts, and next steps
 npx agenticloop github-preflight --pr <number>       Verify a GitHub PR body carries final-state evidence
+npx agenticloop github-ready --pr <number>           Read-only pre-merge gate: evidence preflight + review audit
 npx agenticloop task list [--status <s>] [--json]    List files-backed task records
 npx agenticloop task lint [<task-id>] [--json]       Lint task frontmatter and lifecycle state
 npx agenticloop task new <title> [--id <id>]         Create a new task record

@@ -60,6 +60,25 @@ event-log entries.
 
 Do not copy raw agent exchanges into docs. Use task records, implementation artifacts, command output, and reviewed comments as sources of truth.
 
+### GitHub acceptance verification
+
+For a GitHub-backed group or work unit, verify that every included implementation
+pull request was accepted before publishing the closeout marker. When GitHub is
+available, run the read-only composite gate against each final PR:
+
+```text
+npx agenticloop github-ready --pr <number>
+```
+
+See the Pre-Merge Readiness Gate in `agenticloop/backends/github.md`. A missing
+acceptance or a current `needs_revision` result blocks `AGENT_CLOSEOUT_STATUS:
+complete`; use `follow_up_required` until it is resolved.
+
+When event logging is enabled, run the existing strict event audit
+(`npx agenticloop event-logging audit --task <id>`) for each task, or record a
+truthful missed-event process gap in the closeout note. Never fabricate missing
+historical events to make an audit pass.
+
 ### GitHub issue closure check
 
 For GitHub-backed normal implementation tasks, closeout is incomplete until each

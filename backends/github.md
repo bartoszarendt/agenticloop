@@ -306,9 +306,12 @@ AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
 
 `AGENT_REVIEW_ARTIFACT` is the full current PR head SHA. The audit discovers loop
 markers from both PR issue comments and PR review bodies. The linked task issue
-uses `AGENT_INDEPENDENT_REVIEW_REQUIRED: true` when that pre-implementation
-constraint applies; add it before implementation, and treat later changes as a
-visible task-contract change. For `independent_human`, add
+expresses the independent-review requirement through canonical YAML frontmatter
+`independent_review_required: true`; the explicit `AGENT_INDEPENDENT_REVIEW_REQUIRED: true`
+marker in the issue body remains a supported compatibility form. Use one form,
+set it before implementation, and treat later changes as a visible task-contract
+change. The audit reads either representation; conflicting representations (or a
+malformed value or duplicate markers) fail closed. For `independent_human`, add
 `AGENT_HUMAN_REVIEW_REF: <GitHub-review-url-or-id>`; the audit resolves it against
 live native GitHub reviews from the GitHub REST API (`/repos/{owner}/{repo}/pulls/{pr}/reviews`).
 GraphQL PR review bodies are used only as marker sources; normalized REST reviews
@@ -344,6 +347,31 @@ same outcome for the same pull request head, do not submit another review.
 If a review submission command returns ambiguous output, fetch reviews before
 retrying; retry only when no valid marker with the intended outcome was
 accepted.
+
+### Pre-Merge Readiness Gate
+
+Before merging a normal GitHub-backed implementation pull request, run the
+read-only composite gate from the target repository root:
+
+```text
+npx agenticloop github-ready --pr <number>
+```
+
+It runs the evidence preflight and the review audit together and returns one
+merge-readiness verdict, so the orchestrator does not have to remember and
+sequence `github-preflight` and `github-review-audit` separately. It accepts the
+same `--issue`, `--repo`, and `--json` options. It is strictly read-only: it
+never merges, comments, edits issues, or otherwise mutates GitHub. It requires
+both component checks to pass and to agree on the PR head and linked issue, and
+it fails closed when they disagree.
+
+Do not merge unless `github-ready` exits successfully. Automatic within-group
+merge authorization only removes a human prompt; it never removes the evidence,
+review, or acceptance requirements. A current `needs_revision` result, a missing
+review, a stale review artifact, or a failed independent-review requirement
+always blocks merge. The original `github-preflight` (pre-review) and
+`github-review-audit` (provenance) commands remain available for their narrower
+purposes.
 
 ### Close Or Accept Task
 

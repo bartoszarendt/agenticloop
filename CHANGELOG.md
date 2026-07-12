@@ -3,6 +3,24 @@
 ## 0.1.0 (Unreleased)
 
 ### Added
+- `github-ready` composite pre-merge gate: `npx agenticloop github-ready --pr
+  <number> [--issue <number>] [--repo <owner/name>] [--json]` runs the evidence
+  preflight and the review audit together and returns one merge-readiness
+  verdict, so the orchestrator has a single read-only command to run before
+  merging a GitHub-backed implementation PR. It reuses the existing functions
+  in-process, never mutates GitHub, requires both checks to pass, and fails
+  closed when they disagree on the PR head or linked issue. The original
+  `github-preflight` and `github-review-audit` commands remain available.
+- Independent-review requirement now reads canonical YAML frontmatter
+  `independent_review_required: true|false` from the linked GitHub task issue, in
+  addition to the compatibility `AGENT_INDEPENDENT_REVIEW_REQUIRED: true` marker.
+  Both share the files-backend boolean parser. Conflicting representations, a
+  malformed YAML value, or malformed/duplicate markers fail closed. Quoted or
+  example markers inside fenced code, blockquotes, or indented code stay ignored.
+- Orchestrator model guidance: a provider-neutral note in `docs/host-adapters.md`
+  recommends an orchestration model reliable at multi-step instruction following,
+  state tracking, tool routing, and stop-condition enforcement, without naming or
+  ranking specific models.
 - Activation boundary and standalone engineer: `AGENTIC_LOOP.md` now states that
   installing, discovering, or reading the methodology does not activate it — full
   operation requires explicit activation. The canonical `engineer` role is
@@ -88,6 +106,18 @@
 - Contract tests for supported adapter status.
 
 ### Changed
+- Startup guidance: the orchestrator confirms `npx agenticloop validate` reports
+  no errors before implementation begins; warnings are triaged but only errors
+  block startup, and validation is not rerun every task unless config or toolkit
+  assets change.
+- Closeout guidance: for a GitHub-backed group, the maintainer verifies every
+  included PR was accepted (via `github-ready`) before publishing the closeout
+  marker; missing acceptance or a current `needs_revision` blocks
+  `AGENT_CLOSEOUT_STATUS: complete`. Missing historical events are never
+  fabricated.
+- The removed `.agenticloop/project.md` legacy fields (`summary_template` and
+  peers) now produce an actionable validation error saying the field should be
+  removed and that task summaries live inline in the task record.
 - Direct callers of `evaluateGitHubReviewAudit` must pass normalized REST human reviews
   through the `humanReviews` parameter; `prData.reviews` is no longer used as human-review
   evidence.

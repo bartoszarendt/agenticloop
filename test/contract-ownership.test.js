@@ -104,6 +104,22 @@ describe('contract ownership', () => {
     assert.match(owner, /same-session fallback does not/);
   });
 
+  it('keeps the detailed pre-merge gate in backends/github.md and references it elsewhere', () => {
+    // The detailed "Pre-Merge Readiness Gate" section (a Markdown heading) is
+    // owned by the GitHub backend doc; other files reference it by name only.
+    const gateOwners = ownersOf(body => /^### Pre-Merge Readiness Gate$/m.test(body));
+    assert.deepEqual(gateOwners, ['backends/github.md'], gateOwners.join(', '));
+
+    const github = read('backends/github.md');
+    assert.match(github, /npx agenticloop github-ready --pr/);
+
+    // The composite gate is discoverable from the roles/skills that gate merge
+    // and closeout, by reference rather than by copied procedure.
+    assert.match(read('agents/orchestrator.md'), /github-ready/);
+    assert.match(read('skills/review-and-accept/SKILL.md'), /github-ready/);
+    assert.match(read('skills/task-closeout/SKILL.md'), /github-ready/);
+  });
+
   it('every referenced skill exists', () => {
     const known = new Set(skillNames());
     // Documentation placeholder used to explain the [[skill-name]] convention.

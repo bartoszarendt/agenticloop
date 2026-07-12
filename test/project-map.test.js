@@ -10,6 +10,7 @@ import {
   validateProjectMap,
   isValidTaskId,
 } from '../src/project-map.js';
+import { validateConfig } from '../src/validate-config.js';
 import { getDocumentRoleRegistry } from '../src/document-roles.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -201,13 +202,29 @@ describe('validateProjectMap', () => {
     assert.ok(validation.errors.some(error => error.includes('phase_summary_template')));
   });
 
-  it('rejects summary_template as a removed legacy key', () => {
+  it('rejects summary_template as a removed legacy key with actionable guidance', () => {
     const dir = makeProjectMap([
       'summary_template: ".agenticloop/summaries/{summarySlug}.md"',
     ]);
     const result = loadProjectMap(dir);
     const validation = validateProjectMap(result.config, result.raw, dir);
-    assert.ok(validation.errors.some(error => error.includes('summary_template')));
+    const summaryError = validation.errors.find(error => error.includes('summary_template'));
+    assert.ok(summaryError, 'expected an error naming summary_template');
+    // The diagnostic must be actionable: say to remove the field and that
+    // summaries now live inline in the task record.
+    assert.match(summaryError, /should be removed/);
+    assert.match(summaryError, /inline in the task record/);
+  });
+
+  it('surfaces the summary_template diagnostic through validateConfig', () => {
+    const dir = makeProjectMap([
+      'summary_template: ".agenticloop/summaries/{summarySlug}.md"',
+    ]);
+    const { errors } = validateConfig(dir);
+    const summaryError = errors.find(error => error.includes('summary_template'));
+    assert.ok(summaryError, `expected validateConfig to surface the summary_template error, got: ${errors.join('; ')}`);
+    assert.match(summaryError, /should be removed/);
+    assert.match(summaryError, /inline in the task record/);
   });
 
   it('requires custom grouping fields', () => {

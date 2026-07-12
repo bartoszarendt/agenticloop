@@ -98,6 +98,15 @@ accepted outcome; use `--expect-status needs_revision` for revision audits. If i
 cannot run, report that limitation and follow the backend's blocked or exception
 path; do not claim mechanical validation.
 
+The linked task issue expresses the independent-review requirement through
+canonical YAML frontmatter `independent_review_required: true`; the explicit
+`AGENT_INDEPENDENT_REVIEW_REQUIRED: true` marker remains a supported
+compatibility form. Do not duplicate both forms; conflicting representations
+fail closed. For the single pre-merge acceptance gate, `npx agenticloop
+github-ready --pr <number>` runs the evidence preflight and this audit together
+and returns one merge-readiness verdict; see the Pre-Merge Readiness Gate in
+`agenticloop/backends/github.md`.
+
 The audit discovers loop markers from both PR issue comments and PR review
 bodies, verifies marker authorship against the authenticated loop account, and
 requires the maintainer attribution trailer on the same filtered live body as the

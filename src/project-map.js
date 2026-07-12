@@ -152,7 +152,11 @@ export function validateProjectMap(config, raw, repoRoot) {
 
   for (const legacyKey of LEGACY_FRONTMATTER_KEYS) {
     if (raw[legacyKey] !== undefined) {
-      errors.push(`project.md: '${legacyKey}' is no longer supported; task summaries are inline in the task record and source documents use typed roles`);
+      errors.push(
+        `project.md: '${legacyKey}' is no longer supported and should be removed from the frontmatter. ` +
+        `Task summaries now live inline in the task record (the work-unit summary section), and source ` +
+        `documents are selected through typed 'documents' roles.`
+      );
     }
   }
 

@@ -1185,3 +1185,129 @@ describe('Review audit result semantics', () => {
     assert.equal(result.acceptanceReady, false);
   });
 });
+
+describe('Independent-review requirement detection', () => {
+  // A minimal task-record-style body with YAML frontmatter.
+  function yamlBody(value, extra = '') {
+    return `---\nindependent_review_required: ${value}\n---\n\n# T-001 Task\n${extra}`;
+  }
+
+  it('recognizes canonical YAML independent_review_required: true', () => {
+    assert.deepEqual(taskRequiresIndependentReview(yamlBody('true')), { value: true, error: null });
+  });
+
+  it('recognizes canonical YAML independent_review_required: false', () => {
+    assert.deepEqual(taskRequiresIndependentReview(yamlBody('false')), { value: false, error: null });
+  });
+
+  it('still recognizes the explicit marker true (compatibility form)', () => {
+    assert.deepEqual(
+      taskRequiresIndependentReview('AGENT_INDEPENDENT_REVIEW_REQUIRED: true'),
+      { value: true, error: null }
+    );
+  });
+
+  it('accepts both forms when they agree (YAML true + marker true)', () => {
+    const body = yamlBody('true', '\nAGENT_INDEPENDENT_REVIEW_REQUIRED: true\n');
+    assert.deepEqual(taskRequiresIndependentReview(body), { value: true, error: null });
+  });
+
+  it('treats YAML true with an absent marker as required', () => {
+    assert.deepEqual(taskRequiresIndependentReview(yamlBody('true')), { value: true, error: null });
+  });
+
+  it('fails closed when YAML false conflicts with marker true', () => {
+    const body = yamlBody('false', '\nAGENT_INDEPENDENT_REVIEW_REQUIRED: true\n');
+    const result = taskRequiresIndependentReview(body);
+    assert.equal(result.value, false);
+    assert.match(result.error, /conflicting independent-review signals/);
+  });
+
+  it('fails closed on a malformed YAML boolean', () => {
+    const result = taskRequiresIndependentReview(yamlBody('maybe'));
+    assert.equal(result.value, false);
+    assert.match(result.error, /malformed independent_review_required frontmatter value/);
+  });
+
+  it('fails closed on a present but empty YAML value', () => {
+    const result = taskRequiresIndependentReview(yamlBody(''));
+    assert.equal(result.value, false);
+    assert.match(result.error, /malformed independent_review_required frontmatter value/);
+  });
+
+  it('fails closed when frontmatter containing the field is not terminated', () => {
+    const body = '---\nindependent_review_required: true\n\n# T-001 Task';
+    const result = taskRequiresIndependentReview(body);
+    assert.equal(result.value, false);
+    assert.match(result.error, /malformed YAML frontmatter/);
+  });
+
+  it('fails closed on duplicate YAML fields even when their values agree', () => {
+    const body = '---\nindependent_review_required: true\nindependent_review_required: true\n---\n\n# T-001 Task';
+    const result = taskRequiresIndependentReview(body);
+    assert.equal(result.value, false);
+    assert.match(result.error, /duplicate independent_review_required/);
+  });
+
+  it('fails closed on conflicting duplicate YAML fields', () => {
+    const body = '---\nindependent_review_required: true\nindependent_review_required: false\n---\n\n# T-001 Task';
+    const result = taskRequiresIndependentReview(body);
+    assert.equal(result.value, false);
+    assert.match(result.error, /duplicate independent_review_required/);
+  });
+
+  it('fails closed on multiple markers', () => {
+    const body = 'AGENT_INDEPENDENT_REVIEW_REQUIRED: true\nAGENT_INDEPENDENT_REVIEW_REQUIRED: true';
+    const result = taskRequiresIndependentReview(body);
+    assert.equal(result.value, false);
+    assert.match(result.error, /malformed AGENT_INDEPENDENT_REVIEW_REQUIRED marker/);
+  });
+
+  it('fails closed on a malformed single marker value', () => {
+    const result = taskRequiresIndependentReview('AGENT_INDEPENDENT_REVIEW_REQUIRED: yes');
+    assert.equal(result.value, false);
+    assert.match(result.error, /malformed AGENT_INDEPENDENT_REVIEW_REQUIRED marker/);
+  });
+
+  it('ignores marker-looking examples inside a code fence', () => {
+    const body = 'Example:\n```\nAGENT_INDEPENDENT_REVIEW_REQUIRED: true\n```\nEnd.';
+    assert.deepEqual(taskRequiresIndependentReview(body), { value: false, error: null });
+  });
+
+  it('ignores marker-looking examples inside a blockquote', () => {
+    const body = '> AGENT_INDEPENDENT_REVIEW_REQUIRED: true';
+    assert.deepEqual(taskRequiresIndependentReview(body), { value: false, error: null });
+  });
+
+  it('reports no requirement when neither representation is present', () => {
+    assert.deepEqual(taskRequiresIndependentReview('# T-001\nJust a task body.'), { value: false, error: null });
+  });
+
+  it('rejects a same-session fallback when YAML frontmatter requires independent review', () => {
+    const result = evaluateGitHubReviewAudit({
+      ...data({ comments: [marker({ mode: 'single_agent_fallback' })] }),
+      issueData: { number: 7, body: yamlBody('true') },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.independentReviewRequired, true);
+    assert.match(result.errors.join('\n'), /cannot accept/);
+  });
+
+  it('accepts a valid independent mode when YAML frontmatter requires independent review', () => {
+    const result = evaluateGitHubReviewAudit({
+      ...data({ comments: [marker({ mode: 'host_subagent' })] }),
+      issueData: { number: 7, body: yamlBody('true') },
+    });
+    assert.equal(result.ok, true, result.errors.join('\n'));
+    assert.equal(result.independentReviewRequired, true);
+  });
+
+  it('rejects acceptance when the independent-review YAML field is malformed', () => {
+    const result = evaluateGitHubReviewAudit({
+      ...data({ comments: [marker({ mode: 'single_agent_fallback' })] }),
+      issueData: { number: 7, body: yamlBody('') },
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /malformed independent_review_required frontmatter value/);
+  });
+});

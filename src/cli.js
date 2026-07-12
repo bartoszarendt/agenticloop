@@ -8,6 +8,7 @@
  *   agenticloop remove [--target <dir>] [--dry-run|--yes]
  *   agenticloop validate [--target <dir>]
  *   agenticloop github-preflight --pr <number> [--issue <number>] [--repo <owner/name>] [--json]
+ *   agenticloop github-ready --pr <number> [--issue <number>] [--repo <owner/name>] [--json]
  *   agenticloop event-logging <event_type> [--target <dir>] [--summary <text>] [--task <id>]
  *   agenticloop event-logging validate [--target <dir>] [--output <file>]
  *   agenticloop event-logging audit --task <id> [--target <dir>] [--require a,b,c]
@@ -86,6 +87,7 @@ import { runValidation } from './validate-runner.js';
 import { validateLinks, formatLinkErrors } from './link-validator.js';
 import { runPreflight, PreflightError } from './github-preflight.js';
 import { runGitHubReviewAudit, GitHubReviewAuditError } from './github-review-audit.js';
+import { runGitHubReady, formatGitHubReadyReport, GitHubReadyError } from './github-ready.js';
 import {
   cleanupAgenticLoopWorktrees,
   createAgenticLoopWorktree,
@@ -295,6 +297,8 @@ Commands:
   github-preflight      Pre-review gate: verify a GitHub PR body carries final-state
                         evidence for every required check, tied to the current head.
   github-review-audit   Verify artifact-bound GitHub review provenance for a PR.
+  github-ready          Read-only pre-merge gate: run the evidence preflight and the
+                        review audit together and report one merge-readiness verdict.
   doctor                Show setup checklist, adapter state, and next commands.
   task                  Manage files-backed task records (list, lint, new, status).
   worktree              Manage guarded Agentic Loop Git worktrees (add, guard, list, remove, cleanup, resolve-state, prune).
@@ -339,6 +343,15 @@ Options (github-review-audit):
                         needs_revision, it must be a CHANGES_REQUESTED
                         current-head native GitHub review.
   --json                Emit machine-readable JSON instead of human-readable output.
+
+Options (github-ready):
+  --pr <number>         Pull request number to check. Required.
+  --issue <number>      Linked task issue number (default: inferred from PR closing references).
+  --repo <owner/name>   Target repository (default: gh-resolved current repo).
+  --json                Emit machine-readable JSON instead of human-readable output.
+                        Read-only: runs github-preflight and github-review-audit and
+                        requires both (and their PR head/linked issue) to agree. It never
+                        merges, comments, or edits GitHub state.
 
 Options (doctor):
   --target <dir>        Directory to inspect (default: current directory).
@@ -1010,6 +1023,41 @@ async function cmdGithubReviewAudit(args) {
     }
     console.log();
   }
+  process.exitCode = result.ok ? 0 : 1;
+}
+
+async function cmdGithubReady(args) {
+  const { opts } = parseArgs(args);
+  const asJson = Boolean(opts.json);
+  if (!opts.pr) {
+    if (asJson) console.log(JSON.stringify({ ok: false, readyForMerge: false, errors: ['--pr <number> is required'] }));
+    else console.error('github-ready requires --pr <number>');
+    process.exitCode = 1;
+    return;
+  }
+
+  let result;
+  try {
+    result = runGitHubReady({ pr: opts.pr, issue: opts.issue, repo: opts.repo });
+  } catch (error) {
+    if (!(error instanceof GitHubReadyError)) throw error;
+    if (asJson) console.log(JSON.stringify({ ok: false, readyForMerge: false, errors: [error.message] }));
+    else console.error(`github-ready failed: ${error.message}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (asJson) {
+    console.log(JSON.stringify(result));
+    process.exitCode = result.ok ? 0 : 1;
+    return;
+  }
+
+  const { summary, errors } = formatGitHubReadyReport(result);
+  console.log();
+  for (const line of summary) console.log(line);
+  for (const error of errors) console.error(`    ERROR: ${error}`);
+  console.log();
   process.exitCode = result.ok ? 0 : 1;
 }
 
@@ -1880,6 +1928,9 @@ switch (command) {
     break;
   case 'github-review-audit':
     await cmdGithubReviewAudit(rest);
+    break;
+  case 'github-ready':
+    await cmdGithubReady(rest);
     break;
   case 'doctor':
     await cmdDoctor(rest);

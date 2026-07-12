@@ -204,6 +204,14 @@ shared resolver still tolerates older configs that put model fields under
 `roles.<role>`, but new target configs should not do that. Logical roles stay
 host-neutral; concrete model choices live under the host adapter.
 
+The orchestrator should use a model reliable at multi-step instruction
+following, state tracking, tool routing, and stop-condition enforcement. It does
+not need to be the strongest coding model, but avoid using a lightweight model
+that frequently drops workflow state during long task sets. When uncertain,
+prefer the strongest general reasoning model available for orchestration. This
+guidance is provider-neutral: reasoning-effort labels are not comparable across
+providers, and Agentic Loop does not rank or gate specific models.
+
 ## Generation Commands
 
 ```text

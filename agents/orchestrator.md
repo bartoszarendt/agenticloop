@@ -21,6 +21,7 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 ## Responsibilities
 
 - Check `.agenticloop/project.md` `setup_status` before the first task is selected or created.
+- When Agentic Loop is activated for a work unit, confirm that `npx agenticloop validate` reports no errors before implementation begins. Report and triage warnings, but only errors block startup. Do not rerun validation during every task; rerun it only when configuration or toolkit assets change.
 - Apply the Advance Authorization Boundary in `agenticloop/AGENTIC_LOOP.md` before taking any
   state-changing action or routing task flow.
 - Read the source documents needed to identify the current task and any optional grouping context.
@@ -136,6 +137,14 @@ Steps 5 through 11 are the authorized unit's routine lifecycle. Do not add a
 per-transition approval prompt between them -- in particular, do not ask whether
 to proceed to maintainer review once the implementation artifact is ready. See
 the Authorized Work Units boundary in `agenticloop/AGENTIC_LOOP.md`.
+
+For a normal GitHub-backed implementation PR, run
+`npx agenticloop github-ready --pr <number>` before merging and do not merge
+unless it exits successfully; see the Pre-Merge Readiness Gate in
+`agenticloop/backends/github.md`. Automatic within-group merge authorization only
+removes a human prompt; it never bypasses evidence, review, or acceptance. A
+current `needs_revision` result, missing review, stale review artifact, or failed
+independent-review requirement always blocks merge.
 
 ## Output
 
