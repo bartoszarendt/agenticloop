@@ -25,12 +25,16 @@ const TOLERANCE = 0.05;
 // agentDefinitions baselines were deliberately raised when the canonical
 // engineer role gained its dual-mode (standalone / Agentic Loop) structure and
 // the Codex/Copilot/Cursor engineer preamble gained the mode-selection wording.
+// Baselines were deliberately raised again when the Maintainer Review Fixup
+// exception was added: the detailed procedure in review-and-accept grows every
+// adapter's reference library, and the maintainer/orchestrator role edits grow
+// agentDefinitions.
 const ADAPTERS = [
-  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 7319, agentDefinitions: 6740, activationSurface: 579 } },
-  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 38606, agentDefinitions: 7171, activationSurface: 869, referenceLibrary: 31241 } },
-  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 30781, agentDefinitions: 6330, activationSurface: 1308, referenceLibrary: 23720 } },
-  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 36857, agentDefinitions: 6928, activationSurface: 848, referenceLibrary: 29728 } },
-  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 36684, agentDefinitions: 6925, activationSurface: 678, referenceLibrary: 29728 } },
+  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 7709, agentDefinitions: 7124, activationSurface: 585 } },
+  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 42241, agentDefinitions: 7586, activationSurface: 875, referenceLibrary: 33780 } },
+  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 33565, agentDefinitions: 6714, activationSurface: 1314, referenceLibrary: 25537 } },
+  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 40399, agentDefinitions: 7312, activationSurface: 860, referenceLibrary: 32227 } },
+  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 40220, agentDefinitions: 7309, activationSurface: 684, referenceLibrary: 32227 } },
 ];
 
 let tmpDir;

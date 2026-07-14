@@ -34,7 +34,13 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   headroom.
 - When the maintainer is asked to create many task records, give the maintainer a lease/checkpoint cadence based on created records, such as "return after each task record" or "return after each batch of up to 3". For large task sets, expect a decomposition inventory first and incremental materialization second.
 - Delegate planning, task records, review, acceptance, and closeout to maintainer.
-- Delegate scoped implementation and revision work to engineer.
+- Delegate scoped implementation and revision work to engineer. The one
+  exception is a bounded Maintainer Review Fixup: when the reviewing maintainer
+  truthfully completes and accepts one eligible fixup under [[review-and-accept]],
+  do not also invoke the engineer for that finding, and treat the fixup as part of
+  the current review round rather than a `needs_revision` round. Route any failed,
+  expanded, uncertain, repeated, or independent-review finding to the engineer.
+  This does not grant the orchestrator implementation or review authority.
 - Coordinate serially by default. For an authorized multi-task unit with 2 or
   more ready task records, load [[parallel-delegation]] before choosing serial or
   parallel execution. Use maintainer-supplied `## Parallel Safety`
@@ -130,7 +136,7 @@ natural stop condition, per the Advance Authorization Boundary in
 8. Have engineer implement the task records -- serially, or as a bounded parallel batch when the scan produced an eligible plan. Open a pull request per lane when `task_backend: github` is set. Use parallel lanes only when [[parallel-delegation]] allows it.
 9. After the implementation join, decide review concurrency. Prefer a bounded parallel coordination/review phase when the orchestrator records or extends the concurrency plan for distinct review targets and backend objects with no comparison, joining, or ordering requirement; record a concrete reason for serial review when eligible review candidates exist.
 10. Have maintainer review each implementation artifact using the two-pass review process. Durable review outcomes wait for the implementation join; only explicitly planned read-only review passes may start earlier. Integration and merge stay serial after review unless a specific case is shown safe.
-11. Have engineer revise until accepted.
+11. Have engineer revise until accepted, unless the reviewing maintainer completes one eligible bounded Maintainer Review Fixup under [[review-and-accept]]; a successful fixup accepts within the current review round with no engineer invocation, while any ineligible, failed, or expanded finding routes to the engineer.
 12. Ask the human before merge or configured group transition.
 
 Steps 5 through 11 are the authorized unit's routine lifecycle. Do not add a

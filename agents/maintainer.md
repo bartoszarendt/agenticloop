@@ -37,6 +37,7 @@ acting.
 - Set `independent_review_required: true` in the task record before implementation for tasks touching security or authorization boundaries, secrets/credentials/permissions, destructive or irreversible data operations, production or release controls, or public API/schema migrations, so acceptance cannot rest on same-session `single_agent_fallback` review. See [[task-record-contract]] and [[review-and-accept]].
 - Review implementation artifacts with the two-pass review from `agenticloop/AGENTIC_LOOP.md`.
 - Record review provenance through [[review-and-accept]]; stale or insufficient provenance cannot accept work.
+- During an active eligible review, may apply one bounded Maintainer Review Fixup per [[review-and-accept]]: evaluate and record the eligibility decision before editing, disclose the fixup and attribute maintainer-authored commits, refresh final-state evidence for the artifact just changed, re-review both passes against the result, and accept with `review_mode: single_agent_fallback`. Hand the finding to the engineer whenever eligibility fails or the bound is exceeded. A successful fixup is part of the current review round, not a `needs_revision` round.
 - For GitHub-backed pull request reviews, check existing agent-authored review markers for
   the current PR head before posting a new review.
 - Require fresh verification evidence with command verdicts or relevant excerpts before accepting work.
@@ -67,7 +68,13 @@ acting.
 
 ## Edit Boundary
 
-- Do not edit implementation files.
+- Do not edit implementation files. The only exception is one bounded Maintainer
+  Review Fixup performed exactly under [[review-and-accept]]: during an active
+  eligible review the maintainer may apply a single fully understood quality
+  correction to the artifact under review, refresh final-state evidence, and
+  accept. This exception does not authorize ordinary implementation, task-contract
+  changes, independent-review work, or repeated repair cycles; when the bound is
+  exceeded the finding returns to the engineer.
 - May edit `.agenticloop/project.md` for `setup_status`, `setup_confirmed_at`, `setup_confirmed_by`, typed document selections, backend choice, task naming, and grouping during ordinary setup or confirmation.
 - May create or update target-owned decision records under `.agenticloop/decisions/`.
 - Ordinary first-run project-map confirmation does not require `change-request-gate`.
@@ -150,13 +157,15 @@ comfortably within budget.
 Event logging is optional and off by default. When `event_logging: enabled`,
 resolve the command per [[event-logging]]. Use the resolved command for
 maintainer-owned gates:
-`task.created`, `task.updated`, `review.started`, `review.result`,
+`task.created`, `task.updated`, `check.run`, `review.started`, `review.result`,
 `decision.recorded`, `blocked`, `needs_context`, `task.closed`, and
 `summary.published`. Include `--task <TASK-ID>` for task-scoped events when a
 decision is task-linked, `--role maintainer`, the required `--outcome` where
 the event type requires it, and a short summary. Do not attempt event logging
 when `event_logging` is disabled, and do not copy full task records, decision
 bodies, review bodies, or transcripts into the event log.
+When the maintainer runs required or cited verification during a Maintainer
+Review Fixup, emit `check.run` after each command per [[verification-evidence]].
 
 Feature-adoption telemetry: when event logging is enabled, mirror the
 task-record knobs into event `data` so `npx agenticloop event-logging report
@@ -200,6 +209,7 @@ For review, use:
 ## Review Status
 ## Pass 1: Task Compliance
 ## Pass 2: Quality
+## Maintainer Review Fixup   (optional; only when an eligible fixup was applied, per [[review-and-accept]])
 ## Evidence Checked
 ## Required Revisions
 ## Follow-Ups

@@ -339,6 +339,34 @@ request. The audit verifies:
 
 See [[review-and-accept]] for shared semantics.
 
+#### Maintainer Review Fixup (GitHub projection)
+
+[[review-and-accept]] owns the eligibility gate and full procedure. GitHub-specific
+projection:
+
+- Apply the fixup on the existing task branch and pull request; never commit to the
+  default or integration branch and never invoke a no-PR or no-review exception.
+- Before editing, create one attributed, editable PR comment as the durable fixup record and retain
+  its URL or id. Record the base PR head there, then update that same comment with the resulting PR
+  head, final evidence verdicts, accepted markers, and maintainer attribution; do not post a second
+  fixup record.
+- Attribute maintainer-authored commits with the `Task: <TASK-ID>` and
+  `Agent: maintainer` trailers.
+- Pushing the fixup changes `headRefOid` and invalidates prior head-bound evidence.
+  Rerun the required checks and update the PR body's `Current PR head` and
+  `## Evidence` for the new head.
+- After refreshing the PR body, run `npx agenticloop github-preflight --pr <number>` against the
+  final head, then complete the fresh two-pass review.
+- Post the accepted review markers against the final head in the durable fixup comment with
+  `AGENT_REVIEW_MODE: single_agent_fallback`. Do not add any new fixup marker.
+- Only after the accepted markers are durable, run the final-head review audit or composite gate:
+  `npx agenticloop github-review-audit --pr <number>` or
+  `npx agenticloop github-ready --pr <number>`. `github-ready` remains a post-acceptance,
+  pre-merge gate.
+- The GitHub issue still closes through the merged pull request, or through the
+  existing documented correction path if closure linkage failed. A fixup does not
+  itself authorize merge; the human merge checkpoint is unchanged.
+
 For status comments that are meant to be mutable, prefer editing the latest
 agent-authored marker comment instead of adding another equivalent marker. For
 pull request reviews, fetch existing reviews and the current head revision

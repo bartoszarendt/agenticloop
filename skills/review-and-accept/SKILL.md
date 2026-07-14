@@ -252,7 +252,12 @@ Check:
 The maintainer verifies the engineer's implementation summary and evidence; the maintainer does
 not author missing implementation evidence during acceptance. A reviewer-run command may support
 the review's `Evidence Checked`, but it does not satisfy missing or incomplete engineer evidence
-in the backend's canonical implementation-summary location.
+in the backend's canonical implementation-summary location. The one narrow exception is a
+`## Maintainer Review Fixup` (below): after the maintainer applies its own eligible fixup it may
+refresh the final-state evidence for the artifact it just changed. That exception never lets a
+reviewer repair evidence that was already missing or incomplete at the engineer handoff -- a
+finding of missing summary, evidence, linkage, or acceptance work is not fixup-eligible and stays
+`needs_revision`.
 
 Do not accept if:
 
@@ -297,6 +302,127 @@ Check:
 - Naming, boundaries, error handling, and duplication are appropriate for the task.
 
 Quality findings must be concrete and grounded in files or behavior.
+
+## Maintainer Review Fixup
+
+A Maintainer Review Fixup is one bounded edit packet the maintainer applies during an active
+implementation review to correct a single fully understood quality finding, refresh final-state
+evidence, re-review the resulting artifact, and accept it without an engineer revision handoff.
+This skill solely owns the procedure. It is not general implementation authority; other docs only
+reference or project it, and maintainers otherwise do not edit implementation files.
+
+### Eligibility gate
+
+A fixup may begin only when every condition holds. When any is uncertain, fail closed and route
+the finding to the engineer through the normal revision path.
+
+1. Pass 1 task compliance is already clean: the task record is valid; scope and acceptance
+   criteria are satisfied; the implementation artifact and backend linkage are valid; the
+   canonical implementation summary exists; and required implementation evidence exists and is
+   current for the pre-fix artifact. A finding that the summary, evidence, linkage, or acceptance
+   work is missing is not fixup-eligible and stays `needs_revision`.
+2. `independent_review_required` is not `true`.
+3. The task does not belong to a category that should have required independent review: security
+   or authorization boundaries; secrets, credentials, or permissions; destructive or irreversible
+   data operations; production or release controls; public API or schema migrations; or any
+   project policy requiring independent review. A fixup must never compensate for a missing
+   `independent_review_required: true` classification.
+4. Before editing, the maintainer can state the concrete finding, the exact intended correction,
+   the expected files or areas, and the verification that will prove the correction.
+5. The correction stays within existing task scope; stays within `Expected Files or Areas` or the
+   structured `allowed_paths`; adds no new file; adds or changes no dependency; changes no public
+   API, schema, migration, security boundary, permission model, release control, or destructive
+   behavior; changes no task contract, acceptance criteria, or locked decision; introduces no
+   behavior beyond the already accepted task outcome; and is not a disputed review item.
+6. Existing required checks adequately cover the correction. If a new or changed test is required,
+   the finding is not eligible and goes to the engineer. Test deletion is never an eligible fixup.
+7. The maintainer has exclusive ownership of the current branch, worktree, task record, and
+   backend objects. The branch/worktree is clean apart from known task state, and for GitHub the
+   branch is not the default or integration branch.
+8. At most one fixup episode is allowed per task. Inspect the review history for an earlier fixup
+   before using the path; if one exists, route the finding to the engineer.
+
+There is no mechanical line-count or file-count threshold. A small diff is only a heuristic
+because semantic risk matters more than size. The normative bound is one fully understood finding
+and one coherent edit packet.
+
+### Procedure
+
+1. Complete Pass 1 successfully.
+2. During Pass 2, identify a concrete quality finding.
+3. Evaluate and record the eligibility decision before editing.
+4. Record the pre-fix artifact: the current PR head SHA for GitHub, or the current
+   `implementation_artifact` for files.
+5. Start one durable `## Maintainer Review Fixup` record with the finding, rationale, base
+   artifact, correction, affected files, and planned verification. Follow the backend projection
+   for its mutable surface: update the same GitHub PR comment, or append result fields without
+   rewriting the files-backed plan.
+6. Apply the correction to the existing implementation artifact -- the current task branch and
+   pull request for GitHub, or the current local branch/commit/range/patch for files. Never commit
+   to a default or integration branch, and never create a no-PR or no-review exception through this
+   feature.
+7. Attribute maintainer-authored commits with the existing trailers:
+
+   ```text
+   Task: <TASK-ID>
+   Agent: maintainer
+   ```
+
+8. Treat any earlier review outcome as stale once the artifact changes: replace or clear the
+   mutable current review state, preserve append-only prior review history, and bind the final
+   outcome only to the resulting artifact.
+9. Rerun the focused verification and every required final-state check. When event logging is
+   enabled, emit `check.run` with role `maintainer` per [[verification-evidence]].
+10. Refresh the canonical implementation summary and evidence for the new artifact. This narrow
+    exception lets the maintainer publish fresh evidence it produced after its own fixup; it is not
+    permission to fabricate or reconstruct missing engineer evidence, and missing evidence as the
+    original finding is not fixup-eligible. For GitHub, update the PR body's `Current PR head` and
+    required-check evidence so the GitHub gates can validate the new head. For
+    files, follow the correction-entry rule before refreshing any previously published summary,
+    evidence claim, check result, or artifact reference.
+11. For GitHub, run `npx agenticloop github-preflight --pr <number>` only after publishing
+    final-head PR evidence. Failure follows the handoff path below.
+12. Complete a fresh Pass 1 and Pass 2 against the post-fix artifact.
+13. If accepted, append the resulting artifact, files, check verdicts, and outcome to the durable
+    record; record `review_status: accepted`, the exact `reviewed_artifact`, and
+    `review_mode: single_agent_fallback`. For GitHub, add the accepted markers to the same comment.
+14. `single_agent_fallback` is required because the maintainer authored part of the exact final
+    artifact it accepted, even when the orchestrator originally invoked that maintainer through a
+    real `host_subagent`.
+15. Keep role invocation and review provenance distinct: a `role.invoked` event may record
+    delegation mode `host_subagent` when true, while the final review outcome uses
+    `single_agent_fallback` after a self-authored fixup.
+16. For GitHub, run `github-review-audit` or `github-ready` after the accepted markers are durable.
+    `github-ready` remains post-acceptance and pre-merge.
+17. When event logging is enabled, use existing event types and optional free-form `data` such as
+    `{"maintainer_fixup": true, "base_artifact": "<before>", "fixup_artifact": "<after>"}`. Do not
+    add a new top-level event type or event schema.
+
+### Provenance
+
+A self-accepted fixup uses the existing `review_mode: single_agent_fallback`. Do not add a new
+review mode, a fixup marker, a fixup frontmatter field, or a task-record fixup-permission knob.
+The existing provenance system already permits `single_agent_fallback` for ordinary tasks, rejects
+it when `independent_review_required: true`, requires `reviewed_artifact` to equal the current
+implementation artifact, and (for GitHub) requires the marker to reference the exact current PR
+head. Disclosure is carried by the durable `## Maintainer Review Fixup` subsection and the commit
+attribution, not by new machine fields.
+
+### Round counting
+
+A successful fixup is part of the current review round. Emit or record one `review.started` for
+the review, apply and disclose the fixup, and emit or record the final `review.result: accepted`.
+Do not count a successful fixup as a `needs_revision` round, and do not emit an engineer
+`role.invoked` event, because no engineer was invoked.
+
+### Failure and handoff
+
+Stop the fixup and route to the engineer through the normal revision path if its scope expands;
+root-cause or implementation uncertainty appears; an unexpected file or subsystem becomes
+involved; a required check fails for a reason not already explained by the planned correction;
+another substantive implementation edit would be needed; or a second fixup episode appears
+necessary. On failure, do not silently erase or rewrite history: record the truthful current
+artifact and evidence, post or record `needs_revision`, and hand the task to the engineer.
 
 ## Re-review handoff (engineer)
 

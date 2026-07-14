@@ -93,6 +93,12 @@ target projects do not need toolkit-root `docs/` files at runtime.
   oracle, final proof required, and likely misfire to keep work aligned with the
   owner's outcome. Proof pressure complements acceptance criteria; it does not
   replace them.
+- **Maintainer Review Fixup**: a bounded Pass 2 review exception in which the
+  maintainer applies one fully understood quality correction to the artifact
+  under review, refreshes final-state evidence, re-reviews, and accepts without
+  an engineer revision handoff. Eligibility, procedure, and provenance are owned
+  by [[review-and-accept]]. A successful fixup is part of the current review
+  round, not a `needs_revision` round; independent-review tasks are ineligible.
 - **Needs context**: a task state used when the task record is ambiguous or
   incomplete and can be corrected by the maintainer.
 - **Blocked task**: a durable paused state requiring human action or external
@@ -795,7 +801,8 @@ issue and one pull request per implementation task:
    markers for the current PR head before posting a new marker. For normal
    GitHub-backed implementation tasks, the maintainer must treat a missing
    recognized closing keyword as a linkage defect before acceptance.
-6. Engineer revises until accepted.
+6. Engineer revises until accepted, unless the current review qualifies for a
+   bounded Maintainer Review Fixup under [[review-and-accept]].
 7. Human approves merge when appropriate.
 8. Issue closes through the merged PR. The task is not durably closed until
    GitHub shows the task issue closed, not merely because a local event was
@@ -909,6 +916,17 @@ Pass 2: code and documentation quality.
 
 If either pass fails, request revision. If review feedback is disputed, resolve
 the dispute with evidence rather than repeated assertion.
+
+When Pass 1 is already clean and a Pass 2 finding is minor and fully understood,
+the maintainer may apply one bounded **Maintainer Review Fixup** instead of
+requesting an engineer revision: it corrects the finding on the artifact under
+review, refreshes final-state evidence, re-runs both passes against the result,
+and accepts with `review_mode: single_agent_fallback`. A successful fixup is part
+of the current review round and does not create a `needs_revision` round.
+Independent-review tasks are ineligible, and any finding that expands, becomes
+uncertain, or exceeds one coherent edit packet returns to the normal engineer
+revision path. Merge, integration, issue closure, and closeout gates are
+unchanged. All eligibility and procedure live in [[review-and-accept]].
 
 Every review outcome records its mode and the exact artifact revision reviewed.
 Final acceptance requires current, non-stale provenance. Tasks requiring

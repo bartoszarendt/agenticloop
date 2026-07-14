@@ -3,6 +3,24 @@
 ## 0.1.0 (Unreleased)
 
 ### Added
+- Maintainer Review Fixup: a bounded Pass 2 review exception that lets a
+  reviewing maintainer correct one fully understood quality finding on the
+  artifact under review, refresh final-state evidence, re-review, and accept
+  without an engineer revision handoff. Pass 1 must already be clean; the bound is
+  one fully understood finding and one coherent edit packet, not a line count. A
+  successful fixup stays inside the current review round and does not consume a
+  `needs_revision` round; any expanded, uncertain, or failed finding routes back
+  to the engineer. It fails closed for independent-review tasks and cannot repair
+  summary, evidence, linkage, or acceptance work that was already missing at the
+  engineer handoff. Self-accepted fixups use the existing
+  `review_mode: single_agent_fallback` (truthful because the maintainer authored
+  part of the exact accepted artifact) with disclosure through a durable
+  `## Maintainer Review Fixup` review subsection and `Task:`/`Agent: maintainer`
+  commit trailers -- no new review mode, marker, frontmatter field, or task-record
+  knob. Merge, integration, issue closure, closeout, and cleanup gates are
+  unchanged. `skills/review-and-accept/SKILL.md` owns the procedure; the
+  methodology, roles, delegation, and backend docs reference or project it.
+
 - `github-ready` composite pre-merge gate: `npx agenticloop github-ready --pr
   <number> [--issue <number>] [--repo <owner/name>] [--json]` runs the evidence
   preflight and the review audit together and returns one merge-readiness

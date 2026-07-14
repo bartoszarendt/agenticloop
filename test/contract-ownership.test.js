@@ -120,6 +120,89 @@ describe('contract ownership', () => {
     assert.match(read('skills/task-closeout/SKILL.md'), /github-ready/);
   });
 
+  it('review-and-accept owns the detailed Maintainer Review Fixup procedure', () => {
+    // The detailed section (a Markdown heading) lives only in the skill; other
+    // files reference the feature by name without restating the procedure.
+    const sectionOwners = ownersOf(body => /^## Maintainer Review Fixup$/m.test(body));
+    assert.deepEqual(sectionOwners, ['skills/review-and-accept/SKILL.md'], sectionOwners.join(', '));
+
+    const owner = read('skills/review-and-accept/SKILL.md');
+    // The eligibility gate and its critical invariants live in the owner.
+    assert.match(owner, /### Eligibility gate/);
+    assert.match(owner, /one fully understood finding\s+and one coherent edit packet/);
+    // Independent-review tasks are rejected by the canonical procedure.
+    assert.match(owner, /`independent_review_required` is not `true`/);
+    // The canonical procedure requires single_agent_fallback provenance.
+    assert.match(owner, /`review_mode: single_agent_fallback`/);
+    // Missing pre-existing evidence is not fixup-eligible.
+    assert.match(owner, /missing.*(summary|evidence).*not fixup-eligible/i);
+  });
+
+  it('orders GitHub fixup evidence, review, and readiness gates correctly', () => {
+    const owner = read('skills/review-and-accept/SKILL.md');
+    const start = owner.indexOf('\n## Maintainer Review Fixup\n');
+    const end = owner.indexOf('\n## Re-review handoff', start);
+    assert.ok(start >= 0 && end > start, 'expected canonical fixup section');
+    const fixup = owner.slice(start, end);
+
+    const refresh = fixup.indexOf('Refresh the canonical implementation summary and evidence');
+    const preflight = fixup.indexOf('github-preflight --pr <number>');
+    const accepted = fixup.indexOf('If accepted, append');
+    const ready = fixup.indexOf('`github-ready`');
+    assert.ok(refresh >= 0 && preflight > refresh,
+      'final-head evidence must be refreshed before github-preflight');
+    assert.ok(accepted > preflight,
+      'acceptance must follow final-head preflight');
+    assert.ok(ready > accepted,
+      'github-ready must run only after accepted current-head markers are durable');
+  });
+
+  it('methodology, roles, and delegation reference the Maintainer Review Fixup', () => {
+    for (const rel of [
+      'AGENTIC_LOOP.md',
+      'agents/maintainer.md',
+      'agents/orchestrator.md',
+      'skills/role-delegation/SKILL.md',
+    ]) {
+      assert.match(read(rel), /Maintainer Review Fixup/, `${rel} must reference the feature`);
+    }
+  });
+
+  it('maintainer edit boundary carries the bounded fixup exception', () => {
+    const maintainer = read('agents/maintainer.md');
+    // The absolute prohibition retains a single named exception.
+    assert.match(maintainer, /Do not edit implementation files\. The only exception is one bounded Maintainer\s+Review Fixup/);
+    const eventSection = maintainer.slice(maintainer.indexOf('## Event Logging'));
+    assert.match(eventSection, /`check\.run`/,
+      'maintainer-owned fixup verification must emit check.run');
+  });
+
+  it('backend docs project the fixup without new schema', () => {
+    const github = read('backends/github.md');
+    const files = read('backends/files.md');
+    assert.match(github, /Maintainer Review Fixup \(GitHub projection\)/);
+    assert.match(github, /AGENT_REVIEW_MODE: single_agent_fallback/);
+    assert.match(github, /editable PR comment/);
+    const fixupStart = github.indexOf('#### Maintainer Review Fixup (GitHub projection)');
+    const fixupEnd = github.indexOf('\n### ', fixupStart);
+    const githubFixup = github.slice(fixupStart, fixupEnd);
+    assert.ok(githubFixup.indexOf('github-preflight --pr <number>') < githubFixup.indexOf('Post the accepted review markers'),
+      'GitHub fixup preflight must precede accepted markers');
+    assert.ok(githubFixup.indexOf('Post the accepted review markers') < githubFixup.indexOf('github-ready --pr <number>'),
+      'GitHub fixup ready gate must follow accepted markers');
+    assert.match(files, /Maintainer Review Fixup \(files projection\)/);
+    assert.match(files, /review_mode: single_agent_fallback/);
+  });
+
+  it('the fixup introduces no new review mode or frontmatter field', () => {
+    // Fail closed against schema creep the feature explicitly forbids.
+    for (const { rel, body } of canonicalRuntimeFiles()) {
+      assert.ok(!body.includes('AGENT_REVIEW_FIXUP_COMMITS'), `${rel} must not add AGENT_REVIEW_FIXUP_COMMITS`);
+      assert.ok(!body.includes('review_fixup_commits'), `${rel} must not add review_fixup_commits`);
+      assert.ok(!body.includes('fixups_allowed'), `${rel} must not add a fixups_allowed knob`);
+    }
+  });
+
   it('every referenced skill exists', () => {
     const known = new Set(skillNames());
     // Documentation placeholder used to explain the [[skill-name]] convention.

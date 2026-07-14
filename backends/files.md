@@ -294,6 +294,26 @@ review fields: `review_status`, `review_mode`, `reviewed_artifact`, and
 earlier rounds. See [[review-and-accept]] for shared review semantics; files
 validation mechanically requires the two artifact fields to match exactly.
 
+### Maintainer Review Fixup (files projection)
+
+[[review-and-accept]] owns the eligibility gate and full procedure. Files-specific
+projection:
+
+- Apply the fixup to the current recorded local artifact (branch, commit, range, or
+  patch); do not create a PR, merge, or no-review exception through this path.
+- Attribute maintainer-authored commits with the `Task: <TASK-ID>` and
+  `Agent: maintainer` trailers.
+- Update `implementation_artifact` to the resulting artifact and clear or replace
+  the stale mutable review fields.
+- Append the fixup disclosure to the append-only review history, and append a dated
+  `## Revision Log` or `## Comments` entry before refreshing any previously
+  published summary, evidence claim, check result, or artifact reference.
+- Rerun every required final-state check and refresh the current implementation
+  summary and `## Evidence` for the new artifact.
+- Set `reviewed_artifact` to exactly the resulting `implementation_artifact` and
+  accept only after a fresh two-pass review, with `review_mode: single_agent_fallback`.
+- Use `closed` only after integration, as before.
+
 ### Close Or Accept Task
 
 Set:

@@ -53,11 +53,24 @@ Apply this skill when the orchestrator:
 | Validate host/lane capability, record concurrency plan, and delegate lanes | orchestrator |
 | Implement scoped work | engineer |
 | Revise after review feedback | engineer |
+| Apply one bounded Maintainer Review Fixup during an active eligible review | maintainer |
 | Review implementation artifacts | maintainer |
 | Accept or request revision | maintainer |
 | Closeout and retrospective | maintainer |
 
 The orchestrator does not create task records, implement, review, or accept.
+
+Scoped implementation and ordinary revision remain engineer-owned. The single
+exception is a bounded Maintainer Review Fixup: during an active eligible review
+the maintainer already executing the review may apply one fully understood
+correction under [[review-and-accept]] and accept the result. A successful fixup
+requires no engineer invocation and is not a `needs_revision` round; an
+unsuccessful, ineligible, expanded, or independent-review finding returns to the
+normal engineer handoff. No extra single-agent role-assumption ceremony is
+needed beyond the maintainer's existing execution -- the delegation-mode of the
+role invocation and the final `review_mode` are distinct, so a maintainer invoked
+via `host_subagent` still records `single_agent_fallback` when it accepts its own
+fixup.
 
 ## Slice sizing
 
@@ -239,7 +252,10 @@ Maintainer review delegation must include:
   reference for the task issue,
 - fetch existing PR reviews before posting and skip submission when the latest valid
   agent-authored marker already records the same outcome for the current PR head,
-- post the review marker only after checking the PR artifact.
+- post the review marker only after checking the PR artifact,
+- may apply one bounded Maintainer Review Fixup per [[review-and-accept]] on the
+  existing task branch and PR, then rerun checks, refresh the PR-body head evidence,
+  and accept the resulting head with `AGENT_REVIEW_MODE: single_agent_fallback`.
 
 An issue comment with evidence is supporting evidence, not the artifact. The
 task is not complete until the PR is reviewed, accepted, and merged or closed
@@ -273,7 +289,11 @@ Maintainer review delegation must include:
   changed in the current summary,
 - update `review_status` in frontmatter,
 - append the maintainer review section to the task file,
-- reject acceptance if `implementation_artifact` or final verification evidence is missing.
+- reject acceptance if `implementation_artifact` or final verification evidence is missing,
+- may apply one bounded Maintainer Review Fixup per [[review-and-accept]] on the
+  current local artifact, then update `implementation_artifact`, refresh evidence
+  under the correction-entry rule, set `reviewed_artifact` to the resulting
+  artifact, and accept with `review_mode: single_agent_fallback`.
 
 ## Human Checkpoint Rules
 
