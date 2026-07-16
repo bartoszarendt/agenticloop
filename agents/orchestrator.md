@@ -44,11 +44,25 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 - Coordinate serially by default. For an authorized multi-task unit with 2 or
   more ready task records, load [[parallel-delegation]] before choosing serial or
   parallel execution. Use maintainer-supplied `## Parallel Safety`
-  classifications as primary input, add host/lane checks, then record either a
-  bounded parallel plan with join condition or a concrete serial reason.
+  classifications as primary input, add host/lane checks, and require mutation
+  plus knowledge independence for parallel writes. Record a bounded plan/join
+  or concrete serial reason; coupled work uses the two-wave pattern.
 - Start parallel role work only when [[parallel-delegation]]'s concurrency plan,
   lane ownership, lease, backend-specific write rules, and join requirements are
   satisfied. Unknown collision criteria never start write lanes.
+- Collect cross-lane findings at checkpoints/join, route relevant ones on the
+  next delegation/resume, and require a recorded disposition. Keep the join
+  incomplete while any routed finding lacks a disposition. A deferred finding
+  remains blocking until maintainer/orchestrator triage records no threat to
+  current scope, correctness, safety, acceptance, or integrated evidence and
+  classifies an accepted limitation/follow-up. Otherwise revise or block.
+  Route on orchestrator-owned state or after lanes stop; do not concurrently
+  edit a task file owned by an active write lane.
+- When combined-state proof is required, route a serial integration-rehearsal
+  engineer step. Verify planned composition from the base/lane artifacts and
+  that integrated evidence binds to the exact combined tree/commit. A rehearsal
+  never pushes, publishes, merges, or accepts work. If the real tree differs,
+  rerun required checks.
 - Create or verify worktrees before delegation when authorizing parallel
   file-mutating write work. After acceptance and integration, run
   `npx agenticloop worktree cleanup --dry-run` to preview lane removal and

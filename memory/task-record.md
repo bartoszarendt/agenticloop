@@ -108,8 +108,28 @@ implementation, or coordination/review), role, read/write mode, owned backend
 objects, worktree path and branch for file-mutating write lanes, implementation
 or workflow artifact, allowed files or areas, shared collision risks (including
 shared generated files, lockfiles, schemas, APIs, external state, labels,
-comments, status markers, closeout state, event logs, and group state), lease
-checkpoint cadence, stop condition, and join condition.
+comments, status markers, closeout state, event logs, and group state), and
+test/fixture/snapshot/shared-helper ownership. Also record:
+
+- the knowledge-coupling classification (`independent | coupled | unknown`)
+  for each lane pair, and the two-wave pattern when any pair is coupled;
+- the checkpoint and join finding-routing procedure: cross-lane findings are
+  declared at each lease checkpoint and final return (or `Cross-lane findings:
+  none`), the orchestrator routes relevant findings, and each recipient records
+  one disposition (`applied`, `already satisfied`, `rejected` with evidence, or
+  `deferred` with a reason);
+- the verification topology for every planned check: stable check id, exact
+  command, purpose, owner, target artifact revision or tree, relevant
+  environment/toolchain assumptions, execution phase (`baseline`, `lane-final`,
+  `integrated`, `post-merge`), reuse eligibility, and rerun trigger;
+- the integration-rehearsal trigger and owner when combined-state proof is
+  required, or the recorded reason it is omitted;
+- the intended artifact composition order;
+- the rerun/invalidation trigger that makes earlier integrated or rehearsal
+  evidence stale;
+- lease checkpoint cadence, stop condition, and join condition. The join
+  condition covers finding dispositions and required integrated evidence before
+  durable review outcome, acceptance, merge, or closeout.
 
 ## Parallel Safety
 
@@ -119,16 +139,30 @@ orchestrator's Parallel Opportunity Scan can classify the task. It complements
 
 - Owned paths:
 - Shared or generated files:
+- Test/fixture/snapshot/shared-helper surfaces:
 - Schema/API/lockfile risk:
 - Backend objects owned:
 - Dependency edges:
+- Shared assumptions/invariants:
+- Discoveries that could affect other tasks:
 - Parallel eligibility: eligible | blocked | unknown
+- Knowledge coupling: independent | coupled | unknown
 - Reason:
 
-If code/collision eligibility is unknown and 2 or more ready tasks could
-otherwise run in parallel, the maintainer resolves it with one bounded read-only
-discovery pass before returning. If still unknown, state what stayed unknown and
-recommend serial. Host/lane capability unknowns stay with the orchestrator.
+`Parallel eligibility` is the mutation-collision verdict. `Knowledge coupling`
+is the separate knowledge verdict: `independent` when no likely discovery in
+one lane can invalidate a sibling lane's assumptions, plan, implementation, or
+verification interpretation; `coupled` when shared assumptions mean the
+two-wave pattern (parallel diagnosis, reconciliation, then serial or re-planned
+implementation) applies; `unknown` when the maintainer cannot yet tell. Parallel
+write execution requires `eligible` plus `independent`. Separate worktrees
+never convert coupled or unknown tasks into independent tasks.
+
+If code/collision eligibility or knowledge coupling is unknown and 2 or more
+ready tasks could otherwise run in parallel, the maintainer resolves it with one
+bounded read-only discovery pass before returning. If still unknown, state what
+stayed unknown and recommend serial. Host/lane capability unknowns stay with
+the orchestrator.
 
 ## Completion Summary Template
 
@@ -146,6 +180,10 @@ here so the engineer knows what evidence to publish.
 - [ ] The durable task record includes the current implementation summary.
 - [ ] The implementation artifact is linked to the task record.
 - [ ] If parallel delegation was used, the concurrency plan was followed and the join condition was met.
+- [ ] If parallel delegation was used, the knowledge-coupling classification was recorded, and coupled work used the two-wave reconciliation before implementation continued.
+- [ ] If cross-lane findings were routed, every routed finding has a recorded recipient disposition.
+- [ ] Every deferred cross-lane finding was triaged as non-blocking and accepted/follow-up; otherwise it still blocks the join.
+- [ ] If integrated evidence was required, it binds to the exact combined candidate (tree/commit, order, commands), and a changed final composition invalidated and reran stale rehearsal evidence.
 - [ ] For GitHub-backed normal implementation tasks, the PR body includes `Closes #<issue-number>`.
 - [ ] Known limitations are triaged as accepted, deferred, or follow-up work.
 - [ ] No secrets, generated caches, or runtime artifacts were committed.

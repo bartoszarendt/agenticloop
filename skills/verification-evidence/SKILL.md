@@ -1,6 +1,6 @@
 ---
 name: verification-evidence
-description: Use before claiming any work state -- done, fixed, passing, green, complete, mergeable -- in an implementation or revision summary, review comment, audit, or closeout, and when reading someone else's claim. Defines the identify-run-read-verify gate and the evidence each claim requires.
+description: Use before claiming any work state -- done, fixed, passing, green, complete, mergeable -- in an implementation or revision summary, review comment, audit, or closeout, and when reading someone else's claim. Defines the identify-run-read-verify gate, the evidence each claim requires, and the baseline/lane-final/integrated/post-merge verification topology with evidence-identity and reuse rules.
 metadata:
   area: engineering-discipline
   side_effects: writes-tmp
@@ -197,6 +197,43 @@ If the task file cites a commit, range, branch, patch, or diff that no longer ma
 state, the evidence is stale until the task file and implementation summary are brought back into
 sync.
 
+## Verification topology and evidence identity
+
+In parallel or multi-artifact work, every planned check is classified by the
+tree it runs against:
+
+- **baseline** -- once against the verified shared base tree; establishes
+  pre-existing failures and starting state.
+- **lane-final** -- against one exact lane head or tree, fresh after that
+  lane's final relevant edit. It proves that lane only.
+- **integrated** -- against the composed candidate tree at join; required when
+  knowledge coupling, adjacent behavior, shared invariants, or
+  ordering/composition risk exists.
+- **post-merge** -- against the actual merged tree when it differs from the
+  rehearsed candidate.
+
+Evidence identity is not command plus branch name. A check result binds to the
+exact clean artifact tree or immutable revision, the exact command, and the
+relevant dependency/toolchain/environment state. The same command on different
+branch heads is different evidence; a green lane-final run on lane A proves
+nothing about lane B or about the composed tree.
+
+Baseline reuse is narrow. A verified base run may be referenced across lanes
+only when the base tree is identical and clean, the command is identical,
+relevant dependency/toolchain/environment state is materially identical, the
+prior result and sufficient output are accessible, and the result is used only
+to establish baseline state. Baseline evidence can never prove a lane-final,
+integrated, review, acceptance, or post-merge final-state claim.
+
+Lane-final checks remain fresh after the final relevant edit, per the gate
+above. Integrated proof binds to the exact combined candidate (tree/commit,
+composition order, commands); when the eventual real merged tree differs from
+the rehearsed candidate, the integrated evidence is stale and the required
+checks rerun. An accepted verification decision may change execution strategy
+(focused, split, background, CI); it must not silently convert stale evidence
+into fresh evidence.
+
+
 ## Role responsibilities
 
 - **Engineer**: include evidence in the `Evidence` section from [[task-record-contract]].
@@ -212,4 +249,7 @@ sync.
 - Local `implementation_artifact` references are stale, missing, or contradicted by local git state.
 - A Required Check is unrun, red, skipped, or unread.
 - A summary says "all green" without the verdict lines.
+- One lane's green run is cited as proof for another lane or for the composed tree.
+- A baseline run is cited to satisfy a lane-final, integrated, or post-merge claim.
+- Rehearsal evidence is cited after the real merged tree diverged from the rehearsed candidate.
 - Fatigue is being mistaken for proof.

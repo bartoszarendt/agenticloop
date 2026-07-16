@@ -105,6 +105,29 @@ target projects do not need toolkit-root `docs/` files at runtime.
   change.
 - **Change request**: a task that changes a locked architecture, process, or
   repository decision and must pass an approval gate before implementation.
+- **Mutation independence**: the parallel-eligibility dimension in which lanes
+  do not collide in writable files, test and validation surfaces, backend
+  objects, generated state, schemas, APIs, external state, or other durable
+  state.
+- **Knowledge independence**: the parallel-eligibility dimension in which no
+  likely discovery in one lane can invalidate another lane's assumptions, plan,
+  implementation, or verification interpretation. Classified per task as
+  `independent`, `coupled`, or `unknown`; parallel write execution requires
+  both mutation and knowledge independence.
+- **Cross-lane finding**: a fact or invariant discovered in one parallel lane
+  that is relevant to another lane, declared at a lease checkpoint or final
+  return, routed by the orchestrator, and answered by the recipient with one
+  disposition (`applied`, `already satisfied`, `rejected`, or `deferred`).
+- **Verification topology**: the classification of a planned check as
+  `baseline`, `lane-final`, `integrated`, or `post-merge`, together with the
+  evidence-identity rule that a check result binds to the exact artifact tree
+  or immutable revision, exact command, and relevant environment state it ran
+  against.
+- **Integration rehearsal**: a serial, engineer-owned, non-publishing
+  combined-state proof step that runs planned checks against a disposable
+  candidate composed from the verified base plus lane artifacts in the intended
+  order. It is not a merge and grants no merge, push, publish, or acceptance
+  authority.
 - **Decision record**: a tracked Markdown record for a durable project decision
   that constrains future work. It is separate from task records.
 - **Summary**: the completion summary for a task, recorded inline in the task
@@ -342,10 +365,10 @@ orchestrator must load [[parallel-delegation]] and complete the Parallel
 Opportunity Scan before choosing serial execution.
 
 A bounded parallel batch is preferred when 2 or more ready tasks are independent
-and collision criteria are known and disjoint. Default maximum parallel
-implementation lanes: 3. Use fewer when fewer safe lanes exist or the host cannot
-sustain three; exceed 3 only when project config or explicit human instruction
-raises the limit.
+on both eligibility dimensions and collision criteria are known and disjoint.
+Default maximum parallel implementation lanes: 3. Use fewer when fewer safe lanes
+exist or the host cannot sustain three; exceed 3 only when project config or
+explicit human instruction raises the limit.
 
 Every parallel write lane needs its own owned backend objects, allowed files or
 areas, implementation or workflow artifact, lease, and join condition. Every
@@ -356,9 +379,62 @@ record either a parallel plan or a concrete serial reason.
 
 The concurrency plan must name lane id/type, role, read/write mode, owned backend
 objects, worktree path and branch for file-mutating lanes, artifact,
-allowed files/areas, collision risks, liveness cadence, stop condition, and join
-condition. Backend-specific write rules, join behavior, and delegation liveness
-requirements live in [[parallel-delegation]].
+allowed files/areas, collision risks, knowledge-coupling classification,
+liveness cadence, stop condition, and join condition. Backend-specific write
+rules, join behavior, and delegation liveness requirements live in
+[[parallel-delegation]].
+
+**Mutation independence and knowledge independence.** Parallel write execution
+requires both. Mutation independence means lanes do not collide in writable
+files, test and validation surfaces, backend objects, generated state, schemas,
+APIs, external state, or other durable state. Knowledge independence means no
+likely discovery in one lane can invalidate another lane's assumptions, plan,
+implementation, or verification interpretation. Each task records a knowledge
+classification of `independent`, `coupled`, or `unknown`: `independent` lanes may
+run in parallel when every mutation and host-safety rule also passes; `coupled`
+work uses the two-wave pattern (bounded parallel read-only diagnosis, findings
+reconciliation at the join, then serial implementation or a newly justified
+parallel plan); `unknown` uses the existing one-bounded-discovery-pass rule and
+falls back to serial when uncertainty remains. Separate worktrees isolate
+mutation; they never convert coupled or unknown tasks into independent tasks.
+
+**Cross-lane findings.** At each lease checkpoint and final lane return, every
+lane declares cross-lane findings or explicitly returns `Cross-lane findings:
+none`. A finding names a fact or invariant, its evidence, the affected lanes (or
+`none`), and a requested response (`apply` or `revalidate`). The orchestrator
+routes a relevant finding to each affected lane, and the recipient must record
+one disposition -- `applied`, `already satisfied`, `rejected` with evidence, or
+`deferred` with a reason. A batch join is incomplete while any routed finding
+lacks a disposition. A deferred finding remains join-blocking until
+maintainer/orchestrator triage records that it cannot invalidate current scope,
+correctness, safety, acceptance, or integrated evidence and classifies it as an
+accepted limitation or follow-up. Findings live in lane status returns and the
+concurrency plan or coordination output; there is no shared findings ledger.
+
+**Verification topology.** Parallel check plans classify each check as
+`baseline` (once against the verified shared base), `lane-final` (fresh against
+one exact lane head after its final relevant edit), `integrated` (against the
+composed candidate tree at join), or `post-merge` (against the actual merged
+tree). Evidence identity is the exact artifact tree or immutable revision plus
+the exact command plus relevant dependency/toolchain/environment state -- the
+same command on different branch heads is different evidence. A verified
+baseline may be referenced across lanes only under strict artifact and
+environment identity and only to establish baseline state; it never satisfies a
+lane-final, integrated, review, acceptance, or post-merge final-state claim.
+
+**Integration rehearsal.** When knowledge coupling, adjacent behavior, shared
+invariants, or ordering/composition risk makes individually green lane evidence
+insufficient, the plan authorizes a risk-triggered integration rehearsal: a
+serial, engineer-owned step that composes a disposable non-published candidate
+from the verified base plus the lane artifacts in the intended order and runs
+the affected checks against it. The rehearsal never updates the protected
+default or integration branch, never pushes, publishes, merges, or accepts work,
+and never bypasses the human merge checkpoint. It returns a conflict/ordering
+result for owning task branches to revise rather than silently resolving
+semantic conflicts. If the eventual real merged tree differs from the rehearsed
+candidate, integrated evidence is stale and the required checks rerun.
+Demonstrably disjoint batches may omit the rehearsal with a recorded reason.
+Rehearsal details live in [[parallel-delegation]].
 
 **Worktree placement.** Create each lane worktree with `npx agenticloop worktree
 add <task-id> <branch> [--from <ref>]`. The command creates the worktree at
@@ -728,6 +804,15 @@ Rules:
   directly discovers evidence that constrains future work. Proposed records
   must include provenance fields (`proposed_at`, `proposed_by_role`,
   `proposed_by`) and source references (`source_refs`).
+- Findings discovered during parallel work follow a promotion threshold. A
+  lane-local observation stays in that lane's status return or task summary. A
+  finding relevant only to the current batch is routed and disposed under the
+  cross-lane finding rules. A durable technical invariant that constrains
+  future work beyond the batch may become a `status: proposed` decision record
+  with provenance and a source link; the maintainer resolves it under the
+  existing acceptance rules, and future work retrieves it through existing
+  source-linked decision discovery. Nothing in parallel work auto-promotes a
+  finding into a decision record, a skill, or this methodology.
 - Maintainer owns acceptance, rejection, supersession, and edits to accepted
   decisions. Human confirmation or an approved `type:change-request` remains
   required for `accepted`.

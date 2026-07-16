@@ -42,8 +42,10 @@ condition, and any relevant milestone or duration.
 
 For an authorized multi-task unit with 2 or more ready tasks, perform a Parallel
 Opportunity Scan before choosing serial execution. If 2 or more ready tasks are
-independent and collision criteria are known and disjoint, prefer a bounded
-parallel batch of up to 3 lanes; otherwise record the concrete serial reason.
+independent on both the mutation and knowledge dimensions and collision criteria
+are known and disjoint, prefer a bounded parallel batch of up to 3 lanes;
+otherwise record the concrete serial reason or the two-wave pattern for coupled
+work.
 
 Create or refine the durable task record before any implementation.
 

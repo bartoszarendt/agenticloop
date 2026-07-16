@@ -287,3 +287,239 @@ describe('lease terminology does not regress', () => {
     assert.match(text, /bounded serial delegation/i);
   });
 });
+
+/**
+ * Knowledge-coordination and combined-verification half of the parallel
+ * delegation contract: mutation vs knowledge independence, cross-lane finding
+ * routing and dispositions, verification topology, and the non-publishing
+ * integration rehearsal. Snapshot-style guards that keep the canonical
+ * surfaces from silently drifting apart.
+ */
+
+const CANONICAL = {
+  loop: 'AGENTIC_LOOP.md',
+  parallel: 'skills/parallel-delegation/SKILL.md',
+  taskRecord: 'memory/task-record.md',
+  taskContract: 'skills/task-record-contract/SKILL.md',
+  roleDelegation: 'skills/role-delegation/SKILL.md',
+  verification: 'skills/verification-evidence/SKILL.md',
+  orchestrator: 'agents/orchestrator.md',
+  maintainer: 'agents/maintainer.md',
+  engineer: 'agents/engineer.md',
+  filesBackend: 'backends/files.md',
+  githubBackend: 'backends/github.md',
+};
+
+function canonicalText(rel) {
+  return readFileSync(join(REPO_ROOT, rel), 'utf-8').replace(/\s+/g, ' ');
+}
+
+describe('mutation and knowledge independence are separate eligibility dimensions', () => {
+  it('core methodology distinguishes mutation independence from knowledge independence', () => {
+    const text = canonicalText(CANONICAL.loop);
+    assert.match(text, /Mutation independence and knowledge independence/i);
+    assert.match(text, /Parallel write execution requires both/i);
+    assert.match(text, /independent`, `coupled`, or `unknown`/i);
+    assert.match(text, /Separate worktrees isolate mutation; they never convert coupled or unknown tasks into independent tasks/i);
+  });
+
+  it('parallel-delegation classifies knowledge coupling and the two-wave pattern', () => {
+    const text = canonicalText(CANONICAL.parallel);
+    assert.match(text, /## Knowledge Eligibility/);
+    assert.match(text, /`independent`, `coupled`, or `unknown`/i);
+    assert.match(text, /bounded parallel read-only diagnosis/i);
+    assert.match(text, /Reconciliation at the join/i);
+    assert.match(text, /newly justified parallel implementation plan/i);
+    assert.match(text, /never convert coupled or unknown tasks into independent tasks/i);
+  });
+
+  it('task-record template carries the knowledge-coupling classification', () => {
+    const text = canonicalText(CANONICAL.taskRecord);
+    assert.match(text, /Knowledge coupling: independent \| coupled \| unknown/);
+    assert.match(text, /Shared assumptions\/invariants:/);
+    assert.match(text, /Discoveries that could affect other tasks:/);
+    assert.match(text, /Parallel write execution requires `eligible` plus `independent`/i);
+  });
+
+  it('task-record-contract mirrors the knowledge-coupling classification', () => {
+    const text = canonicalText(CANONICAL.taskContract);
+    assert.match(text, /Knowledge coupling.*`independent`, `coupled`, or `unknown`/i);
+    assert.match(text, /Shared assumptions\/invariants/);
+    assert.match(text, /Discoveries that could affect other tasks/);
+  });
+});
+
+describe('cross-lane findings are routed and disposed without a ledger', () => {
+  it('parallel-delegation defines the finding shape and the explicit none return', () => {
+    const text = canonicalText(CANONICAL.parallel);
+    assert.match(text, /Cross-lane findings: none/);
+    assert.match(text, /Finding id/);
+    assert.match(text, /Fact or invariant/);
+    assert.match(text, /Evidence reference/);
+    assert.match(text, /Affected lane ids, or `none`/);
+    assert.match(text, /Requested response.*`apply`.*`revalidate`/i);
+  });
+
+  it('parallel-delegation requires recipient dispositions and a blocked join', () => {
+    const text = canonicalText(CANONICAL.parallel);
+    assert.match(text, /`applied`/);
+    assert.match(text, /`already satisfied`/);
+    assert.match(text, /`rejected` with evidence/);
+    assert.match(text, /`deferred` with a reason/);
+    assert.match(text, /join incomplete while any routed finding lacks a disposition/i);
+    assert.match(text, /join is also incomplete while a routed finding lacks a disposition/i);
+    assert.match(text, /A disposition records handling; it does not by itself make the finding non-blocking/i);
+    assert.match(text, /`deferred` completes the join only after maintainer\/orchestrator triage/i);
+    assert.match(text, /Otherwise the finding blocks the join/i);
+  });
+
+  it('parallel-delegation forbids a findings ledger and is honest about host limits', () => {
+    const text = canonicalText(CANONICAL.parallel);
+    assert.match(text, /Do not create a findings ledger or a shared mutable findings file/i);
+    assert.match(text, /single-writer durable surface/i);
+    assert.match(text, /cannot inject a message into a running agent, do not pretend otherwise/i);
+  });
+
+  it('role-delegation carries a separate Routed findings field', () => {
+    const text = canonicalText(CANONICAL.roleDelegation);
+    assert.match(text, /Routed findings:\s+none \| <finding ids/i);
+    assert.match(text, /Do not overload `Operating facts` with raw findings/i);
+    assert.match(text, /never claim asynchronous delivery the host cannot perform/i);
+  });
+
+  it('orchestrator routes findings and keeps the join incomplete', () => {
+    const text = canonicalText(CANONICAL.orchestrator);
+    assert.match(text, /Collect cross-lane findings/i);
+    assert.match(text, /require a recorded disposition/i);
+    assert.match(text, /join incomplete while any routed finding lacks a disposition/i);
+    assert.match(text, /deferred finding remains blocking until maintainer\/orchestrator triage/i);
+    assert.match(text, /do not concurrently edit a task file owned by an active write lane/i);
+  });
+
+  it('engineer declares findings and returns dispositions', () => {
+    const text = canonicalText(CANONICAL.engineer);
+    assert.match(text, /Cross-lane findings: none/);
+    assert.match(text, /exactly one disposition per finding/i);
+    assert.match(text, /could invalidate another active lane's assumptions/i);
+  });
+});
+
+describe('verification topology and evidence identity are documented', () => {
+  const TOPOLOGY_DOCS = ['parallel', 'verification'];
+  for (const key of TOPOLOGY_DOCS) {
+    it(`${CANONICAL[key]} classifies baseline, lane-final, integrated, and post-merge`, () => {
+      const text = canonicalText(CANONICAL[key]);
+      assert.match(text, /baseline/i);
+      assert.match(text, /lane-final/i);
+      assert.match(text, /integrated/i);
+      assert.match(text, /post-merge/i);
+      assert.match(text, /same command on different branch heads is different evidence/i);
+    });
+  }
+
+  it('verification-evidence keeps strict baseline reuse bounds', () => {
+    const text = canonicalText(CANONICAL.verification);
+    assert.match(text, /Baseline reuse is narrow/i);
+    assert.match(text, /can never prove a lane-final, integrated, review, acceptance, or post-merge final-state claim/i);
+    assert.match(text, /identical and clean/i);
+    assert.match(text, /must not silently convert stale evidence into fresh evidence/i);
+  });
+
+  it('parallel-delegation records per-check topology fields', () => {
+    const text = canonicalText(CANONICAL.parallel);
+    assert.match(text, /stable check id, exact command, purpose, owner, target artifact revision or tree/i);
+    assert.match(text, /reuse eligibility, and rerun trigger/i);
+    assert.match(text, /Baseline reuse never satisfies a lane-final, integrated, review, acceptance, or post-merge final-state claim/i);
+    assert.match(text, /One verified base run may establish baseline state for multiple lanes/i);
+  });
+});
+
+describe('test and validation surfaces are writable collision surfaces', () => {
+  it('parallel-delegation states the test-surface ownership rule', () => {
+    const text = canonicalText(CANONICAL.parallel);
+    assert.match(text, /## Test And Validation Surfaces/);
+    assert.match(text, /writable collision surfaces exactly like production files/i);
+    assert.match(text, /not parallel-write eligible unless/i);
+    assert.match(text, /combined into one lane/i);
+    assert.match(text, /exclusively owned serial integration task/i);
+  });
+
+  it('task-record template treats test surfaces as parallel-safety data', () => {
+    const text = canonicalText(CANONICAL.taskRecord);
+    assert.match(text, /Test\/fixture\/snapshot\/shared-helper surfaces:/);
+  });
+});
+
+describe('integration rehearsal is risk-triggered, engineer-owned, and non-publishing', () => {
+  it('parallel-delegation defines the rehearsal and its boundaries', () => {
+    const text = canonicalText(CANONICAL.parallel);
+    assert.match(text, /## Integration Rehearsal/);
+    assert.match(text, /risk-triggered combined-state proof/i);
+    assert.match(text, /runs serially after all expected implementation artifacts have returned/i);
+    assert.match(text, /engineer integration-verification lane/i);
+    assert.match(text, /disposable, non-published candidate/i);
+    assert.match(text, /must not update the protected default or integration branch/i);
+    assert.match(text, /must not push, publish, open or merge a pull request, accept work/i);
+    assert.match(text, /do not silently resolve them in the rehearsal/i);
+    assert.match(text, /never merge authorization/i);
+    assert.match(text, /If the eventual real merged tree differs from the rehearsed candidate/i);
+    assert.match(text, /may omit the rehearsal with a recorded reason/i);
+    assert.match(text, /Not every parallel batch needs an expensive full-suite rehearsal/i);
+  });
+
+  it('rehearsal liveness names an expected artifact and failure handling', () => {
+    const text = canonicalText(CANONICAL.parallel);
+    assert.match(text, /Rehearsal liveness/i);
+    assert.match(text, /Its expected artifact is the rehearsal result/i);
+    assert.match(text, /failed or blocked lane at join/i);
+  });
+
+  it('core methodology separates rehearsal from actual human-approved merge', () => {
+    const text = canonicalText(CANONICAL.loop);
+    assert.match(text, /Integration rehearsal/i);
+    assert.match(text, /never bypasses the human merge checkpoint/i);
+    assert.match(text, /not a merge and grants no merge, push, publish, or acceptance authority/i);
+  });
+
+  it('orchestrator authorizes and verifies the rehearsal without gaining merge authority', () => {
+    const text = canonicalText(CANONICAL.orchestrator);
+    assert.match(text, /integration-rehearsal engineer step/i);
+    assert.match(text, /integrated evidence binds to the exact combined tree\/commit/i);
+    assert.match(text, /rehearsal never pushes, publishes, merges, or accepts work/i);
+  });
+
+  it('engineer performs rehearsal only when explicitly assigned', () => {
+    const text = canonicalText(CANONICAL.engineer);
+    assert.match(text, /integration rehearsal only when the orchestrator explicitly assigns it/i);
+    assert.match(text, /never authorizes pushing, publishing, accepting, or actually merging/i);
+    assert.match(text, /conflict\/ordering result for the owning task branches/i);
+  });
+
+  it('backends keep rehearsal non-publishing and the human merge checkpoint', () => {
+    const files = canonicalText(CANONICAL.filesBackend);
+    assert.match(files, /explicitly planned integration rehearsal/i);
+    assert.match(files, /not final integration/i);
+    assert.match(files, /remains a human decision/i);
+    const github = canonicalText(CANONICAL.githubBackend);
+    assert.match(github, /disposable non-published candidate/i);
+    assert.match(github, /never pushes, publishes, opens or merges a pull request/i);
+    assert.match(github, /actual merged composition differs from the rehearsed candidate/i);
+  });
+});
+
+describe('durable invariant promotion reuses the existing decision mechanism', () => {
+  it('core methodology grades the promotion threshold', () => {
+    const text = canonicalText(CANONICAL.loop);
+    assert.match(text, /lane-local observation stays in that lane's status return or task summary/i);
+    assert.match(text, /routed and disposed under the cross-lane finding rules/i);
+    assert.match(text, /`status: proposed` decision record with provenance and a source link/i);
+    assert.match(text, /Nothing in parallel work auto-promotes/i);
+  });
+
+  it('engineer decision creation is broader than verification scope but still bounded', () => {
+    const text = canonicalText(CANONICAL.engineer);
+    assert.match(text, /`scope: verification`/);
+    assert.match(text, /`quality`, `architecture`, `process`/i);
+    assert.match(text, /do not create records indiscriminately/i);
+  });
+});

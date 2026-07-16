@@ -275,15 +275,28 @@ GitHub-backend deltas:
 
 - Each parallel implementation lane requires its own repo-internal worktree,
   task branch, GitHub issue, pull request, disjoint expected files or areas,
-  lease, join condition, and merge barrier.
+  lease, join condition, and merge barrier. One pull request per implementation
+  task, as before.
 - Parallel coordination/review lanes may mutate GitHub backend state only when
   each lane owns distinct backend objects, such as distinct issues or distinct
   PR review targets. Shared issues, PRs, labels, comments, status markers,
   closeout state, event logs, or group state require serial work.
+- Cross-lane findings are routed through lane status returns and recorded in
+  the concurrency plan or coordination output; the join condition stays
+  incomplete while any routed finding lacks a recipient disposition or any
+  deferred finding lacks recorded non-blocking limitation/follow-up triage.
 - Do not merge any pull request from a parallel batch into the default or
   integration branch until every lane has returned, maintainer review is
   complete for every implementation artifact, cross-branch conflict and ordering
   risk has been checked, and the human approves the merge order.
+- When the concurrency plan requires combined-state proof, an integration
+  rehearsal composes a disposable non-published candidate (for example a
+  temporary local integration branch or throwaway worktree) and records
+  integrated evidence bound to that exact candidate. The rehearsal never
+  pushes, publishes, opens or merges a pull request, and never updates the
+  protected default or integration branch. When the actual merged composition
+  differs from the rehearsed candidate, the rehearsal evidence is stale and the
+  required checks rerun against the merged tree.
 - Missing pushed branch, missing PR, or missing expected backend update at join
   time is a failed or blocked lane, not a pending lane.
 

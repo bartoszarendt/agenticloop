@@ -81,28 +81,22 @@ create one oversized record; task sets still decompose.
 
 ## Host Delegation Mechanism
 
-Real delegation means the host starts a separate role, task, or subagent
-execution accepting a role, agent, type, mode, or `subagent_type` argument. Prose
-describing a role's actions is not delegation.
-
-Examples: a task/subagent call naming maintainer or engineer, a named-agent
-session, or a host handoff returning a separate role artifact. The rule is
-separate execution, not prose.
+Real delegation starts a separate role, task, named-agent, or subagent execution
+for maintainer or engineer. Describing that role's actions in prose is not
+delegation.
 
 ## Delegation Capability Check
 
-Before using single-agent fallback, the orchestrator must explicitly check whether the host exposes
-any real delegation mechanism for the requested role.
-
-- If a host task, subagent, role, agent, type, mode, or `subagent_type` mechanism exists for a role,
-  fallback is not allowed for that role.
-- If delegation is absent, record how that was verified.
-- If a concrete attempt fails, record the failed mechanism and reason before fallback.
-- Include the capability check result in the orchestrator's delegation output.
+Before single-agent fallback, explicitly check for a host task, subagent, role,
+agent, type, mode, or `subagent_type` mechanism. If one exists, use it. Otherwise
+record how absence was verified, or the attempted mechanism and failure reason,
+in the delegation output.
 
 ## Concurrency Policy
 
-Delegation is serial by default. Mutation governs concurrency safety. When an
+Delegation is serial by default. Mutation governs concurrency safety, and
+knowledge coupling governs it alongside mutation: parallel write execution
+requires mutation independence plus knowledge independence. When an
 authorized multi-task unit has 2 or more ready task records, or when planning,
 reviewing, or joining parallel lanes, load [[parallel-delegation]] before routing
 work.
@@ -116,25 +110,11 @@ rules, join behavior, and parallel liveness details live in [[parallel-delegatio
 
 ## Event Logging
 
-Event logging is optional and off by default. When `event_logging: enabled`,
-resolve the command and honor the disabled/non-blocking rules in
-[[event-logging]] before writing events.
-
-After a maintainer or engineer is actually invoked, emit `role.invoked`. If
-bounded single-agent fallback begins instead, emit the same event with a summary
-that states the fallback.
-
-Do not emit `role.invoked` for hypothetical routing prose. Record only real role execution.
-
-Recommended `role.invoked` data fields: `target_role`, `delegation_mode`
+Event logging is off by default. When enabled, follow [[event-logging]] and emit
+`role.invoked` only after real maintainer/engineer execution or bounded fallback
+begins, never for hypothetical routing. Record `target_role`, `delegation_mode`
 (`host_subagent`, `explicit_agent_invocation`, or `single_agent_fallback`),
-`fallback` (boolean), `adapter`, `model` (only when known), `reason`.
-
-Example:
-
-```text
-npx agenticloop event-logging role.invoked --task T-001 --role orchestrator --summary "Delegated engineer implementation" --ref "github:issue:42" --data-json '{"target_role":"engineer","delegation_mode":"host_subagent","fallback":false}'
-```
+`fallback`, `adapter`, known `model`, and `reason` as applicable.
 
 ## Single-Agent Fallback
 
@@ -179,6 +159,7 @@ Operating facts:   <required for host_subagent and explicit_agent_invocation onl
 Scope:             <what the role should do>
 Out of scope:      <what the role must not do>
 Expected output:   <what the role should produce>
+Routed findings:   none | <finding ids with fact, evidence ref, and required disposition per finding>
 Stop condition:    <when the role must stop and return to orchestrator or human>
 Budgets:           <omit when all defaults/low; else `minimalism=<lite|full|ultra>; attempt_budget=<n>; review_budget=<n>; context_overflow_risk=<medium|high>` for non-default task-record constraints>
 Concurrency:       `serial -- reason: <concrete blocker>`, or `parallel batch <id> -- lanes: <n>/3; join: <condition>`
@@ -187,31 +168,33 @@ Lease:             <observable-step checkpoint cadence, no-progress budget, and 
 
 Do not omit scope, out of scope, expected output, stop condition, or Operating facts for real delegation. Use explicit `none` for inapplicable fields. The payload mechanism is a doc pointer or `none`, never a copied command recipe.
 
-`Budgets:` propagates the task record's non-default `minimalism`, `attempt_budget`, `review_budget`, and medium/high `context_overflow_risk` so the role does not have to infer them. Omit the line entirely when the task record leaves all discipline, effort, and context-risk signals at defaults or low; the role still reads the task record. Reaching a budget means return status, not push past it -- this restates the task-record effort bounds and the Attempt Budget and Review Round Checkpoint in `agenticloop/AGENTIC_LOOP.md`; it does not add a new limit. Medium context overflow risk is an engineer discipline signal; high context overflow risk is a split-or-tighten signal unless the task record justifies one engineer execution. Medium/high context overflow risk means the role must summarize or return status when unexpected context expansion would exceed the task record's bounds. The existing `Stop condition:` and `Lease:` lines still carry the stop semantics.
+`Routed findings:` lists each cross-lane finding id, fact/invariant, evidence,
+and required disposition; use `none` for parallel lanes without findings. The
+recipient returns `applied`, `already satisfied`, `rejected` with evidence, or
+`deferred` with a reason and effect on correctness, safety, acceptance, and
+evidence. Deferral remains join-blocking pending non-blocking limitation or
+follow-up triage. Do not overload `Operating facts` with raw findings.
 
-Host-visible remaining tool-call counts, incidental runtime budget notes, or similar execution-environment hints are not delegation budgets unless the orchestrator explicitly records them in `Lease:` or `Stop condition:`. If a hard host limit prevents adequate discovery, implementation, or review, the delegated role returns status with concrete remaining unknowns instead of reducing task quality or guessing.
+`Budgets:` propagates non-default task-record minimalism, effort budgets, and
+medium/high context risk; omit it for defaults/low. At a budget or unexpected
+context expansion, summarize and return status. High context risk normally
+requires split-or-tighten. Host tool-call counters are not delegation budgets
+unless recorded in `Lease:` or `Stop condition:`; hard host limits return status
+with concrete unknowns rather than reduced quality or guesses.
 
 
 ## Context Read Discipline
 
-`Source docs` are the closed normative set. A delegated role may also read the
-named task record, `.agenticloop/project.md` for backend or document selection,
-the matching `agenticloop/backends/` projection, and files explicitly named by
-the human or task record. The engineer reads the task record's stepped
-`## Implementation Notes` first, then the named `Source docs`; the orchestrator
-must not copy the plan text into the subagent prompt — the plan lives in the task
-record.
+`Source docs` are the closed normative set. The role may also read the task
+record, project map for backend/document selection, matching backend projection,
+and files explicitly named by the human or task record. Engineer reads stepped
+`## Implementation Notes` first; the orchestrator points to, rather than copies,
+that plan.
 
-Bounded task-scoped implementation discovery -- available repository indexing or
-language-aware symbol/reference and caller/callee lookup, exact identifier or
-known-path search, focused tests, relevant version-control history, and directly
-connected callers, schemas, or generated consumers -- is permitted by default
-when scoped to the delegated task, following the canonical Context Read Discipline in
-`agenticloop/AGENTIC_LOOP.md` and its default discovery bound. Do not read
-`.agenticloop/logs/` as ambient context (`.agenticloop/tmp/` is scratch, not
-source), and do not scan the repository for "related" files or load arbitrary
-material. Expansion beyond the canonical bound, or a material scope change,
-returns `needs_context` (or `blocked`).
+Follow the canonical Context Read Discipline in
+`agenticloop/AGENTIC_LOOP.md`. Bounded task-scoped implementation discovery is
+permitted; ambient logs and vague related-file scans are not. Expansion beyond
+that bound, or a material scope change, returns `needs_context` (or `blocked`).
 
 If an Operating fact is wrong, record the gap in the task record, review, or status return and continue from the canonical document. Do not silently re-probe the same fact in a loop.
 
@@ -227,6 +210,13 @@ or the stop condition is reached. For parallel-specific liveness, host
 streaming/cancel limits, and join-based batch rules, load [[parallel-delegation]].
 Status returns include `STATUS`, task id, branch/worktree, files touched,
 evidence, next step, and stop reason.
+
+Parallel returns also include findings or `Cross-lane findings: none`, routed
+finding dispositions, verification phase and exact tested artifact/tree, and
+any rehearsal result. Route live only when the host supports injection;
+otherwise use the next checkpoint/resume and never claim asynchronous delivery
+the host cannot perform. Findings required before more writes force the
+two-wave pattern or serialization.
 
 ## GitHub Backend Delegation
 
@@ -297,25 +287,22 @@ Maintainer review delegation must include:
 
 ## Human Checkpoint Rules
 
-Authorization covers a whole work unit, not each step. Stop and wait for a human decision
-only at the hard checkpoints in the Authorized Work Units boundary in `agenticloop/AGENTIC_LOOP.md`:
+Authorization covers the work unit. Stop only at hard checkpoints in the
+Authorized Work Units boundary in `agenticloop/AGENTIC_LOOP.md`:
 
 - leaving the authorized work unit, including starting a task, group, or phase outside it
-  (when the human only asked to create or refine a task record, proceeding to implementation
-  is leaving that scope -- confirm first),
+  (task-record-only authorization does not include implementation),
 - merge, release, irreversible external publication, or destructive cleanup including
   deleting branches,
 - changing a locked process, architecture, backend, or product decision, or invoking a
   backend exception.
 
-Commits, pushes, and task-file updates inside the authorized unit are routine, not checkpoints;
-this includes routing from task-record creation to implementation to review to revision. The task
-branch and implementation pull request apply only under `task_backend: github`; under
-`task_backend: files` any PR, publish, or merge stays a human decision.
+In-scope commits, pushes, task-file updates, and lifecycle routing are routine.
+The task branch/PR path applies only to GitHub backend; with files backend, PR,
+publish, and merge remain human decisions.
 
-When a backend mismatch is detected (configured backend differs from the backend used for the
-task record), or when agents cannot resolve a blocker, stop via [[blocked-state]] rather than
-treating it as a checkpoint.
+Backend mismatch or unresolved agent blockers route to [[blocked-state]], not a
+checkpoint.
 
 ### Checkpoint Presentation
 

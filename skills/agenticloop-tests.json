@@ -148,6 +148,7 @@
     },
     "task-closeout": {
       "shouldTrigger": [
+        "Clean up the accepted worktree after integration.",
         "Every task in the configured group is accepted and integrated; run closeout before the next grouped batch.",
         "Confirm every inline summary is complete and post the closeout status marker.",
         "The maintainer must run closeout after all tasks in this group are complete."
@@ -232,14 +233,17 @@
       "shouldTrigger": [
         "Before claiming the task is done, attach fresh command output from the final state.",
         "Verify the bug is fixed by re-running the original reproduction and reading the output.",
-        "Do not accept a passing claim without fresh evidence from the required checks."
+        "Do not accept a passing claim without fresh evidence from the required checks.",
+        "The same command on different branch heads is different evidence; a lane-final green run on one head cannot prove the claim for another head.",
+        "Baseline evidence may establish starting state for every lane but can never prove a lane-final, integrated, or post-merge claim."
       ],
       "shouldNotTrigger": [
         "Draft the architecture decision record.",
         "Generate the Claude Code adapter artifacts."
       ],
       "nearMiss": [
-        "Before claiming the service works, run the smoke command and read the full output."
+        "Before claiming the service works, run the smoke command and read the full output.",
+        "Do not cite the baseline run as proof that the integrated composed tree passes its checks."
       ],
       "nearMissTarget": "review-and-accept"
     },
@@ -263,15 +267,28 @@
       "shouldTrigger": [
         "We have 4 ready independent tasks, can we parallelize?",
         "Plan a bounded parallel batch and join condition for these ready task records.",
-        "Review whether these parallel lanes have disjoint backend objects, leases, and merge barriers."
+        "Review whether these parallel lanes have disjoint backend objects, leases, and merge barriers.",
+        "Two mutation-disjoint tasks share one verified base run; may both parallel lanes cite it to establish baseline state?",
+        "Two tasks that edit the same test module are not parallel-write eligible; plan serial writes or one combined lane.",
+        "Mutation-disjoint tasks with shared assumptions can still be knowledge-coupled; check knowledge coupling before parallel execution.",
+        "Tasks with knowledge coupling use bounded parallel diagnosis, reconciliation at the join, then serial implementation or a re-planned parallel plan.",
+        "Route each cross-lane finding to the affected lane and require a disposition before the batch join completes.",
+        "This host cannot inject a message into a running parallel lane; route the cross-lane finding at the next checkpoint or join, never claim async delivery.",
+        "Both coupled branches are individually green, but the parallel batch still needs combined-state proof through an integration rehearsal.",
+        "The integration rehearsal hit a semantic conflict between the two lane artifacts; return a conflict and ordering result for the owning task branches rather than silently resolving it.",
+        "The actual merged tree differs from the integration rehearsal candidate; the integrated evidence is stale and must rerun.",
+        "Provably disjoint lanes may omit the integration rehearsal when the concurrency plan records the reason.",
+        "A passing integration rehearsal never authorizes the actual merge; merge stays a human checkpoint."
       ],
       "shouldNotTrigger": [
         "Implement this single task serially and report the result.",
         "Clean up the accepted worktree after integration.",
+        "Remove the worktree for the already accepted task.",
         "Run worktree cleanup dry-run for an already accepted task."
       ],
       "nearMiss": [
-        "Plan parallel delegation for four ready tasks with disjoint backend objects, leases, and a join condition."
+        "Plan parallel delegation for four ready tasks with disjoint backend objects, leases, and a join condition.",
+        "The integrated check must bind to the exact combined candidate tree, not to either lane head."
       ],
       "nearMissTarget": "role-delegation"
     }

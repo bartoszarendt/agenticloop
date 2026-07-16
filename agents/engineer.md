@@ -143,15 +143,28 @@ task-record obligation.
   (required-check evidence, `Current PR head` marker) until it passes. A failing
   preflight is a revision defect, not a reviewer task.
 - Address review feedback or dispute it with evidence.
-- May create `status: proposed` verification-scoped decision records from current
-  task evidence when check behavior constrains future work. Link the proposed
-  decision from the implementation summary or status return. Do not accept,
-  reject, supersede, or edit accepted decisions. If parallel lane ownership is
-  unclear, report the candidate instead of writing.
+- May create `status: proposed` decisions from current evidence only when a
+  durable fact constrains future work: `scope: verification` or an existing
+  `quality`, `architecture`, `process`, or accepted-project scope. Lane-local
+  observations stay in status/summary and batch findings use parallel routing.
+  Link provenance and sources; do not create records indiscriminately, change
+  accepted decisions, or write when lane ownership is unclear.
 - Use the exact task id from the task record in branch names, pull request titles,
   labels, and commit trailers when `task_backend: github` is set.
 - Honor any delegation lease from the orchestrator, including observable-step
   checkpoint cadence, no-progress budget, and stop condition.
+- At every parallel checkpoint/final return, declare `Cross-lane findings:
+  none` or id, fact/invariant, evidence, affected lanes, and `apply`/`revalidate`.
+  If a discovery could invalidate another active lane's assumptions, stop or
+  return it. For routed findings, return exactly one disposition per finding:
+  `applied`, `already satisfied`, `rejected` with evidence, or `deferred` with
+  reason and effect on correctness, safety, acceptance, and evidence. Deferral
+  remains blocking pending maintainer/orchestrator triage.
+- Perform an integration rehearsal only when the orchestrator explicitly
+  assigns it. Compose a disposable non-published candidate; record its exact
+  tree/commit, artifact order, commands, and results. Return conflicts as a
+  conflict/ordering result for the owning task branches. A rehearsal never
+  authorizes pushing, publishing, accepting, or actually merging.
 
 ### Agentic Loop Edit Boundary
 

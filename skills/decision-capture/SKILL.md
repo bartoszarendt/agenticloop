@@ -110,6 +110,21 @@ Create or update a decision record when all of the following are true:
 If the note is only evidence for one task, keep it in the task record or
 implementation artifact instead.
 
+The promotion threshold is deliberately graded:
+
+- a lane-local observation stays in that lane's status return or task summary;
+- a finding relevant only to the current batch is routed and disposed under
+  the cross-lane finding rules in [[parallel-delegation]];
+- a durable technical invariant that constrains future work may become a
+  `status: proposed` decision record with provenance and source references.
+
+Any scope from the existing list may carry such an invariant -- `quality`,
+`architecture`, `verification`, `process`, or an accepted project convention.
+Do not add a new decision scope for parallel-lane findings. Promotion is never
+automatic: the maintainer resolves proposed records under the existing rules,
+and future work retrieves them through existing source-linked decision
+discovery.
+
 ## Parallel Safety
 
 In parallel lanes, a role may create only a new uniquely named `proposed`

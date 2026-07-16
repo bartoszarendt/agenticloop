@@ -29,6 +29,9 @@ const TOLERANCE = 0.05;
 // exception was added: the detailed procedure in review-and-accept grows every
 // adapter's reference library, and the maintainer/orchestrator role edits grow
 // agentDefinitions.
+// Knowledge coordination and combined verification must remain within these
+// established budgets; concise canonical rules and cross-links absorb the new
+// behavior without rebasing payload growth.
 const ADAPTERS = [
   { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 7709, agentDefinitions: 7124, activationSurface: 585 } },
   { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 42241, agentDefinitions: 7586, activationSurface: 875, referenceLibrary: 33780 } },

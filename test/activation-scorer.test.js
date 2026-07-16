@@ -57,6 +57,15 @@ describe('rankSkills', () => {
     const b = rankSkills(skills, prompt);
     assert.deepEqual(a, b);
   });
+
+  it('distinguishes an explicit parallel rehearsal from ordinary cleanup after integration', () => {
+    const { skills } = loadSkillDescriptions(SKILLS_DIR);
+    const cleanup = rankSkills(skills, 'Clean up the accepted worktree after integration.');
+    assert.notEqual(cleanup[0].name, 'parallel-delegation');
+
+    const rehearsal = rankSkills(skills, 'Run an integration rehearsal for these parallel branches.');
+    assert.equal(rehearsal[0].name, 'parallel-delegation');
+  });
 });
 
 describe('Activation corpus', () => {

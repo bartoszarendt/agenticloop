@@ -41,7 +41,18 @@ Files-backend deltas:
 - Parallel coordination/review lanes must own distinct task files or workflow
   artifacts and must not share event-log targets, group state, status markers,
   closeout files, scratch outputs, or other local append/update targets.
+- Cross-lane findings are routed through lane status returns and recorded in
+  the concurrency plan or coordination output; the join condition stays
+  incomplete while any routed finding lacks a recipient disposition or any
+  deferred finding lacks recorded non-blocking limitation/follow-up triage.
 - Integration of parallel files-backed lanes is serial; merge remains serial.
+  When the concurrency plan requires combined-state proof, an explicitly planned
+  integration rehearsal may compose a disposable candidate from the verified
+  base plus lane artifacts in the intended order and record integrated evidence
+  bound to that exact candidate. The rehearsal is not final integration: it
+  publishes nothing, and merge or publish after acceptance remains a human
+  decision. When the eventual merged tree differs from the rehearsed candidate,
+  the rehearsal evidence is stale and the required checks rerun.
 - Non-Git targets do not allow parallel write lanes. Run all write work serially;
   read-only parallel discovery is still allowed.
 

@@ -22,19 +22,10 @@ Task records are stored in the configured backend:
 
 ## Event Logging
 
-Event logging is optional and off by default. When `event_logging: enabled`,
-resolve the command and honor the disabled/non-blocking rules in
-[[event-logging]] before writing events.
-
-After creating a new durable task record, emit `task.created`. After materially updating an
-existing task record's scope, acceptance criteria, required checks, or backend linkage, emit
-`task.updated`.
-
-Use the resolved command with `event-logging <event_type> --task <TASK-ID> --role maintainer --summary "<short fact>"`.
-For normal task-scoped events, `--task <TASK-ID>` is enough to correlate related entries in one
-target; the CLI derives the shared trace id unless you intentionally override it with `--trace-id`.
-Record only the gate fact. Do not copy the full task body, issue body, or chat text into the
-event log.
+Event logging is optional and off by default. When enabled, follow
+[[event-logging]]: emit `task.created` for a new record and `task.updated` after
+material scope, criteria, check, or backend-linkage changes. Use the task id and
+a concise gate fact; never copy the task body or chat into the log.
 
 ## Required sections
 
@@ -52,43 +43,23 @@ acceptance criteria or proof pressure.
 
 ## Proof pressure
 
-The optional `## Proof Pressure` section helps keep long-running or ambiguous
-work aligned with the owner's real intent. The maintainer may require it when a
-task is large, vague, or easy to satisfy locally while missing the actual goal.
-If present, every field must be concrete.
+Use optional `## Proof Pressure` when long-running or ambiguous work could pass
+locally while missing the owner's outcome. Every field must be concrete:
 
-- **Completion Oracle**: the standing observable signal the engineer checks
-  during work to confirm the task is still aimed at the owner's outcome. Example:
-  "The new CLI command prints the expected summary row and exits 0 on the
-  fixture input."
-- **Final Proof Required**: the exact evidence closeout/review needs before it
-  can claim completion. Example: "A passing `npm test` run plus a diff showing
-  the parser rejects the previously accepted invalid input."
-- **Likely Misfire**: a concrete scenario where the agent could meet acceptance
-  criteria and pass checks while still failing the owner's intent. Example:
-  "The command accepts the fixture but silently drops fields for all other
-  inputs."
+- **Completion Oracle**: observable signal checked during work.
+- **Final Proof Required**: exact evidence required for completion.
+- **Likely Misfire**: how local criteria could pass while the real intent fails.
 
 Proof pressure complements acceptance criteria; it does not replace scope,
 out-of-scope boundaries, or required checks.
 
 ## Right-sizing before task creation
 
-Before creating or refining a task record from a source plan item, decide whether
-the item is one implementation task or a task set. A human may authorize a whole
-phase, group, milestone, epic, or broad work item, but that authorization does
-not make the whole unit one task record.
+Decide whether the source item is one implementation task or a task set. Broad
+authorization does not make a phase, group, milestone, or epic one task record;
+use the sizing and authorized-work-unit rules in `agenticloop/AGENTIC_LOOP.md`.
 
-The default sizing is one independently verifiable task at a time, the smallest
-useful implementation slice. When a human authorizes a larger bounded run,
-prefer the largest safe useful slice that remains bounded, reversible, and
-independently verifiable as one task. Phase, group, milestone, or epic
-authorization is not permission to create one oversized task record; task sets
-still decompose into ordinary task records using the configured backend and task
-ID convention.
-
-A work item must be decomposed into multiple task records when any of these are
-true:
+Decompose into multiple task records when any of these are true:
 
 - it has more than one independently verifiable deliverable;
 - acceptance criteria would require several unrelated proof paths or review
@@ -99,53 +70,25 @@ true:
   rather than one focused change;
 - one slice can be implemented, checked, reviewed, or reverted without the rest;
 - estimated engineer context load would likely exceed the safe single-task
-  ceiling even though the item has one deliverable, for example because the work
-  requires broad discovery or one very large surface.
+  ceiling even though the item has one deliverable.
 
-When decomposition is needed, create ordinary task records using the configured
-backend and task ID convention. Preserve the source plan item in `Source
-Reference`, and use `Grouping` when the project map has a grouping profile. Keep
-the split one level deep: phase or broad item to task records. Do not create a
-separate subtask model.
-
-If the maintainer cannot decide the split without human judgment, post
-`needs_context` with the proposed task list and stop instead of creating one
-oversized task record. If the work item is genuinely one implementation task,
-the task record's scope, expected files, acceptance criteria, and required
-checks must make that clear.
+Preserve `Source Reference`; use `Grouping` when configured. Split one level
+deep into task records, not a subtask model. If human judgment is needed, return
+`needs_context` with the proposed split instead of creating an oversized task.
 
 ## Materializing a task set
 
-Decomposition may identify the full task set in one planning pass, but durable
-task records for a large task set must be materialized incrementally. The
-default is one task record per write/checkpoint. A small bounded batch of at
-most 3 simple records is allowed only when the tasks are similar, low-risk, and
-the maintainer can keep every record concrete. For 10 or more task records,
-default to one-at-a-time materialization.
+Materialize durable records incrementally: one per write/checkpoint by default,
+at most 3 similar low-risk records per batch, and one-at-a-time for 10 or more.
 
 Before writing full records, produce or retain a compact decomposition inventory
-containing, for each task:
+per task: task id, title, one-line scope, source reference, dependency edges,
+expected owned files/areas, initial parallel eligibility, and context overflow
+risk when medium or high.
 
-- task id
-- title
-- one-line scope
-- source reference
-- dependency edges
-- expected owned files/areas
-- initial parallel eligibility
-- context overflow risk when medium or high
-
-After each record or bounded batch:
-
-- ensure every created record is complete and non-placeholder
-- emit `task.created` if event logging is enabled
-- checkpoint status for resumability
-- with the files backend, the created task files are durable workflow-gate
-  artifacts and should be committed at the task-creation gate when the target
-  project follows that discipline
-
-If materialization fails mid-set, resume from the first missing or invalid task
-record instead of regenerating the whole set.
+After each batch, validate completeness, emit enabled events, checkpoint, and
+commit files-backend task artifacts when project policy requires it. Resume at
+the first missing or invalid record; never regenerate the set.
 
 The fix for large task sets is smaller writes, not thinner task records. Do not
 replace concrete required sections with placeholders or generic checklists to
@@ -165,25 +108,15 @@ The following are forbidden in any durable task record:
 - empty `## Reviewer Checklist` body
 - empty or placeholder `## Proof Pressure` field when that section is present
 
-Scope, acceptance criteria, required checks, the completion summary template, and the reviewer
-checklist must all be concrete at task creation time. A placeholder in any of these sections is
-a task-record defect, not a detail to fill in later. If `## Proof Pressure` is present, its
-fields must also be concrete.
-
-If the maintainer cannot fill a concrete completion template or reviewer checklist at creation
-time, it must post `needs_context` using [[blocked-state]] instead of creating a vague record.
+Scope, criteria, checks, summary expectations, reviewer items, and any proof
+pressure must be concrete at creation. Otherwise use [[blocked-state]]
+`needs_context` instead of writing a vague record.
 
 ## Completion summary template
 
-Every task record must include a non-empty `## Completion Summary Template` section at
-creation time. The maintainer fills in the expected structure so the engineer knows exactly
-what to produce. Use `agenticloop/memory/work-unit-summary.md` with `summary_unit: task`
-for the canonical summary shape.
-
-Each section must contain at least a one-line description of what is expected, not a generic
-placeholder. Example: "Tests and Checks Run: final-state `python -m pytest tests/ -q` verdict
-with counts, must show all tests passing." Copying section headings without content is a
-placeholder violation.
+Every record includes a non-empty `## Completion Summary Template` using
+`agenticloop/memory/work-unit-summary.md` with `summary_unit: task`. State the
+task-specific evidence expected; headings without content are placeholders.
 
 ## Reviewer checklist
 
@@ -196,16 +129,14 @@ The maintainer writes checklist items specific to this task. Minimum required it
 - [ ] If `## Proof Pressure` is present, completion oracle, final proof, and likely misfire were checked.
 - [ ] Backend canonical current-summary location updated with implementation summary: task file for files-backed work; PR body for normal GitHub-backed work; documented exception location for approved no-PR/no-edit cases.
 - [ ] Implementation artifact linked to the task record.
-- [ ] Parallel delegation, if used, followed the recorded concurrency plan and join condition.
+- [ ] Parallel delegation followed its plan and join condition: coupling recorded, coupled work reconciled, findings disposed, deferred findings triaged non-blocking or kept join-blocking, and integrated evidence bound to the exact combined candidate.
 - [ ] GitHub-backed normal implementation tasks: PR body includes `Closes #<issue-number>`.
 - [ ] Known limitations triaged: each one folded back, filed as follow-up, or explicitly dismissed.
 - [ ] No secrets, generated caches, or runtime artifacts committed.
 
-Task-specific items must be added for any non-obvious acceptance criterion, unusual scope
-boundary, or project-specific constraint the engineer must satisfy.
-
-A reviewer checklist that is identical across multiple tasks or consists only of generic items
-must be reviewed for whether task-specific items were omitted.
+Add items for non-obvious criteria, boundaries, and project constraints; a
+generic checklist reused across tasks is incomplete when task-specific risks
+exist.
 
 ## Required Checks
 
@@ -299,41 +230,59 @@ restate them. Add stale-assumption triggers that tell the engineer when to retur
 ## Concurrency plan
 
 Add `## Concurrency Plan` when the orchestrator authorizes parallel delegation.
-The plan names each lane id, lane type (read-only, implementation, or
+The plan names each lane's id, type (read-only, implementation, or
 coordination/review), role, read/write mode, owned backend objects, worktree
-path and branch for file-mutating write lanes, implementation or workflow
-artifact, allowed files or areas, shared collision risks (including shared
-generated files, lockfiles, schemas, APIs, external state, labels, comments,
-status markers, closeout state, event logs, and group state), lease checkpoint
-cadence, stop condition, and join condition. If no parallel delegation is
-planned, omit the section or state that work is serial.
+path and branch, artifact, allowed files or areas, and shared collision risks
+(including test/fixture/snapshot/shared-helper ownership), plus lease
+checkpoint cadence, stop condition, and join condition. The plan also records
+the knowledge-coupling classification per lane pair (with the two-wave pattern
+when coupled), the finding-routing procedure and recipient dispositions, the
+verification topology for each planned check, the integration-rehearsal
+trigger and owner (or the recorded reason it is omitted), the intended
+artifact composition order, and the rerun/invalidation trigger for stale
+integrated evidence. The join condition covers finding dispositions and
+required integrated evidence. [[parallel-delegation]] owns the field meanings
+and operational rules. Omit the section, or state serial, when no parallel
+delegation is planned.
 
 ## Parallel Safety
 
 Add `## Parallel Safety` when the task belongs to an authorized multi-task work
-unit. The maintainer fills it during decomposition so the orchestrator's Parallel
-Opportunity Scan (see `agenticloop/AGENTIC_LOOP.md`) can classify the task without
-re-deriving it. This section complements `## Expected Files or Areas` and the
-`allowed_paths` frontmatter; it does not replace either one.
+unit; the maintainer fills it during decomposition so the orchestrator's
+Parallel Opportunity Scan can classify the task. It complements `## Expected
+Files or Areas` and the `allowed_paths` frontmatter; it does not replace them.
 
 Fields:
 
 - **Owned paths**: the paths this task expects to own for writes.
 - **Shared or generated files**: bundler/codegen output, fixtures, snapshots that
   other tasks might also touch.
+- **Test/fixture/snapshot/shared-helper surfaces**: test modules, fixtures,
+  snapshots, generated expectations, and shared validation helpers; writable
+  collision surfaces exactly like production files.
 - **Schema/API/lockfile risk**: schema, API ordering, or lockfile collisions.
 - **Backend objects owned**: task file(s), GitHub issue/PR, labels, or other
   records the lane mutates.
 - **Dependency edges**: other tasks in the unit that must finish first.
-- **Parallel eligibility**: `eligible`, `blocked`, or `unknown`.
-- **Reason**: the concrete basis for the eligibility verdict; when `unknown`,
-  name the missing information a bounded read-only discovery step would resolve.
+- **Shared assumptions/invariants**: behavioral facts, contracts, or
+  verification interpretations sibling tasks rely on.
+- **Discoveries that could affect other tasks**: likely findings that would
+  invalidate a sibling lane's assumptions, plan, implementation, or
+  verification interpretation.
+- **Parallel eligibility**: `eligible`, `blocked`, or `unknown` -- the
+  mutation-collision verdict.
+- **Knowledge coupling**: `independent`, `coupled`, or `unknown` -- the
+  knowledge verdict. `coupled` work uses the two-wave pattern in
+  [[parallel-delegation]]. Parallel writes require `eligible` plus
+  `independent`; separate worktrees never convert coupled or unknown tasks
+  into independent tasks.
+- **Reason**: the concrete basis for both verdicts; when either is `unknown`,
+  name what a bounded discovery step would resolve.
 
-When `Parallel eligibility` is `unknown` for a code/collision fact and 2 or more
-ready tasks could otherwise run in parallel, the maintainer runs one bounded
-read-only discovery pass before returning. If the verdict stays unknown, the
-reason must state what stayed unknown and recommend serial for that blocker.
-Host/lane capability unknowns stay with the orchestrator.
+When either verdict is `unknown` and 2 or more ready tasks could otherwise run
+in parallel, the maintainer runs one bounded read-only discovery pass before
+returning; if a verdict stays unknown, state what stayed unknown and recommend
+serial. Host/lane capability unknowns stay with the orchestrator.
 
 A standalone single task outside a multi-task unit may omit the section.
 

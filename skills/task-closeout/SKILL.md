@@ -1,6 +1,6 @@
 ---
 name: task-closeout
-description: Use when every task in a configured group is accepted and integrated or closed according to the configured backend, or when a human-identified work unit finishes in a flat project. Defines what closeout inspects, when it runs, the durable status marker it posts, and the human approval gate for grouped projects. Closeout is a verify-and-mark gate; it does not write a separate summary file.
+description: Use when every task in a configured group is accepted and integrated or closed according to the configured backend, when a human-identified work unit finishes in a flat project, or when cleaning up an accepted worktree after integration. Defines what closeout inspects, when it runs, the durable status marker it posts, and the human approval gate for grouped projects. Closeout is a verify-and-mark gate; it does not write a separate summary file.
 metadata:
   area: task-closeout
   side_effects: writes-backend
@@ -13,6 +13,11 @@ metadata:
 Closeout confirms that the relevant task set is actually complete, records
 durable evidence, and turns repeated process friction into follow-up work or
 skill improvements.
+
+If the remaining request is cleanup of an accepted, integrated worktree, follow
+the worktree cleanup lifecycle and human checkpoint in
+`agenticloop/AGENTIC_LOOP.md`.
+Cleanup does not replace closeout evidence or reopen accepted implementation.
 
 Run closeout:
 
