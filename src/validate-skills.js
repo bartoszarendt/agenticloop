@@ -11,7 +11,7 @@
  *
  * Warnings (do not fail):
  *   - orphan skill (no inbound [[link]] from another skill)
- *   - body under 50 or over 4000 words
+ *   - body under 50 or over 5000 words
  *   - description without an explicit trigger phrase
  *
  * [[agent: ...]] attribution markers are not skill links and are ignored.
@@ -26,7 +26,12 @@ const WIKILINK_RE = /\[\[([^\]]+)\]\]/g;
 const REQUIRED_FIELDS = ['name', 'description'];
 const TRIGGER_PHRASES = ['use when', 'use whenever', 'use before', 'use the moment'];
 const MIN_WORDS = 50;
-const MAX_WORDS = 4000;
+// review-and-accept owns the full two-pass review, independent-review enforcement,
+// and the Maintainer Review Fixup procedure/disclosure/verdict-line conventions;
+// keeping that single canonical owner intact pushes it past the previous 4000-word
+// hint. Raised to 5000 so the progressive-disclosure hint still catches genuine
+// bloat without penalizing the deliberately consolidated review contract.
+const MAX_WORDS = 5000;
 const WORD_RE = /[\p{L}\p{N}]+(?:['\u2019\u002d\u2013\u2014][\p{L}\p{N}]+)*/gu;
 
 const TRUST_FIELDS = ['side_effects', 'credentials', 'runs_scripts'];

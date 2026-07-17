@@ -29,15 +29,21 @@ const TOLERANCE = 0.05;
 // exception was added: the detailed procedure in review-and-accept grows every
 // adapter's reference library, and the maintainer/orchestrator role edits grow
 // agentDefinitions.
+// Baselines were raised again for the delegation/review provenance clarification:
+// role-delegation gained the explicit Delegation mode / Fallback cause+reason
+// prompt lines plus the re-review-and-continuation policy, and review-and-accept
+// gained the fixup eligibility verdict line and the standardized durable fixup
+// disclosure shape. These canonical additions grow every packaged reference
+// library and the maintainer role edit grows agentDefinitions.
 // Knowledge coordination and combined verification must remain within these
 // established budgets; concise canonical rules and cross-links absorb the new
 // behavior without rebasing payload growth.
 const ADAPTERS = [
-  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 7709, agentDefinitions: 7124, activationSurface: 585 } },
-  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 42241, agentDefinitions: 7586, activationSurface: 875, referenceLibrary: 33780 } },
-  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 33565, agentDefinitions: 6714, activationSurface: 1314, referenceLibrary: 25537 } },
-  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 40399, agentDefinitions: 7312, activationSurface: 860, referenceLibrary: 32227 } },
-  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 40220, agentDefinitions: 7309, activationSurface: 684, referenceLibrary: 32227 } },
+  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 7996, agentDefinitions: 7397, activationSurface: 599 } },
+  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 44928, agentDefinitions: 7863, activationSurface: 889, referenceLibrary: 36176 } },
+  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 35896, agentDefinitions: 6987, activationSurface: 1342, referenceLibrary: 27567 } },
+  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 43037, agentDefinitions: 7585, activationSurface: 874, referenceLibrary: 34578 } },
+  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 42858, agentDefinitions: 7582, activationSurface: 698, referenceLibrary: 34578 } },
 ];
 
 let tmpDir;

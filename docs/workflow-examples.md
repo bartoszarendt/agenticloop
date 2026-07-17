@@ -166,6 +166,42 @@ performed:
 - `single_agent_fallback` -- same-session review by the acting agent;
 - `independent_human` -- a durable human review or confirmation.
 
+### Delegation fallback vs review fallback
+
+`single_agent_fallback` names two different things; keep them apart:
+
+- **Delegation fallback** (`delegation_mode: single_agent_fallback` on
+  `role.invoked`) means real role delegation was unavailable or a concrete attempt
+  failed. It requires a structured `fallback_cause` (`mechanism_absent` or
+  `invocation_failed`) and a reason. A new review round is never a fallback cause.
+- **Review fallback** (`review_mode: single_agent_fallback`) means the review
+  happened in the acting session and is not independent. It is legal for ordinary
+  tasks even when the role was delegated for real.
+
+A fallback review mode does not prove a Maintainer Review Fixup. Only the durable
+`## Maintainer Review Fixup` subsection plus `Task:`/`Agent: maintainer` commit
+attribution identify a fixup. Only a fixup whose resulting artifact is the
+current head forces the current review into fallback mode; a superseded
+historical fixup still counts toward the one-episode-per-task limit but a later
+genuinely delegated re-review of a newer revision may record `host_subagent`
+(see the review-and-accept skill). On GitHub that count includes fixup disclosures
+from replacement PRs cross-referenced by the same task issue, not only comments
+on the PR currently under audit. Ordinary tasks may use same-session review;
+independent-review tasks may not be accepted that way. A human who directly
+continues an already-active maintainer session records a concise
+`continuation_reason` on the review telemetry rather than a failed delegation
+attempt, and still cannot accept an independent-review task.
+
+When surfacing the review mode to a human, prefer explicit wording over the bare
+word "fallback", for example:
+
+```text
+Review execution: same session (review_mode: single_agent_fallback)
+```
+
+Keep the machine value for compatibility, but do not present "fallback" without
+this context.
+
 Ordinary tasks can be accepted through an honestly recorded
 `single_agent_fallback`. Set `independent_review_required: true` on the task
 record before implementation for higher-assurance work -- security or

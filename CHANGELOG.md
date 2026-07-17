@@ -3,6 +3,87 @@
 ## 0.1.0 (Unreleased)
 
 ### Added
+- Hardened Maintainer Review Fixup follow-up enforcement: GitHub review audit now
+  checks same-task replacement PR history before allowing a fixup, files/event
+  cross-checks ignore malformed fixup flags, and non-maintainer review results are
+  reported separately without creating false unbacked-maintainer-review gaps.
+- Delegation and review provenance clarification. `single_agent_fallback` now has
+  two clearly separated meanings: a `delegation_mode: single_agent_fallback` means
+  real role delegation was unavailable or a concrete attempt failed (and requires
+  a structured `fallback_cause` of `mechanism_absent` or `invocation_failed` plus a
+  reason), while a `review_mode: single_agent_fallback` means the review happened
+  in the acting session and is not independent. A new review round -- for example
+  "re-review round 2" -- is never a fallback cause; orchestrator-routed re-review
+  rounds re-run delegation routing and use real host delegation when available. A
+  human who directly continues an already-active maintainer session emits no new
+  `role.invoked`, records a `continuation_reason` on the review telemetry, uses
+  `review_mode: single_agent_fallback`, and cannot accept an independent-review
+  task that way. The canonical policy lives in `skills/role-delegation/SKILL.md`
+  and `AGENTIC_LOOP.md`; no new event type, review mode, GitHub marker, frontmatter
+  field, or task-record knob was added.
+- Delegation Prompt Shape now carries an explicit `Delegation mode` line
+  (`host_subagent | explicit_agent_invocation | single_agent_fallback`), plus
+  `Fallback cause` and `Fallback reason` lines required only for
+  `single_agent_fallback`. The receiving role uses the supplied mode when it
+  records review provenance; `Operating facts` remains required for real
+  delegation but never substitutes for the explicit mode.
+- Strict producer validation for newly written events. `role.invoked` writes now
+  require a top-level `orchestrator` role, a `maintainer`/`engineer` `target_role`,
+  a canonical `delegation_mode`, a boolean `fallback`, and -- for
+  `single_agent_fallback` -- `fallback: true`, a structured `fallback_cause`, and a
+  non-empty `reason`; non-fallback modes must record `fallback: false` and no
+  fallback cause; maintainer self-invocation is rejected. `review.result` writes
+  now require a valid `review_mode` and a `review_round`, validate an optional
+  `continuation_reason` and `maintainer_fixup` flag, and only allow
+  `maintainer_fixup: true` on a maintainer result with
+  `review_mode: single_agent_fallback`. Both the CLI write path and direct
+  `appendEventLog` callers pass this producer gate, so invalid new events fail
+  before append. Historical schema-version-1 logs remain readable and are never
+  retroactively rejected.
+- Telemetry-quality provenance reporting. `event-logging report` (per task and
+  aggregate) now counts and lists tasks for incomplete or inconsistent
+  `role.invoked` (missing `target_role`, `delegation_mode`, or boolean `fallback`
+  under strict `typeof` semantics, so string values like `"true"` are reported as
+  historical gaps; fallback mode without a structured cause; mode/fallback
+  mismatch; non-orchestrator emitter; self-invocation), `review.result` missing
+  `review_mode`, and review rounds without backing. Review-round backing is
+  computed per review through ordered correlation -- each `review.result` must be
+  preceded by an unconsumed maintainer `role.invoked` for that review step (with
+  `review_round` matching when both carry it) or carry a `continuation_reason`;
+  aggregate subtraction is no longer used, so an unrelated or earlier-round
+  maintainer invocation cannot mask an unbacked round. `report --features` now
+  reports `maintainer_fixup: true` events as event counts (deduplication is not
+  assumed), tasks with a fixup event, and tasks with more than one event as a
+  multiple-episode anomaly. Historical incomplete events are labeled, never
+  inferred or backfilled.
+- Maintainer Review Fixup observability. The durable `## Maintainer Review Fixup`
+  subsection now uses a standardized field shape (Finding, Eligibility decision,
+  Base artifact, Correction, Affected files, Planned verification, Verification
+  result, Resulting artifact) parsed deterministically while ignoring fenced or
+  non-live Markdown examples. One shared episode validator backs both surfaces:
+  all eight fields are required and non-empty, both verification fields are
+  required, duplicate field labels are rejected rather than silently merged, and
+  base/resulting artifacts must differ. Files-backed validation enforces at most
+  one episode, `independent_review_required` not true, final
+  `review_mode: single_agent_fallback`, a reviewed artifact matching the
+  resulting artifact, and a non-empty final `## Evidence` section that references
+  the resulting artifact (`## Scope Completed` alone is not evidence). The GitHub
+  review audit shape-validates every live episode with full-40-character-SHA
+  artifacts (bare or `commit:`/`sha:` prefixed), enforces at most one episode
+  across PR history, and distinguishes current-head from historical episodes:
+  only an episode whose resulting artifact equals the exact current PR head
+  forces `AGENT_REVIEW_MODE: single_agent_fallback` and verified maintainer
+  commit attribution in the base-to-resulting fixup range (`Task:` must identify
+  the canonical task when the issue declares one; unrelated commits never
+  satisfy attribution; missing or malformed commit data fails closed), while a
+  superseded historical episode still counts toward the one-episode limit but
+  does not force a later genuinely delegated `host_subagent` re-review into
+  fallback mode. When event logging is enabled, `agenticloop validate`
+  cross-checks the durable subsection against `maintainer_fixup: true` review
+  events and reports historical mismatches and multiple-episode anomalies as
+  warnings. Every `needs_revision` review now carries one concise
+  `Maintainer Review Fixup: ineligible -- <reason>` (or `applied -- <finding>`)
+  verdict line.
 - Maintainer Review Fixup: a bounded Pass 2 review exception that lets a
   reviewing maintainer correct one fully understood quality finding on the
   artifact under review, refresh final-state evidence, re-review, and accept

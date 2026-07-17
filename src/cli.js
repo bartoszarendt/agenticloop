@@ -79,7 +79,7 @@ import {
   VALID_EVENT_TYPES,
   resolveEventLogPath,
   resolveLogDirectory,
-  validateEvent,
+  validateNewEvent,
   validateEventLogFile,
   validateEventLogs,
 } from './event-logging.js';
@@ -163,6 +163,12 @@ function formatRefSummary(entries) {
   return entries.length > 0 ? entries.map(entry => `${entry.ref}=${entry.count}`).join(', ') : 'none';
 }
 
+function printProvenanceQualityMetric(label, metric) {
+  const count = metric?.count ?? 0;
+  const tasks = metric?.tasks ?? [];
+  console.log(`    ${label}: ${count} (${formatTaskIdList(tasks)})`);
+}
+
 const CHURN_DETAIL_LIMIT = 15;
 
 function printFeatureReport(result, commandLabel) {
@@ -232,6 +238,13 @@ function printFeatureReport(result, commandLabel) {
   console.log(
     `    reached/exceeded review budget but no risk predicted (lower confidence): ${oc.contextRiskOverBudgetNoPredict.length} (${formatTaskIdList(oc.contextRiskOverBudgetNoPredict.map(entry => entry.taskId))})`
   );
+
+  console.log();
+  const fx = f.maintainerFixup;
+  console.log('  maintainer review fixup (from maintainer_fixup: true events; a fallback review mode alone is not a fixup):');
+  console.log(`    maintainer_fixup: true events (event count, not proven-deduplicated episodes): ${fx.episodeCount}`);
+  console.log(`    tasks with a fixup event: ${fx.tasksWithFixup.length} (${formatTaskIdList(fx.tasksWithFixup)})`);
+  console.log(`    tasks with more than one fixup event (multiple-episode anomaly): ${fx.tasksWithMultipleFixups.length} (${formatTaskIdList(fx.tasksWithMultipleFixups)})`);
 
   console.log();
   if (f.warnings.length === 0) {
@@ -1263,6 +1276,13 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
       console.log(`  role.invoked targets: ${formatCountSummary(result.roleInvoked.targetRoleCounts)}`);
       console.log(`  delegation modes: ${formatCountSummary(result.roleInvoked.delegationModeCounts)}`);
       console.log(`  fallback count: ${result.roleInvoked.fallbackCount}`);
+      const tpq = result.provenanceQuality;
+      console.log('  provenance quality (telemetry; historical events labeled, not rewritten):');
+      console.log(`    role.invoked missing target_role=${tpq.roleInvokedMissingTargetRole}, missing delegation_mode=${tpq.roleInvokedMissingDelegationMode}, missing/non-boolean fallback=${tpq.roleInvokedMissingFallback}`);
+      console.log(`    fallback without cause=${tpq.roleInvokedFallbackWithoutCause}, inconsistent mode/fallback=${tpq.roleInvokedInconsistentModeFallback}`);
+      console.log(`    non-orchestrator emitter=${tpq.roleInvokedNonOrchestrator}, self-invocation=${tpq.roleInvokedSelfInvocation}`);
+      console.log(`    review.result missing review_mode=${tpq.reviewResultMissingReviewMode}, non-maintainer emitter=${tpq.reviewResultNonMaintainer}, maintainer review rounds without correlated delegation/continuation=${tpq.reviewRoundsWithoutBacking}`);
+      console.log(`    maintainer_fixup: true events=${tpq.maintainerFixupEvents}${tpq.multipleFixupEpisodes ? ' (multiple-episode anomaly)' : ''}`);
       console.log(`  refs summary: ${formatRefSummary(result.refsSummary)}`);
 
       console.log('  accepted imperfect checks (not clean success):');
@@ -1344,6 +1364,24 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
     console.log(`  tasks missing review.result: ${result.tasksWithMissingReviewResult.length} (${formatTaskIdList(result.tasksWithMissingReviewResult)})`);
     console.log(`  tasks missing task.closed: ${result.tasksWithMissingTaskClosed.length} (${formatTaskIdList(result.tasksWithMissingTaskClosed)})`);
     console.log(`  events with host=unknown: ${result.hostUnknownEvents.length}`);
+    console.log();
+
+    const pq = result.provenanceQuality;
+    console.log('  delegation/review provenance quality (telemetry; historical events are labeled, not rewritten):');
+    printProvenanceQualityMetric('role.invoked missing target_role', pq.roleInvokedMissingTargetRole);
+    printProvenanceQualityMetric('role.invoked missing delegation_mode', pq.roleInvokedMissingDelegationMode);
+    printProvenanceQualityMetric('role.invoked missing/non-boolean fallback', pq.roleInvokedMissingFallback);
+    printProvenanceQualityMetric('fallback mode without structured cause', pq.roleInvokedFallbackWithoutCause);
+    printProvenanceQualityMetric('inconsistent mode/fallback combination', pq.roleInvokedInconsistentModeFallback);
+    printProvenanceQualityMetric('role.invoked emitted by non-orchestrator', pq.roleInvokedNonOrchestrator);
+    printProvenanceQualityMetric('self-invocation (emitter == target)', pq.roleInvokedSelfInvocation);
+    printProvenanceQualityMetric('review.result missing review_mode', pq.reviewResultMissingReviewMode);
+    printProvenanceQualityMetric('review.result emitted by non-maintainer', pq.reviewResultNonMaintainer);
+    printProvenanceQualityMetric('maintainer review rounds without correlated delegation or continuation', pq.reviewRoundsWithoutBacking);
+    const fixup = result.features.maintainerFixup;
+    console.log(`    maintainer_fixup: true events (event count, not proven-deduplicated episodes): ${fixup.episodeCount}`);
+    console.log(`    tasks with a fixup event: ${fixup.tasksWithFixup.length} (${formatTaskIdList(fixup.tasksWithFixup)})`);
+    console.log(`    tasks with more than one fixup event (multiple-episode anomaly): ${fixup.tasksWithMultipleFixups.length} (${formatTaskIdList(fixup.tasksWithMultipleFixups)})`);
     console.log();
 
     console.log('  per-task summary:');
@@ -1454,7 +1492,7 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
     data,
   });
 
-  const validation = validateEvent(event, { target });
+  const validation = validateNewEvent(event, { target });
   for (const error of validation.errors) console.error(`  ERROR: ${error}`);
   for (const warning of validation.warnings) console.warn(`  WARN: ${warning}`);
 

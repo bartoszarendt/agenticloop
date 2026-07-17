@@ -9,6 +9,13 @@ import {
   satisfiesIndependentReview,
   parseIndependentReviewRequired,
 } from './review-provenance.js';
+import {
+  bareArtifactToken,
+  commitHasMaintainerFixupTrailers,
+  commitTaskTrailerValues,
+  detectFixupEpisodes,
+  validateFixupEpisode,
+} from './maintainer-fixup.js';
 
 export class GitHubReviewAuditError extends Error {
   constructor(message) {
@@ -17,8 +24,171 @@ export class GitHubReviewAuditError extends Error {
   }
 }
 
-const PR_FIELDS = ['number', 'headRefOid', 'closingIssuesReferences', 'comments', 'reviews'].join(',');
+const PR_FIELDS = ['number', 'headRefOid', 'closingIssuesReferences', 'comments', 'reviews', 'commits'].join(',');
 const ISSUE_FIELDS = ['number', 'body'].join(',');
+
+/**
+ * Detect live `## Maintainer Review Fixup` episodes across the PR's marker
+ * sources (PR issue comments and PR review bodies -- the same set markers are
+ * read from), retaining source metadata (comment/review ordinal) so validation
+ * errors can identify where the episode was recorded. Fenced/quoted examples
+ * are ignored by the shared detector.
+ *
+ * @param {any} prData
+ * @returns {Array<import('./maintainer-fixup.js').FixupEpisode & { source: string }>}
+ */
+function collectFixupEpisodes(prData, sourcePrefix = `PR #${prData?.number ?? '?'}`) {
+  const sources = [
+    ...(Array.isArray(prData?.comments) ? prData.comments : [])
+      .map((/** @type {any} */ entry, /** @type {number} */ index) => ({ entry, kind: 'comment', ordinal: index + 1 })),
+    ...(Array.isArray(prData?.reviews) ? prData.reviews : [])
+      .map((/** @type {any} */ entry, /** @type {number} */ index) => ({ entry, kind: 'review', ordinal: index + 1 })),
+  ];
+
+  const episodes = [];
+  for (const { entry, kind, ordinal } of sources) {
+    const body = typeof entry === 'string' ? entry : String(entry?.body ?? '');
+    for (const episode of detectFixupEpisodes(body)) {
+      episodes.push({ ...episode, source: `${sourcePrefix} ${kind} ${ordinal}` });
+    }
+  }
+  return episodes;
+}
+
+/** @param {any} commit */
+function commitMessageText(commit) {
+  if (!commit || typeof commit !== 'object') return '';
+  return [commit.messageHeadline, commit.messageBody, commit.message]
+    .filter((/** @type {any} */ part) => typeof part === 'string' && part)
+    .join('\n');
+}
+
+/**
+ * Normalize a GitHub fixup artifact spelling to a bare lowercase commit SHA.
+ * Supported spellings are the bare SHA and a `commit:`/`sha:` prefixed SHA.
+ * The result is only meaningful when it passes {@link isFullCommitSha}.
+ *
+ * @param {string} value
+ * @returns {string}
+ */
+export function normalizeGitHubFixupArtifact(value) {
+  return bareArtifactToken(value);
+}
+
+/** @param {string} value */
+function isFullCommitSha(value) {
+  return /^[0-9a-f]{40}$/.test(value);
+}
+
+/**
+ * Backend artifact check handed to the shared fixup-episode validator: GitHub
+ * fixup artifacts must normalize to a full 40-character commit SHA.
+ *
+ * @param {string} fieldLabel
+ * @param {string} value
+ * @returns {string|null}
+ */
+function githubFixupArtifactError(fieldLabel, value) {
+  if (isFullCommitSha(normalizeGitHubFixupArtifact(value))) return null;
+  return `'${fieldLabel}' must be a full 40-character commit SHA for the GitHub backend (got '${value}')`;
+}
+
+/**
+ * Load and normalize the PR commit list for fixup attribution. Fails closed:
+ * missing commit data or a commit without a resolvable full OID returns an
+ * error instead of being silently skipped.
+ *
+ * @param {any} prData
+ * @returns {{ commits: Array<{ oid: string, message: string }>, error: string|null }}
+ */
+function collectPrCommits(prData) {
+  const raw = prData?.commits;
+  if (!Array.isArray(raw)) {
+    return {
+      commits: [],
+      error: 'pull request commit data is unavailable; cannot verify Maintainer Review Fixup attribution',
+    };
+  }
+  const commits = [];
+  for (const commit of raw) {
+    const oid = String(commit?.oid ?? '').toLowerCase();
+    if (!isFullCommitSha(oid)) {
+      return {
+        commits: [],
+        error: 'pull request commit data is malformed (a commit is missing a full oid); cannot verify Maintainer Review Fixup attribution',
+      };
+    }
+    commits.push({ oid, message: commitMessageText(commit) });
+  }
+  return { commits, error: null };
+}
+
+/**
+ * Verify maintainer attribution for a current-head fixup episode. The relevant
+ * commits are those in the base..resulting range of the PR commit list (or the
+ * resulting commit alone when the base is not a PR commit); at least one must
+ * carry the `Task:`/`Agent: maintainer` trailers, and when the audit knows a
+ * canonical task identity the `Task:` trailer must name it. A trailer on an
+ * unrelated commit elsewhere in the PR does not satisfy attribution.
+ *
+ * @param {any} prData
+ * @param {{ fields: Record<string, string> }} episode
+ * @param {string|null} canonicalTaskId
+ * @returns {string[]}
+ */
+function validateCurrentFixupAttribution(prData, episode, canonicalTaskId) {
+  const { commits, error } = collectPrCommits(prData);
+  if (error) return [error];
+
+  const resultingOid = normalizeGitHubFixupArtifact(episode.fields.resulting_artifact);
+  const baseOid = normalizeGitHubFixupArtifact(episode.fields.base_artifact);
+
+  const resultingIndex = commits.findIndex(commit => commit.oid === resultingOid);
+  if (resultingIndex === -1) {
+    return [
+      `Maintainer Review Fixup resulting artifact '${resultingOid}' is not a commit on this pull request; cannot verify attribution`,
+    ];
+  }
+
+  const baseIndex = commits.findIndex(commit => commit.oid === baseOid);
+  const rangeStart = baseIndex !== -1 && baseIndex < resultingIndex ? baseIndex + 1 : resultingIndex;
+  const range = commits.slice(rangeStart, resultingIndex + 1);
+
+  const attributed = range.filter(commit => commitHasMaintainerFixupTrailers(commit.message));
+  if (attributed.length === 0) {
+    return [
+      'a Maintainer Review Fixup is disclosed but no commit in the fixup range carries the Task: and Agent: maintainer attribution trailers',
+    ];
+  }
+
+  if (canonicalTaskId) {
+    const matchesTask = attributed.some(commit =>
+      commitTaskTrailerValues(commit.message).some(value => value === canonicalTaskId)
+    );
+    if (!matchesTask) {
+      return [
+        `Maintainer Review Fixup commit attribution does not identify the task: no fixup-range commit carries a 'Task: ${canonicalTaskId}' trailer`,
+      ];
+    }
+  }
+
+  return [];
+}
+
+/**
+ * Canonical task identity for trailer verification, when the linked task issue
+ * declares one via YAML frontmatter `task_id`.
+ *
+ * @param {any} issueData
+ * @returns {string|null}
+ */
+function resolveCanonicalTaskId(issueData) {
+  const [frontmatter] = parseFrontmatter(String(issueData?.body ?? ''));
+  const taskId = frontmatter?.task_id;
+  if (typeof taskId !== 'string') return null;
+  const trimmed = taskId.trim();
+  return trimmed || null;
+}
 
 function markerValues(liveBody, name) {
   return [...liveBody.matchAll(new RegExp(`^${name}:[ \\t]*([^\\r\\n]*\\S)[ \\t]*$`, 'gmi'))]
@@ -395,7 +565,23 @@ export function taskRequiresIndependentReview(issueBody) {
 
 const VALID_EXPECTED_STATUSES = new Set(['accepted', 'needs_revision']);
 
-export function evaluateGitHubReviewAudit({ prData, issueData, humanReviews = [], expectedStatus = 'accepted', expectedAccount = null }) {
+/**
+ * @param {object} params
+ * @param {any} params.prData
+ * @param {any} params.issueData
+ * @param {Array<any>} [params.taskPrData]
+ * @param {Array<any>} [params.humanReviews]
+ * @param {string} [params.expectedStatus]
+ * @param {any} [params.expectedAccount]
+ */
+export function evaluateGitHubReviewAudit({
+  prData,
+  issueData,
+  taskPrData = [],
+  humanReviews = [],
+  expectedStatus = 'accepted',
+  expectedAccount = null,
+}) {
   if (!VALID_EXPECTED_STATUSES.has(expectedStatus)) {
     return {
       ok: false,
@@ -457,6 +643,57 @@ export function evaluateGitHubReviewAudit({ prData, issueData, humanReviews = []
     }
   }
 
+  // Durable Maintainer Review Fixup disclosure. A fallback review mode alone does
+  // not prove a fixup; the `## Maintainer Review Fixup` subsection does. Every
+  // live episode in PR history is shape-validated and counts toward the
+  // at-most-one-per-task rule. Only a CURRENT-HEAD episode (normalized resulting
+  // artifact equals the exact current PR head) binds the current review: it
+  // requires AGENT_REVIEW_MODE: single_agent_fallback and verified maintainer
+  // commit attribution in the fixup range, failing closed when commit data is
+  // unavailable. A historical episode (resulting artifact is not the current
+  // head -- e.g. a fixup superseded by an engineer revision) does not force the
+  // current review mode; a later genuinely delegated review may use
+  // host_subagent. Historical episodes are not attribution-checked because a
+  // superseded revision may no longer be reachable from the PR commit list.
+  const currentPrFixupEpisodes = collectFixupEpisodes(prData);
+  const currentPrNumber = Number(prData?.number);
+  const relatedPrFixupEpisodes = (Array.isArray(taskPrData) ? taskPrData : [])
+    .filter(relatedPr => Number(relatedPr?.number) !== currentPrNumber)
+    .flatMap(relatedPr => collectFixupEpisodes(relatedPr));
+  const fixupEpisodes = [...relatedPrFixupEpisodes, ...currentPrFixupEpisodes];
+  const fixupPresent = fixupEpisodes.length > 0;
+  let currentFixup = null;
+  if (fixupPresent) {
+    for (const episode of fixupEpisodes) {
+      errors.push(
+        ...validateFixupEpisode(episode, {
+          subject: `PR #${prData?.number ?? '?'} ${episode.source}`,
+          validateArtifact: githubFixupArtifactError,
+        })
+      );
+    }
+
+    if (fixupEpisodes.length > 1) {
+      errors.push('more than one Maintainer Review Fixup subsection is recorded for this pull request; at most one episode is allowed per task');
+    }
+
+    const currentEpisodes = headRefOid
+      ? currentPrFixupEpisodes.filter(
+        episode => normalizeGitHubFixupArtifact(episode.fields.resulting_artifact) === headRefOid
+      )
+      : [];
+    currentFixup = currentEpisodes[0] ?? null;
+
+    if (currentFixup) {
+      if (outcome && outcome.mode !== 'single_agent_fallback') {
+        errors.push(
+          `a Maintainer Review Fixup is disclosed for the current PR head but the current review mode is '${outcome.mode}'; a self-accepted fixup must record AGENT_REVIEW_MODE: single_agent_fallback`
+        );
+      }
+      errors.push(...validateCurrentFixupAttribution(prData, currentFixup, resolveCanonicalTaskId(issueData)));
+    }
+  }
+
   const provenanceValid = errors.length === 0;
   const acceptanceReady = provenanceValid && outcome?.status === 'accepted';
   const statusMatch = outcome?.status === expectedStatus;
@@ -476,6 +713,9 @@ export function evaluateGitHubReviewAudit({ prData, issueData, humanReviews = []
     issue: issueData?.number ?? null,
     headRefOid,
     independentReviewRequired: requirement.value,
+    maintainerFixup: fixupPresent,
+    maintainerFixupEpisodeCount: fixupEpisodes.length,
+    maintainerFixupCurrent: currentFixup !== null,
     outcome: outcome && { status: outcome.status, mode: outcome.mode, artifact: outcome.artifact, humanReviewRef: outcome.humanReviewRef, author: outcome.author?.login ?? null },
   };
 }
@@ -526,6 +766,53 @@ function fetchRestReviews(commandRunner, owner, repo, prNumber) {
   }
   const flattened = result.flat();
   return flattened.map(normalizeRestReview);
+}
+
+/**
+ * Fetch every same-repository pull request cross-referenced from the linked task
+ * issue, excluding the PR currently under audit. This is the task-wide durable
+ * history used to enforce the one-fixup-per-task bound across replacement PRs.
+ * The lookup is only required when the current PR records a fixup candidate.
+ *
+ * @param {Function} commandRunner
+ * @param {string} owner
+ * @param {string} repoName
+ * @param {number} issueNumber
+ * @param {number|string} currentPrNumber
+ * @param {string} [repoOverride]
+ * @returns {Array<object>}
+ */
+function fetchTaskLinkedPullRequests(commandRunner, owner, repoName, issueNumber, currentPrNumber, repoOverride) {
+  const timeline = runGh(commandRunner, [
+    'api',
+    '--paginate',
+    '--slurp',
+    '-H',
+    'Accept: application/vnd.github+json',
+    `repos/${owner}/${repoName}/issues/${issueNumber}/timeline`,
+  ]);
+  if (!Array.isArray(timeline)) {
+    throw new GitHubReviewAuditError('GitHub issue timeline endpoint returned a non-array response; cannot enforce the task-wide Maintainer Review Fixup limit');
+  }
+
+  const currentNumber = Number(currentPrNumber);
+  const linkedNumbers = new Set();
+  for (const event of timeline.flat()) {
+    const sourceIssue = event?.source?.issue;
+    if (!sourceIssue?.pull_request) continue;
+    const sourceRepo = String(sourceIssue?.repository?.full_name ?? '').toLowerCase();
+    if (sourceRepo && sourceRepo !== `${owner}/${repoName}`.toLowerCase()) continue;
+    const number = Number(sourceIssue?.number);
+    if (Number.isInteger(number) && number > 0 && number !== currentNumber) linkedNumbers.add(number);
+  }
+
+  const related = [];
+  for (const number of [...linkedNumbers].sort((a, b) => a - b)) {
+    const args = ['pr', 'view', String(number), '--json', 'number,comments,reviews'];
+    if (repoOverride) args.push('--repo', repoOverride);
+    related.push(runGh(commandRunner, args));
+  }
+  return related;
 }
 
 /**
@@ -596,6 +883,28 @@ export function runGitHubReviewAudit({ pr, issue, repo, expectedStatus, commandR
   if (repo) issueArgs.push('--repo', repo);
   const issueData = runGh(commandRunner, issueArgs);
 
+  // The one-fixup bound is task-wide, not PR-local. When this PR records a
+  // candidate episode, inspect every same-repository PR cross-referenced from
+  // the linked task issue so a replacement PR cannot silently receive a second
+  // fixup. Fail closed if that task history cannot be loaded.
+  /** @type {Array<any>} */
+  let taskPrData = [];
+  if (collectFixupEpisodes(prData).length > 0) {
+    const ownerName = resolveRepoOwnerName(commandRunner, repo);
+    const parts = String(ownerName).split('/');
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      throw new GitHubReviewAuditError(`cannot resolve repository owner/name: '${ownerName}'`);
+    }
+    taskPrData = fetchTaskLinkedPullRequests(
+      commandRunner,
+      parts[0],
+      parts[1],
+      issueNumber,
+      pr,
+      repo
+    );
+  }
+
   // Determine whether the current valid marker requires live human review data.
   const headRefOid = String(prData?.headRefOid ?? '').toLowerCase();
   const markers = collectReviewMarkers(prData);
@@ -603,6 +912,7 @@ export function runGitHubReviewAudit({ pr, issue, repo, expectedStatus, commandR
   const currentMarker = current.length === 1 ? current[0] : null;
   const requirement = taskRequiresIndependentReview(issueData?.body);
 
+  /** @type {Array<any>} */
   let humanReviews = [];
   if (currentMarker?.mode === 'independent_human') {
     try {
@@ -630,6 +940,6 @@ export function runGitHubReviewAudit({ pr, issue, repo, expectedStatus, commandR
     }
   }
 
-  const result = evaluateGitHubReviewAudit({ prData, issueData, humanReviews, expectedStatus, expectedAccount });
+  const result = evaluateGitHubReviewAudit({ prData, issueData, taskPrData, humanReviews, expectedStatus, expectedAccount });
   return { ...result, closingIssues };
 }

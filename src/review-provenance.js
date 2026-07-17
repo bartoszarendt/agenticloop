@@ -21,6 +21,45 @@ export const DELEGATION_MODES = Object.freeze([
 ]);
 
 /**
+ * Structured causes for a `single_agent_fallback` delegation. A fallback is
+ * legal only when the capability check found no relevant mechanism
+ * (`mechanism_absent`) or a named mechanism was attempted and concretely failed
+ * (`invocation_failed`). "Re-review requested" is not a fallback cause.
+ * @type {readonly string[]}
+ */
+export const FALLBACK_CAUSES = Object.freeze([
+  'mechanism_absent',
+  'invocation_failed',
+]);
+
+/**
+ * The single delegation mode that is a same-session fallback rather than real
+ * host delegation. Kept as a named constant so producers and validators do not
+ * re-spell the string.
+ * @type {string}
+ */
+export const SINGLE_AGENT_FALLBACK = 'single_agent_fallback';
+
+const DELEGATION_MODES_SET = new Set(DELEGATION_MODES);
+const FALLBACK_CAUSES_SET = new Set(FALLBACK_CAUSES);
+
+/**
+ * @param {string} value
+ * @returns {boolean}
+ */
+export function isValidDelegationMode(value) {
+  return DELEGATION_MODES_SET.has(value);
+}
+
+/**
+ * @param {string} value
+ * @returns {boolean}
+ */
+export function isValidFallbackCause(value) {
+  return FALLBACK_CAUSES_SET.has(value);
+}
+
+/**
  * Valid `review_mode` values. Delegation modes plus independent-human review.
  * @type {readonly string[]}
  */

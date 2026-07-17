@@ -198,13 +198,13 @@ describe('Word count warnings', () => {
     assert.ok(!report.skills['joined-words'].warnings.some(w => w.includes('very short')));
   });
 
-  it('warns only when body exceeds 4000 readable words', () => {
+  it('warns only when body exceeds 5000 readable words', () => {
     const d = mkdtempSync(join(tmpDir, 'long-body-'));
-    makeSkill(d, 'below-long-limit', null, 'word '.repeat(3500));
-    makeSkill(d, 'above-long-limit', null, 'word '.repeat(4001));
+    makeSkill(d, 'below-long-limit', null, 'word '.repeat(4500));
+    makeSkill(d, 'above-long-limit', null, 'word '.repeat(5001));
     const report = validateSkills(d);
     assert.ok(!report.skills['below-long-limit'].warnings.some(w => w.includes('Body is long')));
-    assert.ok(report.skills['above-long-limit'].warnings.some(w => w.includes('Body is long (4001 words)')));
+    assert.ok(report.skills['above-long-limit'].warnings.some(w => w.includes('Body is long (5001 words)')));
   });
 });
 

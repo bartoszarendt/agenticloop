@@ -46,6 +46,37 @@ When posting `needs_revision`, the maintainer may include a short numbered
 revision plan in the review body or comment (a "revision packet"), consistent
 with the ≤3-revision churn-classification rule in [[role-delegation]].
 
+### Fixup eligibility verdict line
+
+Every `needs_revision` outcome includes exactly one concise verdict line stating
+why a Maintainer Review Fixup was not applied, and every applied fixup states it:
+
+```text
+Maintainer Review Fixup: ineligible — Pass 1 not clean
+```
+
+Use a more specific reason when one applies, for example:
+
+```text
+Maintainer Review Fixup: ineligible — requires changed tests
+Maintainer Review Fixup: ineligible — independent review required
+Maintainer Review Fixup: ineligible — outside allowed paths
+Maintainer Review Fixup: ineligible — earlier fixup episode already exists
+```
+
+When an eligible fixup is applied, record:
+
+```text
+Maintainer Review Fixup: applied — <short concrete finding>
+```
+
+The verdict line is explanatory and does not replace the durable
+`## Maintainer Review Fixup` subsection. It never loosens the eligibility gate:
+Pass 1 findings, new or changed tests, and independent-review tasks stay
+ineligible, and at most one fixup episode is allowed per task. Older review bodies
+that predate this convention are warned, not hard-failed; newly generated review
+instructions require the line.
+
 ### Independent-review enforcement
 
 When the task record sets `independent_review_required: true`, final acceptance
@@ -154,22 +185,31 @@ is recorded as accepted or needs_revision, emit `review.result` with the matchin
 
 Keep event summaries short. Do not duplicate the full review body in the event log.
 
-When known, include review metadata in `--data-json`:
+Strict producer validation requires every new `review.result` event to use
+top-level `--role maintainer` and its `--data-json` to include:
 
 - `review_round`
+- `review_mode` (a valid review mode)
+
+Optional, recommended metadata for `review.started` and `review.result`:
+
 - `artifact_revision`
 - `pr_head`
+- `continuation_reason` (must be non-empty when present; record it when a human
+  directly continues an active maintainer session without a new `role.invoked`)
+- `maintainer_fixup: true` (boolean; only on a maintainer `review.result` with
+  `review_mode: single_agent_fallback` when a Maintainer Review Fixup was applied)
 
 Example review start event:
 
 ```text
-npx agenticloop event-logging review.started --task T-001 --role maintainer --summary "Started maintainer review" --ref "github:pr:42" --data-json '{"review_round":2,"artifact_revision":"abc123","pr_head":"abc123"}'
+npx agenticloop event-logging review.started --task T-001 --role maintainer --summary "Started maintainer review" --ref "github:pr:42" --data-json '{"review_round":2,"review_mode":"host_subagent","artifact_revision":"abc123","pr_head":"abc123"}'
 ```
 
 Example review result event:
 
 ```text
-npx agenticloop event-logging review.result --task T-001 --role maintainer --summary "Accepted implementation" --outcome accepted --ref "github:pr:42" --data-json '{"review_round":2,"artifact_revision":"abc123","pr_head":"abc123"}'
+npx agenticloop event-logging review.result --task T-001 --role maintainer --summary "Accepted implementation" --outcome accepted --ref "github:pr:42" --data-json '{"review_round":2,"review_mode":"host_subagent","artifact_revision":"abc123","pr_head":"abc123"}'
 ```
 
 ## Reading markers
@@ -397,6 +437,63 @@ and one coherent edit packet.
 17. When event logging is enabled, use existing event types and optional free-form `data` such as
     `{"maintainer_fixup": true, "base_artifact": "<before>", "fixup_artifact": "<after>"}`. Do not
     add a new top-level event type or event schema.
+
+### Durable disclosure shape
+
+Record the fixup under the existing heading with these standardized fields so the
+disclosure parses deterministically. Keep it live Markdown (not fenced) in the
+review body or files-backed task record:
+
+```text
+## Maintainer Review Fixup
+
+- Finding:
+- Eligibility decision:
+- Base artifact:
+- Correction:
+- Affected files:
+- Planned verification:
+- Verification result:
+- Resulting artifact:
+```
+
+All eight fields are mandatory and must be non-empty; `Planned verification` and
+`Verification result` are both required, and a duplicated field label is
+rejected rather than silently merged. Base artifact and resulting artifact must
+differ, and for GitHub each must normalize (bare SHA or a `commit:`/`sha:`
+prefix) to a full 40-character commit SHA. At most one such subsection may exist
+per task, counting both current and superseded episodes.
+
+For GitHub, the one-episode count is task-wide across replacement pull requests:
+when the current PR contains a fixup candidate, the review audit reads the linked
+task issue's same-repository PR cross-reference history and includes fixup
+subsections from those PRs. If that history cannot be loaded, the audit fails
+closed rather than silently treating the current PR as the task's whole history.
+
+A fixup episode is *current* when its resulting artifact equals the exact
+current artifact: the current PR head for GitHub, or the final
+`reviewed_artifact`/`implementation_artifact` for files. A current episode binds
+the current review: the accepted marker must review that same resulting artifact
+with `single_agent_fallback`, and the commits in the base-to-resulting fixup
+range must carry the `Task:`/`Agent: maintainer` trailers -- an unrelated commit
+elsewhere in the PR does not satisfy attribution, and missing or malformed
+GitHub commit data fails closed. A *historical* episode -- one whose resulting
+artifact was superseded by a later engineer revision -- still counts toward the
+one-episode limit but does not force the current review mode; a later genuinely
+delegated re-review of the new head may record `host_subagent`.
+
+Files-backed fixup records additionally require a non-empty final `## Evidence`
+section that references the resulting artifact. `## Scope Completed` alone is
+not evidence; the enforced guarantee is the recorded evidence/artifact
+association, since a static record cannot prove when evidence was produced.
+Files-backed validation and the GitHub review audit detect this subsection
+(ignoring examples inside fenced or otherwise non-live Markdown) and enforce
+these invariants. When event logging is enabled, `agenticloop validate` also
+cross-checks the durable subsection against `maintainer_fixup: true` review
+events and reports mismatches or multiple-episode anomalies as warnings. A
+corresponding event must carry the same task id, role `maintainer`, and
+`review_mode: single_agent_fallback`; a malformed historical flag is reported but
+does not satisfy the durable evidence cross-check.
 
 ### Provenance
 

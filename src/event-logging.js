@@ -5,6 +5,15 @@ import { TextDecoder } from 'node:util';
 
 import { loadAgenticLoopConfig } from './json.js';
 import { isValidTaskId, loadProjectMap } from './project-map.js';
+import {
+  DELEGATION_MODES,
+  FALLBACK_CAUSES,
+  REVIEW_MODES,
+  SINGLE_AGENT_FALLBACK,
+  isValidDelegationMode,
+  isValidFallbackCause,
+  isValidReviewMode,
+} from './review-provenance.js';
 import { resolveTaskBackend } from './task-backend.js';
 
 export const EVENT_SCHEMA_VERSION = 1;
@@ -760,7 +769,163 @@ export function validateEvent(event, options = {}) {
   return { errors, warnings };
 }
 
-export function appendEventLog({ target, output, event, path }) {
+// Producer-side delegation roles a `role.invoked` event may target. The
+// orchestrator delegates only to maintainer or engineer.
+const DELEGATION_TARGET_ROLES = new Set(['maintainer', 'engineer']);
+
+function isBoolean(value) {
+  return value === true || value === false;
+}
+
+// Strict producer rules for a newly written `role.invoked` event. These are NOT
+// applied to historical logs by the generic validator; they gate new writes so
+// an incomplete or self-justifying delegation record cannot be appended.
+function validateRoleInvokedProducer(event) {
+  const errors = [];
+  const data = isPlainObject(event.data) ? event.data : {};
+
+  if (event.role !== 'orchestrator') {
+    errors.push(
+      `role.invoked must be emitted by the orchestrator (role is '${event.role}'); a role must not emit a self-invocation event`
+    );
+  }
+
+  const targetRole = normalizeNullableString(data.target_role);
+  if (!targetRole) {
+    errors.push("role.invoked requires data.target_role");
+  } else if (!DELEGATION_TARGET_ROLES.has(targetRole)) {
+    errors.push(
+      `role.invoked data.target_role must be one of: ${[...DELEGATION_TARGET_ROLES].join(', ')} (got '${targetRole}')`
+    );
+  }
+
+  const delegationMode = normalizeNullableString(data.delegation_mode);
+  if (!delegationMode) {
+    errors.push('role.invoked requires data.delegation_mode');
+  } else if (!isValidDelegationMode(delegationMode)) {
+    errors.push(
+      `role.invoked data.delegation_mode must be one of: ${DELEGATION_MODES.join(', ')} (got '${delegationMode}')`
+    );
+  }
+
+  if (!isBoolean(data.fallback)) {
+    errors.push('role.invoked requires a boolean data.fallback');
+  }
+
+  const hasFallbackCause = data.fallback_cause !== undefined && data.fallback_cause !== null;
+
+  if (delegationMode === SINGLE_AGENT_FALLBACK) {
+    if (data.fallback !== true) {
+      errors.push("role.invoked with delegation_mode 'single_agent_fallback' requires data.fallback: true");
+    }
+    const cause = normalizeNullableString(data.fallback_cause);
+    if (!cause) {
+      errors.push(
+        `role.invoked with delegation_mode 'single_agent_fallback' requires data.fallback_cause (one of: ${FALLBACK_CAUSES.join(', ')})`
+      );
+    } else if (!isValidFallbackCause(cause)) {
+      errors.push(
+        `role.invoked data.fallback_cause must be one of: ${FALLBACK_CAUSES.join(', ')} (got '${cause}'); "re-review requested" is not a fallback cause`
+      );
+    }
+    if (!normalizeNullableString(data.reason)) {
+      errors.push(
+        "role.invoked with delegation_mode 'single_agent_fallback' requires a non-empty data.reason naming the mechanism checked and the concrete result"
+      );
+    }
+  } else if (delegationMode && isValidDelegationMode(delegationMode)) {
+    // Real delegation modes.
+    if (data.fallback === true) {
+      errors.push(
+        `role.invoked with delegation_mode '${delegationMode}' requires data.fallback: false`
+      );
+    }
+    if (hasFallbackCause) {
+      errors.push(
+        `role.invoked with delegation_mode '${delegationMode}' must not carry data.fallback_cause`
+      );
+    }
+  }
+
+  return errors;
+}
+
+// Strict producer rules for a newly written `review.result` event.
+function validateReviewResultProducer(event) {
+  const errors = [];
+  const data = isPlainObject(event.data) ? event.data : {};
+
+  if (event.role !== 'maintainer') {
+    errors.push(
+      `review.result must be emitted by the maintainer (role is '${event.role}')`
+    );
+  }
+
+  const reviewMode = normalizeNullableString(data.review_mode);
+  if (!reviewMode) {
+    errors.push('review.result requires data.review_mode');
+  } else if (!isValidReviewMode(reviewMode)) {
+    errors.push(
+      `review.result data.review_mode must be one of: ${REVIEW_MODES.join(', ')} (got '${reviewMode}')`
+    );
+  }
+
+  if (normalizeNullableSummaryValue(data.review_round) === null) {
+    errors.push('review.result requires data.review_round');
+  }
+
+  if (data.continuation_reason !== undefined && data.continuation_reason !== null) {
+    if (typeof data.continuation_reason !== 'string' || !data.continuation_reason.trim()) {
+      errors.push('review.result data.continuation_reason must be a non-empty string when present');
+    }
+  }
+
+  if (data.maintainer_fixup !== undefined) {
+    if (!isBoolean(data.maintainer_fixup)) {
+      errors.push('review.result data.maintainer_fixup must be a boolean when present');
+    } else if (data.maintainer_fixup === true) {
+      if (reviewMode && reviewMode !== SINGLE_AGENT_FALLBACK) {
+        errors.push(
+          "review.result with data.maintainer_fixup: true requires review_mode 'single_agent_fallback'"
+        );
+      }
+    }
+  }
+
+  return errors;
+}
+
+// Producer-strict validation used for every NEWLY written event. It layers
+// event-specific requirements on top of the generic historical-compatible
+// shape check. Historical logs are never held to these producer rules.
+export function validateNewEvent(event, options = {}) {
+  const base = validateEvent(event, options);
+  const errors = [...base.errors];
+  const warnings = [...base.warnings];
+
+  if (isPlainObject(event)) {
+    if (event.event_type === 'role.invoked') {
+      errors.push(...validateRoleInvokedProducer(event));
+    } else if (event.event_type === 'review.result') {
+      errors.push(...validateReviewResultProducer(event));
+    }
+  }
+
+  return { errors, warnings };
+}
+
+export function appendEventLog({ target, output, event, path, historical = false }) {
+  // Every newly produced event passes strict producer validation before it is
+  // appended, so direct callers cannot bypass the write-path gate. Tests that
+  // deliberately simulate historical or hypothetical on-disk logs pass
+  // `historical: true`.
+  if (!historical) {
+    const { errors } = validateNewEvent(event, { target });
+    if (errors.length > 0) {
+      throw new Error(`Refusing to append invalid event: ${errors.join('; ')}`);
+    }
+  }
+
   const eventLogPath = path ?? resolveEventLogPath(target, output, event?.task_id).path;
   mkdirSync(dirname(eventLogPath), { recursive: true });
   appendFileSync(eventLogPath, `${JSON.stringify(event)}\n`, 'utf-8');
@@ -984,6 +1149,87 @@ export function auditTaskEventLog({ target, taskId, requiredEventTypes, explicit
   return result;
 }
 
+/**
+ * Per-review backing correlation for maintainer review rounds (telemetry only,
+ * never fatal for historical logs). Each `review.result` is evaluated
+ * independently against the task's ordered event stream: it is backed when it
+ * carries a non-empty `continuation_reason`, or when an unconsumed
+ * `role.invoked` targeting maintainer precedes it within the current review
+ * step. Invocation evidence is consumed (one invocation backs at most one
+ * review) and scoped (leftover invocations do not carry past a `review.result`,
+ * and an invocation followed by `task.created` before any `review.started` is
+ * treated as planning delegation, not review backing). When both the invocation
+ * and the review carry `review_round` values, they must match. Exact
+ * correlation is impossible for some legacy streams, so the round/planning
+ * scoping is a conservative heuristic; out-of-order or malformed events are
+ * still counted without crashing.
+ *
+ * @param {Array<any>} events Ordered task event stream.
+ * @returns {number} review.result events with neither backing nor continuation.
+ */
+function countReviewRoundsWithoutBacking(events) {
+  let gaps = 0;
+  /** @type {Array<{ round: number|null, sawReviewStarted: boolean }>} */
+  let pending = [];
+
+  for (const event of events) {
+    const type = event?.event_type;
+
+    if (type === 'role.invoked') {
+      if (normalizeNullableString(event.data?.target_role) === 'maintainer') {
+        pending.push({ round: toFiniteNumber(event.data?.review_round), sawReviewStarted: false });
+      }
+      continue;
+    }
+
+    if (type === 'task.created') {
+      // A maintainer invocation that leads straight into task creation was a
+      // planning delegation; it must not mask a later unbacked review round.
+      pending = pending.filter(token => token.sawReviewStarted);
+      continue;
+    }
+
+    if (type === 'review.started') {
+      const round = toFiniteNumber(event.data?.review_round);
+      for (let i = pending.length - 1; i >= 0; i--) {
+        if (!pending[i].sawReviewStarted) {
+          pending[i].sawReviewStarted = true;
+          if (pending[i].round === null) pending[i].round = round;
+          break;
+        }
+      }
+      continue;
+    }
+
+    if (type === 'review.result') {
+      // Only maintainer review results participate in maintainer-delegation
+      // correlation. Malformed historical results from other roles are reported
+      // by a separate provenance-quality counter and must not create a false
+      // "unbacked maintainer review" gap or consume maintainer evidence.
+      if (event?.role !== 'maintainer') continue;
+      const round = toFiniteNumber(event.data?.review_round);
+      const hasContinuation = Boolean(normalizeNullableString(event.data?.continuation_reason));
+      if (!hasContinuation) {
+        let matched = -1;
+        for (let i = pending.length - 1; i >= 0; i--) {
+          const tokenRound = pending[i].round;
+          if (tokenRound === null || round === null || tokenRound === round) {
+            matched = i;
+            break;
+          }
+        }
+        if (matched >= 0) pending.splice(matched, 1);
+        else gaps += 1;
+      }
+      // Invocation evidence is scoped to the review step it precedes; an
+      // earlier-round leftover cannot back a later round.
+      pending = [];
+    }
+  }
+
+  return gaps;
+}
+
 function summarizeEvents(events, repoRoot) {
   const recordedEventTypes = new Set(events.map(event => event.event_type));
   const strictAudit = {
@@ -1002,6 +1248,23 @@ function summarizeEvents(events, repoRoot) {
   const delegationModeCounts = new Map();
   const refsSummary = new Map();
   let fallbackCount = 0;
+
+  // Provenance-quality (telemetry-only) counters. These never fail historical
+  // logs; they surface incomplete or inconsistent delegation/review provenance
+  // as report metrics. Historical events are labeled, never rewritten.
+  const provenanceQuality = {
+    roleInvokedMissingTargetRole: 0,
+    roleInvokedMissingDelegationMode: 0,
+    roleInvokedMissingFallback: 0,
+    roleInvokedFallbackWithoutCause: 0,
+    roleInvokedInconsistentModeFallback: 0,
+    roleInvokedNonOrchestrator: 0,
+    roleInvokedSelfInvocation: 0,
+    reviewResultMissingReviewMode: 0,
+    reviewResultNonMaintainer: 0,
+    reviewRoundsWithoutBacking: 0,
+    maintainerFixupEvents: 0,
+  };
   let firstTimestampMs = Number.POSITIVE_INFINITY;
   let lastTimestampMs = Number.NEGATIVE_INFINITY;
   let firstEventTimestamp = null;
@@ -1061,6 +1324,10 @@ function summarizeEvents(events, repoRoot) {
       if (event.outcome === 'accepted' || event.outcome === 'needs_revision') {
         reviewResultCounts[event.outcome] += 1;
       }
+      const reviewMode = normalizeNullableString(event.data?.review_mode);
+      if (!reviewMode) provenanceQuality.reviewResultMissingReviewMode += 1;
+      if (event.role !== 'maintainer') provenanceQuality.reviewResultNonMaintainer += 1;
+      if (event.data?.maintainer_fixup === true) provenanceQuality.maintainerFixupEvents += 1;
       continue;
     }
 
@@ -1074,8 +1341,39 @@ function summarizeEvents(events, repoRoot) {
       if (event.data?.fallback === true) {
         fallbackCount += 1;
       }
+
+      // Provenance-quality checks (telemetry, never fatal for historical logs).
+      if (!targetRole) provenanceQuality.roleInvokedMissingTargetRole += 1;
+      if (!delegationMode) provenanceQuality.roleInvokedMissingDelegationMode += 1;
+      // Strict type semantics: only actual booleans count. A string "true" is a
+      // historical provenance-quality gap, reported but never rewritten.
+      if (typeof event.data?.fallback !== 'boolean') {
+        provenanceQuality.roleInvokedMissingFallback += 1;
+      }
+      if (event.role !== 'orchestrator') provenanceQuality.roleInvokedNonOrchestrator += 1;
+      if (targetRole && event.role !== 'unknown' && targetRole === event.role
+        && (event.role === 'maintainer' || event.role === 'engineer')) {
+        provenanceQuality.roleInvokedSelfInvocation += 1;
+      }
+
+      const fallbackCause = normalizeNullableString(event.data?.fallback_cause);
+      if (delegationMode === 'single_agent_fallback') {
+        if (!fallbackCause) provenanceQuality.roleInvokedFallbackWithoutCause += 1;
+        if (event.data?.fallback !== true) provenanceQuality.roleInvokedInconsistentModeFallback += 1;
+      } else if (delegationMode && isValidDelegationMode(delegationMode)) {
+        if (event.data?.fallback === true || fallbackCause) {
+          provenanceQuality.roleInvokedInconsistentModeFallback += 1;
+        }
+      }
     }
   }
+
+  // A maintainer review round should be backed by a correlated delegation
+  // (role.invoked targeting maintainer for that review step) or carry an
+  // explicit continuation reason. Each review.result is evaluated independently
+  // through ordered per-review correlation -- never aggregate subtraction, so an
+  // unrelated maintainer invocation cannot mask an unbacked review round.
+  provenanceQuality.reviewRoundsWithoutBacking = countReviewRoundsWithoutBacking(events);
 
   const traceDurationMs = events.length > 0 ? Math.max(0, lastTimestampMs - firstTimestampMs) : 0;
 
@@ -1096,6 +1394,11 @@ function summarizeEvents(events, repoRoot) {
       targetRoleCounts: sortCountEntries(targetRoleCounts),
       delegationModeCounts: sortCountEntries(delegationModeCounts),
       fallbackCount,
+    },
+    provenanceQuality: {
+      ...provenanceQuality,
+      hasFixup: provenanceQuality.maintainerFixupEvents >= 1,
+      multipleFixupEpisodes: provenanceQuality.maintainerFixupEvents > 1,
     },
     refsSummary: sortCountEntries(refsSummary).map(entry => ({ ref: entry.value, count: entry.count })),
   };
@@ -1143,6 +1446,13 @@ function summarizeTaskFeatures(events) {
   const contextPressureEncountered = readNullableBoolean(closed?.data?.context_pressure_encountered);
   const reviewBudgetExceededRecorded = readNullableBoolean(closed?.data?.review_budget_exceeded);
 
+  // Durable Maintainer Review Fixup episodes are counted only from explicit
+  // review.result data.maintainer_fixup: true. A same-session review mode alone
+  // is not a fixup.
+  const maintainerFixupEpisodes = reviewResultEvents.filter(
+    event => event.data?.maintainer_fixup === true
+  ).length;
+
   return {
     hasTelemetry: events.some(isTelemetryEvent),
     hasCreated: created !== null,
@@ -1161,6 +1471,7 @@ function summarizeTaskFeatures(events) {
     minimalismTrigger,
     contextOverflowRisk,
     contextPressureEncountered,
+    maintainerFixupEpisodes,
   };
 }
 
@@ -1215,8 +1526,57 @@ function createEmptyFeatureAggregate() {
       contextRiskPressureNoPredict: [], // Rule 1: taskIds
       contextRiskOverBudgetNoPredict: [], // Rule 2: {taskId, derivedReviewRounds, reviewBudget}
     },
+    // Maintainer Review Fixup observability (from durable maintainer_fixup: true
+    // review.result events). A fallback review mode alone does not count as a
+    // fixup; only the explicit event flag does.
+    maintainerFixup: {
+      episodeCount: 0, // total maintainer_fixup: true events across tasks
+      tasksWithFixup: [], // taskIds with at least one fixup
+      tasksWithMultipleFixups: [], // taskIds with more than one recorded episode
+    },
     warnings: [],
   };
+}
+
+// Telemetry-quality provenance metrics surfaced by the aggregate report. Each
+// carries a running count and the task ids that contributed. These are
+// telemetry, not workflow failures: historical incomplete events are labeled
+// here, never rewritten or backfilled.
+const PROVENANCE_QUALITY_METRICS = [
+  'roleInvokedMissingTargetRole',
+  'roleInvokedMissingDelegationMode',
+  'roleInvokedMissingFallback',
+  'roleInvokedFallbackWithoutCause',
+  'roleInvokedInconsistentModeFallback',
+  'roleInvokedNonOrchestrator',
+  'roleInvokedSelfInvocation',
+  'reviewResultMissingReviewMode',
+  'reviewResultNonMaintainer',
+  'reviewRoundsWithoutBacking',
+];
+
+function createEmptyProvenanceQualityAggregate() {
+  const aggregate = {};
+  for (const metric of PROVENANCE_QUALITY_METRICS) {
+    aggregate[metric] = { count: 0, tasks: [] };
+  }
+  return aggregate;
+}
+
+function accumulateProvenanceQuality(aggregate, taskId, taskProvenanceQuality) {
+  for (const metric of PROVENANCE_QUALITY_METRICS) {
+    const count = taskProvenanceQuality?.[metric] ?? 0;
+    if (count > 0) {
+      aggregate[metric].count += count;
+      aggregate[metric].tasks.push(taskId);
+    }
+  }
+}
+
+function finalizeProvenanceQualityAggregate(aggregate) {
+  for (const metric of PROVENANCE_QUALITY_METRICS) {
+    aggregate[metric].tasks.sort((a, b) => String(a).localeCompare(String(b)));
+  }
 }
 
 function accumulateTaskFeatures(features, triggerCounts, taskId, taskFeatures) {
@@ -1241,6 +1601,17 @@ function accumulateTaskFeatures(features, triggerCounts, taskId, taskFeatures) {
       reviewBudgetIsDefault: taskFeatures.reviewBudgetIsDefault,
       overBudget: taskFeatures.overReviewBudget,
     });
+  }
+
+  // Maintainer Review Fixup observability: episodes come only from explicit
+  // maintainer_fixup: true events, applies to every task (not gated on the
+  // telemetry marker) since the fixup flag is itself the durable signal.
+  if (taskFeatures.maintainerFixupEpisodes > 0) {
+    features.maintainerFixup.episodeCount += taskFeatures.maintainerFixupEpisodes;
+    features.maintainerFixup.tasksWithFixup.push(taskId);
+    if (taskFeatures.maintainerFixupEpisodes > 1) {
+      features.maintainerFixup.tasksWithMultipleFixups.push(taskId);
+    }
   }
 
   // Emitted-telemetry dimensions: only count tasks that opted into telemetry so
@@ -1332,6 +1703,8 @@ function finalizeFeatureAggregate(features, triggerCounts) {
     .sort((a, b) => String(a).localeCompare(String(b)));
   features.omissionCandidates.contextRiskOverBudgetNoPredict
     .sort((a, b) => String(a.taskId).localeCompare(String(b.taskId)));
+  features.maintainerFixup.tasksWithFixup.sort((a, b) => String(a).localeCompare(String(b)));
+  features.maintainerFixup.tasksWithMultipleFixups.sort((a, b) => String(a).localeCompare(String(b)));
   features.warnings.sort((a, b) => a.localeCompare(b));
 }
 
@@ -1360,6 +1733,7 @@ export function reportEventLogs({ target } = {}) {
     tasksWithMissingTaskStarted: [],
     tasksWithMissingReviewResult: [],
     tasksWithMissingTaskClosed: [],
+    provenanceQuality: createEmptyProvenanceQualityAggregate(),
     hostUnknownEvents: [],
     invalidLogs: [],
     emptyLogs: [],
@@ -1517,6 +1891,7 @@ export function reportEventLogs({ target } = {}) {
     }
 
     accumulateTaskFeatures(result.features, featureTriggerCounts, taskId, summarizeTaskFeatures(entry.events));
+    accumulateProvenanceQuality(result.provenanceQuality, taskId, summary.provenanceQuality);
 
     if (!summary.strictAudit.presentEventTypes.includes('role.invoked')) {
       result.tasksWithMissingRoleInvoked.push(taskId);
@@ -1535,6 +1910,7 @@ export function reportEventLogs({ target } = {}) {
   result.totalRoleInvokedTargets = sortCountEntries(totalRoleInvokedTargets);
   result.totalDelegationModes = sortCountEntries(totalDelegationModes);
   result.totalFallbackCount = totalFallbackCount;
+  finalizeProvenanceQualityAggregate(result.provenanceQuality);
   finalizeFeatureAggregate(result.features, featureTriggerCounts);
 
   result.tasks.sort((a, b) => String(a.taskId).localeCompare(String(b.taskId)));

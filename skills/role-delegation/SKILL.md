@@ -112,25 +112,73 @@ rules, join behavior, and parallel liveness details live in [[parallel-delegatio
 
 Event logging is off by default. When enabled, follow [[event-logging]] and emit
 `role.invoked` only after real maintainer/engineer execution or bounded fallback
-begins, never for hypothetical routing. Record `target_role`, `delegation_mode`
-(`host_subagent`, `explicit_agent_invocation`, or `single_agent_fallback`),
-`fallback`, `adapter`, known `model`, and `reason` as applicable.
+begins, never for hypothetical routing. The orchestrator is the emitter: top-level
+`role` is `orchestrator`, and a maintainer or engineer must not emit a
+self-invocation event targeting itself. Record `target_role`, `delegation_mode`
+(`host_subagent`, `explicit_agent_invocation`, or `single_agent_fallback`), a
+boolean `fallback`, `adapter`, known `model`, and `reason` as applicable. For
+`single_agent_fallback`, also record `fallback: true`, a structured
+`fallback_cause` (`mechanism_absent` or `invocation_failed`), and a non-empty
+`reason`. Non-fallback modes record `fallback: false` and no fallback cause. The
+strict producer path rejects a new `role.invoked` that violates these rules.
+
+## Two Meanings of single_agent_fallback
+
+Keep the delegation mode and the review mode distinct:
+
+- `delegation_mode: single_agent_fallback` on `role.invoked` means real role
+  delegation was unavailable or a concrete attempt failed. It requires a
+  structured `fallback_cause` and reason.
+- `review_mode: single_agent_fallback` on the review means the review happened in
+  the acting session and is not independent. It is legal for ordinary tasks even
+  when the role was delegated for real (for example a self-accepted Maintainer
+  Review Fixup by a `host_subagent` maintainer).
+
+A `review_mode: single_agent_fallback` does not by itself prove a delegation
+failure or a fixup; only the durable fixup subsection and maintainer attribution
+identify a fixup.
 
 ## Single-Agent Fallback
 
-Single-agent fallback is legal only after the capability check shows no real host
-delegation exists, or a concrete attempt fails. If allowed, the current agent may
-assume the requested role for one bounded role step only.
+Single-agent fallback is legal only when the delegation capability check found no
+relevant mechanism (`fallback_cause: mechanism_absent`), or a named mechanism was
+attempted and concretely failed (`fallback_cause: invocation_failed`). A request
+such as "re-review round 2" is not a fallback cause. If allowed, the current agent
+may assume the requested role for one bounded role step only.
 
 When using fallback:
 
-- announce it in output and record the capability-check result and fallback reason,
+- announce it in output and record the capability-check result, `fallback_cause`, and reason,
 - follow the assumed role's boundaries and required skills,
 - stop at the role's normal stop condition, bounded to that one role step,
-- emit `role.invoked` when event logging is enabled,
+- emit `role.invoked` with `fallback: true`, the `fallback_cause`, and the reason when event logging is enabled,
 - do not claim host delegation happened.
 
 If neither host delegation nor single-agent role assumption is allowed, use [[blocked-state]] with category `contract` and stop.
+
+## Re-Review and Continuation
+
+Every orchestrator-routed implementation or review role step receives a fresh
+delegation decision, and every orchestrator-routed re-review round passes through
+delegation routing again. When host delegation is available, the orchestrator uses
+it for the new round instead of continuing the prior maintainer session for
+convenience. A new review round is not a reason to record
+`delegation_mode: single_agent_fallback`.
+
+A human may directly continue an already-active maintainer session for ordinary
+tasks, but that continuation:
+
+- is not a new role invocation, so it emits no new `role.invoked`;
+- does not satisfy an independent-review requirement;
+- must not be represented as a failed delegation attempt;
+- records a concise `continuation_reason` on `review.started` and/or
+  `review.result` and uses `review_mode: single_agent_fallback`;
+- stops with a clear status instead of accepting when the task record requires
+  independent review.
+
+A successful Maintainer Review Fixup does not alter the original role invocation's
+delegation mode; the final fixup review still uses
+`review_mode: single_agent_fallback`.
 
 ## Review Round Checkpoint
 
@@ -149,6 +197,9 @@ When invoking a role, orchestrator prompts must include:
 Role:              maintainer | engineer
 Task ID:           <task-id from project task convention, or "pending decomposition" before task records exist>
 Backend:           <task_backend from .agenticloop/project.md; default is 'files'>
+Delegation mode:   host_subagent | explicit_agent_invocation | single_agent_fallback
+Fallback cause:    mechanism_absent | invocation_failed   (required only for single_agent_fallback)
+Fallback reason:   <mechanism checked and its concrete result>   (required only for single_agent_fallback)
 Source docs:       <closed list of files the role must read before acting; no expansion without explicit exception>
 Operating facts:   <required for host_subagent and explicit_agent_invocation only; omit for single_agent_fallback>
   Scratch directory:   <path>
@@ -166,7 +217,18 @@ Concurrency:       `serial -- reason: <concrete blocker>`, or `parallel batch <i
 Lease:             <observable-step checkpoint cadence, no-progress budget, and any relevant max duration or milestone>
 ```
 
-Do not omit scope, out of scope, expected output, stop condition, or Operating facts for real delegation. Use explicit `none` for inapplicable fields. The payload mechanism is a doc pointer or `none`, never a copied command recipe.
+`Delegation mode` is always required and names the exact mechanism used. `Fallback
+cause` and `Fallback reason` are required only for `single_agent_fallback`: the
+cause is `mechanism_absent` (the capability check found no relevant mechanism) or
+`invocation_failed` (a named mechanism was attempted and concretely failed), and
+the reason states the mechanism checked and its concrete result. "Re-review
+requested" or "round 2" is never a fallback cause. Non-fallback modes omit both
+fallback fields. The receiving role uses the supplied `Delegation mode` when it
+records review provenance and event data; `Operating facts` remains required for
+real delegation but never substitutes for the explicit mode.
+
+Do not omit scope, out of scope, expected output, stop condition, Delegation mode,
+or Operating facts for real delegation. Use explicit `none` for inapplicable fields. The payload mechanism is a doc pointer or `none`, never a copied command recipe.
 
 `Routed findings:` lists each cross-lane finding id, fact/invariant, evidence,
 and required disposition; use `none` for parallel lanes without findings. The

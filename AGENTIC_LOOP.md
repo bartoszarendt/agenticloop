@@ -725,12 +725,28 @@ Recommended `data` conventions:
   `duration_ms`, `timeout_ms`, `timed_out`, `host_timeout_limit_ms`,
   `execution_strategy`, `attempt`, `required`, `triaged_unrelated`,
   `accepted_known_failure`
-- `role.invoked`: `target_role`, `delegation_mode`
-  (`host_subagent`, `explicit_agent_invocation`, or `single_agent_fallback`),
-  `fallback`, `adapter`, `model` only when explicitly known from adapter
-  config, and `reason`
-- `review.started` and `review.result`: `review_round`, `artifact_revision`,
-  `pr_head`
+- `role.invoked`: `target_role` (`maintainer` or `engineer`), `delegation_mode`
+  (`host_subagent`, `explicit_agent_invocation`, or `single_agent_fallback`), a
+  boolean `fallback`, `adapter`, `model` only when explicitly known from adapter
+  config, and `reason`. For `single_agent_fallback` also record `fallback: true`,
+  a structured `fallback_cause` (`mechanism_absent` or `invocation_failed`), and a
+  non-empty `reason`; non-fallback modes use `fallback: false` and no fallback
+  cause. The orchestrator emits `role.invoked`; a role never emits a
+  self-invocation targeting itself.
+- `review.started` and `review.result`: the maintainer is the top-level event
+  `role`; data carries `review_round`, `review_mode` (a valid
+  review mode), `artifact_revision`, `pr_head`. Add `continuation_reason` when a
+  direct same-session continuation records the review without a corresponding
+  `role.invoked`. Add `maintainer_fixup: true` only on a maintainer
+  `review.result` with `review_mode: single_agent_fallback` when a Maintainer
+  Review Fixup was applied; a fallback review mode alone does not imply a fixup.
+
+Newly produced `role.invoked` and `review.result` events pass strict producer
+validation before they are written: `role.invoked` requires `target_role`,
+`delegation_mode`, and a boolean `fallback` (plus `fallback_cause` and a
+non-empty `reason` for `single_agent_fallback`); `review.result` requires
+`review_round`, a valid `review_mode`, and top-level role `maintainer`. Historical logs that predate these
+conventions are read and reported, never rewritten or backfilled.
 
 `check.run` triage fields:
 
@@ -762,8 +778,18 @@ event-logging report --task <TASK-ID>` for a local read-side summary of one
 task log. Use `npx agenticloop event-logging report` (without `--task`) for a
 read-only aggregate summary across every `.agenticloop/logs/*.jsonl` file;
 the aggregate surfaces strict-audit gaps, durable-closure gaps, review churn,
-check outcomes, delegation/fallback counts, invalid or empty logs, and
-`host=unknown` events as telemetry-quality warnings rather than workflow failures. Reporting
+check outcomes, delegation/fallback counts, delegation/review provenance-quality
+gaps (incomplete or inconsistent `role.invoked`, self-invocation, non-orchestrator
+emitters, `review.result` missing `review_mode` or emitted by a non-maintainer,
+and maintainer review rounds with neither correlated delegation evidence nor a
+continuation reason -- each review round is
+matched per-review against a preceding unconsumed maintainer invocation for that
+step, never estimated by aggregate subtraction), `maintainer_fixup: true` event
+counts (reported as event counts, with more than one per task flagged as a
+multiple-episode anomaly), invalid or empty logs, and
+`host=unknown` events as telemetry-quality warnings rather than workflow failures.
+Historical incomplete events are labeled legacy/unknown, never inferred or
+backfilled. Reporting
 stays local; it does not upload data or require producers to add new event keys
 before it is useful. Add `--features` to that aggregate command for a
 feature-adoption view: minimalism levels and triggers, non-default effort
@@ -775,7 +801,16 @@ candidates rather than warnings. The review-round dimension is
 derived from existing `review.result` events, so it works on historical logs;
 the knob dimensions read the optional `task.created`/`task.closed` telemetry
 fields when present. `npx agenticloop validate` also validates every default
-`.agenticloop/logs/*.jsonl` file when present.
+`.agenticloop/logs/*.jsonl` file when present, and -- when
+`event_logging: enabled` is recorded -- cross-checks each files-backed task
+record's durable `## Maintainer Review Fixup` subsection against that task's
+`maintainer_fixup: true` review events, reporting historical mismatches and
+multiple-episode anomalies as warnings. Only an event with the matching task id,
+role `maintainer`, and `review_mode: single_agent_fallback` satisfies that
+cross-check; malformed historical flags are reported separately. A
+`review_mode: single_agent_fallback` alone is never counted as a fixup; only the
+durable subsection and the explicit
+event flag are.
 
 ## Decision Records
 

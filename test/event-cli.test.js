@@ -116,11 +116,13 @@ Document the implementation summary, files changed, tests and checks run, result
 }
 
 function appendAuditFixtureEvents(target, taskId, eventTypes = ['role.invoked', 'task.started', 'check.run', 'review.result', 'task.closed']) {
+  // role.invoked and review.result go through the strict producer path, so they
+  // carry complete delegation/review provenance data.
   const definitions = {
-    'role.invoked': ['event', 'role.invoked', '--target', target, '--task', taskId, '--role', 'orchestrator', '--summary', 'Delegated engineer'],
+    'role.invoked': ['event', 'role.invoked', '--target', target, '--task', taskId, '--role', 'orchestrator', '--summary', 'Delegated engineer', '--data-json', '{"target_role":"engineer","delegation_mode":"host_subagent","fallback":false}'],
     'task.started': ['event', 'task.started', '--target', target, '--task', taskId, '--role', 'engineer', '--summary', 'Started scoped implementation'],
     'check.run': ['event', 'check.run', '--target', target, '--task', taskId, '--role', 'engineer', '--summary', 'npm test passed', '--outcome', 'success'],
-    'review.result': ['event', 'review.result', '--target', target, '--task', taskId, '--role', 'maintainer', '--summary', 'Accepted implementation', '--outcome', 'accepted'],
+    'review.result': ['event', 'review.result', '--target', target, '--task', taskId, '--role', 'maintainer', '--summary', 'Accepted implementation', '--outcome', 'accepted', '--data-json', '{"review_round":1,"review_mode":"host_subagent"}'],
     'task.closed': ['event', 'task.closed', '--target', target, '--task', taskId, '--role', 'maintainer', '--summary', 'Closed task', '--outcome', 'success'],
   };
 
@@ -267,6 +269,8 @@ describe('event CLI', () => {
       'Delegated engineer',
       '--backend',
       'files',
+      '--data-json',
+      '{"target_role":"engineer","delegation_mode":"host_subagent","fallback":false}',
     ]);
 
     assertOk(result);
@@ -444,6 +448,8 @@ describe('event CLI', () => {
       'Accepted implementation',
       '--outcome',
       'accepted',
+      '--data-json',
+      '{"review_round":1,"review_mode":"host_subagent"}',
     ]);
 
     assertOk(result);
@@ -872,7 +878,7 @@ describe('event CLI', () => {
       '--ref',
       'github:pr:17',
       '--data-json',
-      JSON.stringify({ review_round: 1, artifact_revision: 'abc123', pr_head: 'abc123' }),
+      JSON.stringify({ review_round: 1, review_mode: 'host_subagent', artifact_revision: 'abc123', pr_head: 'abc123' }),
     ]));
     assertOk(run([
       'event-logging',
@@ -892,6 +898,7 @@ describe('event CLI', () => {
         target_role: 'maintainer',
         delegation_mode: 'single_agent_fallback',
         fallback: true,
+        fallback_cause: 'invocation_failed',
         adapter: 'opencode',
         reason: 'Review tool unavailable',
       }),
@@ -914,7 +921,7 @@ describe('event CLI', () => {
       '--ref',
       'commit:def456',
       '--data-json',
-      JSON.stringify({ review_round: 2, artifact_revision: 'def456', pr_head: 'def456' }),
+      JSON.stringify({ review_round: 2, review_mode: 'single_agent_fallback', artifact_revision: 'def456', pr_head: 'def456' }),
     ]));
     assertOk(run([
       'event-logging',
@@ -1047,6 +1054,8 @@ describe('event CLI', () => {
       'orchestrator',
       '--summary',
       'Delegated engineer',
+      '--data-json',
+      '{"target_role":"engineer","delegation_mode":"host_subagent","fallback":false}',
     ]));
     assertOk(run([
       'event-logging',
@@ -1109,6 +1118,8 @@ describe('event CLI', () => {
       'Accepted implementation',
       '--outcome',
       'accepted',
+      '--data-json',
+      '{"review_round":1,"review_mode":"host_subagent"}',
     ]));
     assertOk(run([
       'event-logging',
@@ -1206,7 +1217,7 @@ describe('event-logging aggregate report', () => {
     appendAuditFixtureEvents(target, 'T-001');
 
     assertOk(run(['event-logging', 'task.started', '--target', target, '--task', 'T-002', '--role', 'engineer', '--summary', 'Started T-002']));
-    assertOk(run(['event-logging', 'review.result', '--target', target, '--task', 'T-002', '--role', 'maintainer', '--outcome', 'accepted', '--summary', 'Accepted T-002']));
+    assertOk(run(['event-logging', 'review.result', '--target', target, '--task', 'T-002', '--role', 'maintainer', '--outcome', 'accepted', '--summary', 'Accepted T-002', '--data-json', '{"review_round":1,"review_mode":"single_agent_fallback","continuation_reason":"direct maintainer continuation"}']));
 
     assertOk(run(['event-logging', 'task.started', '--target', target, '--task', 'T-003', '--role', 'engineer', '--host', 'unknown', '--summary', 'Unknown host event']));
 
@@ -1247,7 +1258,7 @@ describe('event-logging aggregate report', () => {
     assertOk(run([
       'event-logging', 'role.invoked', '--target', target, '--task', 'T-001', '--role', 'orchestrator',
       '--summary', 'Fallback maintainer', '--data-json',
-      JSON.stringify({ target_role: 'maintainer', delegation_mode: 'single_agent_fallback', fallback: true }),
+      JSON.stringify({ target_role: 'maintainer', delegation_mode: 'single_agent_fallback', fallback: true, fallback_cause: 'mechanism_absent', reason: 'No subagent mechanism available in this host' }),
     ]));
     assertOk(run([
       'event-logging', 'task.closed', '--target', target, '--task', 'T-001', '--role', 'maintainer',
@@ -1319,9 +1330,9 @@ describe('event-logging aggregate report', () => {
     writeValidTaskRecord(target, 'P23-16');
     // Three review.result events -> three derived review rounds, no producer telemetry.
     for (let i = 0; i < 2; i += 1) {
-      assertOk(run(['event', 'review.result', '--target', target, '--task', 'P23-16', '--role', 'maintainer', '--summary', `Round ${i + 1}`, '--outcome', 'needs_revision']));
+      assertOk(run(['event', 'review.result', '--target', target, '--task', 'P23-16', '--role', 'maintainer', '--summary', `Round ${i + 1}`, '--outcome', 'needs_revision', '--data-json', JSON.stringify({ review_round: i + 1, review_mode: 'single_agent_fallback', continuation_reason: 'direct maintainer continuation' })]));
     }
-    assertOk(run(['event', 'review.result', '--target', target, '--task', 'P23-16', '--role', 'maintainer', '--summary', 'Accepted', '--outcome', 'accepted']));
+    assertOk(run(['event', 'review.result', '--target', target, '--task', 'P23-16', '--role', 'maintainer', '--summary', 'Accepted', '--outcome', 'accepted', '--data-json', JSON.stringify({ review_round: 3, review_mode: 'single_agent_fallback', continuation_reason: 'direct maintainer continuation' })]));
 
     const result = run(['event-logging', 'report', '--features', '--target', target]);
 

@@ -117,7 +117,13 @@ import {
   normalizeCodexModel,
   normalizeCodexReasoningEffort,
 } from './codex-models.js';
-import { validateReviewProvenance } from './review-provenance.js';
+import { parseIndependentReviewRequired, validateReviewProvenance } from './review-provenance.js';
+import {
+  crossCheckMaintainerFixup,
+  detectFixupEpisodes,
+  validateFilesFixup,
+} from './maintainer-fixup.js';
+import { loadEvents, resolveEventLogPath } from './event-logging.js';
 
 const PLACEHOLDER_PATTERNS = [
   /\bTBD\b/i,
@@ -626,6 +632,22 @@ export function validateFilesTaskRecord(content, filename, options = {}) {
       reviewedArtifact,
       independentRaw,
       humanReviewRef,
+    })
+  );
+
+  // Durable Maintainer Review Fixup subsection (when present). The final
+  // '## Evidence' body is passed through so the fixup validator can require
+  // evidence recorded against the resulting artifact; a '## Scope Completed'
+  // heading alone is not evidence.
+  errors.push(
+    ...validateFilesFixup({
+      label: filename,
+      content,
+      reviewMode,
+      implementationArtifact,
+      reviewedArtifact,
+      independentRequired: parseIndependentReviewRequired(independentRaw).value,
+      evidenceBody: sectionBody(content, '## Evidence'),
     })
   );
 
@@ -1143,7 +1165,77 @@ function validateTaskRecords(repoRoot, taskDirRel, errors, warnings, options = {
       })) {
         errors.push(err);
       }
+      crossCheckTaskRecordFixupEvents(repoRoot, content, f, warnings, options);
     }
+  }
+}
+
+/**
+ * Cross-check a task record's durable `## Maintainer Review Fixup` subsections
+ * against the task's `maintainer_fixup: true` review.result events. This is the
+ * production surface for `crossCheckMaintainerFixup`: `agenticloop validate`
+ * has both the durable record and the local event log. The check runs only when
+ * the event surface is expected (`.agenticloop/project.md` records
+ * `event_logging: enabled`); disabled or absent logging never produces a
+ * mismatch claim. The records under validation are existing durable history, so
+ * mismatches are reported as historical warnings, never rewritten.
+ */
+function crossCheckTaskRecordFixupEvents(repoRoot, content, filename, warnings, options = {}) {
+  if ((options.projectMapConfig ?? PROJECT_MAP_DEFAULTS).event_logging !== 'enabled') return;
+
+  const [frontmatter] = parseFrontmatter(content);
+  const taskId = frontmatterString(frontmatter?.task_id);
+  if (!taskId) return;
+  const activeTaskBackend = options.activeTaskBackend ?? 'files';
+  const declaredBackend = frontmatterString(frontmatter?.backend);
+  if (activeTaskBackend !== 'files' && declaredBackend !== 'files') return;
+
+  const subsectionCount = detectFixupEpisodes(content).length;
+
+  let maintainerFixupEventCount = 0;
+  const logPath = resolveEventLogPath(repoRoot, undefined, taskId).path;
+  if (existsSync(logPath)) {
+    let events;
+    try {
+      events = loadEvents(logPath);
+    } catch {
+      // A malformed log is reported by the event-log validation surface; a
+      // cross-check claim on unreadable data would not be evidence-based.
+      return;
+    }
+    const flaggedFixupEvents = events.filter(
+      event => event?.event_type === 'review.result' && event?.data?.maintainer_fixup === true
+    );
+    const validFixupEvents = flaggedFixupEvents.filter(
+      event =>
+        event?.task_id === taskId &&
+        event?.role === 'maintainer' &&
+        event?.data?.review_mode === 'single_agent_fallback'
+    );
+    maintainerFixupEventCount = validFixupEvents.length;
+
+    const malformedCount = flaggedFixupEvents.length - validFixupEvents.length;
+    if (malformedCount > 0) {
+      warnings.push(
+        `Task record '${filename}': ${malformedCount} maintainer_fixup: true review event(s) ` +
+        `do not have the matching task_id, role 'maintainer', and review_mode 'single_agent_fallback'; ` +
+        `malformed historical events do not satisfy durable fixup evidence`
+      );
+    }
+    if (flaggedFixupEvents.length > 1 && validFixupEvents.length <= 1) {
+      warnings.push(
+        `Task record '${filename}': ${flaggedFixupEvents.length} maintainer_fixup: true events are recorded for this task log; ` +
+        `at most one fixup episode is allowed per task`
+      );
+    }
+  }
+
+  const { warnings: mismatches } = crossCheckMaintainerFixup({
+    subsectionCount,
+    maintainerFixupEventCount,
+  });
+  for (const message of mismatches) {
+    warnings.push(`Task record '${filename}': ${message}`);
   }
 }
 

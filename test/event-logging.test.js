@@ -14,6 +14,7 @@ import {
   resolveEventLogPath,
   STRICT_AUDIT_EVENT_TYPES,
   validateEvent,
+  validateNewEvent,
   validateEventLogFile,
   validateEventLogs,
 } from '../src/event-logging.js';
@@ -99,8 +100,12 @@ function appendAuditEvents(target, taskId, eventTypes = STRICT_AUDIT_EVENT_TYPES
   };
 
   for (const eventType of eventTypes) {
+    // These fixtures simulate stored/historical logs; bypass strict producer
+    // validation so incomplete-by-new-rules role.invoked/review.result events
+    // can be written to exercise the read side.
     appendEventLog({
       target,
+      historical: true,
       event: buildEvent({
         target,
         task: taskId,
@@ -113,6 +118,7 @@ function appendAuditEvents(target, taskId, eventTypes = STRICT_AUDIT_EVENT_TYPES
 function appendFixtureEvent(target, taskId, definition) {
   appendEventLog({
     target,
+    historical: true,
     event: buildEvent({
       target,
       task: taskId,
@@ -1458,5 +1464,570 @@ describe('feature-adoption telemetry', () => {
     assert.ok(features.reviewRounds.tasksOverBudget.includes('P40-05')); // over budget, but...
     assert.deepEqual(features.omissionCandidates.contextRiskPressureNoPredict, []);
     assert.deepEqual(features.omissionCandidates.contextRiskOverBudgetNoPredict, []); // forward-gated
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Strict producer validation for newly written events
+// ---------------------------------------------------------------------------
+
+function roleInvokedEvent(data, overrides = {}) {
+  return buildEvent({
+    task: 'T-001',
+    eventType: 'role.invoked',
+    role: overrides.role ?? 'orchestrator',
+    summary: overrides.summary ?? 'Delegated role',
+    data,
+  });
+}
+
+describe('strict producer validation: role.invoked', () => {
+  it('accepts a complete host_subagent delegation (scenario 1)', () => {
+    const result = validateNewEvent(roleInvokedEvent({
+      target_role: 'engineer', delegation_mode: 'host_subagent', fallback: false,
+    }));
+    assert.deepEqual(result.errors, []);
+  });
+
+  it('accepts a complete explicit_agent_invocation delegation (scenario 2)', () => {
+    const result = validateNewEvent(roleInvokedEvent({
+      target_role: 'maintainer', delegation_mode: 'explicit_agent_invocation', fallback: false,
+    }));
+    assert.deepEqual(result.errors, []);
+  });
+
+  it('accepts fallback with mechanism_absent (scenario 3)', () => {
+    const result = validateNewEvent(roleInvokedEvent({
+      target_role: 'maintainer', delegation_mode: 'single_agent_fallback', fallback: true,
+      fallback_cause: 'mechanism_absent', reason: 'No subagent/task/agent mechanism in this host',
+    }));
+    assert.deepEqual(result.errors, []);
+  });
+
+  it('accepts fallback with invocation_failed (scenario 4)', () => {
+    const result = validateNewEvent(roleInvokedEvent({
+      target_role: 'engineer', delegation_mode: 'single_agent_fallback', fallback: true,
+      fallback_cause: 'invocation_failed', reason: 'subagent_type=engineer returned a spawn error',
+    }));
+    assert.deepEqual(result.errors, []);
+  });
+
+  it('rejects fallback justified only by "re-review requested" (scenario 5)', () => {
+    const result = validateNewEvent(roleInvokedEvent({
+      target_role: 'maintainer', delegation_mode: 'single_agent_fallback', fallback: true,
+      reason: 'Round-2 re-review requested',
+    }));
+    assert.ok(result.errors.some(e => e.includes('fallback_cause')));
+  });
+
+  it('rejects a maintainer self-invocation (scenario 6)', () => {
+    const result = validateNewEvent(roleInvokedEvent({
+      target_role: 'maintainer', delegation_mode: 'single_agent_fallback', fallback: true,
+      fallback_cause: 'mechanism_absent', reason: 'no mechanism',
+    }, { role: 'maintainer' }));
+    assert.ok(result.errors.some(e => e.includes('must be emitted by the orchestrator')));
+  });
+
+  it('rejects missing target_role, mode, or boolean fallback (scenario 7)', () => {
+    const missingTarget = validateNewEvent(roleInvokedEvent({
+      delegation_mode: 'host_subagent', fallback: false,
+    }));
+    assert.ok(missingTarget.errors.some(e => e.includes('data.target_role')));
+
+    const missingMode = validateNewEvent(roleInvokedEvent({
+      target_role: 'engineer', fallback: false,
+    }));
+    assert.ok(missingMode.errors.some(e => e.includes('data.delegation_mode')));
+
+    const missingFallback = validateNewEvent(roleInvokedEvent({
+      target_role: 'engineer', delegation_mode: 'host_subagent',
+    }));
+    assert.ok(missingFallback.errors.some(e => e.includes('boolean data.fallback')));
+  });
+
+  it('rejects a non-fallback mode that carries fallback: true or a cause', () => {
+    const badFallbackFlag = validateNewEvent(roleInvokedEvent({
+      target_role: 'engineer', delegation_mode: 'host_subagent', fallback: true,
+    }));
+    assert.ok(badFallbackFlag.errors.some(e => e.includes('requires data.fallback: false')));
+
+    const strayCause = validateNewEvent(roleInvokedEvent({
+      target_role: 'engineer', delegation_mode: 'host_subagent', fallback: false, fallback_cause: 'mechanism_absent',
+    }));
+    assert.ok(strayCause.errors.some(e => e.includes('must not carry data.fallback_cause')));
+  });
+
+  it('rejects an unknown target_role or delegation_mode', () => {
+    const badTarget = validateNewEvent(roleInvokedEvent({
+      target_role: 'reviewer', delegation_mode: 'host_subagent', fallback: false,
+    }));
+    assert.ok(badTarget.errors.some(e => e.includes('target_role must be one of')));
+
+    const badMode = validateNewEvent(roleInvokedEvent({
+      target_role: 'engineer', delegation_mode: 'bot_delegation', fallback: false,
+    }));
+    assert.ok(badMode.errors.some(e => e.includes('delegation_mode must be one of')));
+  });
+});
+
+describe('strict producer validation: review.result', () => {
+  function reviewResultEvent(data, overrides = {}) {
+    return buildEvent({
+      task: 'T-001', eventType: 'review.result',
+      role: overrides.role ?? 'maintainer',
+      summary: overrides.summary ?? 'Recorded review',
+      outcome: overrides.outcome ?? 'accepted',
+      data,
+    });
+  }
+
+  it('accepts a complete review.result', () => {
+    const result = validateNewEvent(reviewResultEvent({ review_round: 1, review_mode: 'host_subagent' }));
+    assert.deepEqual(result.errors, []);
+  });
+
+  it('requires review_mode and review_round', () => {
+    const noMode = validateNewEvent(reviewResultEvent({ review_round: 1 }));
+    assert.ok(noMode.errors.some(e => e.includes('data.review_mode')));
+    const noRound = validateNewEvent(reviewResultEvent({ review_mode: 'host_subagent' }));
+    assert.ok(noRound.errors.some(e => e.includes('data.review_round')));
+  });
+
+  it('accepts a direct continuation carrying continuation_reason (scenario 9)', () => {
+    const result = validateNewEvent(reviewResultEvent({
+      review_round: 2, review_mode: 'single_agent_fallback',
+      continuation_reason: 'human continued the active maintainer session',
+    }));
+    assert.deepEqual(result.errors, []);
+  });
+
+  it('rejects an empty continuation_reason when present', () => {
+    const result = validateNewEvent(reviewResultEvent({
+      review_round: 2, review_mode: 'single_agent_fallback', continuation_reason: '   ',
+    }));
+    assert.ok(result.errors.some(e => e.includes('continuation_reason must be a non-empty string')));
+  });
+
+  it('allows maintainer_fixup: true only for a maintainer single_agent_fallback result', () => {
+    const ok = validateNewEvent(reviewResultEvent({
+      review_round: 1, review_mode: 'single_agent_fallback', maintainer_fixup: true,
+    }));
+    assert.deepEqual(ok.errors, []);
+
+    const wrongMode = validateNewEvent(reviewResultEvent({
+      review_round: 1, review_mode: 'host_subagent', maintainer_fixup: true,
+    }));
+    assert.ok(wrongMode.errors.some(e => e.includes("requires review_mode 'single_agent_fallback'")));
+
+    const wrongRole = validateNewEvent(reviewResultEvent({
+      review_round: 1, review_mode: 'single_agent_fallback', maintainer_fixup: true,
+    }, { role: 'engineer' }));
+    assert.ok(wrongRole.errors.some(e => e.includes('must be emitted by the maintainer')));
+
+    const nonBool = validateNewEvent(reviewResultEvent({
+      review_round: 1, review_mode: 'single_agent_fallback', maintainer_fixup: 'yes',
+    }));
+    assert.ok(nonBool.errors.some(e => e.includes('maintainer_fixup must be a boolean')));
+  });
+
+  it('does not require maintainer_fixup on ordinary reviews', () => {
+    const result = validateNewEvent(reviewResultEvent({ review_round: 1, review_mode: 'host_subagent' }));
+    assert.deepEqual(result.errors, []);
+  });
+
+  it('requires every newly produced review.result to be emitted by the maintainer', () => {
+    const result = validateNewEvent(reviewResultEvent(
+      { review_round: 1, review_mode: 'host_subagent' },
+      { role: 'engineer' }
+    ));
+    assert.ok(result.errors.some(e => e.includes('must be emitted by the maintainer')));
+  });
+});
+
+describe('appendEventLog producer guard', () => {
+  it('refuses to append an invalid new role.invoked (scenario 7)', () => {
+    const target = makeTarget('producer-guard-invalid');
+    assert.throws(
+      () => appendEventLog({
+        target,
+        event: buildEvent({ task: 'T-001', eventType: 'role.invoked', role: 'orchestrator', summary: 'Bad delegation', data: {} }),
+      }),
+      /Refusing to append invalid event/
+    );
+  });
+
+  it('appends a complete new role.invoked through the producer guard', () => {
+    const target = makeTarget('producer-guard-valid');
+    const filePath = appendEventLog({
+      target,
+      event: buildEvent({
+        task: 'T-001', eventType: 'role.invoked', role: 'orchestrator', summary: 'Delegated engineer',
+        data: { target_role: 'engineer', delegation_mode: 'host_subagent', fallback: false },
+      }),
+    });
+    assert.equal(loadEvents(filePath).length, 1);
+  });
+
+  it('historical: true bypasses the producer guard for stored-log simulation (scenario 8)', () => {
+    const target = makeTarget('producer-guard-historical');
+    const filePath = appendEventLog({
+      target,
+      historical: true,
+      event: buildEvent({ task: 'T-001', eventType: 'role.invoked', role: 'maintainer', summary: 'Legacy self-invocation', data: { target_role: 'maintainer', delegation_mode: 'single_agent_fallback', reason: 'Round-2 re-review requested' } }),
+    });
+    // The historical event is still readable and shape-valid.
+    const events = loadEvents(filePath);
+    assert.equal(events.length, 1);
+    assert.deepEqual(validateEvent(events[0]).errors, []);
+  });
+});
+
+describe('provenance-quality telemetry (historical logs are labeled, not rewritten)', () => {
+  it('counts incomplete and self-invoked historical role.invoked events (scenario 8)', () => {
+    const target = makeTarget('provenance-quality-incomplete');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'github' });
+    // A P20-02/PR-129-style legacy self-invocation with no fallback flag/cause.
+    appendFixtureEvent(target, 'P20-02', {
+      backend: 'github', eventType: 'role.invoked', role: 'maintainer',
+      summary: 'Maintainer began round-2 PR re-review',
+      refs: ['github:issue:109', 'github:pr:129'],
+      data: { target_role: 'maintainer', delegation_mode: 'single_agent_fallback', reason: 'Round-2 re-review requested' },
+    });
+
+    const report = reportTaskEventLog({ target, taskId: 'P20-02' });
+    const pq = report.provenanceQuality;
+    assert.equal(pq.roleInvokedNonOrchestrator, 1);
+    assert.equal(pq.roleInvokedSelfInvocation, 1);
+    assert.equal(pq.roleInvokedMissingFallback, 1);
+    assert.equal(pq.roleInvokedFallbackWithoutCause, 1);
+    assert.equal(pq.roleInvokedInconsistentModeFallback, 1);
+
+    const aggregate = reportEventLogs({ target });
+    assert.equal(aggregate.provenanceQuality.roleInvokedSelfInvocation.count, 1);
+    assert.deepEqual(aggregate.provenanceQuality.roleInvokedSelfInvocation.tasks, ['P20-02']);
+    assert.equal(aggregate.provenanceQuality.roleInvokedNonOrchestrator.count, 1);
+  });
+
+  it('counts review rounds without delegation or continuation, and review_mode gaps', () => {
+    const target = makeTarget('provenance-quality-review');
+    // Two review results, no maintainer delegation, no continuation reason.
+    appendFixtureEvent(target, 'T-050', {
+      eventType: 'review.result', role: 'maintainer', summary: 'Round 1', outcome: 'needs_revision',
+      data: { review_round: 1 },
+    });
+    appendFixtureEvent(target, 'T-050', {
+      eventType: 'review.result', role: 'maintainer', summary: 'Round 2', outcome: 'accepted',
+      data: { review_round: 2, review_mode: 'single_agent_fallback' },
+    });
+
+    const report = reportTaskEventLog({ target, taskId: 'T-050' });
+    assert.equal(report.provenanceQuality.reviewResultMissingReviewMode, 1);
+    assert.equal(report.provenanceQuality.reviewRoundsWithoutBacking, 2);
+  });
+
+  it('a direct continuation with continuation_reason is not counted as unbacked', () => {
+    const target = makeTarget('provenance-quality-continuation');
+    appendFixtureEvent(target, 'T-051', {
+      eventType: 'review.result', role: 'maintainer', summary: 'Continued review', outcome: 'accepted',
+      data: { review_round: 1, review_mode: 'single_agent_fallback', continuation_reason: 'human continued the session' },
+    });
+    const report = reportTaskEventLog({ target, taskId: 'T-051' });
+    assert.equal(report.provenanceQuality.reviewRoundsWithoutBacking, 0);
+  });
+
+  it('does not flag a complete host_subagent delegation + backed review', () => {
+    const target = makeTarget('provenance-quality-clean');
+    appendFixtureEvent(target, 'T-052', {
+      eventType: 'role.invoked', role: 'orchestrator', summary: 'Delegated maintainer review',
+      data: { target_role: 'maintainer', delegation_mode: 'host_subagent', fallback: false },
+    });
+    appendFixtureEvent(target, 'T-052', {
+      eventType: 'review.result', role: 'maintainer', summary: 'Accepted', outcome: 'accepted',
+      data: { review_round: 1, review_mode: 'host_subagent' },
+    });
+    const report = reportTaskEventLog({ target, taskId: 'T-052' });
+    const pq = report.provenanceQuality;
+    assert.equal(pq.roleInvokedNonOrchestrator, 0);
+    assert.equal(pq.roleInvokedSelfInvocation, 0);
+    assert.equal(pq.reviewResultMissingReviewMode, 0);
+    assert.equal(pq.reviewRoundsWithoutBacking, 0);
+  });
+});
+
+describe('per-review backing correlation (no aggregate subtraction)', () => {
+  function maintainerInvocation(extraData = {}) {
+    return {
+      eventType: 'role.invoked', role: 'orchestrator', summary: 'Delegated maintainer review',
+      data: { target_role: 'maintainer', delegation_mode: 'host_subagent', fallback: false, ...extraData },
+    };
+  }
+
+  function reviewResult(round, extraData = {}) {
+    return {
+      eventType: 'review.result', role: 'maintainer', summary: `Round ${round}`, outcome: 'accepted',
+      data: { review_round: round, review_mode: 'host_subagent', ...extraData },
+    };
+  }
+
+  it('two review rounds with only one invocation and no continuation report one gap', () => {
+    const target = makeTarget('backing-one-invocation');
+    appendFixtureEvent(target, 'T-070', maintainerInvocation());
+    appendFixtureEvent(target, 'T-070', reviewResult(1));
+    appendFixtureEvent(target, 'T-070', reviewResult(2));
+    const report = reportTaskEventLog({ target, taskId: 'T-070' });
+    assert.equal(report.provenanceQuality.reviewRoundsWithoutBacking, 1);
+  });
+
+  it('a second round with a continuation reason is not a second gap', () => {
+    const target = makeTarget('backing-continuation');
+    appendFixtureEvent(target, 'T-071', maintainerInvocation());
+    appendFixtureEvent(target, 'T-071', reviewResult(1));
+    appendFixtureEvent(target, 'T-071', reviewResult(2, {
+      review_mode: 'single_agent_fallback',
+      continuation_reason: 'human continued the active maintainer session',
+    }));
+    const report = reportTaskEventLog({ target, taskId: 'T-071' });
+    assert.equal(report.provenanceQuality.reviewRoundsWithoutBacking, 0);
+  });
+
+  it('an unrelated planning invocation before a review does not satisfy that review', () => {
+    const target = makeTarget('backing-planning');
+    // Maintainer invoked for planning: the delegation is followed by
+    // task.created before any review starts, so it is planning-scoped.
+    appendFixtureEvent(target, 'T-072', maintainerInvocation());
+    appendFixtureEvent(target, 'T-072', {
+      eventType: 'task.created', role: 'maintainer', summary: 'Created task record',
+    });
+    appendFixtureEvent(target, 'T-072', reviewResult(1));
+    const report = reportTaskEventLog({ target, taskId: 'T-072' });
+    assert.equal(report.provenanceQuality.reviewRoundsWithoutBacking, 1);
+  });
+
+  it('an earlier-round leftover invocation does not mask a later unbacked round', () => {
+    const target = makeTarget('backing-earlier-round');
+    // Two invocations before round 1 (e.g. one retried), none before round 2.
+    appendFixtureEvent(target, 'T-073', maintainerInvocation());
+    appendFixtureEvent(target, 'T-073', maintainerInvocation());
+    appendFixtureEvent(target, 'T-073', reviewResult(1));
+    appendFixtureEvent(target, 'T-073', reviewResult(2));
+    const report = reportTaskEventLog({ target, taskId: 'T-073' });
+    assert.equal(report.provenanceQuality.reviewRoundsWithoutBacking, 1);
+  });
+
+  it('an invocation with a matching review_round backs the review; a mismatch does not', () => {
+    const matching = makeTarget('backing-round-match');
+    appendFixtureEvent(matching, 'T-074', maintainerInvocation({ review_round: 2 }));
+    appendFixtureEvent(matching, 'T-074', reviewResult(2));
+    assert.equal(
+      reportTaskEventLog({ target: matching, taskId: 'T-074' }).provenanceQuality.reviewRoundsWithoutBacking,
+      0
+    );
+
+    const mismatched = makeTarget('backing-round-mismatch');
+    appendFixtureEvent(mismatched, 'T-075', maintainerInvocation({ review_round: 1 }));
+    appendFixtureEvent(mismatched, 'T-075', reviewResult(2));
+    assert.equal(
+      reportTaskEventLog({ target: mismatched, taskId: 'T-075' }).provenanceQuality.reviewRoundsWithoutBacking,
+      1
+    );
+  });
+
+  it('one invocation cannot back multiple review rounds even with matching rounds absent', () => {
+    const target = makeTarget('backing-consumed');
+    appendFixtureEvent(target, 'T-076', maintainerInvocation());
+    appendFixtureEvent(target, 'T-076', reviewResult(1));
+    appendFixtureEvent(target, 'T-076', reviewResult(2));
+    appendFixtureEvent(target, 'T-076', reviewResult(3));
+    const report = reportTaskEventLog({ target, taskId: 'T-076' });
+    assert.equal(report.provenanceQuality.reviewRoundsWithoutBacking, 2);
+  });
+
+  it('a review.started between invocation and result keeps the round association', () => {
+    const target = makeTarget('backing-review-started');
+    appendFixtureEvent(target, 'T-077', maintainerInvocation());
+    appendFixtureEvent(target, 'T-077', {
+      eventType: 'review.started', role: 'maintainer', summary: 'Started round 1',
+      data: { review_round: 1, review_mode: 'host_subagent' },
+    });
+    appendFixtureEvent(target, 'T-077', reviewResult(1));
+    const report = reportTaskEventLog({ target, taskId: 'T-077' });
+    assert.equal(report.provenanceQuality.reviewRoundsWithoutBacking, 0);
+  });
+
+  it('out-of-order or malformed historical events remain reportable without crashing', () => {
+    const target = makeTarget('backing-malformed');
+    // Result before its invocation, malformed round values, and missing data.
+    appendFixtureEvent(target, 'T-078', reviewResult('not-a-number'));
+    appendFixtureEvent(target, 'T-078', maintainerInvocation({ review_round: 'also-bad' }));
+    appendFixtureEvent(target, 'T-078', {
+      eventType: 'review.result', role: 'unknown', summary: 'No data', outcome: 'accepted',
+    });
+    const report = reportTaskEventLog({ target, taskId: 'T-078' });
+    // The first result precedes any invocation (1 gap); the later invocation
+    // backs the second result (round values unreadable -> compatible).
+    assert.equal(report.provenanceQuality.reviewRoundsWithoutBacking, 1);
+    assert.equal(report.provenanceQuality.reviewResultNonMaintainer, 1);
+  });
+
+  it('does not count a non-maintainer historical review.result as an unbacked maintainer review', () => {
+    const target = makeTarget('backing-non-maintainer');
+    appendFixtureEvent(target, 'T-079', {
+      eventType: 'review.result', role: 'engineer', summary: 'Malformed historical result', outcome: 'accepted',
+      data: { review_round: 1, review_mode: 'host_subagent' },
+    });
+    const report = reportTaskEventLog({ target, taskId: 'T-079' });
+    assert.equal(report.provenanceQuality.reviewRoundsWithoutBacking, 0);
+    assert.equal(report.provenanceQuality.reviewResultNonMaintainer, 1);
+
+    const aggregate = reportEventLogs({ target });
+    assert.equal(aggregate.provenanceQuality.reviewResultNonMaintainer.count, 1);
+    assert.deepEqual(aggregate.provenanceQuality.reviewResultNonMaintainer.tasks, ['T-079']);
+  });
+});
+
+describe('historical fallback boolean classification uses strict type semantics', () => {
+  const cases = [
+    { name: 'boolean true', fallback: true, missing: 0 },
+    { name: 'boolean false', fallback: false, missing: 0 },
+    { name: 'missing field', fallback: undefined, missing: 1 },
+    { name: 'null', fallback: null, missing: 1 },
+    { name: 'string "true"', fallback: 'true', missing: 1 },
+    { name: 'string "false"', fallback: 'false', missing: 1 },
+    { name: 'number 1', fallback: 1, missing: 1 },
+    { name: 'array', fallback: [true], missing: 1 },
+    { name: 'object', fallback: { value: true }, missing: 1 },
+  ];
+
+  for (const { name, fallback, missing } of cases) {
+    it(`counts ${name} as ${missing === 1 ? 'missing/non-boolean' : 'a valid boolean'}`, () => {
+      const target = makeTarget(`fallback-type-${name.replace(/[^a-z0-9]+/gi, '-')}`);
+      const data = { target_role: 'engineer', delegation_mode: 'host_subagent' };
+      if (fallback !== undefined) data.fallback = fallback;
+      appendFixtureEvent(target, 'T-080', {
+        eventType: 'role.invoked', role: 'orchestrator', summary: 'Historical delegation', data,
+      });
+      const report = reportTaskEventLog({ target, taskId: 'T-080' });
+      assert.equal(report.provenanceQuality.roleInvokedMissingFallback, missing);
+    });
+  }
+
+  it('historical string booleans are reported, and the log remains readable', () => {
+    const target = makeTarget('fallback-string-readable');
+    appendFixtureEvent(target, 'T-081', {
+      eventType: 'role.invoked', role: 'orchestrator', summary: 'Legacy string boolean',
+      data: { target_role: 'engineer', delegation_mode: 'host_subagent', fallback: 'true' },
+    });
+    const report = reportTaskEventLog({ target, taskId: 'T-081' });
+    assert.equal(report.eventCount, 1);
+    assert.equal(report.provenanceQuality.roleInvokedMissingFallback, 1);
+  });
+});
+
+describe('Maintainer Review Fixup telemetry', () => {
+  it('counts fixup episodes and affected tasks in report --features', () => {
+    const target = makeTarget('fixup-features');
+    appendFixtureEvent(target, 'T-060', {
+      eventType: 'review.result', role: 'maintainer', summary: 'Accepted after fixup', outcome: 'accepted',
+      data: { review_round: 1, review_mode: 'single_agent_fallback', maintainer_fixup: true },
+    });
+    // A second task with two fixup episodes (durable but unusual; telemetry flags it).
+    appendFixtureEvent(target, 'T-061', {
+      eventType: 'review.result', role: 'maintainer', summary: 'Fixup A', outcome: 'accepted',
+      data: { review_round: 1, review_mode: 'single_agent_fallback', maintainer_fixup: true },
+    });
+    appendFixtureEvent(target, 'T-061', {
+      eventType: 'review.result', role: 'maintainer', summary: 'Fixup B', outcome: 'accepted',
+      data: { review_round: 2, review_mode: 'single_agent_fallback', maintainer_fixup: true },
+    });
+
+    const { features } = reportEventLogs({ target });
+    assert.equal(features.maintainerFixup.episodeCount, 3);
+    assert.deepEqual(features.maintainerFixup.tasksWithFixup, ['T-060', 'T-061']);
+    assert.deepEqual(features.maintainerFixup.tasksWithMultipleFixups, ['T-061']);
+  });
+
+  it('a fallback review mode without maintainer_fixup is not counted as a fixup', () => {
+    const target = makeTarget('fixup-not-a-fixup');
+    appendFixtureEvent(target, 'T-062', {
+      eventType: 'review.result', role: 'maintainer', summary: 'Same-session accept', outcome: 'accepted',
+      data: { review_round: 1, review_mode: 'single_agent_fallback' },
+    });
+    const { features } = reportEventLogs({ target });
+    assert.equal(features.maintainerFixup.episodeCount, 0);
+    assert.deepEqual(features.maintainerFixup.tasksWithFixup, []);
+  });
+});
+
+describe('PR-129 regression sequence (delegated re-review, no spurious fallback)', () => {
+  // Synthetic fixture; no external PR or network.
+  it('round 2 re-delegates through host_subagent and does not record single_agent_fallback', () => {
+    const target = makeTarget('pr129-delegated');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'github' });
+    // Round 1 delegated through host_subagent.
+    appendFixtureEvent(target, 'PR-129', {
+      backend: 'github', eventType: 'role.invoked', role: 'orchestrator', summary: 'Delegated round-1 review',
+      refs: ['github:pr:129'], data: { target_role: 'maintainer', delegation_mode: 'host_subagent', fallback: false },
+    });
+    appendFixtureEvent(target, 'PR-129', {
+      backend: 'github', eventType: 'review.result', role: 'maintainer', summary: 'Round 1 needs revision', outcome: 'needs_revision',
+      refs: ['github:pr:129'], data: { review_round: 1, review_mode: 'host_subagent' },
+    });
+    // Engineer revision.
+    appendFixtureEvent(target, 'PR-129', {
+      backend: 'github', eventType: 'role.invoked', role: 'orchestrator', summary: 'Delegated revision',
+      refs: ['github:pr:129'], data: { target_role: 'engineer', delegation_mode: 'host_subagent', fallback: false },
+    });
+    // Host subagent remains available; round 2 delegates to a host subagent again.
+    appendFixtureEvent(target, 'PR-129', {
+      backend: 'github', eventType: 'role.invoked', role: 'orchestrator', summary: 'Delegated round-2 review',
+      refs: ['github:pr:129'], data: { target_role: 'maintainer', delegation_mode: 'host_subagent', fallback: false },
+    });
+    appendFixtureEvent(target, 'PR-129', {
+      backend: 'github', eventType: 'review.result', role: 'maintainer', summary: 'Round 2 accepted', outcome: 'accepted',
+      refs: ['github:pr:129'], data: { review_round: 2, review_mode: 'host_subagent' },
+    });
+
+    const report = reportTaskEventLog({ target, taskId: 'PR-129' });
+    assert.deepEqual(report.roleInvoked.delegationModeCounts, [{ value: 'host_subagent', count: 3 }]);
+    assert.equal(report.roleInvoked.fallbackCount, 0);
+    // Every round is backed by a delegation; no telemetry gaps.
+    assert.equal(report.provenanceQuality.reviewRoundsWithoutBacking, 0);
+    assert.equal(report.provenanceQuality.roleInvokedInconsistentModeFallback, 0);
+
+    // A new round-2 role.invoked recording single_agent_fallback only because it
+    // is a re-review is rejected by the producer path.
+    const spurious = validateNewEvent(buildEvent({
+      task: 'PR-129', eventType: 'role.invoked', role: 'orchestrator', summary: 'Round-2 re-review',
+      data: { target_role: 'maintainer', delegation_mode: 'single_agent_fallback', fallback: true, reason: 'Round-2 re-review requested' },
+    }));
+    assert.ok(spurious.errors.some(e => e.includes('fallback_cause')));
+  });
+
+  it('a direct-human continuation variant uses same-session review provenance without a delegation claim', () => {
+    const target = makeTarget('pr129-continuation');
+    writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'github' });
+    // Round 1 delegated through host_subagent.
+    appendFixtureEvent(target, 'PR-129B', {
+      backend: 'github', eventType: 'role.invoked', role: 'orchestrator', summary: 'Delegated round-1 review',
+      refs: ['github:pr:129'], data: { target_role: 'maintainer', delegation_mode: 'host_subagent', fallback: false },
+    });
+    appendFixtureEvent(target, 'PR-129B', {
+      backend: 'github', eventType: 'review.result', role: 'maintainer', summary: 'Round 1 needs revision', outcome: 'needs_revision',
+      refs: ['github:pr:129'], data: { review_round: 1, review_mode: 'host_subagent' },
+    });
+    // Human directly continues the active maintainer session for round 2: no new
+    // role.invoked, a continuation_reason, and same-session review mode.
+    appendFixtureEvent(target, 'PR-129B', {
+      backend: 'github', eventType: 'review.result', role: 'maintainer', summary: 'Round 2 accepted (continued)', outcome: 'accepted',
+      refs: ['github:pr:129'],
+      data: { review_round: 2, review_mode: 'single_agent_fallback', continuation_reason: 'human continued the active maintainer review session' },
+    });
+
+    const report = reportTaskEventLog({ target, taskId: 'PR-129B' });
+    // Exactly one role.invoked (round 1), no fallback delegation recorded.
+    assert.equal(report.roleInvoked.total, 1);
+    assert.equal(report.roleInvoked.fallbackCount, 0);
+    // The continuation review does not read as an unbacked round.
+    assert.equal(report.provenanceQuality.reviewRoundsWithoutBacking, 0);
   });
 });
