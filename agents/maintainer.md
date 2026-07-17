@@ -28,9 +28,13 @@ acting.
   just to estimate context.
 - Own accepting, rejecting, superseding, and editing accepted decision records
   under `.agenticloop/decisions/`. Review proposed decisions from other roles.
-  May create `proposed` or `accepted` verification-scoped decisions when
-  evidence shows a durable check execution strategy is needed, subject to
-  existing acceptance rules.
+- Own the current mutable `## Verification Operating Facts` profile in
+  `.agenticloop/project.md`. After every timed-out task attempt, append final
+  maintainer triage before accepting or closing the task. Promote an observation
+  to one current `VF-...` fact when it affects project-wide execution; use
+  [[decision-capture]] only when that already-recorded fact requires a
+  policy-level decision and its normal acceptance gate. Do not turn one timeout
+  into a decision or treat a delegation observation as strategy approval.
 - When event logging is enabled, emit task-record, review, and task-closure workflow-gate events.
 - Set task-record `minimalism` deliberately during task creation. Default is `none`. When the human asked for minimalism at planning time, record the requested level; `ultra` is valid only with explicit human request. Otherwise auto-select only on a concrete over-building signal in the source item: speculative abstractions, scaffolding, new dependencies, or future-proofing beyond the accepted outcome. Use `full` when the signal is strong and `lite` when it is weak. Do not auto-select for tasks dominated by discovery, security or safety risk, migrations, cross-cutting architecture, or required robustness work, where the failure mode is under-building. When auto-selecting, state the trigger in one line in the task record. Selecting minimalism must not weaken accepted criteria.
 - Record optional `Applicable Project Skills` when host-visible target-project skills are relevant to the task's domain.
@@ -41,6 +45,8 @@ acting.
 - For GitHub-backed pull request reviews, check existing agent-authored review markers for
   the current PR head before posting a new review.
 - Require fresh verification evidence with command verdicts or relevant excerpts before accepting work.
+- Reject acceptance when a timed-out verification attempt lacks final triage or
+  retains `Classification: pending`.
 - When `## Proof Pressure` is present in the task record, verify that the completion oracle was checked, the final proof is present, and the likely misfire was avoided.
 - For files-backed work, reject untracked `.agenticloop/tasks/*.md` task records unless
   explicitly excepted. Reject silent summary rewrites that erase previously published
@@ -99,9 +105,11 @@ acting.
 
 - [[task-record-contract]] for task records and implementation summaries.
 - [[review-and-accept]] for implementation review and acceptance.
-- [[verification-evidence]] for evidence requirements.
+- [[verification-evidence]] for evidence requirements, timeout triage, and
+  verification-fact profile updates.
 - [[blocked-state]] for needs-context or blocked task states.
-- [[decision-capture]] for durable project decisions that constrain future work.
+- [[decision-capture]] only to promote an already-recorded policy-level
+  verification observation or for another durable project decision.
 - [[change-request-gate]] for locked decision changes.
 - [[ponytail]] when the user explicitly asks for YAGNI, lazy mode, or minimal planning/review discipline; when selecting a non-`none` task-record `minimalism` level during task creation; or when the active task record sets `minimalism: lite|full|ultra`.
 - [[task-closeout]] for closeout.

@@ -26,6 +26,8 @@
 
 import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
 import { markdownSection, topLevelListItems } from './markdown.js';
+import { validateGitHubVerificationAttempts } from './verification-learning.js';
+import { createLocalVerificationContext } from './verification-context.js';
 
 export class PreflightError extends Error {
   constructor(message) {
@@ -324,10 +326,24 @@ export function compareRequiredChecksToEvidence(requiredChecks, evidenceEntries,
  * @param {object} params
  * @param {object} params.prData    PR data with number, body, headRefOid, files,
  *                                   closingIssuesReferences, statusCheckRollup.
- * @param {object} params.issueData Issue data with number, body, title.
+ * @param {object} params.issueData Issue data with number, body, title, comments.
+ * @param {'accepted'|'closed'} [params.verificationStatus] Terminal lifecycle
+ *   status for verification-attempt triage evaluation.
+ * @param {{ id: string }[]} [params.projectFacts]
+ * @param {(id: string) => boolean} [params.decisionExists]
+ * @param {(id: string) => boolean} [params.taskExists]
+ * @param {{ login: string }} [params.expectedAccount]
  * @returns {object} structured result.
  */
-export function evaluatePreflight({ prData, issueData }) {
+export function evaluatePreflight({
+  prData,
+  issueData,
+  verificationStatus,
+  projectFacts,
+  decisionExists,
+  taskExists,
+  expectedAccount,
+}) {
   const errors = [];
   const warnings = [];
   const headRefOid = String(prData?.headRefOid ?? '').toLowerCase();
@@ -353,6 +369,17 @@ export function evaluatePreflight({ prData, issueData }) {
       errors.push(`${label} uses duplicate required-check id '${id}'`);
     }
   }
+
+  const verificationAttempts = validateGitHubVerificationAttempts(issueData?.comments, {
+    requiredChecks,
+    status: verificationStatus,
+    projectFacts,
+    decisionExists,
+    taskExists,
+    expectedAccount,
+  });
+  errors.push(...verificationAttempts.errors);
+  warnings.push(...verificationAttempts.warnings);
 
   const evidence = parsePrEvidence(prData?.body);
   if (evidence.section === null) {
@@ -410,6 +437,39 @@ function runGhPreflightJson(commandRunner, args) {
   }
 }
 
+function resolveAuthenticatedAccount(commandRunner) {
+  const account = runGhPreflightJson(commandRunner, ['api', 'user', '--jq', `{"login":.login,"type":.type}`]);
+  if (!account?.login) {
+    throw new PreflightError('authenticated GitHub account has no login; cannot verify verification-attempt comment authorship');
+  }
+  return account;
+}
+
+function resolveRepoOwnerName(commandRunner, explicitRepo) {
+  if (explicitRepo) return String(explicitRepo);
+  const result = runGhPreflightJson(commandRunner, ['repo', 'view', '--json', 'nameWithOwner']);
+  if (!result?.nameWithOwner) throw new PreflightError('cannot resolve repository owner/name for paginated issue-comment validation');
+  return String(result.nameWithOwner);
+}
+
+function fetchAllIssueComments(commandRunner, ownerName, issueNumber) {
+  const parts = String(ownerName).split('/');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new PreflightError(`cannot resolve repository owner/name: '${ownerName}'`);
+  }
+  const pages = runGhPreflightJson(commandRunner, [
+    'api',
+    '--paginate',
+    '--slurp',
+    `repos/${parts[0]}/${parts[1]}/issues/${issueNumber}/comments?per_page=100`,
+  ]);
+  if (!Array.isArray(pages)) throw new PreflightError('GitHub issue-comment pagination returned incomplete data');
+  if (pages.some(page => !Array.isArray(page))) {
+    throw new PreflightError('GitHub issue-comment pagination returned a malformed page');
+  }
+  return pages.flat();
+}
+
 /**
  * Resolve which issue number to treat as the task record for a PR.
  *
@@ -447,10 +507,24 @@ export function resolveIssueNumber(prData, explicitIssue) {
  * @param {number|string} [options.issue] Issue number override.
  * @param {string} [options.repo]          owner/name repo override.
  * @param {Function} [options.commandRunner] Injectable runner for testing.
+ * @param {'accepted'|'closed'} [options.verificationStatus] Internal terminal
+ *   lifecycle status for verification-attempt triage evaluation.
+ * @param {string} [options.target] Local target root for project facts and references.
+ * @param {object} [options.verificationContext] Injectable local validation context.
+ * @param {{ login: string }} [options.expectedAccount] Injectable authenticated account.
  * @returns {object} the evaluatePreflight result.
  * @throws {PreflightError} on missing/incomplete GitHub data.
  */
-export function runPreflight({ pr, issue, repo, commandRunner = defaultGhCommandRunner } = {}) {
+export function runPreflight({
+  pr,
+  issue,
+  repo,
+  commandRunner = defaultGhCommandRunner,
+  verificationStatus,
+  target = process.cwd(),
+  verificationContext,
+  expectedAccount,
+} = {}) {
   if (pr === undefined || pr === null || pr === '') {
     throw new PreflightError('--pr <number> is required');
   }
@@ -468,6 +542,17 @@ export function runPreflight({ pr, issue, repo, commandRunner = defaultGhCommand
   const issueArgs = ['issue', 'view', String(issueNumber), '--json', ISSUE_FIELDS];
   if (repo) issueArgs.push('--repo', repo);
   const issueData = runGhPreflightJson(commandRunner, issueArgs);
+  const ownerName = resolveRepoOwnerName(commandRunner, repo);
+  issueData.comments = fetchAllIssueComments(commandRunner, ownerName, issueNumber);
 
-  return evaluatePreflight({ prData, issueData });
+  const localContext = verificationContext ?? createLocalVerificationContext(target);
+  const authenticatedAccount = expectedAccount ?? resolveAuthenticatedAccount(commandRunner);
+
+  return evaluatePreflight({
+    prData,
+    issueData,
+    verificationStatus,
+    ...localContext,
+    expectedAccount: authenticatedAccount,
+  });
 }

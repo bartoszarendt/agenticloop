@@ -285,6 +285,9 @@ Check:
   summary explicitly triages them as accepted scope corrections.
 - Every acceptance criterion is demonstrably met.
 - Required checks were run on the final state with concise verdict lines or relevant excerpts, per [[verification-evidence]].
+- Every timed-out `## Verification Attempts` entry has final maintainer triage;
+  a missing triage or `Classification: pending` is a pass-1 blocker for
+  `accepted` or `closed` work.
 - New behavior has RED-to-GREEN or equivalent evidence, per [[tdd-implementation]].
 - Bugfixes state the confirmed root cause or explicitly explain why no root cause could be isolated, per [[debugging-before-fixes]].
 - No locked process or architecture decision changed without [[change-request-gate]].
@@ -321,6 +324,8 @@ Do not accept if:
   exists,
 - a revision corrected a previously published claim, evidence, or artifact reference without a
   dated `## Revision Log` or `## Comments` entry recording the correction,
+- a timed-out verification attempt lacks maintainer triage or retains
+  `Classification: pending`,
 - `review_status` is stale for the current implementation artifact.
 
 If pass 1 fails, post `needs_revision` without padding the review with optional style feedback.
@@ -585,7 +590,15 @@ Distinct from a single sustained-and-disputed item: once `needs_revision` rounds
 
 ## Mandatory triage before accepting
 
-Before posting `accepted`, triage every `Known Limitation` and `Follow-Up Recommendation` from the implementation summary:
+Before posting `accepted`, final-triage every timed-out verification attempt in
+the append-only history under [[verification-evidence]]. The maintainer may
+classify it as `one_off`, `project_fact`, `decision`, `follow_up`, or `blocker`,
+but may not leave it missing or `pending`. A `project_fact` may update the
+current profile; a `decision` is only a policy-level promotion of an existing
+fact through [[decision-capture]].
+
+Also triage every `Known Limitation` and `Follow-Up Recommendation` from the
+implementation summary:
 
 1. Fold it back into the task and request revision.
 2. File a follow-up task record.

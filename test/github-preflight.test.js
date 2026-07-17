@@ -33,6 +33,7 @@ import {
 } from '../src/github-preflight.js';
 
 const HEAD = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0';
+const LOOP_ACCOUNT = { login: 'loop-bot', type: 'User' };
 
 function issueBody(checks) {
   return [
@@ -56,6 +57,75 @@ function prBody({ head = HEAD, entries = [], evidenceExtra = [] } = {}) {
   lines.push(...evidenceExtra);
   lines.push('', '## Deviations', 'None.');
   return lines.join('\n');
+}
+
+function verificationAttempt({
+  number = 1,
+  strategy = 'foreground',
+  timeout = 180000,
+  outcome = 'timed_out',
+  candidate = 'one_off',
+} = {}) {
+  return [
+    `#### Attempt ${number}`,
+    '',
+    '- Artifact: commit:abc123',
+    '- Command: `npm test`',
+    `- Strategy: ${strategy}`,
+    `- Timeout ms: ${timeout}`,
+    `- Outcome: ${outcome}`,
+    `- Duration ms: ${timeout}`,
+    '- Required: true',
+    '- Partial evidence: test process exceeded the foreground host ceiling',
+    '- Proposed next strategy: background',
+    ...(candidate ? [`- Candidate classification: ${candidate}`] : []),
+    '- Recorded by: engineer',
+    '- Recorded at: 2026-07-17T12:00:00Z',
+  ].join('\n');
+}
+
+function verificationPrediction({ number = 2, based = 1, timeout = 300000 } = {}) {
+  return [
+    `#### Foreground escalation prediction for attempt ${number}`,
+    '',
+    `- Based on attempt: ${based}`,
+    '- Evidence: comparable successful runs normally finish between 220000 and 260000 ms',
+    '- Predicted completion window ms: 220000-260000',
+    `- Chosen timeout ms: ${timeout}`,
+    '- Recorded by: engineer',
+    '- Recorded at: 2026-07-17T12:05:00Z',
+  ].join('\n');
+}
+
+function verificationTriage({ number = 1, classification = 'pending', reference = 'none', reason = '' } = {}) {
+  return [
+    `#### Triage for attempt ${number}`,
+    '',
+    `- Classification: ${classification}`,
+    `- Reference: ${reference}`,
+    ...(reason ? [`- Reason: ${reason}`] : []),
+    '- Triaged by: maintainer',
+    '- Triaged at: 2026-07-17T12:30:00Z',
+  ].join('\n');
+}
+
+function verificationComment(entries, checkId = 'RC-1') {
+  return [
+    `<!-- AGENTIC_LOOP_VERIFICATION_ATTEMPTS:${checkId} -->`,
+    '',
+    '## Verification Attempts',
+    '',
+    `### ${checkId}`,
+    '',
+    entries.join('\n\n'),
+  ].join('\n');
+}
+
+function trustedVerificationComment(entries, checkId = 'RC-1') {
+  return {
+    body: `${verificationComment(entries, checkId)}\n\n[[agent: maintainer]]`,
+    author: LOOP_ACCOUNT,
+  };
 }
 
 describe('extractSectionBody', () => {
@@ -228,6 +298,156 @@ describe('headMatches', () => {
 });
 
 describe('evaluatePreflight', () => {
+  it('allows an issue with no verification-attempt comments', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '[RC-1] `npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBody(['[RC-1] `npm test`']), comments: [] },
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+  });
+
+  it('accepts a valid marked verification attempt and ignores unrelated comments', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '[RC-1] `npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        statusCheckRollup: [],
+      },
+      issueData: {
+        number: 7,
+        body: issueBody(['[RC-1] `npm test`']),
+        comments: [
+          { body: '## Verification Attempts\n\nthis unrelated comment is deliberately not canonical' },
+          { body: verificationComment([verificationAttempt({ outcome: 'passed' })]) },
+        ],
+      },
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+  });
+
+  it('rejects malformed and duplicate marked verification-attempt comments', () => {
+    const base = {
+      number: 42,
+      headRefOid: HEAD,
+      body: prBody({ entries: [{ check: '[RC-1] `npm test`', verdict: 'passed', evidence: 'ok' }] }),
+      statusCheckRollup: [],
+    };
+    const malformed = evaluatePreflight({
+      prData: base,
+      issueData: {
+        number: 7,
+        body: issueBody(['[RC-1] `npm test`']),
+        comments: [{ body: '<!-- AGENTIC_LOOP_VERIFICATION_ATTEMPTS:RC-1 -->\nno history' }],
+      },
+    });
+    assert.equal(malformed.ok, false);
+    assert.match(malformed.errors.join('\n'), /canonical/);
+
+    const comment = verificationComment([verificationAttempt({ outcome: 'passed' })]);
+    const duplicate = evaluatePreflight({
+      prData: base,
+      issueData: {
+        number: 7,
+        body: issueBody(['[RC-1] `npm test`']),
+        comments: [{ body: comment }, { body: comment }],
+      },
+    });
+    assert.equal(duplicate.ok, false);
+    assert.match(duplicate.errors.join('\n'), /duplicate/);
+  });
+
+  it('allows a timed-out attempt with candidate classification pending final maintainer triage', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '[RC-1] `npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        statusCheckRollup: [],
+      },
+      issueData: {
+        number: 7,
+        body: issueBody(['[RC-1] `npm test`']),
+        comments: [{ body: verificationComment([verificationAttempt(), verificationTriage()]) }],
+      },
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+  });
+
+  it('validates project-fact and decision triage against supplied project context', () => {
+    const prData = {
+      number: 42,
+      headRefOid: HEAD,
+      body: prBody({ entries: [{ check: '[RC-1] `npm test`', verdict: 'passed', evidence: 'ok' }] }),
+      statusCheckRollup: [],
+    };
+    const evaluate = (triage, context = {}) => evaluatePreflight({
+      prData,
+      issueData: {
+        number: 7,
+        body: issueBody(['[RC-1] `npm test`']),
+        comments: [trustedVerificationComment([verificationAttempt(), triage])],
+      },
+      verificationStatus: 'accepted',
+      expectedAccount: LOOP_ACCOUNT,
+      ...context,
+    });
+
+    const projectFact = verificationTriage({ classification: 'project_fact', reference: 'VF-full-suite' });
+    assert.equal(evaluate(projectFact, { projectFacts: [{ id: 'VF-full-suite' }] }).ok, true);
+    assert.match(evaluate(projectFact, { projectFacts: [] }).errors.join('\n'), /missing project verification fact/);
+
+    const decision = verificationTriage({ classification: 'decision', reference: 'D-2026-07-17-001' });
+    assert.equal(evaluate(decision, { decisionExists: id => id === 'D-2026-07-17-001' }).ok, true);
+    assert.match(evaluate(decision, { decisionExists: () => false }).errors.join('\n'), /missing decision/);
+  });
+
+  it('rejects missing timeout candidates and unsupported foreground retries', () => {
+    const base = {
+      number: 42,
+      headRefOid: HEAD,
+      body: prBody({ entries: [{ check: '[RC-1] `npm test`', verdict: 'passed', evidence: 'ok' }] }),
+      statusCheckRollup: [],
+    };
+    const issue = comments => ({ number: 7, body: issueBody(['[RC-1] `npm test`']), comments });
+
+    const missingCandidate = evaluatePreflight({
+      prData: base,
+      issueData: issue([{ body: verificationComment([verificationAttempt({ candidate: '' })]) }]),
+    });
+    assert.match(missingCandidate.errors.join('\n'), /Candidate classification/);
+
+    const missingPrediction = evaluatePreflight({
+      prData: base,
+      issueData: issue([{
+        body: verificationComment([
+          verificationAttempt(),
+          verificationAttempt({ number: 2, timeout: 300000, outcome: 'passed' }),
+        ]),
+      }]),
+    });
+    assert.match(missingPrediction.errors.join('\n'), /no preceding prediction/);
+
+    const prohibitedRetry = evaluatePreflight({
+      prData: base,
+      issueData: issue([{
+        body: verificationComment([
+          verificationAttempt(),
+          verificationPrediction(),
+          verificationAttempt({ number: 2, timeout: 300000 }),
+          verificationPrediction({ number: 3, based: 2, timeout: 360000 }),
+          verificationAttempt({ number: 3, timeout: 360000, outcome: 'passed' }),
+        ]),
+      }]),
+    });
+    assert.match(prohibitedRetry.errors.join('\n'), /more than one foreground timeout escalation/);
+  });
+
   it('matches a reworded evidence label by stable check id', () => {
     const prData = {
       number: 42,
@@ -529,6 +749,15 @@ describe('runPreflight (injected gh runner)', () => {
       if (args[0] === 'issue') {
         return { status: 0, stdout: JSON.stringify(issueData), stderr: '' };
       }
+      if (args[0] === 'repo') {
+        return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'o/r' }), stderr: '' };
+      }
+      if (args[0] === 'api' && args[1] === 'user') {
+        return { status: 0, stdout: JSON.stringify(LOOP_ACCOUNT), stderr: '' };
+      }
+      if (args[0] === 'api' && args.includes('--paginate')) {
+        return { status: 0, stdout: JSON.stringify([issueData.comments ?? []]), stderr: '' };
+      }
       throw new Error(`unexpected gh call: ${args.join(' ')}`);
     };
   }
@@ -545,6 +774,71 @@ describe('runPreflight (injected gh runner)', () => {
     const result = runPreflight({ pr: 42, commandRunner: makeRunner(prData, issueData) });
     assert.equal(result.ok, true, JSON.stringify(result.errors));
     assert.equal(result.issue, 7);
+  });
+
+  it('requests issue comments along with the task record', () => {
+    const prData = {
+      number: 42,
+      headRefOid: HEAD,
+      body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+      closingIssuesReferences: [{ number: 7 }],
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['`npm test`']), comments: [] };
+    let issueArgs = [];
+    let commentApiArgs = [];
+    const runner = (command, args) => {
+      assert.equal(command, 'gh');
+      if (args[0] === 'pr') return { status: 0, stdout: JSON.stringify(prData), stderr: '' };
+      if (args[0] === 'issue') {
+        issueArgs = args;
+        return { status: 0, stdout: JSON.stringify(issueData), stderr: '' };
+      }
+      if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'o/r' }), stderr: '' };
+      if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify(LOOP_ACCOUNT), stderr: '' };
+      if (args[0] === 'api' && args.includes('--paginate')) {
+        commentApiArgs = args;
+        return { status: 0, stdout: JSON.stringify([issueData.comments ?? []]), stderr: '' };
+      }
+      throw new Error(`unexpected gh call: ${args.join(' ')}`);
+    };
+    const result = runPreflight({ pr: 42, commandRunner: runner });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.doesNotMatch(issueArgs[issueArgs.indexOf('--json') + 1], /comments/);
+    assert.ok(commentApiArgs.includes('--paginate') && commentApiArgs.includes('--slurp'));
+    assert.ok(commentApiArgs.some(arg => /issues\/7\/comments\?per_page=100$/.test(arg)));
+  });
+
+  it('validates marked comments returned on later paginated API pages', () => {
+    const prData = {
+      number: 42,
+      headRefOid: HEAD,
+      body: prBody({ entries: [{ check: '[RC-1] `npm test`', verdict: 'passed', evidence: 'ok' }] }),
+      closingIssuesReferences: [{ number: 7 }],
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['[RC-1] `npm test`']) };
+    const runner = (command, args) => {
+      assert.equal(command, 'gh');
+      if (args[0] === 'pr') return { status: 0, stdout: JSON.stringify(prData), stderr: '' };
+      if (args[0] === 'issue') return { status: 0, stdout: JSON.stringify(issueData), stderr: '' };
+      if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'o/r' }), stderr: '' };
+      if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify(LOOP_ACCOUNT), stderr: '' };
+      if (args[0] === 'api' && args.includes('--paginate')) {
+        return {
+          status: 0,
+          stdout: JSON.stringify([[], [{
+            body: '<!-- AGENTIC_LOOP_VERIFICATION_ATTEMPTS:RC-1 -->\nmalformed\n\n[[agent: engineer]]',
+            user: LOOP_ACCOUNT,
+          }]]),
+          stderr: '',
+        };
+      }
+      throw new Error(`unexpected gh call: ${args.join(' ')}`);
+    };
+    const result = runPreflight({ pr: 42, commandRunner: runner });
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /missing the canonical/);
   });
 
   it('throws PreflightError when the PR has no closing issue reference and no --issue', () => {

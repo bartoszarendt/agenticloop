@@ -74,6 +74,10 @@ Name nearby work that must not be bundled into this task.
 Use one stable `[RC-N]` id per bullet. Include linked verification decisions
 when a check has a known non-obvious execution strategy.
 
+## Verification Attempts
+
+No verification attempts are currently recorded.
+
 ## Proof Pressure
 
 Optional. Maintainer may require this section for ambiguous or long-running work.
@@ -175,6 +179,8 @@ here so the engineer knows what evidence to publish.
 - [ ] Task scope matches the source documents reviewed for this task.
 - [ ] Unexpected files are justified in `## Deviations From Plan`.
 - [ ] Required checks were rerun on the final state with fresh output.
+- [ ] Every timed-out verification attempt has final maintainer triage; no timed-out
+  attempt remains missing triage or `pending` at acceptance.
 - [ ] If `## Proof Pressure` is present, completion oracle, final proof, and likely misfire were checked.
 - [ ] If `context_overflow_risk: medium|high` was set or context pressure was encountered, `## Outcome` records `context_pressure_encountered: true|false`.
 - [ ] The durable task record includes the current implementation summary.

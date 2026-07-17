@@ -23,6 +23,8 @@ import {
   validateFilesTaskRecord,
   validateTaskRecord,
 } from './validate-config.js';
+import { validateVerificationAttempts } from './verification-learning.js';
+import { createLocalVerificationContext } from './verification-context.js';
 import {
   validateReviewProvenance,
 } from './review-provenance.js';
@@ -35,7 +37,10 @@ function resolveProject(target) {
   const projectMap = loadProjectMap(target);
   return {
     raw: projectMap?.raw ?? {},
-    config: projectMap?.config ?? PROJECT_MAP_DEFAULTS,
+    config: {
+      ...(projectMap?.config ?? PROJECT_MAP_DEFAULTS),
+      verificationFacts: projectMap?.verificationFacts ?? [],
+    },
   };
 }
 
@@ -115,7 +120,7 @@ function formatTable(rows) {
   return [line, sep, ...body].join('\n');
 }
 
-function lintTaskFile(filePath, target, projectConfig) {
+function lintTaskFile(filePath, target, projectConfig, verificationContext) {
   const content = readFileSync(filePath, 'utf-8');
   const filename = relative(target, filePath).replace(/\\/g, '/');
   const warnings = [];
@@ -124,6 +129,9 @@ function lintTaskFile(filePath, target, projectConfig) {
     ...validateFilesTaskRecord(content, filename, {
       activeTaskBackend: 'files',
       projectMapConfig: projectConfig,
+      projectVerificationFacts: verificationContext.projectFacts,
+      decisionExists: verificationContext.decisionExists,
+      taskExists: verificationContext.taskExists,
       warnings,
     }),
   ];
@@ -270,10 +278,10 @@ function validateTransition(currentStatus, nextStatus, note) {
  *
  * @param {string} content  Full task record content
  * @param {string} filePath  Path for error messages
- * @param {object} projectConfig
+ * @param {object} verificationContext
  * @returns {string[]} Error messages (empty if gate passes)
  */
-function validateAcceptanceGate(content, filePath, projectConfig) {
+function validateAcceptanceGate(content, filePath, verificationContext) {
   const filename = filePath.replace(/\\/g, '/');
   const [frontmatter] = parseFrontmatter(content);
   const errors = [];
@@ -323,6 +331,12 @@ function validateAcceptanceGate(content, filePath, projectConfig) {
     errors.push(`Task '${filename}' cannot be accepted: '## Evidence' section is empty`);
   }
 
+  const verificationAttempts = validateVerificationAttempts(content, {
+    status: 'accepted',
+    ...verificationContext,
+  });
+  errors.push(...verificationAttempts.errors.map(error => `Task '${filename}' cannot be accepted: ${error}`));
+
   return errors;
 }
 
@@ -339,6 +353,9 @@ export async function cmdTask(args) {
 
   const project = resolveProject(target);
   const projectConfig = project.config;
+  const verificationContext = createLocalVerificationContext(target, {
+    projectMap: { config: projectConfig, verificationFacts: projectConfig.verificationFacts },
+  });
 
   try {
     if (sub === 'list') {
@@ -364,7 +381,7 @@ export async function cmdTask(args) {
       const taskId = positional[0];
       const files = taskId ? [taskPathForId(target, projectConfig, taskId)] : taskFiles(target, projectConfig);
       const results = files.map(file => existsSync(file)
-        ? lintTaskFile(file, target, projectConfig)
+        ? lintTaskFile(file, target, projectConfig, verificationContext)
         : { file: relative(target, file).replace(/\\/g, '/'), errors: [`Task record not found: ${taskId}`], warnings: [] });
       printLintResults(results, Boolean(opts.json));
       process.exitCode = results.some(result => result.errors.length > 0) ? 1 : 0;
@@ -456,7 +473,7 @@ export async function cmdTask(args) {
       // --- Acceptance gate for accepted/closed ---
       if ((nextStatus === 'accepted' || nextStatus === 'closed') &&
           currentStatus !== nextStatus) {
-        const gateErrors = validateAcceptanceGate(parsedContent, filePath, projectConfig);
+        const gateErrors = validateAcceptanceGate(parsedContent, filePath, verificationContext);
         if (gateErrors.length > 0) {
           for (const err of gateErrors) console.error(err);
           process.exitCode = 1;

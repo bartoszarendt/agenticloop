@@ -89,6 +89,10 @@ target projects do not need toolkit-root `docs/` files at runtime.
   and publishes evidence.
 - **Required checks**: exact commands or manual checks that must be run before a
   task can be accepted.
+- **Verification operating fact**: a current, maintainer-owned execution fact in
+  `.agenticloop/project.md` about a project-wide check, identified as `VF-...`.
+  It records observed behavior and a current strategy; it is not by itself a
+  policy decision.
 - **Proof pressure**: the optional task-record practice of naming a completion
   oracle, final proof required, and likely misfire to keep work aligned with the
   owner's outcome. Proof pressure complements acceptance criteria; it does not
@@ -181,8 +185,8 @@ role contracts.
 ## Source Documents
 
 At the start of a non-trivial task, read `.agenticloop/project.md` for
-`task_backend`, task naming, optional grouping settings, and typed document
-selections.
+`task_backend`, task naming, optional grouping settings, typed document
+selections, and relevant current verification operating facts.
 
 Document roles are:
 
@@ -636,6 +640,24 @@ context pressure encountered, or follow-ups. The section uses the task-record
 Outcome fields, including `context_pressure_encountered`, for later pattern
 mining.
 
+## Verification Learning
+
+`## Verification Operating Facts` in `.agenticloop/project.md` is the one
+current, mutable, maintainer-owned profile for project-wide check behavior. It
+uses the canonical `### VF-...` entries and fields in
+[[verification-evidence]]. A fact records observed command behavior and the
+current operational strategy; update or replace it when evidence changes rather
+than accumulating competing facts for the same command.
+
+`## Verification Attempts` in a task record is append-only per-check evidence.
+New task records start with its canonical empty state. When a required or cited
+check times out, the engineer appends the attempt; the maintainer later appends
+the final triage. An `accepted` or `closed` task cannot retain a timed-out
+attempt with missing or `pending` triage. The exact attempt, foreground
+prediction, and triage shapes, retry limits, and event procedure are owned by
+[[verification-evidence]]. Backend placement and append-only behavior are owned
+by the matching backend projection.
+
 ## Task Backends
 
 The active task backend defines where task records live. Read `task_backend`
@@ -839,6 +861,10 @@ Rules:
   directly discovers evidence that constrains future work. Proposed records
   must include provenance fields (`proposed_at`, `proposed_by_role`,
   `proposed_by`) and source references (`source_refs`).
+- Verification is a narrower exception: the engineer records a timeout or
+  expensive-check observation through [[verification-evidence]], and the
+  maintainer may use a verification decision only after final triage and a
+  current `VF-...` fact establish a policy-level promotion.
 - Findings discovered during parallel work follow a promotion threshold. A
   lane-local observation stays in that lane's status return or task summary. A
   finding relevant only to the current batch is routed and disposed under the
@@ -866,16 +892,14 @@ Rules:
 - Changing an accepted locked process, architecture, backend, or project
   decision must use [[change-request-gate]] before implementation.
 
-Verification operating decisions are durable conclusions about how this target
-project should run non-obvious checks. Examples include using background
-execution for a full suite that exceeds a host foreground timeout, preferring a
-focused subset during iteration, or routing a check to CI when local execution
-is not reliable. Store these as `.agenticloop/decisions/` records with
-`scope: verification`. Do not store raw command dumps in the decision; cite task
-evidence, event logs, or command summaries. Raw timing output belongs in task
-evidence or event logs; the decision record stores the conclusion and future
-action. Proposed verification decisions may be created from evidence; accepted
-verification decisions still require the existing decision acceptance rules.
+Verification observations first belong in the task's append-only attempt history
+and, when they affect repeated project work, in the mutable verification-fact
+profile. A verification decision is narrower: the maintainer may use
+[[decision-capture]] only to promote an already-recorded, policy-level profile
+observation into a durable decision that needs the normal acceptance gate. A
+timeout alone is not a decision and does not authorize a role to approve a new
+strategy. Decisions cite the fact and task evidence; raw timing output remains in
+the attempt history or event log.
 
 ## Default Backend: Files
 
@@ -969,6 +993,10 @@ For each task:
    location.
 9. Request review.
 
+For a timeout, unexpectedly expensive check, or retry, load
+[[verification-evidence]] before choosing how to run it again. Do not treat an
+unchanged rerun as a new verification plan.
+
 The default sizing is one independently verifiable task at a time, the smallest
 useful implementation slice. When a human authorizes a larger bounded run,
 prefer the largest safe useful slice that remains bounded, reversible, and
@@ -1023,6 +1051,8 @@ Pass 1: task compliance.
 - Out-of-scope work is absent or justified.
 - Acceptance criteria are met.
 - Required checks were run on the final state.
+- Timed-out verification attempts have final maintainer triage; no required
+  check retains `pending` triage.
 - New behavior has RED-to-GREEN or equivalent evidence.
 - Locked process or architecture decisions did not change accidentally.
 
@@ -1142,6 +1172,7 @@ Closeout checks:
   issue, or any exception/manual correction is recorded
 - acceptance criteria
 - required checks
+- final triage for timed-out verification attempts
 - documentation changes
 - known gaps
 - follow-up task records

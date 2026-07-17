@@ -32,9 +32,9 @@ Explain every meaningful scope or plan deviation from the task record or group
 plan.
 
 ## Process Observations
-Optional. Record repeated review churn, blocker patterns, setup issues,
-workflow friction, or candidate verification decisions when a timed-out or
-expensive check should affect future tasks.
+Optional. Record review churn, blockers, setup issues, or workflow friction.
+Reference `## Verification Attempts` for timeout observations; do not duplicate
+history or create a decision here.
 
 ## Known Gaps
 List accepted limitations, deferred concerns, or unresolved issues that remain

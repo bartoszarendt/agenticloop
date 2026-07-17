@@ -57,6 +57,11 @@ These apply in both modes.
   moving.
 - Use TDD or another explicit verification loop for behavior changes. Run focused
   checks and any required checks on the final state.
+- After a foreground timeout, do not rerun the same command on the same artifact
+  with only a larger timeout unless concrete evidence and a bounded predicted
+  completion window were recorded before the retry. After a failed prediction,
+  switch strategy or return status; use [[verification-evidence]] in Agentic
+  Loop mode before retrying.
 - Use host-visible target-project skills when they apply to domain-specific work.
 - Return concise findings: what changed (files), checks run with fresh evidence,
   and remaining gaps.
@@ -93,6 +98,10 @@ record and creates no Agentic Loop state.
   broader workflow.
 - Return a concise result: findings, changed files, checks and evidence, and any
   remaining gaps or risks. No Agentic Loop summary shape is required.
+- Report a timeout or expensive-check observation to the caller with its command,
+  limit, duration when known, partial evidence, and suggested next step. Do not
+  create Agentic Loop verification attempts, project facts, triage, or decisions
+  in standalone mode.
 
 ### Standalone Edit Boundary
 
@@ -131,6 +140,10 @@ task-record obligation.
   summary.
 - When event logging is enabled, emit implementation-start, verification,
   blocked, and needs-context workflow-gate events.
+- For every timed-out required or cited check, use [[verification-evidence]] to
+  append the exact attempt record before retrying or handing back. Record the
+  observation, not a project fact or strategy approval, and return it for
+  maintainer triage.
 - Publish an implementation summary with fresh evidence.
 - For files-backed work, keep the current implementation summary accurate but
   append a dated correction entry to `## Revision Log` or `## Comments` before
@@ -143,12 +156,13 @@ task-record obligation.
   (required-check evidence, `Current PR head` marker) until it passes. A failing
   preflight is a revision defect, not a reviewer task.
 - Address review feedback or dispute it with evidence.
-- May create `status: proposed` decisions from current evidence only when a
-  durable fact constrains future work: `scope: verification` or an existing
-  `quality`, `architecture`, `process`, or accepted-project scope. Lane-local
-  observations stay in status/summary and batch findings use parallel routing.
-  Link provenance and sources; do not create records indiscriminately, change
-  accepted decisions, or write when lane ownership is unclear.
+- May create `status: proposed` decisions from current evidence only for existing
+  `quality`, `architecture`, `process`, or accepted-project scopes. Verification
+  observations stay in `## Verification Attempts`: do not create a
+  `scope: verification` decision directly. Return them to the maintainer for
+  triage and profile promotion. Lane-local observations stay in status/summary
+  and batch findings use parallel routing. Do not create records indiscriminately,
+  change accepted decisions, or write when lane ownership is unclear.
 - Use the exact task id from the task record in branch names, pull request titles,
   labels, and commit trailers when `task_backend: github` is set.
 - Honor any delegation lease from the orchestrator, including observable-step

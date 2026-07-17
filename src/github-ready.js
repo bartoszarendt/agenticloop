@@ -35,6 +35,8 @@ export class GitHubReadyError extends Error {
  * @param {number|string} [options.issue]   Linked task issue override.
  * @param {string} [options.repo]           owner/name repo override.
  * @param {Function} [options.commandRunner] Injectable `gh` runner for testing.
+ * @param {string} [options.target] Local target root for verification facts and references.
+ * @param {object} [options.verificationContext] Injectable local verification context.
  * @returns {{
  *   ok: boolean,
  *   readyForMerge: boolean,
@@ -47,7 +49,14 @@ export class GitHubReadyError extends Error {
  * }}
  * @throws {GitHubReadyError} when the PR argument is not a positive integer.
  */
-export function runGitHubReady({ pr, issue, repo, commandRunner = defaultGhCommandRunner } = {}) {
+export function runGitHubReady({
+  pr,
+  issue,
+  repo,
+  commandRunner = defaultGhCommandRunner,
+  target = process.cwd(),
+  verificationContext,
+} = {}) {
   const prNumber = Number(pr);
   if (pr === undefined || pr === null || pr === '' || !Number.isInteger(prNumber) || prNumber <= 0) {
     throw new GitHubReadyError(`--pr must be a positive integer, got '${pr}'`);
@@ -56,7 +65,17 @@ export function runGitHubReady({ pr, issue, repo, commandRunner = defaultGhComma
   // 1. Evidence preflight.
   let preflight = { ok: false, errors: [], issue: null, headRefOid: '' };
   try {
-    const result = runPreflight({ pr: prNumber, issue, repo, commandRunner });
+    const result = runPreflight({
+      pr: prNumber,
+      issue,
+      repo,
+      commandRunner,
+      target,
+      verificationContext,
+      // Merge readiness is terminal acceptance: every timed-out attempt needs
+      // durable, non-pending maintainer triage before it can pass.
+      verificationStatus: 'accepted',
+    });
     preflight = {
       ok: Boolean(result.ok),
       errors: Array.isArray(result.errors) ? result.errors : [],

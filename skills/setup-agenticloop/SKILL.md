@@ -223,7 +223,11 @@ When `.agenticloop/project.md` already exists:
 - Parse the existing frontmatter.
 - Merge in the new override keys.
 - Preserve existing frontmatter values that are not being overridden.
-- Preserve the body of the file.
+- Preserve the body of the file, including the exact `## Verification Operating
+  Facts` body, byte-for-byte.
+- Do not add, remove, normalize, infer, or update `VF-...` facts during setup.
+  Setup has no evidence or strategy-approval authority; the maintainer updates
+  the current profile only through [[verification-evidence]].
 - If the human declines confirmation, leave `setup_status: unconfirmed`.
 
 When `.agenticloop/project.md` does not exist, write a fresh file using the
@@ -231,7 +235,8 @@ project-map shape: YAML frontmatter with `setup_status`,
 `setup_confirmed_at`, `setup_confirmed_by`, `task_backend`,
 `task_id_pattern`, `task_id_regex`, `task_file_template`,
 optional `engineer_context_window_tokens`, and optional typed `documents` keys, followed by a
-`# Agentic Loop Project Map` heading.
+`# Agentic Loop Project Map` heading and the canonical empty `## Verification
+Operating Facts` section. Do not invent an initial fact.
 Alternatively, tell the human to run `npx agenticloop init` first, which
 creates the file automatically.
 

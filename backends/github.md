@@ -42,6 +42,8 @@ template, grouping profile) stays in `.agenticloop/project.md`.
 | Grouping | Optional grouping label such as `phase:1` when the project uses grouping |
 | Implementation artifact | Pull request linked to the issue by a recognized closing keyword |
 | Evidence | PR body for normal implementation evidence; comments and PR review bodies for status markers, later evidence updates, and documented exceptions |
+| Verification profile | Current `## Verification Operating Facts` in `.agenticloop/project.md` |
+| Verification attempts | One marked, append-only task-issue comment per required check id |
 | Review status | Review comment or PR review body marker |
 | Blocked state | Issue label plus status marker comment |
 | Completion summary | Inline in the PR body (per task) |
@@ -159,6 +161,33 @@ When using a separate comment for mutable evidence, edit the latest
 agent-authored implementation evidence comment instead of adding an equivalent
 new comment.
 
+### Record Verification Attempts
+
+Verification attempt history belongs on the **task issue**, not in the PR body
+or an unmarked comment. For each check id, create exactly one agent-authored,
+editable comment with exactly one marker and exactly one matching check section:
+
+```text
+<!-- AGENTIC_LOOP_VERIFICATION_ATTEMPTS:RC-1 -->
+
+## Verification Attempts
+
+### RC-1
+```
+
+Append the canonical attempt, foreground-prediction, and maintainer-triage
+subsections from [[verification-evidence]] to that same marked comment. Do not
+post a second marked comment for the same check id, put multiple markers in one
+comment, or change, delete, or reorder an earlier entry. Before appending, fetch
+the existing marked comment for that `RC-N`; ambiguous posting requires fetching
+comments before retrying. The comment is an editable carrier for append-only
+history, so the updater appends and retains prior text rather than replacing the
+history. Keep the final [[github-attribution]] role trailer.
+
+The maintainer may update the separate current `VF-...` profile in
+`.agenticloop/project.md` only after final triage. The profile does not replace
+the issue-comment attempt history or approve a strategy by itself.
+
 ### Pre-Review Evidence Gate
 
 Before requesting maintainer review on a GitHub-backed implementation pull
@@ -178,14 +207,18 @@ Options:
 The gate uses `gh` and fails clearly when `gh` is missing, unauthenticated, or
 returns incomplete data. It fetches the pull request (`number`, `body`,
 `headRefOid`, `files`, `closingIssuesReferences`, `statusCheckRollup`) and the
-linked issue (`number`, `body`, `title`), then checks that:
+linked issue (`number`, `body`, `title`) plus all issue-comment pages, then
+checks that:
 
 - the issue has a non-empty `## Required Checks` section;
 - the pull request body has a non-empty `## Evidence` section;
 - the pull request body carries a `Current PR head: <sha>` marker that matches
   the current `headRefOid` (a stale or missing marker fails);
 - every required check has acceptable PR-body evidence, or an unambiguous
-  successful status check that matches it.
+  successful status check that matches it;
+- paginated marked attempts are live, authenticated, attributed, valid, within
+  retry limits, and locally referenced;
+  `github-ready` also requires final timeout triage.
 
 This gate does not change `agenticloop validate`. Normal validation performs
 GitHub label checks only when the active backend is `github`; files-backed
@@ -423,6 +456,10 @@ request body resolves to the expected closing issue reference, for example with
 from that field, update the pull request body or request revision before
 accepting.
 
+For every timed-out attempt in a marked verification-attempt comment, final
+maintainer triage must be present and not `pending`. Missing or pending timeout
+triage blocks acceptance and closure.
+
 Close through the merged pull request. After merge, verify that the task issue
 is closed before emitting `task.closed` or treating the task as durably closed.
 If a pull request was already merged without closing the issue, close the issue
@@ -457,6 +494,9 @@ closeout status marker as a comment on the last task issue or PR in the work uni
 AGENT_CLOSEOUT_STATUS: complete
 AGENT_CLOSEOUT_STATUS: follow_up_required
 ```
+
+Pending or missing final triage for any timed-out verification attempt blocks
+`AGENT_CLOSEOUT_STATUS: complete`.
 
 ## Bootstrap Labels (GitHub-Only First Run Setup)
 

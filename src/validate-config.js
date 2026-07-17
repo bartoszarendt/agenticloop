@@ -124,6 +124,7 @@ import {
   validateFilesFixup,
 } from './maintainer-fixup.js';
 import { loadEvents, resolveEventLogPath } from './event-logging.js';
+import { validateVerificationAttempts } from './verification-learning.js';
 
 const PLACEHOLDER_PATTERNS = [
   /\bTBD\b/i,
@@ -655,6 +656,15 @@ export function validateFilesTaskRecord(content, filename, options = {}) {
     errors.push(`Task record '${filename}' has status 'blocked' but is missing required frontmatter field 'block_category'`);
   }
 
+  const verificationAttempts = validateVerificationAttempts(content, {
+    status,
+    projectFacts: options.projectVerificationFacts,
+    decisionExists: options.decisionExists,
+    taskExists: options.taskExists,
+  });
+  errors.push(...verificationAttempts.errors.map(error => `Task record '${filename}': ${error}`));
+  warnings.push(...verificationAttempts.warnings.map(warning => `Task record '${filename}': ${warning}`));
+
   if (status === 'accepted' || status === 'closed') {
     const hasWorkUnitSummary = hasMarkdownHeading(content, '## Scope Completed');
     const hasLegacyImplSummary = !!sectionBody(content, '## Implementation Summary');
@@ -1022,6 +1032,7 @@ export function validateConfig(repoRoot, options = {}) {
     validateTaskRecords(repoRoot, '.agenticloop/tasks', errors, warnings, {
       activeTaskBackend: 'files',
       projectMapConfig: PROJECT_MAP_DEFAULTS,
+      projectVerificationFacts: [],
       commandRunner,
     });
     return { errors, warnings };
@@ -1082,6 +1093,7 @@ export function validateConfig(repoRoot, options = {}) {
   validateTaskRecords(repoRoot, taskDir, errors, warnings, {
     activeTaskBackend: taskBackendResolution.backend,
     projectMapConfig: projectMapResult?.config ?? PROJECT_MAP_DEFAULTS,
+    projectVerificationFacts: projectMapResult?.verificationFacts ?? [],
     commandRunner,
   });
 
@@ -1152,7 +1164,13 @@ function validateTmpAndGitignore(repoRoot, errors, warnings) {
 function validateTaskRecords(repoRoot, taskDirRel, errors, warnings, options = {}) {
   const taskDir = join(repoRoot, taskDirRel);
   if (existsSync(taskDir) && statSync(taskDir).isDirectory()) {
-    for (const f of readdirSync(taskDir).filter(n => n.endsWith('.md'))) {
+    const files = readdirSync(taskDir).filter(n => n.endsWith('.md'));
+    const taskIds = new Set(files.map(f => {
+      const [frontmatter] = parseFrontmatter(readFileSync(join(taskDir, f), 'utf-8'));
+      return frontmatterString(frontmatter?.task_id);
+    }).filter(Boolean));
+    const decisionExists = decisionId => existsSync(join(repoRoot, '.agenticloop', 'decisions', `${decisionId}.md`));
+    for (const f of files) {
       const content = readFileSync(join(taskDir, f), 'utf-8');
       for (const err of validateTaskRecord(content, f)) {
         errors.push(err);
@@ -1161,11 +1179,49 @@ function validateTaskRecords(repoRoot, taskDirRel, errors, warnings, options = {
         ...options,
         repoRoot,
         commandRunner: options.commandRunner,
+        taskExists: taskId => taskIds.has(taskId),
+        decisionExists,
         warnings,
       })) {
         errors.push(err);
       }
       crossCheckTaskRecordFixupEvents(repoRoot, content, f, warnings, options);
+      crossCheckTaskRecordVerificationAttemptEvents(repoRoot, content, f, warnings, options);
+    }
+  }
+}
+
+function crossCheckTaskRecordVerificationAttemptEvents(repoRoot, content, filename, warnings, options = {}) {
+  if ((options.projectMapConfig ?? PROJECT_MAP_DEFAULTS).event_logging !== 'enabled') return;
+  const [frontmatter] = parseFrontmatter(content);
+  const taskId = frontmatterString(frontmatter?.task_id);
+  if (!taskId) return;
+  const activeTaskBackend = options.activeTaskBackend ?? 'files';
+  const declaredBackend = frontmatterString(frontmatter?.backend);
+  if (activeTaskBackend !== 'files' && declaredBackend !== 'files') return;
+
+  const logPath = resolveEventLogPath(repoRoot, undefined, taskId).path;
+  if (!existsSync(logPath)) return;
+  let events;
+  try {
+    events = loadEvents(logPath);
+  } catch {
+    return;
+  }
+  const attempts = validateVerificationAttempts(content).attempts;
+  const timedOutEvents = events.filter(event =>
+    event?.event_type === 'check.run' && event?.data?.timed_out === true
+  );
+  for (const event of timedOutEvents) {
+    const command = String(event?.data?.command ?? '').trim();
+    const captured = attempts.some(attempt =>
+      attempt.outcome === 'timed_out' &&
+      attempt.command.replace(/`/g, '').trim() === command
+    );
+    if (!captured) {
+      warnings.push(
+        `Task record '${filename}': timed_out check.run event for '${command || 'unknown command'}' has no matching durable Verification Attempts capture`
+      );
     }
   }
 }

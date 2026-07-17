@@ -75,6 +75,14 @@ command output before claiming success. Use event-log `refs` and small `data`
 for structured facts; do not create a separate parseable receipt block. Output
 refs remain a deferred future policy; do not create or rely on them now.
 
+The target project's `## Verification Operating Facts` section in
+`.agenticloop/project.md` is the maintainer-owned mutable current profile. The
+task file's `## Verification Attempts` section is separate append-only history:
+the engineer appends attempts and bounded foreground predictions, and the
+maintainer appends triage. Use the exact shapes and retry procedure in
+[[verification-evidence]]; do not replace task attempts with summary prose or
+project facts.
+
 Closeout does not write a separate summary file. When a human-identified task
 set or configured group finishes, closeout verifies the inline task summaries
 are complete and records a status marker (see [[task-closeout]]).
@@ -104,6 +112,8 @@ exchanges.
 | Grouping | Optional frontmatter/body field when the project uses grouping |
 | Implementation artifact | Branch, commit range, patch, or local diff reference |
 | Evidence | Current implementation summary (refreshable) plus append-only history sections |
+| Verification profile | Current `## Verification Operating Facts` in `.agenticloop/project.md` |
+| Verification attempts | Append-only `## Verification Attempts` in the task file |
 | Review status | Frontmatter field plus review section |
 | Blocked state | Frontmatter field plus blocker section |
 | Completion summary | Inline `## Scope Completed` section in the task file |
@@ -275,6 +285,19 @@ previously published claim, evidence block, check result, or artifact reference,
 append a dated entry to `## Revision Log` or `## Comments` before updating the
 summary.
 
+### Record Verification Attempts
+
+For a required or cited check, replace the canonical empty state in
+`## Verification Attempts` on its first record, then append new entries under
+the matching `### RC-N` heading only. Preserve every earlier attempt,
+foreground-escalation prediction, and maintainer triage verbatim. The exact
+entry shapes, retry limit, and final-triage rules are owned by
+[[verification-evidence]].
+
+Do not update `.agenticloop/project.md` from an engineer attempt. The maintainer
+may update the profile's current `VF-...` fact after final triage; that mutable
+profile never replaces the task's append-only evidence.
+
 ### Link Implementation Artifact
 
 Record the implementation artifact in frontmatter. Mirror it in the implementation summary when
@@ -369,6 +392,8 @@ truncated:
 - `## Comments` -- dated notes on status changes, context, and decisions.
 - `## Revision Log` -- dated entries recording corrections to previously
   published claims, evidence, artifact references, or check results.
+- `## Verification Attempts` -- per-`RC-N` attempt, prediction, and triage
+  history. Append entries only; do not rewrite a prior record.
 - Blocker sections added while the task is blocked.
 - Maintainer review sections appended per review round.
 

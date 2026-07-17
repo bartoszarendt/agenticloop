@@ -44,6 +44,8 @@ Review:
 - for GitHub-backed normal implementation tasks, the task issue state and the
   merged PR closing relationship,
 - acceptance criteria and required checks,
+- append-only verification attempts and final maintainer triage for every
+  timed-out attempt,
 - proof pressure fields when present and the evidence that satisfies them,
 - known limitations and follow-up recommendations,
 - documentation changes,
@@ -64,6 +66,11 @@ the task record, distinct from the per-review `review.result` field used in
 event-log entries.
 
 Do not copy raw agent exchanges into docs. Use task records, implementation artifacts, command output, and reviewed comments as sources of truth.
+
+Pending or missing final triage for any timed-out verification attempt blocks
+closeout completion. Keep the marker at `follow_up_required`, or retain a
+blocked state, until the maintainer records final triage under
+[[verification-evidence]].
 
 ### GitHub acceptance verification
 

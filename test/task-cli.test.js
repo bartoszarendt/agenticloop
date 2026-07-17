@@ -37,6 +37,47 @@ function taskPath(target, taskId) {
   return join(target, '.agenticloop', 'tasks', `${taskId}.md`);
 }
 
+function verificationHistory(classification, reference) {
+  return `## Verification Attempts
+
+### RC-1
+
+#### Attempt 1
+
+- Artifact: commit:abc123
+- Command: \`npm test\`
+- Strategy: foreground
+- Timeout ms: 180000
+- Outcome: timed_out
+- Duration ms: 180000
+- Required: true
+- Partial evidence: test process exceeded the foreground host ceiling
+- Proposed next strategy: background
+- Candidate classification: ${classification}
+- Recorded by: engineer
+- Recorded at: 2026-07-17T12:00:00Z
+
+#### Triage for attempt 1
+
+- Classification: ${classification}
+- Reference: ${reference}
+- Triaged by: maintainer
+- Triaged at: 2026-07-17T12:30:00Z`;
+}
+
+const PROJECT_FACT = `### VF-full-suite
+
+- Command: \`npm test\`
+- Last outcome: timed_out
+- Observed duration ms: 180000
+- Timeout ms: 180000
+- Host timeout ceiling ms: 180000
+- Strategy: background
+- Updated: 2026-07-17
+- Source: T-001
+- Revisit when: the suite layout, expected runtime, CI behavior, or host ceiling changes
+- Decision: none`;
+
 function writeAcceptedTask(target, taskId, { reviewStatus = 'needs_revision', extraFrontmatter = '' } = {}) {
   mkdirSync(join(target, '.agenticloop', 'tasks'), { recursive: true });
   writeFileSync(taskPath(target, taskId), `---
@@ -139,6 +180,7 @@ describe('task CLI', () => {
     const content = readFileSync(taskPath(target, 'T-001'), 'utf-8');
     assert.match(content, /^status: in-progress$/m);
     assert.match(content, /Started implementation/);
+    assert.match(content, /## Verification Attempts\n\nNo verification attempts are currently recorded\./);
   });
 
   it('appends notes to the live Comments section, not a fenced example', () => {
@@ -228,6 +270,43 @@ describe('task CLI', () => {
     const payload = JSON.parse(result.stdout);
     assert.equal(payload[0].errors.length, 0);
     assert.ok(payload[0].warnings.some(w => w.includes("empty '## Outcome' section")));
+  });
+
+  it('lints project-fact and decision triage with the same local reference context as validation', () => {
+    const target = makeTarget('verification-context');
+    assertOk(run(['task', 'new', 'Verify local references', '--target', target]));
+    const projectPath = join(target, '.agenticloop', 'project.md');
+    const project = readFileSync(projectPath, 'utf-8').replace(
+      'No project-wide verification operating facts are currently recorded.',
+      PROJECT_FACT
+    );
+    writeFileSync(projectPath, project, 'utf-8');
+
+    const path = taskPath(target, 'T-001');
+    const original = readFileSync(path, 'utf-8');
+    writeFileSync(path, original.replace(
+      '## Verification Attempts\n\nNo verification attempts are currently recorded.',
+      verificationHistory('project_fact', 'VF-full-suite')
+    ), 'utf-8');
+    assertOk(run(['task', 'lint', 'T-001', '--target', target]));
+
+    writeFileSync(path, readFileSync(path, 'utf-8').replace('Reference: VF-full-suite', 'Reference: VF-missing'), 'utf-8');
+    const missingFact = run(['task', 'lint', 'T-001', '--target', target]);
+    assert.notEqual(missingFact.status, 0);
+    assert.match(missingFact.stdout, /missing project verification fact 'VF-missing'/);
+
+    mkdirSync(join(target, '.agenticloop', 'decisions'), { recursive: true });
+    writeFileSync(join(target, '.agenticloop', 'decisions', 'D-2026-07-17-001.md'), '# Decision\n', 'utf-8');
+    writeFileSync(path, original.replace(
+      '## Verification Attempts\n\nNo verification attempts are currently recorded.',
+      verificationHistory('decision', 'D-2026-07-17-001')
+    ), 'utf-8');
+    assertOk(run(['task', 'lint', 'T-001', '--target', target]));
+
+    rmSync(join(target, '.agenticloop', 'decisions', 'D-2026-07-17-001.md'));
+    const missingDecision = run(['task', 'lint', 'T-001', '--target', target]);
+    assert.notEqual(missingDecision.status, 0);
+    assert.match(missingDecision.stdout, /missing decision 'D-2026-07-17-001'/);
   });
 
   it('warns but continues when a task subcommand receives an unknown option', () => {

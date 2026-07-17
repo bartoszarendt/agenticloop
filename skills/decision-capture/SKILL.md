@@ -1,6 +1,6 @@
 ---
 name: decision-capture
-description: Use when recording, updating, accepting, or superseding a durable project decision that constrains future work. Covers tracked Markdown decision records under .agenticloop/decisions/, maintainer ownership, proposed vs accepted state, source-linked discoverability, supersession, and decision.recorded events.
+description: Use when recording, updating, accepting, or superseding a durable project decision that constrains future work, including a maintainer's promotion of an already-recorded policy-level verification observation. Covers tracked Markdown decision records under .agenticloop/decisions/, maintainer ownership, proposed vs accepted state, source-linked discoverability, supersession, and decision.recorded events.
 metadata:
   area: decision-records
   side_effects: writes-files
@@ -36,26 +36,21 @@ still matter, but they are not the only trigger.
 
 ## Verification operating decisions
 
-Use decision records for durable verification conclusions that constrain future
-agents. Examples:
+This is a promotion path, not timeout handling. First use
+[[verification-evidence]] to record the task attempt. The maintainer then
+triages it and, when the observation affects repeated project work, records or
+updates the current `VF-...` fact in `.agenticloop/project.md`.
 
-- a full test suite exceeds the foreground host timeout and should be run as
-  background, split, focused, or CI;
-- a known expensive integration check needs a specific execution strategy;
-- a local check is not reliable and must be treated as advisory.
+Use this skill for verification only when that already-recorded fact represents
+a policy-level conclusion that constrains future work, such as a project rule to
+use CI rather than local execution for a class of checks. The decision cites the
+`VF-...` fact and its durable task/event evidence, states the policy and revisit
+trigger, and follows the normal acceptance gate.
 
-Do not create a decision for one-off timing noise or ordinary task evidence.
-Engineers may create `proposed` `scope: verification` decisions when a
-timed-out, expensive, unreliable, or host-limited check constrains future work.
-The proposed decision must cite task evidence or `check.run` event data and
-state the future execution strategy. The record should include:
-
-- command or check name,
-- observed behavior summary,
-- chosen execution strategy,
-- consequences for future engineers or reviewers,
-- revisit trigger such as duration growth, host limit change, test layout
-  change, or CI divergence.
+Do not use this skill for one timeout, ordinary timing noise, a retry choice, a
+task attempt, final timeout triage, or a mutable verification-fact update.
+Engineers report those observations; delegation observations never approve a
+strategy. A decision is not created merely because a check is expensive.
 
 ## When Not to Use
 
@@ -84,6 +79,11 @@ role must:
 - keep it short and evidence-backed,
 - not mark it `accepted`.
 
+For `scope: verification`, the maintainer uses this path only after final
+timeout triage and an existing `VF-...` fact establish a policy-level promotion.
+An engineer records and reports the observation through
+[[verification-evidence]] instead of opening a verification decision directly.
+
 ## Maintainer Ownership
 
 The maintainer owns:
@@ -106,6 +106,9 @@ Create or update a decision record when all of the following are true:
 1. the decision is durable enough to matter beyond one task,
 2. it constrains future implementation, review, setup, or release work,
 3. later agents or maintainers would likely make the wrong choice without it.
+
+For verification, also require an existing evidence-backed `VF-...` fact and a
+policy-level consequence beyond selecting the next run's strategy.
 
 If the note is only evidence for one task, keep it in the task record or
 implementation artifact instead.

@@ -68,6 +68,25 @@ conventions for this project. Do not put model IDs here; those belong in
   `backend_evidence_summary` are optional durable notes for bounded backend
   evidence review.
 
+## Verification Operating Facts
+
+No project-wide verification operating facts are currently recorded.
+
+## Verification Fact Profile
+
+This is the current mutable, maintainer-owned profile for project-wide check
+behavior. It is not task history and does not approve a strategy by itself.
+Use one `### VF-...` entry per exact command when final timeout triage or other
+repeated evidence supports a project fact. The canonical entry shape is owned by
+`agenticloop/skills/verification-evidence/SKILL.md`; its fields are `Command`,
+`Last outcome`, `Observed duration ms`, `Timeout ms`, `Host timeout ceiling ms`,
+`Strategy`, `Updated`, `Source`, `Revisit when`, and `Decision`.
+
+Setup preserves this section and never invents facts. Update a fact to the
+current supported truth rather than retaining competing active facts for the
+same command. Task-specific runs belong in each task record's append-only
+`## Verification Attempts` section.
+
 ## Conventions
 
 Agentic Loop uses convention-first document lookup. If a typed document role is

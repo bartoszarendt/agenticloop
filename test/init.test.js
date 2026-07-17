@@ -181,6 +181,14 @@ describe('init - .agenticloop/project.md handling', () => {
     assert.ok(content.includes('setup_status: unconfirmed'), 'project.md should start unconfirmed');
   });
 
+  it('project.md includes the empty verification operating-facts section', async () => {
+    const d = makeEmptyTarget();
+    await init({ target: d });
+    const content = readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8');
+    assert.match(content, /## Verification Operating Facts/);
+    assert.match(content, /No project-wide verification operating facts are currently recorded\./);
+  });
+
   it('generated project.md accepts the default T-001 task id shape', async () => {
     const d = makeEmptyTarget();
     await init({ target: d });

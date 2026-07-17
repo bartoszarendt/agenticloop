@@ -64,6 +64,51 @@ function issueBody() {
   return ['## Required Checks', '- [RC-1] `npm test`', '', '## Acceptance Criteria', '- done'].join('\n');
 }
 
+function verificationAttempt() {
+  return [
+    '#### Attempt 1',
+    '',
+    '- Artifact: commit:abc123',
+    '- Command: `npm test`',
+    '- Strategy: foreground',
+    '- Timeout ms: 180000',
+    '- Outcome: timed_out',
+    '- Duration ms: 180000',
+    '- Required: true',
+    '- Partial evidence: test process exceeded the foreground host ceiling',
+    '- Proposed next strategy: background',
+    '- Candidate classification: one_off',
+    '- Recorded by: engineer',
+    '- Recorded at: 2026-07-17T12:00:00Z',
+  ].join('\n');
+}
+
+function verificationTriage({ classification = 'pending', reference = 'none', reason = '' } = {}) {
+  return [
+    '#### Triage for attempt 1',
+    '',
+    `- Classification: ${classification}`,
+    `- Reference: ${reference}`,
+    ...(reason ? [`- Reason: ${reason}`] : []),
+    '- Triaged by: maintainer',
+    '- Triaged at: 2026-07-17T12:30:00Z',
+  ].join('\n');
+}
+
+function verificationComment(entries) {
+  return [
+    '<!-- AGENTIC_LOOP_VERIFICATION_ATTEMPTS:RC-1 -->',
+    '',
+    '## Verification Attempts',
+    '',
+    '### RC-1',
+    '',
+    entries.join('\n\n'),
+    '',
+    '[[agent: maintainer]]',
+  ].join('\n');
+}
+
 function makePr(overrides = {}) {
   return {
     number: 42,
@@ -79,7 +124,9 @@ function makePr(overrides = {}) {
 }
 
 function makeIssue(overrides = {}) {
-  return { number: 7, body: issueBody(), title: 'T-001', ...overrides };
+  const issue = { number: 7, body: issueBody(), title: 'T-001', ...overrides };
+  issue.comments = (issue.comments ?? []).map(comment => ({ author: LOOP_ACCOUNT, ...comment }));
+  return issue;
 }
 
 /**
@@ -93,6 +140,9 @@ function makeRunner({ prData, issueData, prFor, record } = {}) {
     if (record) record.push(args);
     if (args[0] === 'api' && args[1] === 'user') {
       return { status: 0, stdout: JSON.stringify(LOOP_ACCOUNT), stderr: '' };
+    }
+    if (args[0] === 'api' && args.includes('--paginate')) {
+      return { status: 0, stdout: JSON.stringify([issueData?.comments ?? []]), stderr: '' };
     }
     if (args[0] === 'pr' && args[1] === 'view') {
       const fields = args[args.indexOf('--json') + 1] ?? '';
@@ -168,6 +218,81 @@ describe('github-ready composite gate', () => {
     assert.match(result.reviewAudit.errors.join('\n'), /stale/);
   });
 
+  it('rejects a timed-out attempt whose final maintainer triage is pending or missing', () => {
+    const issue = makeIssue({
+      comments: [{ body: verificationComment([verificationAttempt(), verificationTriage()]) }],
+    });
+    const result = runGitHubReady({ pr: 42, commandRunner: makeRunner({ prData: makePr(), issueData: issue }) });
+
+    assert.equal(result.ok, false);
+    assert.match(result.preflight.errors.join('\n'), /pending maintainer triage/);
+
+    const missing = makeIssue({
+      comments: [{ body: verificationComment([verificationAttempt()]) }],
+    });
+    const missingResult = runGitHubReady({ pr: 42, commandRunner: makeRunner({ prData: makePr(), issueData: missing }) });
+    assert.equal(missingResult.ok, false);
+    assert.match(missingResult.preflight.errors.join('\n'), /lacks final maintainer triage/);
+  });
+
+  it('accepts valid final maintainer triage for a timed-out attempt', () => {
+    const issue = makeIssue({
+      comments: [{
+        body: verificationComment([
+          verificationAttempt(),
+          verificationTriage({ classification: 'one_off', reason: 'The timeout was isolated to the shared CI host.' }),
+        ]),
+      }],
+    });
+    const result = runGitHubReady({ pr: 42, commandRunner: makeRunner({ prData: makePr(), issueData: issue }) });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+  });
+
+  it('accepts project-fact triage only when the local project fact exists', () => {
+    const issueData = makeIssue({
+      comments: [{
+        body: verificationComment([
+          verificationAttempt(),
+          verificationTriage({ classification: 'project_fact', reference: 'VF-full-suite' }),
+        ]),
+      }],
+    });
+    const valid = runGitHubReady({
+      pr: 42,
+      commandRunner: makeRunner({ prData: makePr(), issueData }),
+      verificationContext: {
+        projectFacts: [{ id: 'VF-full-suite' }],
+        decisionExists: () => false,
+        taskExists: () => false,
+      },
+    });
+    assert.equal(valid.ok, true, JSON.stringify(valid));
+
+    const missing = runGitHubReady({
+      pr: 42,
+      commandRunner: makeRunner({ prData: makePr(), issueData }),
+      verificationContext: { projectFacts: [], decisionExists: () => false, taskExists: () => false },
+    });
+    assert.equal(missing.ok, false);
+    assert.match(missing.preflight.errors.join('\n'), /missing project verification fact 'VF-full-suite'/);
+  });
+
+  it('rejects final maintainer triage with an invalid reference', () => {
+    const issue = makeIssue({
+      comments: [{
+        body: verificationComment([
+          verificationAttempt(),
+          verificationTriage({ classification: 'follow_up', reference: 'later' }),
+        ]),
+      }],
+    });
+    const result = runGitHubReady({ pr: 42, commandRunner: makeRunner({ prData: makePr(), issueData: issue }) });
+
+    assert.equal(result.ok, false);
+    assert.match(result.preflight.errors.join('\n'), /requires a task or issue Reference/);
+  });
+
   it('combines errors when both checks fail', () => {
     const prData = makePr({
       body: '## Scope Completed\nNo evidence section here.\n\nCloses #7',
@@ -238,6 +363,10 @@ describe('github-ready composite gate', () => {
     // The issue view must satisfy whichever number is asked for; return by title.
     const runner = (_command, args) => {
       if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify(LOOP_ACCOUNT), stderr: '' };
+      if (args[0] === 'api' && args.includes('--paginate')) {
+        const number = Number(args.find(arg => /\/issues\/\d+\/comments/.test(arg))?.match(/\/issues\/(\d+)\/comments/)?.[1] ?? 0);
+        return { status: 0, stdout: JSON.stringify([[...(makeIssue({ number }).comments ?? [])]]), stderr: '' };
+      }
       if (args[0] === 'pr' && args[1] === 'view') {
         const fields = args[args.indexOf('--json') + 1] ?? '';
         return { status: 0, stdout: JSON.stringify(prFor(fields)), stderr: '' };
@@ -245,6 +374,9 @@ describe('github-ready composite gate', () => {
       if (args[0] === 'issue' && args[1] === 'view') {
         const number = Number(args[2]);
         return { status: 0, stdout: JSON.stringify(makeIssue({ number })), stderr: '' };
+      }
+      if (args[0] === 'repo' && args[1] === 'view') {
+        return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'o/r' }), stderr: '' };
       }
       return { status: 1, stderr: `unexpected gh call: ${args.join(' ')}` };
     };

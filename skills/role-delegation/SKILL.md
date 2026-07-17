@@ -53,6 +53,8 @@ Apply this skill when the orchestrator:
 | Validate host/lane capability, record concurrency plan, and delegate lanes | orchestrator |
 | Implement scoped work | engineer |
 | Revise after review feedback | engineer |
+| Record a timed-out check attempt and return its observation | engineer |
+| Final-triage a timeout and update the current verification-fact profile | maintainer |
 | Apply one bounded Maintainer Review Fixup during an active eligible review | maintainer |
 | Review implementation artifacts | maintainer |
 | Accept or request revision | maintainer |
@@ -206,7 +208,7 @@ Operating facts:   <required for host_subagent and explicit_agent_invocation onl
   Event logging:       <disabled | resolved command | unavailable with reason>
   Payload mechanism:   <doc pointer (e.g. `agenticloop/backends/github.md` Command Safety) | none>
   Adapter constraints: <host constraints | none>
-  Verification decisions: accepted <links>; proposed <links>; or none
+  Verification observations: <relevant VF ids and task-attempt refs; accepted/proposed decision links if any; or none> (facts only; no strategy approval)
 Scope:             <what the role should do>
 Out of scope:      <what the role must not do>
 Expected output:   <what the role should produce>
@@ -260,10 +262,11 @@ that bound, or a material scope change, returns `needs_context` (or `blocked`).
 
 If an Operating fact is wrong, record the gap in the task record, review, or status return and continue from the canonical document. Do not silently re-probe the same fact in a loop.
 
-In Operating facts, list only relevant verification decisions or `none`.
-Distinguish `accepted` (binding) from `proposed` (hint, not binding unless
-accepted). If stale, record the gap; do not re-probe. Surface new `proposed`
-records to maintainer.
+In Operating facts, list only relevant verification observations: current
+`VF-...` ids, task-attempt references, and linked decision references, or
+`none`. Distinguish accepted decisions (binding) from proposed decisions
+(non-binding), but never present an observation as strategy approval. If stale,
+record the gap; do not re-probe. Surface any promotion candidate to maintainer.
 
 Long-running or parallel work requires a lease. Without host cancellation, use a
 return-after-N-observable-steps checkpoint. Return status when the lease expires,

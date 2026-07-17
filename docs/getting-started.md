@@ -242,6 +242,16 @@ are optional frontmatter notes for the bounded backend-evidence review.
 model's active context window is known and task sizing should use that value
 instead of the generic examples in Agentic Loop.
 
+### Verification operating facts
+
+The project-map body also holds `## Verification Operating Facts`: maintainer-
+owned, current cross-task facts such as a known host timeout for `npm test` and
+the reversible strategy to use instead. They are not routine test history or
+decision records. Per-task runs belong in `## Verification Attempts` in the
+task record; a timed-out foreground run must be recorded before a retry or
+handoff. See `agenticloop/skills/verification-evidence/SKILL.md` for the
+canonical entry and one bounded-escalation rule.
+
 To confirm defaults manually, update the setup fields in the same file. Example:
 
 ```yaml

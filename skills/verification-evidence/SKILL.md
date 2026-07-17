@@ -1,10 +1,10 @@
 ---
 name: verification-evidence
-description: Use before claiming any work state -- done, fixed, passing, green, complete, mergeable -- in an implementation or revision summary, review comment, audit, or closeout, and when reading someone else's claim. Defines the identify-run-read-verify gate, the evidence each claim requires, and the baseline/lane-final/integrated/post-merge verification topology with evidence-identity and reuse rules.
+description: Use before claiming any work state -- done, fixed, passing, green, complete, mergeable -- and whenever a required or cited check times out, is unexpectedly expensive, or needs a retry. Defines the identify-run-read-verify gate, timeout evidence and retry records, and the baseline/lane-final/integrated/post-merge verification topology with evidence-identity and reuse rules.
 metadata:
   area: engineering-discipline
-  side_effects: writes-tmp
-  credentials: none
+  side_effects: writes-backend
+  credentials: backend-dependent
   runs_scripts: optional
 ---
 
@@ -45,35 +45,131 @@ do not create or rely on them now.
 | Bug fixed | Original symptom re-run and now passing | "changed relevant code" |
 | Test guards behavior | Failing RED run from [[tdd-implementation]] | green-only run |
 
-## Long-running or timed-out checks
+## Timeout, retry, and learning procedure
 
-Before running a required or cited check, inspect the task record and any
-delegation Operating facts for linked verification decisions. If a linked
-verification decision applies, follow its execution strategy unless it is stale
-or contradicted by current evidence.
+This skill owns this procedure.
 
-If a check times out or is unexpectedly expensive:
+### Before a run
 
-- record the exact command,
-- the timeout used,
-- the observed duration if known,
-- the host timeout ceiling if known,
-- any partial relevant output,
-- whether the check was required,
-- and whether the next strategy should be background, focused, split, or CI.
+1. Identify its `[RC-N]` id, exact command, required status, and artifact/tree.
+2. Read relevant current `VF-...` facts and linked accepted decisions. Facts and
+   delegation observations are references, not strategy approval.
+3. Use concrete evidence for `foreground`, `background`, `focused`, `split`, or
+   `ci` and a bounded timeout. With no fact, run the ordinary proving check once.
+4. Read full output and record the result before claiming or retrying.
 
-Do not rerun the same foreground command just to rediscover a known timeout. If
-the required check cannot be completed under the host limits, report the gap
-honestly under `## Known Gaps`, `## Process Observations`, `blocked`, or
-`needs_context` as appropriate. Treat a materially worse duration than a prior
-decision as a possible regression signal, not just a reason to raise the timeout.
-If the behavior constrains future tasks, the engineer may create a `proposed`
-verification decision directly when the evidence is current and
-decision-worthy. The proposed decision must cite the exact command,
-timeout/duration facts, host limit when known, selected execution strategy, and
-revisit trigger. If write ownership is unsafe (for example in an unclear
-parallel lane), record the candidate in Process Observations or status return
-for maintainer capture.
+### Project verification profile
+
+The maintainer owns the one mutable profile in `.agenticloop/project.md`. New
+projects use this exact empty state:
+
+```text
+## Verification Operating Facts
+
+No project-wide verification operating facts are currently recorded.
+```
+
+Use one active fact per exact command:
+
+```text
+## Verification Operating Facts
+
+### VF-full-suite
+
+- Command: `npm test`
+- Last outcome: timed_out
+- Observed duration ms: 180000 | unknown | none
+- Timeout ms: 180000 | unknown | none
+- Host timeout ceiling ms: 180000 | unknown | none
+- Strategy: foreground | background | focused | split | ci
+- Updated: YYYY-MM-DD
+- Source: <task evidence, event, issue/PR, commit, or durable Markdown reference>
+- Revisit when: <concrete trigger>
+- Decision: none | <D-id or .agenticloop/decisions/<id>.md>
+```
+
+Allowed `Last outcome` values are `passed`, `failed`, `timed_out`, and
+`blocked`. Do not add routine successful check results to this profile.
+
+Facts are current state; task attempts remain evidence. Only policy-level
+conclusions use [[decision-capture]].
+
+### Append-only task attempt history
+
+New task records use this exact empty state:
+
+```text
+## Verification Attempts
+
+No verification attempts are currently recorded.
+```
+
+Replace it with one `### RC-N` subsection per check and append only. Never
+rewrite, reorder, or delete earlier entries. Timestamps are ISO-8601 UTC.
+
+```text
+## Verification Attempts
+
+### RC-1
+
+#### Attempt 1
+
+- Artifact: <exact tree, commit, PR head, range, or patch reference>
+- Command: <exact command>
+- Strategy: foreground | background | focused | split | ci
+- Timeout ms: <positive integer | unknown | none>
+- Outcome: passed | failed | timed_out | blocked
+- Duration ms: <positive integer | unknown | none>
+- Required: true | false
+- Partial evidence: <concise observed output or state>
+- Proposed next strategy: none | foreground | background | focused | split | ci
+- Candidate classification: one_off | project_fact | decision | follow_up | blocker
+- Recorded by: engineer
+- Recorded at: YYYY-MM-DDTHH:MM:SSZ
+```
+
+For a timeout, `Candidate classification` is required but is not final triage or
+approval. It may be omitted otherwise. Use a new number for every new run.
+
+Only one foreground escalation is allowed for the same command and artifact.
+Append this prediction after the timeout and before the retry; its timeout must
+cover the bounded window and match the retry.
+
+```text
+#### Foreground escalation prediction for attempt 2
+
+- Based on attempt: 1
+- Evidence: <concrete comparable timing or progress evidence>
+- Predicted completion window ms: <positive-min>-<positive-max>
+- Chosen timeout ms: <positive integer at least the upper bound>
+- Recorded by: engineer
+- Recorded at: YYYY-MM-DDTHH:MM:SSZ
+```
+
+The maintainer appends triage. `pending` is allowed only while active; accepted
+or closed work cannot retain missing or pending timeout triage.
+
+```text
+#### Triage for attempt 1
+
+- Classification: pending | one_off | project_fact | decision | follow_up | blocker
+- Reference: none | <VF-id | decision path/id | task/issue | blocker reference>
+- Reason: <required for one_off; concise rationale when useful>
+- Triaged by: maintainer
+- Triaged at: YYYY-MM-DDTHH:MM:SSZ
+```
+
+`project_fact` references a `VF-...` fact, `decision` a decision, `follow_up` a
+task or issue, and `blocker` a durable blocker. `one_off` needs a concrete
+reason. The maintainer finalizes classification and updates the profile; only a
+policy-level fact uses [[decision-capture]].
+
+### Retry rule
+
+Append and emit the real timeout before retrying. Do not rerun unchanged. Change
+strategy on evidence, make the one bounded escalation above, or return
+`blocked`/`needs_context`. If it times out, no further foreground escalation is
+allowed. A worse duration is a regression signal, not automatic timeout growth.
 
 ## Event Logging
 
@@ -81,9 +177,9 @@ Event logging is optional and off by default. When `event_logging: enabled`,
 resolve the command and honor the disabled/non-blocking rules in
 [[event-logging]] before writing events.
 
-When a required or cited verification command completes, emit `check.run` with the task id, role,
-short summary, outcome, a `command:<...>` reference, and small structured `--data-json` when the
-fields are known.
+After each required or cited command, append its attempt, then emit `check.run`
+with task, role, real outcome, `command:<...>`, and known small data. The event
+is an audit copy, never the attempt history.
 
 Recommended `check.run` data fields:
 
@@ -105,11 +201,11 @@ Recommended `check.run` data fields:
   accepted as such.
 - `accepted_known_failure`: true when the failure is a pre-existing known
   failure and accepted for this task.
+- `candidate_classification`: timeout candidate, when recorded.
 
-Log unrelated or known failures as `failure` or `blocked` with the matching
-triage flag set to `true`; do not hide them as clean `success`. A triaged
-check is still an imperfect check and must be reported separately from clean
-passes.
+Log unrelated or known failures as `failure` or `blocked`, never clean
+`success`. For a timeout retain actual limit, strategy, duration, known host
+ceiling, and attempt number; a planned retry is not a pass.
 
 Example success event:
 

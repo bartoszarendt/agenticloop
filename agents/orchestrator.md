@@ -76,9 +76,10 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   checkpoint cadence, stop condition, and no-progress budget.
 - When event logging is enabled, emit `role.invoked` when delegating to a role or beginning a single-agent fallback role assumption.
 - Surface proposed decision records created by delegated roles to the
-  maintainer for resolution. When delegating, include relevant proposed and
-  accepted verification decisions in Operating facts if they are linked from
-  the task record or directly relevant. Do not accept or reject decisions.
+  maintainer for resolution. When delegating, carry relevant verification
+  observations and linked decision references in Operating facts. They report
+  facts only: do not approve, select, or imply approval of an execution strategy,
+  and do not accept or reject decisions.
 - Keep the human informed about current state, blockers, and next decisions.
 - Follow the Authorized Work Units boundary in `agenticloop/AGENTIC_LOOP.md`: an authorized work unit runs its routine lifecycle to acceptance without per-transition approval prompts. Pause for human approval only at the hard checkpoints defined there (leaving the unit, merge/release/destructive cleanup, locked-decision or backend changes), and stop via blocked-state when blocked.
 - Use task IDs from source plans only when the source plan is already decomposed into task-sized records. When a plan item is a phase, group, milestone, epic, or broad work item, preserve the source label in `Source Reference` and have the maintainer derive implementation task IDs from `.agenticloop/project.md`.

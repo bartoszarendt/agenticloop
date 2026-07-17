@@ -37,7 +37,7 @@
         "Record the durable project decision in .agenticloop/decisions/ because it constrains future work.",
         "Accept and supersede the old decision record after the new project convention is approved.",
         "Capture the accepted backend convention in a tracked Markdown decision record and link it from the nearest durable source.",
-        "Engineer hits npm test timeout and should create a proposed scope: verification decision from the check evidence.",
+        "Maintainer: promote the already recorded VF-full-suite verification fact into a policy-level decision because future tasks must use CI.",
         "A role discovers a durable project convention and creates a proposed decision record with provenance.",
         "A proposed decision needs maintainer acceptance before becoming binding."
       ],
@@ -45,7 +45,8 @@
         "Append ordinary task notes to the implementation record.",
         "Write the implementation summary for the completed task.",
         "Store the raw meeting notes in the repository.",
-        "Keep this temporary debugging observation for later."
+        "Keep this temporary debugging observation for later.",
+        "npm test timed out; record the attempt, choose a safe retry, and collect timeout evidence."
       ],
       "nearMiss": [
         "Create a tracked decision record under .agenticloop/decisions/ for the durable project convention instead of opening an ordinary implementation task record."
@@ -234,6 +235,8 @@
         "Before claiming the task is done, attach fresh command output from the final state.",
         "Verify the bug is fixed by re-running the original reproduction and reading the output.",
         "Do not accept a passing claim without fresh evidence from the required checks.",
+        "npm test timed out at the foreground host limit; record the exact attempt, emit the real check event, and decide whether a bounded retry is justified.",
+        "Before retrying this expensive required check, inspect the current verification facts and append the timeout observation rather than rerunning unchanged.",
         "The same command on different branch heads is different evidence; a lane-final green run on one head cannot prove the claim for another head.",
         "Baseline evidence may establish starting state for every lane but can never prove a lane-final, integrated, or post-merge claim."
       ],

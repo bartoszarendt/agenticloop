@@ -32,7 +32,10 @@ a concise gate fact; never copy the task body or chat into the log.
 Use `agenticloop/memory/task-record.md` as the canonical task-record shape.
 It defines the ordered required sections and the optional `Proof Pressure`,
 `Concurrency Plan`, `Parallel Safety`, `Grouping`, `Source Reference`,
-`Applicable Project Skills`, and `Outcome` sections.
+`Applicable Project Skills`, and `Outcome` sections. New records also include
+the `## Verification Attempts` section with the canonical empty state from
+[[verification-evidence]]. Historical records without that optional learning
+section remain readable.
 
 The `## Outcome` section is optional for routine clean tasks, maintainer-filled
 at closeout. It becomes conditionally required when any of these happened:
@@ -126,6 +129,8 @@ The maintainer writes checklist items specific to this task. Minimum required it
 - [ ] Task scope verified against source documents listed in "Source Documents Reviewed".
 - [ ] Out-of-scope files: any files touched outside "Expected Files or Areas" are justified.
 - [ ] Required checks run on the final state with concise verdict lines or relevant excerpts.
+- [ ] Every timed-out verification attempt has final maintainer triage; no timed-out
+  attempt remains missing triage or `pending` at acceptance.
 - [ ] If `## Proof Pressure` is present, completion oracle, final proof, and likely misfire were checked.
 - [ ] Backend canonical current-summary location updated with implementation summary: task file for files-backed work; PR body for normal GitHub-backed work; documented exception location for approved no-PR/no-edit cases.
 - [ ] Implementation artifact linked to the task record.
@@ -164,6 +169,21 @@ be referenced as current evidence-backed guidance when no accepted decision
 exists, but the task record should state that the linked decision is
 `proposed`. A decision link explains how to run it safely; it does not remove
 the requirement unless the task explicitly changes the check.
+
+## Verification attempts
+
+For a new task record, place `## Verification Attempts` immediately after
+`## Required Checks` with the exact empty state defined by
+[[verification-evidence]]. When a required or cited check is run, replace that
+empty state with its per-`RC-N` append-only history. The engineer appends
+attempts and any bounded foreground prediction; the maintainer appends final
+triage. Do not use `## Process Observations`, a decision record, or the current
+project profile as a substitute for the task's attempt history.
+
+Relevant `VF-...` facts in `.agenticloop/project.md` may be linked from a
+required check as current operating context. The maintainer owns fact updates;
+a fact or delegation observation does not approve a strategy. The exact shapes,
+retry rule, and triage classifications are owned by [[verification-evidence]].
 
 ## Expected files or areas
 

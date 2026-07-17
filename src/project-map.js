@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { parseFrontmatter } from './frontmatter.js';
 import { getDefaultDocumentSelections, getDocumentRoleNames } from './document-roles.js';
 import { PROJECT_MAP_RELATIVE_PATH } from './layout.js';
+import { parseVerificationOperatingFacts } from './verification-learning.js';
 
 export const PROJECT_MAP_PATH = PROJECT_MAP_RELATIVE_PATH;
 
@@ -124,6 +125,7 @@ export function loadProjectMap(repoRoot) {
   const [fm] = parseFrontmatter(content);
 
   const raw = normalizeRawFrontmatter(fm ?? {});
+  const verificationFacts = parseVerificationOperatingFacts(content).facts;
   const groupingProfile = raw.grouping_profile ?? PROJECT_MAP_DEFAULTS.grouping_profile;
   const groupingDefaults = GROUPING_PROFILE_DEFAULTS[groupingProfile] ?? {};
   const config = {
@@ -133,7 +135,11 @@ export function loadProjectMap(repoRoot) {
     documents: mergeDocuments(raw.documents),
   };
 
-  return { config, raw };
+  return { config, raw, content, verificationFacts };
+}
+
+function localDecisionExists(repoRoot, decisionId) {
+  return existsSync(join(repoRoot, '.agenticloop', 'decisions', `${decisionId}.md`));
 }
 
 /**
@@ -149,6 +155,13 @@ export function validateProjectMap(config, raw, repoRoot) {
   const warnings = [];
   const validDocumentRoles = new Set(getDocumentRoleNames());
   const validGroupingProfiles = new Set(Object.keys(GROUPING_PROFILE_DEFAULTS));
+  const projectMapPath = join(repoRoot, PROJECT_MAP_PATH);
+  if (existsSync(projectMapPath)) {
+    const verificationFacts = parseVerificationOperatingFacts(readFileSync(projectMapPath, 'utf-8'), {
+      decisionExists: decisionId => localDecisionExists(repoRoot, decisionId),
+    });
+    errors.push(...verificationFacts.errors);
+  }
 
   for (const legacyKey of LEGACY_FRONTMATTER_KEYS) {
     if (raw[legacyKey] !== undefined) {
