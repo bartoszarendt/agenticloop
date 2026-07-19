@@ -1,10 +1,10 @@
 # Agentic Loop
 
-> A Markdown-first workflow toolkit that gives AI coding agents a repeatable engineering loop instead of a loose chat session.
+> Practical loop engineering for AI coding agents -- a Markdown-first overlay that gives your agent a task contract, role boundaries, verification rules, and durable memory: the process a good engineering team already has.
 
 AI coding agents are useful, but they are unreliable at sustained software work. They drift scope, skip verification, repeat failing approaches, and lose context between sessions. The problem is not that the models are not smart enough. The problem is that they lack process: a clear task contract, role boundaries, verification rules, and durable project memory.
 
-Agentic Loop adds that layer. It installs as a lightweight overlay in an existing project. It never replaces your target-owned repository contract documents: your `README.md`, implementation plan, and architecture docs stay untouched. The one exception is a single clearly marked, manifest-owned, removable activation-guidance block it may create or maintain inside your selected repository-rules document (`AGENTS.md`, `CLAUDE.md`, or `GEMINI.md`) -- everything outside that block stays target-owned, existing installations are never silently enrolled, and you can opt out (`--no-agents-guidance`) or remove it (`agenticloop guidance remove`). It gives agents the scaffolding they need to stay in scope, produce evidence, and respect review gates.
+Agentic Loop adds that layer. It installs as a lightweight, removable overlay in an existing project and never rewrites your target-owned documents: your `README.md`, implementation plan, and architecture docs stay untouched. (The one clearly marked, removable exception is described in [Repository-rules activation guidance](#repository-rules-activation-guidance).) It gives agents the scaffolding they need to stay in scope, produce evidence, and respect review gates.
 
 ![Version: 0.1.0](https://img.shields.io/badge/version-0.1.0-blue)
 ![Node.js >=20](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
@@ -14,9 +14,15 @@ Agentic Loop adds that layer. It installs as a lightweight overlay in an existin
 [![npm version](https://img.shields.io/npm/v/agenticloop.svg)](https://www.npmjs.com/package/agenticloop)
 -->
 
+## Loop engineering
+
+Prompt engineering shapes a single response. Context engineering shapes what the model sees. **Loop engineering** shapes the whole run: which states the agent moves through, what durable artifact each state must produce, when verification happens, when to stop and escalate, and who reviews work before it counts as done.
+
+Most agent failures -- scope drift, evidence-free "done", unbounded retries, reviewing your own work -- are loop failures, not model failures. Agentic Loop is loop engineering made practical: an installable Markdown overlay that defines the states, gates, and artifacts so the loop holds for hours of complex work instead of unraveling after a few exchanges. Under the hood this is prompt chaining hardened for software delivery: each step hands off a durable, reviewable artifact -- a task record, verification evidence, a review result -- instead of loose chat text.
+
 ## Why this exists
 
-After watching AI coding agents work on real projects, a few failure patterns keep showing up:
+After watching AI coding agents work on real projects, the same loop failures keep showing up:
 
 - **Scope drift**: the agent expands the task or bundles unrelated changes because nothing tells it where the boundary is.
 - **Evidence-free completion**: the agent claims work is done without running fresh checks against the final state.
@@ -25,7 +31,7 @@ After watching AI coding agents work on real projects, a few failure patterns ke
 - **Lost context**: useful decisions disappear when the chat session ends because nothing durable was written down.
 - **Host lock-in**: workflow instructions get written in one agent host's format and are useless in another.
 
-These are process failures. The models are capable enough. What is missing is a portable engineering loop that gives agents clear task records, role boundaries, verification rules, and durable project memory -- and that works across hosts without duplicating everything.
+These are process failures, not model failures -- and they are exactly what the loop is engineered to prevent, in a form portable across hosts without duplicating everything.
 
 ## Who this is for
 
@@ -38,20 +44,32 @@ This toolkit makes sense if you already use AI coding agents for real software w
 
 It probably does not make sense if you only use agents for one-shot questions or throwaway scripts, if you want a fully autonomous pipeline with no human in the loop, or if you are looking for a hosted SaaS platform rather than project-local tooling.
 
+## The team
+
+Agentic Loop organizes agent work the way a small, disciplined engineering team does. Three roles, three boundaries:
+
+| Role | What it does | What it never does |
+|---|---|---|
+| **Orchestrator** | Plans routing, delegates work, coordinates serial and parallel lanes, tracks progress. | Edit implementation files, act as final reviewer, or accept tasks. |
+| **Engineer** | Implements the smallest useful slice, test-first when applicable, and publishes fresh verification evidence. | Expand scope or accept its own work. |
+| **Maintainer** | Creates and right-sizes task records, reviews in two passes (task compliance, then quality), accepts or requests revisions, owns decisions and closeout. | Accept work without fresh final-state evidence. |
+
+No role grades its own exam. When ready tasks are independent, the orchestrator can run up to three engineer lanes in parallel by default, each in its own guarded repo-internal `git worktree`, with cross-lane findings routed between lanes at checkpoints. In practice it feels like having a well-organized development team at your fingertips: a coordinator, parallel implementers, and a demanding reviewer -- each with its own model budget (see [Cost-quality routing by role](#cost-quality-routing-by-role)).
+
 ## What it gives your agent
 
 | Capability | What it does |
 |---|---|
 | **Task records** | Define scope, out-of-scope boundaries, acceptance criteria, required checks, expected files, implementation notes, and review state. |
-| **Role boundaries** | Split work across orchestrator, maintainer, and engineer roles so the same agent does not silently plan, implement, and accept its own work. |
-| **Cost-quality routing** | Configure different model and reasoning settings per role, so cheap coordinator work does not consume the same model budget as high-judgment review. |
+| **Role boundaries** | Split work across orchestrator, maintainer, and engineer roles with explicit edit and acceptance boundaries per role. |
+| **Parallel worktree lanes** | Run independent engineer lanes concurrently in guarded repo-internal `git worktree`s, with guard checks, lane-state preservation, and safe bulk cleanup after acceptance. |
 | **Canonical skills** | Provide focused procedures for task creation, TDD, debugging, verification evidence, review, blocked states, decision capture, attribution, and closeout. |
+| **Decision records** | Preserve durable project decisions under `.agenticloop/decisions/` so future agent sessions do not rediscover or contradict them. |
 | **Files-first backend** | Store task records as local Markdown files under `.agenticloop/tasks/` by default. No GitHub setup required. |
 | **GitHub backend** | Optionally project task records to GitHub issues and implementation artifacts to pull requests. |
-| **Decision records** | Preserve durable project decisions under `.agenticloop/decisions/` so future agent sessions do not rediscover or contradict them. |
-| **Optional event logs** | Record compact JSONL workflow-gate events for local audit and summary generation without storing raw transcripts. |
-| **Worktree lifecycle** | Create guarded repo-internal `git worktree` lanes, inspect guard state, list/remove/prune worktrees, and run safe bulk cleanup after acceptance. |
+| **Cost-quality routing** | Configure different model and reasoning settings per role, so cheap coordinator work does not consume the same model budget as high-judgment review. |
 | **Host adapters** | Generate host-native shims for OpenCode, Claude Code, Codex, GitHub Copilot, and Cursor from one canonical Markdown source. |
+| **Optional event logs** | Record compact JSONL workflow-gate events for local audit and summary generation without storing raw transcripts. |
 
 ## The core loop
 
@@ -65,29 +83,56 @@ Task record
   - required checks
   - expected files or areas
   ↓
-Implementation
-  - smallest useful slice
-  - TDD when applicable
+Implementation  ◄─────────────┐
+  - smallest useful slice     │
+  - TDD when applicable       │
+  ↓                           │
+Verification                  │
+  - required checks           │
+  - fresh evidence from       │
+    the final state           │
+  ↓                           │
+Review                        │
+  - pass 1: task compliance   │
+  - pass 2: code and          │
+    documentation quality     │
+  ↓                           │
+  needs revision ─────────────┘
+  ↓ accepted
+Closeout
+  - confirm the task record's inline
+    completion summary, mark done
   ↓
-Verification
-  - required checks
-  - fresh evidence from final state
-  ↓
-Review
-  - pass 1: task compliance
-  - pass 2: code and documentation quality
-  ↓
-Revision or acceptance
-  ↓
-Closeout (verify-and-mark gate)
-  - per-task completion summary always required, inline in the task record
-  - closeout confirms the inline summaries are complete and posts a status
-    marker; it does not write a separate summary file
+Next task → new task record, top of the loop
 ```
 
 Every meaningful state change should produce a durable artifact. Nothing important should live only in chat.
 
-Agentic Loop builds on **prompt chaining** -- splitting a task into a sequence of prompts where one step's output feeds the next -- and hardens it for software delivery. Each step hands off a durable, reviewable artifact (a task record, verification evidence, a review result) instead of loose chat text, and the work moves through role boundaries and stop conditions rather than a straight line.
+## Why long runs don't fall apart
+
+A loose chat session degrades as it grows: context evaporates, failed attempts repeat, and "done" gets cheaper the longer the session runs. The loop is engineered so that multi-hour runs on complex tasks stay stable:
+
+- **Attempt budgets.** Repeating an equivalent action that produces no new evidence hits a hard budget (default 3). When it is exhausted, the agent stops repeating and records a blocked or needs-context state instead of thrashing.
+- **Review round checkpoints.** A task that keeps failing review is bounded separately: after three `needs_revision` rounds the orchestrator must classify the cause and route one targeted revision. A fourth undirected "try again" is not allowed.
+- **Blocked states, not guesses.** When progress requires a human decision or missing context, the agent records a durable blocked state naming what it needs. The loop resumes when the blocker is cleared.
+- **Verification learning.** Observed check behavior -- slow suites, flaky commands, timeouts -- is recorded as durable operating facts, so later tasks and sessions do not rediscover it.
+- **Everything durable.** Task records, evidence, review outcomes, and decisions live in files, not chat. A run survives session death: a fresh session reads the task record and continues where the last one stopped.
+
+The result in practice: inside an authorized work unit, the agent works autonomously for hours on a complex task -- and when it finally needs you, it is because it hit a boundary that is genuinely yours to decide.
+
+## What a run looks like
+
+A typical files-backed run, condensed:
+
+1. You activate with a bare `/agenticloop`. The agent orients itself: it reads the project map and configured docs, reports what the project is and where it currently stands, and proposes the next task -- from open task records, or straight from your implementation plan.
+2. You approve. The maintainer creates `.agenticloop/tasks/T-014.md` with scope, out of scope, acceptance criteria, and required checks.
+3. The engineer implements the smallest useful slice test-first, runs the required checks fresh, and publishes the implementation summary with evidence into the task record.
+4. The maintainer reviews in two passes -- task compliance, then quality -- and accepts or requests revisions with concrete findings.
+5. Closeout confirms the inline completion summary and marks the task done. You review a durable record, not a chat scroll.
+
+An implementation plan in the repository is all it needs: bare activation finds the plan, proposes the next task from it, and the loop handles it once you approve. To route directly to a known work unit instead, pass it: `/agenticloop T-014` or a one-line task description.
+
+[docs/workflow-examples.md](docs/workflow-examples.md) walks through the full loop, including the GitHub-backed variant and review markers.
 
 ## Quick start
 
@@ -213,7 +258,7 @@ See [docs/host-adapters.md](docs/host-adapters.md) for the full adapter matrix a
 
 ## Cost-quality routing by role
 
-Different roles need different intelligence. Cheap, fast orchestration is appropriate only for serial single-task coordination with clear scope; parallel scans, lease design, backend selection, and authorization-boundary judgment need strong reasoning. The practical savings usually come from splitting implementation and review: use a capable coding model for engineer work, and reserve the strongest reasoning you can justify for maintainer scope, review, and acceptance decisions.
+This is [the team](#the-team) with a budget attached: a cheap coordinator, a capable implementer, and the strongest reviewer you can justify. Different roles need different intelligence. Cheap, fast orchestration is appropriate only for serial single-task coordination with clear scope; parallel scans, lease design, backend selection, and authorization-boundary judgment need strong reasoning. The practical savings usually come from splitting implementation and review: use a capable coding model for engineer work, and reserve the strongest reasoning you can justify for maintainer scope, review, and acceptance decisions.
 
 Adapter-local role settings live under `adapters.<host>.roleSettings.<role>` in `agenticloop.json`. OpenCode and Codex support role-specific reasoning effort. Claude Code supports role-specific model and permission mode. Copilot and Cursor currently support role-specific model selection.
 
@@ -248,22 +293,7 @@ Use host-specific model identifiers and aliases. In hosts or providers where the
 
 ## What happens with bare activation
 
-Activation syntax is host-specific (`/agenticloop`, `$agenticloop`, or the generated Copilot IDE prompt file — see the table above); the behavior below is the same on every host.
-
-A bare activation is the safest way to start in a new or unfamiliar repository. The agent should not immediately implement work just because it found something interesting.
-
-Expected behavior:
-
-1. Read `.agenticloop/project.md`.
-2. If setup is unconfirmed, route setup confirmation first.
-3. Read configured primary project documents (rules, overview, process) plus any selected task-source docs (plan, spec, design, context).
-4. Inspect the active backend for existing candidate tasks.
-5. Summarize current project and task state.
-6. If exactly one open or ready task exists, propose it as the default candidate.
-7. If no open tasks exist, identify a likely next task from the plan.
-8. Ask the human to select a task or provide a task description.
-
-The agent should not silently start implementation unless the human has clearly authorized that work unit.
+Activation syntax is host-specific (`/agenticloop`, `$agenticloop`, or the generated Copilot IDE prompt file — see the table above); the behavior is the same on every host. A bare activation is the safest way to start in a new or unfamiliar repository: the agent orients itself first. It reads `.agenticloop/project.md` (routing setup confirmation first if setup is unconfirmed), reads the configured project documents, inspects the active backend for candidate tasks, and summarizes the current project and task state. If exactly one open task exists it proposes it as the default candidate; if none exist it identifies a likely next task from the plan. Then it stops and asks you to select a work unit -- it does not silently start implementation unless the human has clearly authorized that work unit. The normative step list lives in [AGENTIC_LOOP.md](AGENTIC_LOOP.md).
 
 ## Task backends
 
@@ -309,9 +339,9 @@ Local Markdown task records are the default. GitHub issues and PRs are an option
 
 A task is not complete because the agent says so. Completion requires fresh verification evidence from the final state -- test output, lint results, build status, changed file lists. The evidence lives in the task record, not in chat.
 
-### Supervised, not autonomous
+### Supervised autonomy
 
-The agent can advance through routine lifecycle steps inside an authorized work unit. It stops for human direction before leaving scope, merging, releasing, publishing, destructive cleanup, or changing locked decisions. The human owns the authorization boundaries.
+Autonomous inside the boundary, supervised at the boundary. The human authorizes work units; inside one, the agent advances through the full lifecycle on its own -- implement, verify, request review, revise, close out. It stops for human direction before leaving scope, merging, releasing, publishing, destructive cleanup, or changing locked decisions. The human owns the authorization boundaries; the loop owns everything between them.
 
 ### Portable across hosts
 
@@ -355,20 +385,9 @@ npx agenticloop remove --yes                         Remove toolkit assets and g
 npx agenticloop remove --yes --include-state         Also remove target-owned `.agenticloop/` state
 ```
 
-Lane-local state that cleanup can preserve is flat only (`logs`, `tasks`,
-`summaries` (legacy; preserved for migration only -- current projects do not
-create a summaries directory), and `decisions` files directly under
-`.agenticloop/<dir>/`). Nested or shared `.agenticloop` files are treated as
-blocking dirty state. For `.jsonl`
-files, preservation is safe when the root file already contains every lane line
-(a root superset). If preservation conflicts with existing root state, use
-`worktree resolve-state` with `--strategy prefer-root` (copy root into lane),
-`--strategy prefer-worktree` (copy lane into root), or `--strategy union-jsonl`
-(root-first max-count multiset union written to both files) before running
-cleanup. `union-jsonl` is the recommended lossless strategy for JSONL log
-conflicts. resolve-state does not remove worktrees or branches.
+Worktree `remove` and `cleanup` preserve task-specific lane-local `.agenticloop` state before removal. See [docs/worktrees.md](docs/worktrees.md) for what counts as lane-local state, when preservation conflicts block cleanup, and the `resolve-state` strategies.
 
-Event logging is **disabled by default**. Enable it in `.agenticloop/project.md` with `event_logging: enabled`. `event_logging_command` can stay blank; agents test `npx agenticloop --help` once when enabled. Writes require `--task` and `--summary`; `validate`/`audit`/`report` inspect existing logs. Per-task completion summaries are always written inline into `.agenticloop/tasks/<TASK-ID>.md` (the `## Scope Completed` section). There is no separate `.agenticloop/summaries/` directory; closeout is a verify-and-mark gate that confirms those inline summaries and posts a status marker.
+Event logging is **disabled by default** and stores only compact workflow-gate summaries, never raw transcripts. Enable it with `event_logging: enabled` in `.agenticloop/project.md`; see [docs/event-logging.md](docs/event-logging.md) for the event commands and audit workflow. Per-task completion summaries are always written inline into the task record's `## Scope Completed` section; there is no separate summaries directory.
 
 Normal downstream use does not require Python, PowerShell, Bash scripts, API keys, or framework setup for the toolkit itself.
 
@@ -449,6 +468,8 @@ updates. Canonical toolkit assets (agents, skills, backends) always live under
 | [docs/host-adapters.md](docs/host-adapters.md) | Adapter support table and generation behavior. |
 | [docs/skill-anatomy.md](docs/skill-anatomy.md) | Skill authoring contract and expectations. |
 | [docs/workflow-examples.md](docs/workflow-examples.md) | Project-agnostic workflow examples. |
+| [docs/worktrees.md](docs/worktrees.md) | Worktree lanes, lane-state preservation, and cleanup. |
+| [docs/event-logging.md](docs/event-logging.md) | Optional workflow-gate event logging. |
 | [docs/registry-horizon.md](docs/registry-horizon.md) | Why registry and marketplace work is deferred. |
 | [docs/opencode-setup.md](docs/opencode-setup.md) | OpenCode setup. |
 | [docs/claude-code-setup.md](docs/claude-code-setup.md) | Claude Code setup. |

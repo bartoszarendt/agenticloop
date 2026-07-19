@@ -1,7 +1,7 @@
 {
   "name": "agenticloop",
   "version": "0.1.0",
-  "description": "Markdown-first workflow toolkit for AI coding agents",
+  "description": "Practical loop engineering for AI coding agents: a Markdown-first workflow overlay with task records, role boundaries, verification evidence, and review gates",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -23,6 +23,7 @@
     "ai",
     "agent",
     "agentic",
+    "loop-engineering",
     "workflow",
     "skills",
     "markdown",
