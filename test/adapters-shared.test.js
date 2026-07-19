@@ -49,7 +49,7 @@ function minimalConfig(overrides = {}) {
 
 describe('collectInstructionPaths', () => {
   // Seed a self-contained installed layout so the test does not depend on the
-  // toolkit's own root docs (IMPLEMENTATION_PLAN.md now lives under .dev/).
+  // toolkit's local-only internal planning docs.
   function seededRoot() {
     const root = mkdtempSync(join(tmpdir(), 'al-shared-test-'));
     seedTargetLayout(REPO_ROOT, root);

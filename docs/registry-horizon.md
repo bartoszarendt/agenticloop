@@ -52,5 +52,4 @@ is out of scope.
 
 ## Links
 
-- [PLAN.md](../.dev/PLAN.md) - phase status and scope.
 - [docs/host-adapters.md](host-adapters.md) - adapter status table.

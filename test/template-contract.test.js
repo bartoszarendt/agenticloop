@@ -439,8 +439,8 @@ describe('phase-s stale-reference check', () => {
   ];
 
   const EXCLUDED_FILES = new Set([
-    // IMPLEMENTATION_PLAN.md lives under .dev/ and .dev is not in ACTIVE_SURFACE_DIRS,
-    // so it does not need to be listed here.
+    // Local-only internal planning docs are outside ACTIVE_SURFACE_DIRS, so
+    // they do not need to be listed here.
     'test/template-contract.test.js',
   ]);
 

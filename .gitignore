@@ -30,9 +30,6 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Internal working docs are local-only, except the plan source-of-truth files
-# that AGENTS.md tracks as canonical (re-included via the negations below).
-.dev/*
-!.dev/PLAN.md
-!.dev/PLAN-PHASE-07.md
+# Internal working docs are local-only and never tracked.
+.dev/
 .mcp.json

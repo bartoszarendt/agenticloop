@@ -29,11 +29,10 @@ Agentic Loop is a reusable, Markdown-first workflow toolkit for downstream repos
 Use these files as the durable repository contract:
 
 1. [README.md](README.md)
-2. [PLAN.md](.dev/PLAN.md)
-3. [AGENTIC_LOOP.md](AGENTIC_LOOP.md)
-4. [agents/](agents/)
-5. [skills/](skills/)
-6. [backends/](backends/)
+2. [AGENTIC_LOOP.md](AGENTIC_LOOP.md)
+3. [agents/](agents/)
+4. [skills/](skills/)
+5. [backends/](backends/)
 
 The `docs/` directory is the user-facing setup and authoring surface. Keep it practical and adoption-oriented.
 Stable Agentic Loop vocabulary belongs in `AGENTIC_LOOP.md`.
