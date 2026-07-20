@@ -102,7 +102,7 @@ export function satisfiesIndependentReview(mode) {
  * Parse an `independent_review_required` frontmatter value.
  * Absent/empty -> null; only `true`/`false` are well-formed.
  *
- * @param {string} raw
+ * @param {string|undefined|null} raw
  * @returns {{ value: boolean | null, malformed: boolean }}
  */
 export function parseIndependentReviewRequired(raw) {

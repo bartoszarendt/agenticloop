@@ -18,6 +18,7 @@ import {
 } from './maintainer-fixup.js';
 
 export class GitHubReviewAuditError extends Error {
+  /** @param {string} message */
   constructor(message) {
     super(message);
     this.name = 'GitHubReviewAuditError';
@@ -190,6 +191,11 @@ function resolveCanonicalTaskId(issueData) {
   return trimmed || null;
 }
 
+/**
+ * @param {string} liveBody
+ * @param {string} name
+ * @returns {string[]}
+ */
 function markerValues(liveBody, name) {
   return [...liveBody.matchAll(new RegExp(`^${name}:[ \\t]*([^\\r\\n]*\\S)[ \\t]*$`, 'gmi'))]
     .map(match => match[1].trim());
@@ -283,6 +289,7 @@ function filterLiveLines(body) {
   return result.join('\n');
 }
 
+/** @param {any} source */
 function extractMarkerAuthor(source) {
   if (!source || typeof source === 'string') return null;
   const login = source?.author?.login ?? source?.user?.login ?? '';
@@ -291,6 +298,10 @@ function extractMarkerAuthor(source) {
   return { login: String(login), type: String(authorType) };
 }
 
+/**
+ * @param {unknown} body
+ * @param {any} [source]
+ */
 export function parseReviewMarker(body, source = {}) {
   const liveBody = filterLiveLines(String(body ?? ''));
   const statuses = markerValues(liveBody, 'AGENT_REVIEW_STATUS');
@@ -316,6 +327,7 @@ export function parseReviewMarker(body, source = {}) {
   return { status, mode, artifact, humanReviewRef: humanRefs[0] ?? '', source, author, errors };
 }
 
+/** @param {any} prData */
 export function collectReviewMarkers(prData) {
   const markerSources = [
     ...(Array.isArray(prData?.comments) ? prData.comments : []),
@@ -324,13 +336,13 @@ export function collectReviewMarkers(prData) {
 
   return markerSources
     .map(source => parseReviewMarker(typeof source === 'string' ? source : source?.body, source))
-    .filter(Boolean);
+    .filter(marker => marker !== null);
 }
 
 /**
  * Normalize a raw GitHub REST review record into the internal review shape.
  *
- * @param {object} review
+ * @param {Record<string, any>} review
  * @returns {{ id: string, url: string, state: string, commitOid: string, author: { login: string, type: string } }}
  */
 export function normalizeRestReview(review) {
@@ -377,7 +389,7 @@ export function normalizeRestReview(review) {
  * required state.
  *
  * @param {string} ref The AGENT_HUMAN_REVIEW_REF value (review URL or ID)
- * @param {Array} reviews Normalized PR reviews
+ * @param {Array<any>} reviews Normalized PR reviews
  * @param {string} headRefOid The current PR head commit SHA (lowercase)
  * @param {{ login: string, type?: string }|null} expectedAccount The loop account to exclude
  * @param {string} expectedStatus The marker review status ('accepted' or 'needs_revision')
@@ -423,7 +435,7 @@ function validateHumanReviewReference(ref, reviews, headRefOid, expectedAccount,
   // Different from the loop account
   const expectedLogin = expectedAccount?.login ? String(expectedAccount.login).toLowerCase() : null;
   if (expectedLogin && login && login.toLowerCase() === expectedLogin) {
-    errors.push(`human review author '${login}' must differ from the loop account '${expectedAccount.login}'`);
+    errors.push(`human review author '${login}' must differ from the loop account '${String(expectedAccount?.login ?? '')}'`);
   }
 
   // Outcome-sensitive state
@@ -720,8 +732,17 @@ export function evaluateGitHubReviewAudit({
   };
 }
 
+/**
+ * @param {Function} commandRunner
+ * @param {string[]} args
+ * @returns {any}
+ */
 function runGh(commandRunner, args) {
-  try { return runGhJson(commandRunner, args); } catch (error) { throw new GitHubReviewAuditError(error.message); }
+  try {
+    return runGhJson(commandRunner, args);
+  } catch (error) {
+    throw new GitHubReviewAuditError(error instanceof Error ? error.message : String(error));
+  }
 }
 
 /**
@@ -756,7 +777,7 @@ function resolveRepoOwnerName(commandRunner, explicitRepo) {
  * @param {string} owner
  * @param {string} repo
  * @param {number|string} prNumber
- * @returns {Array<{ id, url, state, commitOid, author }>}
+ * @returns {Array<{ id: string, url: string, state: string, commitOid: string, author: { login: string, type: string } }>}
  */
 function fetchRestReviews(commandRunner, owner, repo, prNumber) {
   const args = ['api', '--paginate', '--slurp', `repos/${owner}/${repo}/pulls/${prNumber}/reviews`];
@@ -819,14 +840,16 @@ function fetchTaskLinkedPullRequests(commandRunner, owner, repoName, issueNumber
  * Strict issue resolver for review-audit. Unlike the generic resolveIssueNumber,
  * this enforces that the selected issue must be one of the PR's closing references.
  *
- * @param {object} prData The PR data from GitHub
+ * @param {Record<string, any>} prData The PR data from GitHub
  * @param {string|number|undefined} explicitIssue The --issue value, if provided
  * @returns {{ issueNumber: number, closingIssues: number[] }}
  * @throws {GitHubReviewAuditError}
  */
 function resolveReviewAuditIssue(prData, explicitIssue) {
   const refs = Array.isArray(prData?.closingIssuesReferences) ? prData.closingIssuesReferences : [];
-  const closingIssues = refs.map(r => r?.number).filter(n => Number.isInteger(n));
+  const closingIssues = refs
+    .map((/** @type {any} */ r) => r?.number)
+    .filter((/** @type {unknown} */ n) => Number.isInteger(n));
 
   if (closingIssues.length === 0) {
     throw new GitHubReviewAuditError(
@@ -858,26 +881,42 @@ function resolveReviewAuditIssue(prData, explicitIssue) {
   );
 }
 
+/**
+ * @param {{
+ *   pr?: string|number,
+ *   issue?: string|number,
+ *   repo?: string,
+ *   expectedStatus?: string,
+ *   commandRunner?: Function,
+ * }} [options]
+ */
 export function runGitHubReviewAudit({ pr, issue, repo, expectedStatus, commandRunner = defaultGhCommandRunner } = {}) {
-  if (!Number.isInteger(Number(pr)) || Number(pr) <= 0) throw new GitHubReviewAuditError('--pr must be a positive integer');
+  const prNumber = Number(pr);
+  if (!Number.isInteger(prNumber) || prNumber <= 0) throw new GitHubReviewAuditError('--pr must be a positive integer');
 
   // Resolve the authenticated loop account
+  /** @type {any} */
   let expectedAccount;
   try {
     expectedAccount = runGh(commandRunner, ['api', 'user', '--jq', `{"login":.login,"type":.type}`]);
   } catch (error) {
-    throw new GitHubReviewAuditError(`cannot resolve authenticated GitHub account: ${error.message}`);
+    const message = error instanceof Error ? error.message : String(error);
+    throw new GitHubReviewAuditError(`cannot resolve authenticated GitHub account: ${message}`);
   }
   if (!expectedAccount?.login) {
     throw new GitHubReviewAuditError('authenticated GitHub account has no login; cannot verify marker authorship');
   }
 
-  const prArgs = ['pr', 'view', String(pr), '--json', PR_FIELDS];
+  const prArgs = ['pr', 'view', String(prNumber), '--json', PR_FIELDS];
   if (repo) prArgs.push('--repo', repo);
   const prData = runGh(commandRunner, prArgs);
 
   let issueNumber, closingIssues;
-  try { ({ issueNumber, closingIssues } = resolveReviewAuditIssue(prData, issue)); } catch (error) { throw new GitHubReviewAuditError(error.message); }
+  try {
+    ({ issueNumber, closingIssues } = resolveReviewAuditIssue(prData, issue));
+  } catch (error) {
+    throw new GitHubReviewAuditError(error instanceof Error ? error.message : String(error));
+  }
 
   const issueArgs = ['issue', 'view', String(issueNumber), '--json', ISSUE_FIELDS];
   if (repo) issueArgs.push('--repo', repo);
@@ -900,7 +939,7 @@ export function runGitHubReviewAudit({ pr, issue, repo, expectedStatus, commandR
       parts[0],
       parts[1],
       issueNumber,
-      pr,
+      prNumber,
       repo
     );
   }
@@ -922,14 +961,14 @@ export function runGitHubReviewAudit({ pr, issue, repo, expectedStatus, commandR
         throw new GitHubReviewAuditError(`cannot resolve repository owner/name: '${ownerName}'`);
       }
       const [owner, repoName] = parts;
-      humanReviews = fetchRestReviews(commandRunner, owner, repoName, pr);
+      humanReviews = fetchRestReviews(commandRunner, owner, repoName, prNumber);
     } catch (error) {
       return {
         ok: false,
         provenanceValid: false,
         acceptanceReady: false,
         expectedStatus: expectedStatus ?? 'accepted',
-        errors: [error.message],
+        errors: [error instanceof Error ? error.message : String(error)],
         pr: prData?.number ?? null,
         issue: issueData?.number ?? null,
         headRefOid,

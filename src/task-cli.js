@@ -28,6 +28,7 @@ import { createLocalVerificationContext } from './verification-context.js';
 import {
   validateReviewProvenance,
 } from './review-provenance.js';
+import { createIo } from './cli-io.js';
 
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -44,9 +45,9 @@ function resolveProject(target) {
   };
 }
 
-function guardFilesBackend(target) {
+function guardFilesBackend(target, io) {
   const resolution = resolveTaskBackend(target);
-  for (const warning of resolution.warnings) console.warn(`  WARN: ${warning}`);
+  for (const warning of resolution.warnings) io.warn(`  WARN: ${warning}`);
   if (resolution.backend !== 'files') {
     const message = resolution.backend === 'github'
       ? "Active task backend is 'github'. `agenticloop task` v1 supports the files backend only; " +
@@ -201,18 +202,18 @@ function appendComment(content, note) {
   return `${content.trimEnd()}\n\n## Comments\n${entry}\n`;
 }
 
-function printLintResults(results, json) {
+function printLintResults(results, json, io) {
   if (json) {
-    console.log(JSON.stringify(results, null, 2));
+    io.out(JSON.stringify(results, null, 2));
     return;
   }
   for (const result of results) {
     if (result.errors.length === 0 && result.warnings.length === 0) {
-      console.log(`${result.file}: ok`);
+      io.out(`${result.file}: ok`);
       continue;
     }
-    for (const error of result.errors) console.log(`${result.file}: ERROR ${error}`);
-    for (const warning of result.warnings) console.log(`${result.file}: WARN ${warning}`);
+    for (const error of result.errors) io.out(`${result.file}: ERROR ${error}`);
+    for (const warning of result.warnings) io.out(`${result.file}: WARN ${warning}`);
   }
 }
 
@@ -340,15 +341,14 @@ function validateAcceptanceGate(content, filePath, verificationContext) {
   return errors;
 }
 
-export async function cmdTask(args) {
+export async function cmdTask(args, io = createIo()) {
   const sub = args[0];
   const { opts, positional } = parseArgs(args.slice(1));
-  const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
-  const guard = guardFilesBackend(target);
+  const target = opts.target && opts.target !== true ? resolve(io.cwd, opts.target) : io.cwd;
+  const guard = guardFilesBackend(target, io);
   if (!guard.ok) {
-    console.error(guard.message);
-    process.exitCode = 1;
-    return;
+    io.err(guard.message);
+    return 1;
   }
 
   const project = resolveProject(target);
@@ -359,7 +359,7 @@ export async function cmdTask(args) {
 
   try {
     if (sub === 'list') {
-      warnUnknownOptions(opts, ['target', 'status', 'json'], 'task list');
+      warnUnknownOptions(opts, ['target', 'status', 'json'], 'task list', io);
       const rows = taskFiles(target, projectConfig)
         .map(taskRecordFromFile)
         .filter(row => !opts.status || row.status === opts.status)
@@ -371,30 +371,28 @@ export async function cmdTask(args) {
           implementation_artifact: row.implementation_artifact,
           reviewed_artifact: row.reviewed_artifact,
         }));
-      if (opts.json) console.log(JSON.stringify(rows, null, 2));
-      else console.log(rows.length > 0 ? formatTable(rows) : 'No task records found.');
-      return;
+      if (opts.json) io.out(JSON.stringify(rows, null, 2));
+      else io.out(rows.length > 0 ? formatTable(rows) : 'No task records found.');
+      return 0;
     }
 
     if (sub === 'lint') {
-      warnUnknownOptions(opts, ['target', 'json'], 'task lint');
+      warnUnknownOptions(opts, ['target', 'json'], 'task lint', io);
       const taskId = positional[0];
       const files = taskId ? [taskPathForId(target, projectConfig, taskId)] : taskFiles(target, projectConfig);
       const results = files.map(file => existsSync(file)
         ? lintTaskFile(file, target, projectConfig, verificationContext)
         : { file: relative(target, file).replace(/\\/g, '/'), errors: [`Task record not found: ${taskId}`], warnings: [] });
-      printLintResults(results, Boolean(opts.json));
-      process.exitCode = results.some(result => result.errors.length > 0) ? 1 : 0;
-      return;
+      printLintResults(results, Boolean(opts.json), io);
+      return results.some(result => result.errors.length > 0) ? 1 : 0;
     }
 
     if (sub === 'new') {
-      warnUnknownOptions(opts, ['target', 'id', 'json'], 'task new');
+      warnUnknownOptions(opts, ['target', 'id', 'json'], 'task new', io);
       const title = positional.join(' ').trim();
       if (!title) {
-        console.error('task new requires a title');
-        process.exitCode = 1;
-        return;
+        io.err('task new requires a title');
+        return 1;
       }
       const defaultRegex = PROJECT_MAP_DEFAULTS.task_id_regex;
       const taskId = opts.id
@@ -403,20 +401,17 @@ export async function cmdTask(args) {
           ? nextDefaultTaskId(taskFiles(target, projectConfig))
           : null;
       if (!taskId) {
-        console.error('Automatic task id allocation supports the default T-### convention only; pass --id for this project.');
-        process.exitCode = 1;
-        return;
+        io.err('Automatic task id allocation supports the default T-### convention only; pass --id for this project.');
+        return 1;
       }
       if (!isValidTaskId(taskId, projectConfig.task_id_regex ?? defaultRegex)) {
-        console.error(`Task id '${taskId}' does not match project task_id_regex '${projectConfig.task_id_regex ?? defaultRegex}'`);
-        process.exitCode = 1;
-        return;
+        io.err(`Task id '${taskId}' does not match project task_id_regex '${projectConfig.task_id_regex ?? defaultRegex}'`);
+        return 1;
       }
       const filePath = taskPathForId(target, projectConfig, taskId);
       if (existsSync(filePath)) {
-        console.error(`Task record already exists: ${relative(target, filePath).replace(/\\/g, '/')}`);
-        process.exitCode = 1;
-        return;
+        io.err(`Task record already exists: ${relative(target, filePath).replace(/\\/g, '/')}`);
+        return 1;
       }
       mkdirSync(dirname(filePath), { recursive: true });
       // A freshly scaffolded skeleton is not yet ready for an agent; the
@@ -427,35 +422,31 @@ export async function cmdTask(args) {
         'draft'
       );
       writeFileSync(filePath, newContent, 'utf-8');
-      if (opts.json) console.log(JSON.stringify({ task_id: taskId, file: relative(target, filePath).replace(/\\/g, '/') }, null, 2));
-      else console.log(`Created ${relative(target, filePath).replace(/\\/g, '/')}`);
-      return;
+      if (opts.json) io.out(JSON.stringify({ task_id: taskId, file: relative(target, filePath).replace(/\\/g, '/') }, null, 2));
+      else io.out(`Created ${relative(target, filePath).replace(/\\/g, '/')}`);
+      return 0;
     }
 
     if (sub === 'status') {
-      warnUnknownOptions(opts, ['target', 'note', 'blockCategory', 'json', 'accept'], 'task status');
+      warnUnknownOptions(opts, ['target', 'note', 'blockCategory', 'json', 'accept'], 'task status', io);
       const [taskId, nextStatus] = positional;
       if (!taskId || !nextStatus) {
-        console.error('task status requires <id> and <status>');
-        process.exitCode = 1;
-        return;
+        io.err('task status requires <id> and <status>');
+        return 1;
       }
       if (!FILES_TASK_STATUSES.has(nextStatus)) {
-        console.error(`Invalid task status '${nextStatus}' (expected one of: ${[...FILES_TASK_STATUSES].join(', ')})`);
-        process.exitCode = 1;
-        return;
+        io.err(`Invalid task status '${nextStatus}' (expected one of: ${[...FILES_TASK_STATUSES].join(', ')})`);
+        return 1;
       }
       const blockCategory = frontmatterString(opts.blockCategory);
       if (nextStatus === 'blocked' && !blockCategory) {
-        console.error("task status blocked requires --block-category <category>");
-        process.exitCode = 1;
-        return;
+        io.err("task status blocked requires --block-category <category>");
+        return 1;
       }
       const filePath = taskPathForId(target, projectConfig, taskId);
       if (!existsSync(filePath)) {
-        console.error(`Task record not found: ${relative(target, filePath).replace(/\\/g, '/')}`);
-        process.exitCode = 1;
-        return;
+        io.err(`Task record not found: ${relative(target, filePath).replace(/\\/g, '/')}`);
+        return 1;
       }
       let content = readFileSync(filePath, 'utf-8');
 
@@ -465,9 +456,8 @@ export async function cmdTask(args) {
 
       const transitionError = validateTransition(currentStatus, nextStatus, opts.note);
       if (transitionError) {
-        console.error(transitionError);
-        process.exitCode = 1;
-        return;
+        io.err(transitionError);
+        return 1;
       }
 
       // --- Acceptance gate for accepted/closed ---
@@ -475,9 +465,8 @@ export async function cmdTask(args) {
           currentStatus !== nextStatus) {
         const gateErrors = validateAcceptanceGate(parsedContent, filePath, verificationContext);
         if (gateErrors.length > 0) {
-          for (const err of gateErrors) console.error(err);
-          process.exitCode = 1;
-          return;
+          for (const err of gateErrors) io.err(err);
+          return 1;
         }
       }
 
@@ -489,15 +478,15 @@ export async function cmdTask(args) {
         content = appendComment(content, String(opts.note));
       }
       writeFileSync(filePath, content, 'utf-8');
-      if (opts.json) console.log(JSON.stringify({ task_id: taskId, status: nextStatus, file: relative(target, filePath).replace(/\\/g, '/') }, null, 2));
-      else console.log(`Updated ${taskId} status to ${nextStatus}`);
-      return;
+      if (opts.json) io.out(JSON.stringify({ task_id: taskId, status: nextStatus, file: relative(target, filePath).replace(/\\/g, '/') }, null, 2));
+      else io.out(`Updated ${taskId} status to ${nextStatus}`);
+      return 0;
     }
 
-    console.error('Unknown task subcommand. Expected: list, lint, new, status.');
-    process.exitCode = 1;
+    io.err('Unknown task subcommand. Expected: list, lint, new, status.');
+    return 1;
   } catch (error) {
-    console.error(error.message);
-    process.exitCode = 1;
+    io.err(error.message);
+    return 1;
   }
 }

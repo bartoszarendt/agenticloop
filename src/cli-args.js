@@ -43,10 +43,11 @@ export function parseArgs(rawArgs) {
   return { opts, positional };
 }
 
-export function warnUnknownOptions(opts, allowed, commandLabel) {
+export function warnUnknownOptions(opts, allowed, commandLabel, io) {
+  const warn = io ? io.warn : console.warn.bind(console);
   const allowedSet = new Set(allowed);
   const unknown = Object.keys(opts).filter(key => !allowedSet.has(key));
   if (unknown.length > 0) {
-    console.warn(`  WARN: ${commandLabel} ignoring unknown option(s): ${unknown.map(key => `--${toKebabCase(key)}`).join(', ')}`);
+    warn(`  WARN: ${commandLabel} ignoring unknown option(s): ${unknown.map(key => `--${toKebabCase(key)}`).join(', ')}`);
   }
 }

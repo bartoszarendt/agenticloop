@@ -36,6 +36,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
 import { parseArgs, warnUnknownOptions } from './cli-args.js';
+import { createIo } from './cli-io.js';
 import { init } from './init.js';
 import { bootstrapLabels } from './bootstrap-labels.js';
 import {
@@ -163,97 +164,97 @@ function formatRefSummary(entries) {
   return entries.length > 0 ? entries.map(entry => `${entry.ref}=${entry.count}`).join(', ') : 'none';
 }
 
-function printProvenanceQualityMetric(label, metric) {
+function printProvenanceQualityMetric(label, metric, io) {
   const count = metric?.count ?? 0;
   const tasks = metric?.tasks ?? [];
-  console.log(`    ${label}: ${count} (${formatTaskIdList(tasks)})`);
+  io.out(`    ${label}: ${count} (${formatTaskIdList(tasks)})`);
 }
 
 const CHURN_DETAIL_LIMIT = 15;
 
-function printFeatureReport(result, commandLabel) {
+function printFeatureReport(result, commandLabel, io) {
   const f = result.features;
-  console.log();
-  console.log(`agenticloop ${commandLabel} report --features`);
-  console.log('='.repeat(50));
-  console.log(`  directory: ${result.directory}`);
-  console.log(`  tasks scanned: ${f.tasksScanned}`);
-  console.log(`  tasks with feature telemetry: ${f.tasksWithTelemetry}`);
+  io.out();
+  io.out(`agenticloop ${commandLabel} report --features`);
+  io.out('='.repeat(50));
+  io.out(`  directory: ${result.directory}`);
+  io.out(`  tasks scanned: ${f.tasksScanned}`);
+  io.out(`  tasks with feature telemetry: ${f.tasksWithTelemetry}`);
 
   if (result.missingLogs) {
-    console.log();
-    console.log('  No event log files found.');
-    console.log();
+    io.out();
+    io.out('  No event log files found.');
+    io.out();
     return;
   }
 
-  console.log();
-  console.log('  review budget / churn (derived from review.result, data.review_round, closeout review_rounds):');
-  console.log(`    max derived review rounds: ${f.reviewRounds.maxDerivedReviewRounds}`);
-  console.log(`    tasks with review churn: ${f.reviewRounds.churnTasks.length}`);
-  console.log(
+  io.out();
+  io.out('  review budget / churn (derived from review.result, data.review_round, closeout review_rounds):');
+  io.out(`    max derived review rounds: ${f.reviewRounds.maxDerivedReviewRounds}`);
+  io.out(`    tasks with review churn: ${f.reviewRounds.churnTasks.length}`);
+  io.out(
     `    tasks over review budget: ${f.reviewRounds.tasksOverBudget.length} (${formatTaskIdList(f.reviewRounds.tasksOverBudget)})`
   );
   const overBudgetChurn = f.reviewRounds.churnTasks
     .filter(task => task.overBudget)
     .sort((a, b) => b.derivedReviewRounds - a.derivedReviewRounds || String(a.taskId).localeCompare(String(b.taskId)));
   if (overBudgetChurn.length > 0) {
-    console.log('    over-budget detail (highest rounds first):');
+    io.out('    over-budget detail (highest rounds first):');
     for (const task of overBudgetChurn.slice(0, CHURN_DETAIL_LIMIT)) {
       const budget = `${task.reviewBudget}${task.reviewBudgetIsDefault ? ' (default)' : ''}`;
-      console.log(
+      io.out(
         `      - ${task.taskId}: rounds=${task.derivedReviewRounds} needs_revision=${task.needsRevisionCount} accepted=${task.acceptedCount} budget=${budget}`
       );
     }
     if (overBudgetChurn.length > CHURN_DETAIL_LIMIT) {
-      console.log(`      (+${overBudgetChurn.length - CHURN_DETAIL_LIMIT} more over budget)`);
+      io.out(`      (+${overBudgetChurn.length - CHURN_DETAIL_LIMIT} more over budget)`);
     }
   }
 
-  console.log();
+  io.out();
   const m = f.minimalism;
-  console.log(
+  io.out(
     `  minimalism (telemetry tasks): none=${m.none}, lite=${m.lite}, full=${m.full}, ultra=${m.ultra}, missing=${m.missing}, other=${m.other}`
   );
-  console.log(`  minimalism triggers: ${formatCountSummary(f.minimalismTriggers.map(entry => ({ value: entry.trigger, count: entry.count })))}`);
-  console.log(
+  io.out(`  minimalism triggers: ${formatCountSummary(f.minimalismTriggers.map(entry => ({ value: entry.trigger, count: entry.count })))}`);
+  io.out(
     `  non-default attempt budgets: ${f.budgets.nonDefaultAttempt.length} (${formatTaskIdList(f.budgets.nonDefaultAttempt.map(entry => `${entry.taskId}=${entry.attemptBudget}`))})`
   );
-  console.log(
+  io.out(
     `  non-default review budgets: ${f.budgets.nonDefaultReview.length} (${formatTaskIdList(f.budgets.nonDefaultReview.map(entry => `${entry.taskId}=${entry.reviewBudget}`))})`
   );
-  console.log(
+  io.out(
     `  context overflow risk: medium=${f.contextOverflowRisk.medium}, high=${f.contextOverflowRisk.high} (tasks: ${formatTaskIdList(f.contextOverflowRisk.tasks)})`
   );
-  console.log(
+  io.out(
     `  context pressure: true=${f.contextPressure.true}, false=${f.contextPressure.false}, missing-for-risk-tasks=${f.contextPressure.missingForRiskTasks.length} (${formatTaskIdList(f.contextPressure.missingForRiskTasks)})`
   );
 
-  console.log();
+  io.out();
   const oc = f.omissionCandidates;
-  console.log('  context-risk omission candidates (heuristic; candidates, not misses):');
-  console.log(
+  io.out('  context-risk omission candidates (heuristic; candidates, not misses):');
+  io.out(
     `    pressure hit but no risk predicted (higher confidence): ${oc.contextRiskPressureNoPredict.length} (${formatTaskIdList(oc.contextRiskPressureNoPredict)})`
   );
-  console.log(
+  io.out(
     `    reached/exceeded review budget but no risk predicted (lower confidence): ${oc.contextRiskOverBudgetNoPredict.length} (${formatTaskIdList(oc.contextRiskOverBudgetNoPredict.map(entry => entry.taskId))})`
   );
 
-  console.log();
+  io.out();
   const fx = f.maintainerFixup;
-  console.log('  maintainer review fixup (from maintainer_fixup: true events; a fallback review mode alone is not a fixup):');
-  console.log(`    maintainer_fixup: true events (event count, not proven-deduplicated episodes): ${fx.episodeCount}`);
-  console.log(`    tasks with a fixup event: ${fx.tasksWithFixup.length} (${formatTaskIdList(fx.tasksWithFixup)})`);
-  console.log(`    tasks with more than one fixup event (multiple-episode anomaly): ${fx.tasksWithMultipleFixups.length} (${formatTaskIdList(fx.tasksWithMultipleFixups)})`);
+  io.out('  maintainer review fixup (from maintainer_fixup: true events; a fallback review mode alone is not a fixup):');
+  io.out(`    maintainer_fixup: true events (event count, not proven-deduplicated episodes): ${fx.episodeCount}`);
+  io.out(`    tasks with a fixup event: ${fx.tasksWithFixup.length} (${formatTaskIdList(fx.tasksWithFixup)})`);
+  io.out(`    tasks with more than one fixup event (multiple-episode anomaly): ${fx.tasksWithMultipleFixups.length} (${formatTaskIdList(fx.tasksWithMultipleFixups)})`);
 
-  console.log();
+  io.out();
   if (f.warnings.length === 0) {
-    console.log('  feature telemetry warnings: none');
+    io.out('  feature telemetry warnings: none');
   } else {
-    console.log('  feature telemetry warnings:');
-    for (const warning of f.warnings) console.warn(`    WARN: ${warning}`);
+    io.out('  feature telemetry warnings:');
+    for (const warning of f.warnings) io.warn(`    WARN: ${warning}`);
   }
-  console.log();
+  io.out();
 }
 
 function inferCheckRunOutcome(data) {
@@ -295,8 +296,9 @@ function inferEventHost(target, explicitHost) {
   return undefined;
 }
 
-function usage() {
-  console.log(`
+function usage(io) {
+  const write = io ? io.out : console.log;
+  write(`
 agenticloop <command> [options]
 
 Commands:
@@ -1074,51 +1076,49 @@ async function cmdGithubReady(args) {
   process.exitCode = result.ok ? 0 : 1;
 }
 
-async function cmdEvent(args, commandLabel = 'event-logging') {
+async function cmdEvent(args, commandLabel = 'event-logging', io = createIo()) {
   const sub = args[0];
 
   if (!sub) {
-    console.error(`${commandLabel} requires an event type, 'validate', 'audit', or 'report'`);
-    usage();
-    process.exitCode = 1;
-    return;
+    io.err(`${commandLabel} requires an event type, 'validate', 'audit', or 'report'`);
+    usage(io);
+    return 1;
   }
 
   if (sub === '--help' || sub === '-h') {
-    console.log(`${commandLabel} [event_type|validate|audit|report] [options]`);
-    console.log();
-    console.log('Subcommands:');
-    console.log('  validate              Validate event log files.');
-    console.log('  audit                 Audit task event logs for required events.');
-    console.log('  report                Generate a per-task or aggregate report from event logs.');
-    console.log('                        Add --features for a feature-adoption telemetry report.');
-    console.log();
-    console.log('Write path (bare event type):');
-    console.log(`  ${commandLabel} <event_type> --summary "..." [options]`);
-    console.log();
-    console.log('  event_type is a positional — one of:');
-    for (const t of VALID_EVENT_TYPES) console.log(`    ${t}`);
-    console.log();
-    console.log('Write options:');
-    console.log('  --summary <text>      Required. Event description.');
-    console.log('  --outcome <outcome>   Event outcome.');
-    console.log('  --role <role>         Role associated with the event.');
-    console.log('  --backend <backend>   Storage backend (files, github).');
-    console.log('  --task <id>           Task identifier.');
-    console.log('  --trace-id <id>       Trace identifier.');
-    console.log('  --parent-event-id <id> Parent event identifier.');
-    console.log('  --refs <a,b,...>      Comma-separated list of references.');
-    console.log('  --data-json <json>    JSON event data payload.');
-    console.log();
-    process.exitCode = 0;
-    return;
+    io.out(`${commandLabel} [event_type|validate|audit|report] [options]`);
+    io.out();
+    io.out('Subcommands:');
+    io.out('  validate              Validate event log files.');
+    io.out('  audit                 Audit task event logs for required events.');
+    io.out('  report                Generate a per-task or aggregate report from event logs.');
+    io.out('                        Add --features for a feature-adoption telemetry report.');
+    io.out();
+    io.out('Write path (bare event type):');
+    io.out(`  ${commandLabel} <event_type> --summary "..." [options]`);
+    io.out();
+    io.out('  event_type is a positional — one of:');
+    for (const t of VALID_EVENT_TYPES) io.out(`    ${t}`);
+    io.out();
+    io.out('Write options:');
+    io.out('  --summary <text>      Required. Event description.');
+    io.out('  --outcome <outcome>   Event outcome.');
+    io.out('  --role <role>         Role associated with the event.');
+    io.out('  --backend <backend>   Storage backend (files, github).');
+    io.out('  --task <id>           Task identifier.');
+    io.out('  --trace-id <id>       Trace identifier.');
+    io.out('  --parent-event-id <id> Parent event identifier.');
+    io.out('  --refs <a,b,...>      Comma-separated list of references.');
+    io.out('  --data-json <json>    JSON event data payload.');
+    io.out();
+    return 0;
   }
 
   const { opts } = parseArgs(args.slice(1));
-  const target = opts.target ? resolve(opts.target) : process.cwd();
+  const target = opts.target ? resolve(io.cwd, opts.target) : io.cwd;
 
   if (sub === 'validate') {
-    warnUnknownOptions(opts, ['target', 'output'], `${commandLabel} validate`);
+    warnUnknownOptions(opts, ['target', 'output'], `${commandLabel} validate`, io);
     const eventLogDirectory = resolveLogDirectory(target);
     const pathResult = opts.output ? resolveEventLogPath(target, opts.output) : null;
     const eventLogPath = pathResult?.path ?? null;
@@ -1127,48 +1127,44 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
       ? validateEventLogFile(eventLogPath, { target })
       : validateEventLogs(target);
 
-    console.log();
-    console.log(`agenticloop ${commandLabel} validate`);
-    console.log('='.repeat(50));
-    if (opts.output) console.log(`  event log: ${eventLogPath}`);
-    else console.log(`  directory: ${eventLogDirectory}`);
-    for (const warning of pathWarnings) console.warn(`  WARN: ${warning}`);
+    io.out();
+    io.out(`agenticloop ${commandLabel} validate`);
+    io.out('='.repeat(50));
+    if (opts.output) io.out(`  event log: ${eventLogPath}`);
+    else io.out(`  directory: ${eventLogDirectory}`);
+    for (const warning of pathWarnings) io.warn(`  WARN: ${warning}`);
     if (!result.exists) {
-      console.log('  No event logs found.');
-      console.log();
-      process.exitCode = 0;
-      return;
+      io.out('  No event logs found.');
+      io.out();
+      return 0;
     }
-    for (const error of result.errors) console.error(`  ERROR: ${error}`);
-    for (const warning of result.warnings) console.warn(`  WARN: ${warning}`);
+    for (const error of result.errors) io.err(`  ERROR: ${error}`);
+    for (const warning of result.warnings) io.warn(`  WARN: ${warning}`);
     if (result.errors.length === 0 && result.warnings.length === 0 && pathWarnings.length === 0) {
       if (opts.output) {
-        console.log(`  OK: ${result.eventCount} event(s) validated`);
+        io.out(`  OK: ${result.eventCount} event(s) validated`);
       } else {
-        console.log(`  OK: ${result.fileCount} file(s), ${result.eventCount} event(s) validated`);
+        io.out(`  OK: ${result.fileCount} file(s), ${result.eventCount} event(s) validated`);
       }
     } else {
-      if (!opts.output) console.log(`  files: ${result.fileCount}`);
-      console.log(`  events: ${result.eventCount}`);
+      if (!opts.output) io.out(`  files: ${result.fileCount}`);
+      io.out(`  events: ${result.eventCount}`);
     }
-    console.log();
-    process.exitCode = result.errors.length > 0 ? 1 : 0;
-    return;
+    io.out();
+    return result.errors.length > 0 ? 1 : 0;
   }
 
   if (sub === 'audit') {
-    warnUnknownOptions(opts, ['target', 'task', 'require'], `${commandLabel} audit`);
+    warnUnknownOptions(opts, ['target', 'task', 'require'], `${commandLabel} audit`, io);
     if (!opts.task) {
-      console.error('--task is required for event log audit');
-      process.exitCode = 1;
-      return;
+      io.err('--task is required for event log audit');
+      return 1;
     }
 
     const requireResult = parseRequiredEventTypesOption(opts.require);
-    for (const error of requireResult.errors) console.error(error);
+    for (const error of requireResult.errors) io.err(error);
     if (requireResult.errors.length > 0) {
-      process.exitCode = 1;
-      return;
+      return 1;
     }
 
     let result;
@@ -1180,65 +1176,60 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
         explicitRequire: requireResult.explicitRequire,
       });
     } catch (error) {
-      console.error(error.message);
-      process.exitCode = 1;
-      return;
+      io.err(error.message);
+      return 1;
     }
 
-    console.log();
-    console.log(`agenticloop ${commandLabel} audit`);
-    console.log('='.repeat(50));
-    console.log(`  task: ${result.taskId}`);
-    console.log(`  event log: ${result.path}`);
-    console.log(`  event_logging: ${result.eventLogging}`);
-    console.log(`  required events: ${result.requiredEventTypes.join(', ')}`);
+    io.out();
+    io.out(`agenticloop ${commandLabel} audit`);
+    io.out('='.repeat(50));
+    io.out(`  task: ${result.taskId}`);
+    io.out(`  event log: ${result.path}`);
+    io.out(`  event_logging: ${result.eventLogging}`);
+    io.out(`  required events: ${result.requiredEventTypes.join(', ')}`);
 
     if (result.skipped) {
-      console.log('  Event logging is disabled in .agenticloop/project.md; skipping strict audit.');
-      console.log();
-      process.exitCode = 0;
-      return;
+      io.out('  Event logging is disabled in .agenticloop/project.md; skipping strict audit.');
+      io.out();
+      return 0;
     }
 
     if (result.durableClosure) {
       const status = result.durableClosure.satisfied
         ? 'yes'
         : `no (${result.durableClosure.reason})`;
-      console.log(`  durable task.closed: ${status}`);
+      io.out(`  durable task.closed: ${status}`);
     }
 
     if (!result.enabled && result.explicitRequire) {
-      console.log('  Event logging is disabled in .agenticloop/project.md, but explicit --require requested an audit.');
+      io.out('  Event logging is disabled in .agenticloop/project.md, but explicit --require requested an audit.');
     }
 
-    for (const error of result.errors) console.error(`  ERROR: ${error}`);
-    for (const warning of result.warnings) console.warn(`  WARN: ${warning}`);
+    for (const error of result.errors) io.err(`  ERROR: ${error}`);
+    for (const warning of result.warnings) io.warn(`  WARN: ${warning}`);
 
     if (result.errors.length === 0) {
-      console.log(`  OK: ${result.eventCount} event(s) validated for strict audit`);
+      io.out(`  OK: ${result.eventCount} event(s) validated for strict audit`);
     } else {
-      console.log(`  events: ${result.eventCount}`);
+      io.out(`  events: ${result.eventCount}`);
     }
 
-    console.log();
-    process.exitCode = result.errors.length > 0 ? 1 : 0;
-    return;
+    io.out();
+    return result.errors.length > 0 ? 1 : 0;
   }
 
   if (sub === 'report') {
-    warnUnknownOptions(opts, ['target', 'task', 'features'], `${commandLabel} report`);
+    warnUnknownOptions(opts, ['target', 'task', 'features'], `${commandLabel} report`, io);
     if (opts.features) {
       let result;
       try {
         result = reportEventLogs({ target });
       } catch (error) {
-        console.error(`Failed to generate feature telemetry report: ${error.message}`);
-        process.exitCode = 1;
-        return;
+        io.err(`Failed to generate feature telemetry report: ${error.message}`);
+        return 1;
       }
-      printFeatureReport(result, commandLabel);
-      process.exitCode = 0;
-      return;
+      printFeatureReport(result, commandLabel, io);
+      return 0;
     }
 
     if (opts.task) {
@@ -1246,48 +1237,47 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
       try {
         result = reportTaskEventLog({ target, taskId: opts.task });
       } catch (error) {
-        console.error(error.message);
-        process.exitCode = 1;
-        return;
+        io.err(error.message);
+        return 1;
       }
 
-      console.log();
-      console.log(`agenticloop ${commandLabel} report`);
-      console.log('='.repeat(50));
-      console.log(`  task: ${result.taskId}`);
-      console.log(`  event log: ${result.path}`);
-      console.log(`  events: ${result.eventCount}`);
-      console.log(`  first event: ${result.firstEventTimestamp ?? 'none'}`);
-      console.log(`  last event: ${result.lastEventTimestamp ?? 'none'}`);
-      console.log(`  trace duration: ${result.traceDuration}`);
-      console.log(`  strict audit present: ${formatSummaryList(result.strictAudit.presentEventTypes)}`);
-      console.log(`  strict audit missing: ${formatSummaryList(result.strictAudit.missingEventTypes)}`);
+      io.out();
+      io.out(`agenticloop ${commandLabel} report`);
+      io.out('='.repeat(50));
+      io.out(`  task: ${result.taskId}`);
+      io.out(`  event log: ${result.path}`);
+      io.out(`  events: ${result.eventCount}`);
+      io.out(`  first event: ${result.firstEventTimestamp ?? 'none'}`);
+      io.out(`  last event: ${result.lastEventTimestamp ?? 'none'}`);
+      io.out(`  trace duration: ${result.traceDuration}`);
+      io.out(`  strict audit present: ${formatSummaryList(result.strictAudit.presentEventTypes)}`);
+      io.out(`  strict audit missing: ${formatSummaryList(result.strictAudit.missingEventTypes)}`);
       const durableClosureStatus = result.strictAudit.durableClosure.satisfied
         ? 'yes'
         : `no (${result.strictAudit.durableClosure.reason})`;
-      console.log(`  durable task.closed: ${durableClosureStatus}`);
-      console.log(
+      io.out(`  durable task.closed: ${durableClosureStatus}`);
+      io.out(
         `  check.run counts: success=${result.checkRunCounts.success}, failure=${result.checkRunCounts.failure}, blocked=${result.checkRunCounts.blocked}`
       );
-      console.log(
+      io.out(
         `  review.result counts: accepted=${result.reviewResultCounts.accepted}, needs_revision=${result.reviewResultCounts.needs_revision}`
       );
-      console.log(`  review rounds: ${formatSummaryList(result.reviewRounds)}`);
-      console.log(`  role.invoked targets: ${formatCountSummary(result.roleInvoked.targetRoleCounts)}`);
-      console.log(`  delegation modes: ${formatCountSummary(result.roleInvoked.delegationModeCounts)}`);
-      console.log(`  fallback count: ${result.roleInvoked.fallbackCount}`);
+      io.out(`  review rounds: ${formatSummaryList(result.reviewRounds)}`);
+      io.out(`  role.invoked targets: ${formatCountSummary(result.roleInvoked.targetRoleCounts)}`);
+      io.out(`  delegation modes: ${formatCountSummary(result.roleInvoked.delegationModeCounts)}`);
+      io.out(`  fallback count: ${result.roleInvoked.fallbackCount}`);
       const tpq = result.provenanceQuality;
-      console.log('  provenance quality (telemetry; historical events labeled, not rewritten):');
-      console.log(`    role.invoked missing target_role=${tpq.roleInvokedMissingTargetRole}, missing delegation_mode=${tpq.roleInvokedMissingDelegationMode}, missing/non-boolean fallback=${tpq.roleInvokedMissingFallback}`);
-      console.log(`    fallback without cause=${tpq.roleInvokedFallbackWithoutCause}, inconsistent mode/fallback=${tpq.roleInvokedInconsistentModeFallback}`);
-      console.log(`    non-orchestrator emitter=${tpq.roleInvokedNonOrchestrator}, self-invocation=${tpq.roleInvokedSelfInvocation}`);
-      console.log(`    review.result missing review_mode=${tpq.reviewResultMissingReviewMode}, non-maintainer emitter=${tpq.reviewResultNonMaintainer}, maintainer review rounds without correlated delegation/continuation=${tpq.reviewRoundsWithoutBacking}`);
-      console.log(`    maintainer_fixup: true events=${tpq.maintainerFixupEvents}${tpq.multipleFixupEpisodes ? ' (multiple-episode anomaly)' : ''}`);
-      console.log(`  refs summary: ${formatRefSummary(result.refsSummary)}`);
+      io.out('  provenance quality (telemetry; historical events labeled, not rewritten):');
+      io.out(`    role.invoked missing target_role=${tpq.roleInvokedMissingTargetRole}, missing delegation_mode=${tpq.roleInvokedMissingDelegationMode}, missing/non-boolean fallback=${tpq.roleInvokedMissingFallback}`);
+      io.out(`    fallback without cause=${tpq.roleInvokedFallbackWithoutCause}, inconsistent mode/fallback=${tpq.roleInvokedInconsistentModeFallback}`);
+      io.out(`    non-orchestrator emitter=${tpq.roleInvokedNonOrchestrator}, self-invocation=${tpq.roleInvokedSelfInvocation}`);
+      io.out(`    review.result missing review_mode=${tpq.reviewResultMissingReviewMode}, non-maintainer emitter=${tpq.reviewResultNonMaintainer}, maintainer review rounds without correlated delegation/continuation=${tpq.reviewRoundsWithoutBacking}`);
+      io.out(`    maintainer_fixup: true events=${tpq.maintainerFixupEvents}${tpq.multipleFixupEpisodes ? ' (multiple-episode anomaly)' : ''}`);
+      io.out(`  refs summary: ${formatRefSummary(result.refsSummary)}`);
 
-      console.log('  accepted imperfect checks (not clean success):');
+      io.out('  accepted imperfect checks (not clean success):');
       if (result.acceptedImperfectChecks.length === 0) {
-        console.log('    none');
+        io.out('    none');
       } else {
         for (const check of result.acceptedImperfectChecks) {
           const details = [];
@@ -1297,95 +1287,92 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
           if (check.accepted_known_failure) triage.push('accepted_known_failure');
           if (triage.length > 0) details.push(`triage=${triage.join(',')}`);
           details.push(`refs=${check.refs.length > 0 ? check.refs.join(', ') : 'none'}`);
-          console.log(`    - ${check.outcome}: ${check.summary} (${details.join('; ')})`);
+          io.out(`    - ${check.outcome}: ${check.summary} (${details.join('; ')})`);
         }
       }
 
-      console.log('  failed/blocked checks:');
+      io.out('  failed/blocked checks:');
       if (result.failedOrBlockedChecks.length === 0) {
-        console.log('    none');
+        io.out('    none');
       } else {
         for (const check of result.failedOrBlockedChecks) {
           const details = [];
           if (check.command) details.push(`command=${check.command}`);
           details.push(`refs=${check.refs.length > 0 ? check.refs.join(', ') : 'none'}`);
-          console.log(`    - ${check.outcome}: ${check.summary} (${details.join('; ')})`);
+          io.out(`    - ${check.outcome}: ${check.summary} (${details.join('; ')})`);
         }
       }
 
-      for (const warning of result.warnings) console.warn(`  WARN: ${warning}`);
-      console.log();
-      process.exitCode = 0;
-      return;
+      for (const warning of result.warnings) io.warn(`  WARN: ${warning}`);
+      io.out();
+      return 0;
     }
 
     let result;
     try {
       result = reportEventLogs({ target });
     } catch (error) {
-      console.error(`Failed to generate aggregate event log report: ${error.message}`);
-      process.exitCode = 1;
-      return;
+      io.err(`Failed to generate aggregate event log report: ${error.message}`);
+      return 1;
     }
 
-    console.log();
-    console.log(`agenticloop ${commandLabel} report`);
-    console.log('='.repeat(50));
-    console.log(`  directory: ${result.directory}`);
-    console.log(`  files scanned: ${result.filesScanned}`);
-    console.log(`  valid task logs: ${result.validTaskLogCount}`);
-    console.log(`  invalid logs: ${result.invalidLogCount}`);
-    console.log(`  empty logs: ${result.emptyLogCount}`);
-    console.log();
+    io.out();
+    io.out(`agenticloop ${commandLabel} report`);
+    io.out('='.repeat(50));
+    io.out(`  directory: ${result.directory}`);
+    io.out(`  files scanned: ${result.filesScanned}`);
+    io.out(`  valid task logs: ${result.validTaskLogCount}`);
+    io.out(`  invalid logs: ${result.invalidLogCount}`);
+    io.out(`  empty logs: ${result.emptyLogCount}`);
+    io.out();
 
     if (result.missingLogs) {
-      console.log('  No event log files found.');
-      console.log();
-      process.exitCode = 0;
-      return;
+      io.out('  No event log files found.');
+      io.out();
+      return 0;
     }
 
-    console.log(`  strict audit: pass=${result.strictAuditPassCount}, fail=${result.strictAuditFailCount}`);
-    console.log(
+    io.out(`  strict audit: pass=${result.strictAuditPassCount}, fail=${result.strictAuditFailCount}`);
+    io.out(
       `  durable task.closed: satisfied=${result.durableClosureSatisfied}, missing=${result.durableClosureMissing}, failing=${result.durableClosureFailing}`
     );
-    console.log(
+    io.out(
       `  check.run totals: success=${result.totalCheckOutcomes.success}, failure=${result.totalCheckOutcomes.failure}, blocked=${result.totalCheckOutcomes.blocked}`
     );
-    console.log(
+    io.out(
       `  review.result totals: accepted=${result.totalReviewOutcomes.accepted}, needs_revision=${result.totalReviewOutcomes.needs_revision}`
     );
-    console.log(`  role.invoked targets: ${formatCountSummary(result.totalRoleInvokedTargets)}`);
-    console.log(`  delegation modes: ${formatCountSummary(result.totalDelegationModes)}`);
-    console.log(`  fallback count: ${result.totalFallbackCount}`);
-    console.log(`  tasks with review churn: ${result.tasksWithReviewChurn.length} (${formatTaskIdList(result.tasksWithReviewChurn)})`);
-    console.log(`  tasks missing role.invoked: ${result.tasksWithMissingRoleInvoked.length} (${formatTaskIdList(result.tasksWithMissingRoleInvoked)})`);
-    console.log(`  tasks missing task.started: ${result.tasksWithMissingTaskStarted.length} (${formatTaskIdList(result.tasksWithMissingTaskStarted)})`);
-    console.log(`  tasks missing review.result: ${result.tasksWithMissingReviewResult.length} (${formatTaskIdList(result.tasksWithMissingReviewResult)})`);
-    console.log(`  tasks missing task.closed: ${result.tasksWithMissingTaskClosed.length} (${formatTaskIdList(result.tasksWithMissingTaskClosed)})`);
-    console.log(`  events with host=unknown: ${result.hostUnknownEvents.length}`);
-    console.log();
+    io.out(`  role.invoked targets: ${formatCountSummary(result.totalRoleInvokedTargets)}`);
+    io.out(`  delegation modes: ${formatCountSummary(result.totalDelegationModes)}`);
+    io.out(`  fallback count: ${result.totalFallbackCount}`);
+    io.out(`  tasks with review churn: ${result.tasksWithReviewChurn.length} (${formatTaskIdList(result.tasksWithReviewChurn)})`);
+    io.out(`  tasks missing role.invoked: ${result.tasksWithMissingRoleInvoked.length} (${formatTaskIdList(result.tasksWithMissingRoleInvoked)})`);
+    io.out(`  tasks missing task.started: ${result.tasksWithMissingTaskStarted.length} (${formatTaskIdList(result.tasksWithMissingTaskStarted)})`);
+    io.out(`  tasks missing review.result: ${result.tasksWithMissingReviewResult.length} (${formatTaskIdList(result.tasksWithMissingReviewResult)})`);
+    io.out(`  tasks missing task.closed: ${result.tasksWithMissingTaskClosed.length} (${formatTaskIdList(result.tasksWithMissingTaskClosed)})`);
+    io.out(`  events with host=unknown: ${result.hostUnknownEvents.length}`);
+    io.out();
 
     const pq = result.provenanceQuality;
-    console.log('  delegation/review provenance quality (telemetry; historical events are labeled, not rewritten):');
-    printProvenanceQualityMetric('role.invoked missing target_role', pq.roleInvokedMissingTargetRole);
-    printProvenanceQualityMetric('role.invoked missing delegation_mode', pq.roleInvokedMissingDelegationMode);
-    printProvenanceQualityMetric('role.invoked missing/non-boolean fallback', pq.roleInvokedMissingFallback);
-    printProvenanceQualityMetric('fallback mode without structured cause', pq.roleInvokedFallbackWithoutCause);
-    printProvenanceQualityMetric('inconsistent mode/fallback combination', pq.roleInvokedInconsistentModeFallback);
-    printProvenanceQualityMetric('role.invoked emitted by non-orchestrator', pq.roleInvokedNonOrchestrator);
-    printProvenanceQualityMetric('self-invocation (emitter == target)', pq.roleInvokedSelfInvocation);
-    printProvenanceQualityMetric('review.result missing review_mode', pq.reviewResultMissingReviewMode);
-    printProvenanceQualityMetric('review.result emitted by non-maintainer', pq.reviewResultNonMaintainer);
-    printProvenanceQualityMetric('maintainer review rounds without correlated delegation or continuation', pq.reviewRoundsWithoutBacking);
+    io.out('  delegation/review provenance quality (telemetry; historical events are labeled, not rewritten):');
+    printProvenanceQualityMetric('role.invoked missing target_role', pq.roleInvokedMissingTargetRole, io);
+    printProvenanceQualityMetric('role.invoked missing delegation_mode', pq.roleInvokedMissingDelegationMode, io);
+    printProvenanceQualityMetric('role.invoked missing/non-boolean fallback', pq.roleInvokedMissingFallback, io);
+    printProvenanceQualityMetric('fallback mode without structured cause', pq.roleInvokedFallbackWithoutCause, io);
+    printProvenanceQualityMetric('inconsistent mode/fallback combination', pq.roleInvokedInconsistentModeFallback, io);
+    printProvenanceQualityMetric('role.invoked emitted by non-orchestrator', pq.roleInvokedNonOrchestrator, io);
+    printProvenanceQualityMetric('self-invocation (emitter == target)', pq.roleInvokedSelfInvocation, io);
+    printProvenanceQualityMetric('review.result missing review_mode', pq.reviewResultMissingReviewMode, io);
+    printProvenanceQualityMetric('review.result emitted by non-maintainer', pq.reviewResultNonMaintainer, io);
+    printProvenanceQualityMetric('maintainer review rounds without correlated delegation or continuation', pq.reviewRoundsWithoutBacking, io);
     const fixup = result.features.maintainerFixup;
-    console.log(`    maintainer_fixup: true events (event count, not proven-deduplicated episodes): ${fixup.episodeCount}`);
-    console.log(`    tasks with a fixup event: ${fixup.tasksWithFixup.length} (${formatTaskIdList(fixup.tasksWithFixup)})`);
-    console.log(`    tasks with more than one fixup event (multiple-episode anomaly): ${fixup.tasksWithMultipleFixups.length} (${formatTaskIdList(fixup.tasksWithMultipleFixups)})`);
-    console.log();
+    io.out(`    maintainer_fixup: true events (event count, not proven-deduplicated episodes): ${fixup.episodeCount}`);
+    io.out(`    tasks with a fixup event: ${fixup.tasksWithFixup.length} (${formatTaskIdList(fixup.tasksWithFixup)})`);
+    io.out(`    tasks with more than one fixup event (multiple-episode anomaly): ${fixup.tasksWithMultipleFixups.length} (${formatTaskIdList(fixup.tasksWithMultipleFixups)})`);
+    io.out();
 
-    console.log('  per-task summary:');
-    console.log(
+    io.out('  per-task summary:');
+    io.out(
       `    ${'task id'.padEnd(12)} ${'events'.padEnd(7)} ${'missing strict'.padEnd(15)} ${'closure'.padEnd(10)} ${'review rounds'.padEnd(14)} ${'checks (s/f/b)'.padEnd(16)} host quality`
     );
     for (const task of result.tasks) {
@@ -1396,48 +1383,48 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
       const hostQuality = result.hostUnknownEvents.some(entry =>
         entry.taskId === task.taskId || entry.inferredTaskId === task.taskId
       ) ? 'unknown present' : 'ok';
-      console.log(
+      io.out(
         `    ${String(task.taskId).padEnd(12)} ${String(task.eventCount).padEnd(7)} ${missing.padEnd(15)} ${closure.padEnd(10)} ${rounds.padEnd(14)} ${checks.padEnd(16)} ${hostQuality}`
       );
     }
 
     if (result.invalidLogs.length > 0) {
-      console.log();
-      console.log('  invalid logs:');
+      io.out();
+      io.out('  invalid logs:');
       for (const invalid of result.invalidLogs) {
-        console.log(`    - ${invalid.displayPath} (${invalid.eventCount} events)`);
-        for (const error of invalid.errors) console.error(`      ERROR: ${error}`);
-        for (const warning of invalid.warnings) console.warn(`      WARN: ${warning}`);
+        io.out(`    - ${invalid.displayPath} (${invalid.eventCount} events)`);
+        for (const error of invalid.errors) io.err(`      ERROR: ${error}`);
+        for (const warning of invalid.warnings) io.warn(`      WARN: ${warning}`);
       }
     }
 
     if (result.emptyLogs.length > 0) {
-      console.log();
-      console.log('  empty logs:');
+      io.out();
+      io.out('  empty logs:');
       for (const empty of result.emptyLogs) {
-        console.log(`    - ${empty.displayPath} (${empty.eventCount} events)`);
-        for (const warning of empty.warnings) console.warn(`      WARN: ${warning}`);
+        io.out(`    - ${empty.displayPath} (${empty.eventCount} events)`);
+        for (const warning of empty.warnings) io.warn(`      WARN: ${warning}`);
       }
     }
 
     if (result.hostUnknownEvents.length > 0) {
-      console.log();
-      console.log('  host=unknown events:');
+      io.out();
+      io.out('  host=unknown events:');
       for (const entry of result.hostUnknownEvents) {
-        console.log(`    - ${entry.file} line ${entry.line} (${entry.taskId})`);
+        io.out(`    - ${entry.file} line ${entry.line} (${entry.taskId})`);
       }
     }
 
-    for (const warning of result.warnings) console.warn(`  WARN: ${warning}`);
-    console.log();
-    process.exitCode = 0;
-    return;
+    for (const warning of result.warnings) io.warn(`  WARN: ${warning}`);
+    io.out();
+    return 0;
   }
 
   warnUnknownOptions(
     opts,
     ['target', 'summary', 'outcome', 'role', 'backend', 'task', 'traceId', 'parentEventId', 'ref', 'refs', 'dataJson', 'output', 'host'],
-    `${commandLabel} ${sub}`
+    `${commandLabel} ${sub}`,
+    io
   );
 
   if (opts.refs !== undefined) {
@@ -1447,9 +1434,8 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
   }
 
   if (!opts.summary) {
-    console.error('--summary is required for event writes');
-    process.exitCode = 1;
-    return;
+    io.err('--summary is required for event writes');
+    return 1;
   }
 
   let data = {};
@@ -1457,25 +1443,23 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
     try {
       data = JSON.parse(opts.dataJson);
     } catch (error) {
-      console.error(`--data-json must be valid JSON: ${error.message}`);
-      process.exitCode = 1;
-      return;
+      io.err(`--data-json must be valid JSON: ${error.message}`);
+      return 1;
     }
 
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
-      console.error('--data-json must decode to a JSON object');
-      process.exitCode = 1;
-      return;
+      io.err('--data-json must decode to a JSON object');
+      return 1;
     }
   }
 
   const backendResolution = resolveTaskBackend(target);
-  for (const warning of backendResolution.warnings) console.warn(`  WARN: ${warning}`);
+  for (const warning of backendResolution.warnings) io.warn(`  WARN: ${warning}`);
   const defaultBackend = backendResolution.backend === 'files' || backendResolution.backend === 'github'
     ? backendResolution.backend
     : 'unknown';
   const outcomeOption = normalizeEventOutcomeOption(sub, opts.outcome);
-  for (const warning of outcomeOption.warnings) console.warn(`  WARN: ${warning}`);
+  for (const warning of outcomeOption.warnings) io.warn(`  WARN: ${warning}`);
 
   const event = buildEvent({
     target,
@@ -1493,30 +1477,29 @@ async function cmdEvent(args, commandLabel = 'event-logging') {
   });
 
   const validation = validateNewEvent(event, { target });
-  for (const error of validation.errors) console.error(`  ERROR: ${error}`);
-  for (const warning of validation.warnings) console.warn(`  WARN: ${warning}`);
+  for (const error of validation.errors) io.err(`  ERROR: ${error}`);
+  for (const warning of validation.warnings) io.warn(`  WARN: ${warning}`);
 
   if (validation.errors.length > 0) {
-    process.exitCode = 1;
-    return;
+    return 1;
   }
 
   let pathResult;
   try {
     pathResult = resolveEventLogPath(target, opts.output, event.task_id);
   } catch (error) {
-    console.error(error.message);
-    process.exitCode = 1;
-    return;
+    io.err(error.message);
+    return 1;
   }
 
   const { path: eventLogPath, warnings: pathWarnings } = pathResult;
-  for (const warning of pathWarnings) console.warn(`  WARN: ${warning}`);
+  for (const warning of pathWarnings) io.warn(`  WARN: ${warning}`);
 
   appendEventLog({ target, output: opts.output, event, path: eventLogPath });
-  console.log(`Appended event '${event.event_type}' to ${eventLogPath}`);
-  console.log(`  event_id: ${event.event_id}`);
-  console.log(`  trace_id: ${event.trace_id}`);
+  io.out(`Appended event '${event.event_type}' to ${eventLogPath}`);
+  io.out(`  event_id: ${event.event_id}`);
+  io.out(`  trace_id: ${event.trace_id}`);
+  return 0;
 }
 
 async function cmdConfigureModels(args) {
@@ -1935,82 +1918,108 @@ async function cmdGenerate(subArgs) {
 
 // --- entry ------------------------------------------------------------------
 
-const argv = process.argv.slice(2);
-const command = argv[0];
-const rest = argv.slice(1);
+/**
+ * Route a parsed argv to the matching command handler and return a numeric exit
+ * code. Importing this module no longer executes anything; the binary calls
+ * `runCli` (src/cli-main.js), which delegates here with an injected io context.
+ *
+ * Commands already migrated to the injectable-io contract (task, event) return
+ * their own exit code and never touch global `process.exitCode`. Remaining
+ * legacy handlers still communicate via `process.exitCode`; `dispatchLegacy`
+ * snapshots and restores it so a call never leaves global state mutated.
+ *
+ * @param {string[]} argv  Arguments after the node/bin prefix.
+ * @param {ReturnType<import('./cli-io.js').createIo>} [io]
+ * @returns {Promise<number>} exit code
+ */
+export async function dispatch(argv, io = createIo()) {
+  const command = argv[0];
+  const rest = argv.slice(1);
 
-switch (command) {
-  case 'init':
-    await cmdInit(rest);
-    break;
-  case 'setup':
-    await cmdSetup(rest);
-    break;
-  case 'update':
-    await cmdUpdate(rest);
-    break;
-  case 'upgrade':
-    await cmdUpdate(rest);
-    break;
-  case 'remove':
-    await cmdRemove(rest);
-    break;
-  case 'guidance':
-    await cmdGuidance(rest);
-    break;
-  case 'validate':
-    await cmdValidate(rest);
-    break;
-  case 'github-preflight':
-    await cmdGithubPreflight(rest);
-    break;
-  case 'github-review-audit':
-    await cmdGithubReviewAudit(rest);
-    break;
-  case 'github-ready':
-    await cmdGithubReady(rest);
-    break;
-  case 'doctor':
-    await cmdDoctor(rest);
-    break;
-  case 'task':
-    await cmdTask(rest);
-    break;
-  case 'worktree':
-    await cmdWorktree(rest);
-    break;
-  case 'event-logging':
-    await cmdEvent(rest, 'event-logging');
-    break;
-  case 'event':
-    await cmdEvent(rest, 'event');
-    break;
-  case 'configure':
-    if (rest[0] === 'models') {
-      await cmdConfigureModels(rest.slice(1));
-    } else {
-      console.error(`Unknown configure subcommand: ${rest[0]}`);
-      usage();
-      process.exitCode = 1;
+  switch (command) {
+    case 'task':
+      return await cmdTask(rest, io);
+    case 'event-logging':
+      return await cmdEvent(rest, 'event-logging', io);
+    case 'event':
+      return await cmdEvent(rest, 'event', io);
+    case undefined:
+    case '--help':
+    case '-h':
+    case 'help':
+      usage(io);
+      return 0;
+    default:
+      return await dispatchLegacy(command, rest);
+  }
+}
+
+async function dispatchLegacy(command, rest) {
+  const previousExitCode = process.exitCode;
+  process.exitCode = 0;
+  try {
+    switch (command) {
+      case 'init':
+        await cmdInit(rest);
+        break;
+      case 'setup':
+        await cmdSetup(rest);
+        break;
+      case 'update':
+        await cmdUpdate(rest);
+        break;
+      case 'upgrade':
+        await cmdUpdate(rest);
+        break;
+      case 'remove':
+        await cmdRemove(rest);
+        break;
+      case 'guidance':
+        await cmdGuidance(rest);
+        break;
+      case 'validate':
+        await cmdValidate(rest);
+        break;
+      case 'github-preflight':
+        await cmdGithubPreflight(rest);
+        break;
+      case 'github-review-audit':
+        await cmdGithubReviewAudit(rest);
+        break;
+      case 'github-ready':
+        await cmdGithubReady(rest);
+        break;
+      case 'doctor':
+        await cmdDoctor(rest);
+        break;
+      case 'worktree':
+        await cmdWorktree(rest);
+        break;
+      case 'configure':
+        if (rest[0] === 'models') {
+          await cmdConfigureModels(rest.slice(1));
+        } else {
+          console.error(`Unknown configure subcommand: ${rest[0]}`);
+          usage();
+          process.exitCode = 1;
+        }
+        break;
+      case 'status':
+        await cmdStatus(rest);
+        break;
+      case 'bootstrap-labels':
+        await cmdBootstrapLabels(rest);
+        break;
+      case 'generate':
+        await cmdGenerate(rest);
+        break;
+      default:
+        console.error(`Unknown command: ${command}`);
+        usage();
+        process.exitCode = 1;
     }
-    break;
-  case 'status':
-    await cmdStatus(rest);
-    break;
-  case 'bootstrap-labels':
-    await cmdBootstrapLabels(rest);
-    break;
-  case 'generate':
-    await cmdGenerate(rest);
-    break;
-  case undefined:
-  case '--help':
-  case '-h':
-  case 'help':
-    usage();
-    break;
-  default:
-    console.error(`Unknown command: ${command}`);
-    usage();
-    process.exitCode = 1;
+    return process.exitCode ?? 0;
+  } finally {
+    process.exitCode = previousExitCode;
+  }
 }

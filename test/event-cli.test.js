@@ -3,11 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
-
-const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
-const BIN = join(REPO_ROOT, 'bin', 'agenticloop.js');
+import { runCliInProcess } from './helpers/run-cli.js';
 
 let tmpBase;
 
@@ -19,8 +15,12 @@ after(() => {
   rmSync(tmpBase, { recursive: true, force: true });
 });
 
+// The `event`/`event-logging` command family is migrated to the injectable-io
+// contract, so exercise it in-process: no subprocess node startup, identical
+// output/exit codes. Full-init validation scenarios live in
+// event-validate-cli.test.js.
 function run(args) {
-  return spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf-8' });
+  return runCliInProcess(args);
 }
 
 function assertOk(result) {
@@ -115,7 +115,7 @@ Document the implementation summary, files changed, tests and checks run, result
   );
 }
 
-function appendAuditFixtureEvents(target, taskId, eventTypes = ['role.invoked', 'task.started', 'check.run', 'review.result', 'task.closed']) {
+async function appendAuditFixtureEvents(target, taskId, eventTypes = ['role.invoked', 'task.started', 'check.run', 'review.result', 'task.closed']) {
   // role.invoked and review.result go through the strict producer path, so they
   // carry complete delegation/review provenance data.
   const definitions = {
@@ -127,17 +127,17 @@ function appendAuditFixtureEvents(target, taskId, eventTypes = ['role.invoked', 
   };
 
   for (const eventType of eventTypes) {
-    assertOk(run(definitions[eventType]));
+    assertOk(await run(definitions[eventType]));
   }
 }
 
 describe('event CLI', () => {
-  it('event-logging appends and validates the default task-scoped event log', () => {
+  it('event-logging appends and validates the default task-scoped event log', async () => {
     const target = makeTarget('event-logging-alias');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'T-001');
 
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'task.started',
       '--target',
@@ -155,18 +155,18 @@ describe('event CLI', () => {
     const event = JSON.parse(readFileSync(filePath, 'utf-8').trim());
     assert.equal(event.event_type, 'task.started');
 
-    const result = run(['event-logging', 'validate', '--target', target]);
+    const result = await run(['event-logging', 'validate', '--target', target]);
     assertOk(result);
     assert.match(result.stdout, /agenticloop event-logging validate/);
     assert.match(result.stdout, /OK: 1 file\(s\), 1 event\(s\) validated/);
   });
 
-  it('treats task.started --outcome required as the default unknown outcome', () => {
+  it('treats task.started --outcome required as the default unknown outcome', async () => {
     const target = makeTarget('task-started-required-outcome');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'T-001');
 
-    const result = run([
+    const result = await run([
       'event',
       'task.started',
       '--target',
@@ -189,10 +189,10 @@ describe('event CLI', () => {
     assert.equal(event.outcome, 'unknown');
   });
 
-  it('fails default event writes when --task is missing', () => {
+  it('fails default event writes when --task is missing', async () => {
     const target = makeTarget('missing-task-default-output');
 
-    const result = run([
+    const result = await run([
       'event',
       'decision.recorded',
       '--target',
@@ -207,11 +207,11 @@ describe('event CLI', () => {
     assert.match(result.stderr, /--task is required for default event logging output/);
   });
 
-  it('allows no-task events when --output is supplied', () => {
+  it('allows no-task events when --output is supplied', async () => {
     const target = makeTarget('manual-event-log');
     const output = eventLogPath(target, 'manual.jsonl');
 
-    assertOk(run([
+    assertOk(await run([
       'event',
       'decision.recorded',
       '--target',
@@ -230,11 +230,11 @@ describe('event CLI', () => {
     assert.equal(event.task_id, null);
   });
 
-  it('writes github-backed task events without requiring a local task file', () => {
+  it('writes github-backed task events without requiring a local task file', async () => {
     const target = makeTarget('github-no-local-task-file');
     writeProjectMap(target, { taskBackend: 'github' });
 
-    const result = run([
+    const result = await run([
       'event',
       'task.started',
       '--target',
@@ -252,11 +252,11 @@ describe('event CLI', () => {
     assert.ok(existsSync(eventLogPath(target, 'T-001.jsonl')));
   });
 
-  it('writes files-backed task events with a warning when the task file does not exist', () => {
+  it('writes files-backed task events with a warning when the task file does not exist', async () => {
     const target = makeTarget('files-no-local-task-file');
     writeProjectMap(target, { taskBackend: 'files' });
 
-    const result = run([
+    const result = await run([
       'event',
       'role.invoked',
       '--target',
@@ -278,11 +278,11 @@ describe('event CLI', () => {
     assert.ok(existsSync(eventLogPath(target, 'T-001.jsonl')));
   });
 
-  it('surfaces unsupported task backend warnings on event writes', () => {
+  it('surfaces unsupported task backend warnings on event writes', async () => {
     const target = makeTarget('unsupported-backend-warning');
     writeProjectMap(target, { taskBackend: 'jira' });
 
-    const result = run([
+    const result = await run([
       'event-logging',
       'task.started',
       '--target',
@@ -299,12 +299,12 @@ describe('event CLI', () => {
     assert.match(result.stderr, /Unsupported task backend 'jira'/);
   });
 
-  it('writes task-scoped events with the same derived trace id', () => {
+  it('writes task-scoped events with the same derived trace id', async () => {
     const target = makeTarget('append-events');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'T-001');
 
-    assertOk(run([
+    assertOk(await run([
       'event',
       'task.created',
       '--target',
@@ -316,7 +316,7 @@ describe('event CLI', () => {
       '--summary',
       'Created files task record',
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event',
       'check.run',
       '--target',
@@ -344,13 +344,13 @@ describe('event CLI', () => {
     assert.equal(first.trace_id, second.trace_id);
   });
 
-  it('writes different tasks to different event log files', () => {
+  it('writes different tasks to different event log files', async () => {
     const target = makeTarget('different-task-files');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'T-001');
     writeValidTaskRecord(target, 'T-002');
 
-    assertOk(run([
+    assertOk(await run([
       'event',
       'task.started',
       '--target',
@@ -362,7 +362,7 @@ describe('event CLI', () => {
       '--summary',
       'Started first task',
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event',
       'task.started',
       '--target',
@@ -383,17 +383,17 @@ describe('event CLI', () => {
     assert.equal(JSON.parse(readFileSync(secondPath, 'utf-8').trim()).task_id, 'T-002');
   });
 
-  it('rejects invalid event types', () => {
+  it('rejects invalid event types', async () => {
     const target = makeTarget('invalid-event-type');
-    const result = run(['event', 'not.real', '--target', target, '--summary', 'Bad event']);
+    const result = await run(['event', 'not.real', '--target', target, '--summary', 'Bad event']);
 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /event_type must be one of/);
   });
 
-  it('rejects privacy-blocked data payloads', () => {
+  it('rejects privacy-blocked data payloads', async () => {
     const target = makeTarget('privacy-payload');
-    const result = run([
+    const result = await run([
       'event',
       'decision.recorded',
       '--target',
@@ -408,12 +408,12 @@ describe('event CLI', () => {
     assert.match(result.stderr, /banned privacy-sensitive key 'data\.messages'/);
   });
 
-  it('rejects review.result when outcome is omitted', () => {
+  it('rejects review.result when outcome is omitted', async () => {
     const target = makeTarget('review-result-missing-outcome');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'T-001');
 
-    const result = run([
+    const result = await run([
       'event',
       'review.result',
       '--target',
@@ -430,12 +430,12 @@ describe('event CLI', () => {
     assert.match(result.stderr, /event_type 'review\.result' requires outcome accepted or needs_revision/);
   });
 
-  it('accepts review.result with outcome accepted', () => {
+  it('accepts review.result with outcome accepted', async () => {
     const target = makeTarget('review-result-accepted');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'T-001');
 
-    const result = run([
+    const result = await run([
       'event',
       'review.result',
       '--target',
@@ -459,12 +459,12 @@ describe('event CLI', () => {
     assert.equal(event.outcome, 'accepted');
   });
 
-  it('rejects incompatible task.created outcomes', () => {
+  it('rejects incompatible task.created outcomes', async () => {
     const target = makeTarget('task-created-accepted');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'T-001');
 
-    const result = run([
+    const result = await run([
       'event',
       'task.created',
       '--target',
@@ -483,13 +483,13 @@ describe('event CLI', () => {
     assert.match(result.stderr, /event_type 'task\.created' requires outcome unknown or success/);
   });
 
-  it('accepts check.run with success, failure, and blocked outcomes', () => {
+  it('accepts check.run with success, failure, and blocked outcomes', async () => {
     const target = makeTarget('check-run-outcomes');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'T-001');
 
     for (const outcome of ['success', 'failure', 'blocked']) {
-      assertOk(run([
+      assertOk(await run([
         'event',
         'check.run',
         '--target',
@@ -510,12 +510,12 @@ describe('event CLI', () => {
     assert.deepEqual(entries.map(entry => entry.outcome), ['success', 'failure', 'blocked']);
   });
 
-  it('infers check.run outcome from structured exit_code data when outcome is omitted', () => {
+  it('infers check.run outcome from structured exit_code data when outcome is omitted', async () => {
     const target = makeTarget('check-run-inferred-outcome');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'T-001');
 
-    const result = run([
+    const result = await run([
       'event',
       'check.run',
       '--target',
@@ -539,10 +539,10 @@ describe('event CLI', () => {
     assert.equal(event.outcome, 'success');
   });
 
-  it('warns on short transcript-like summaries but still writes the event', () => {
+  it('warns on short transcript-like summaries but still writes the event', async () => {
     const target = makeTarget('transcript-summary-warning');
     const output = eventLogPath(target, 'manual.jsonl');
-    const result = run([
+    const result = await run([
       'event',
       'task.updated',
       '--target',
@@ -560,12 +560,12 @@ describe('event CLI', () => {
     assert.equal(event.summary, 'system: scoped note\nuser: confirm updated task record');
   });
 
-  it('event-logging validate checks every JSONL file in the default log directory', () => {
+  it('event-logging validate checks every JSONL file in the default log directory', async () => {
     const target = makeTarget('validate-all-logs');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'T-001');
 
-    assertOk(run([
+    assertOk(await run([
       'event',
       'task.started',
       '--target',
@@ -577,7 +577,7 @@ describe('event CLI', () => {
       '--summary',
       'Started scoped implementation',
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event',
       'decision.recorded',
       '--target',
@@ -590,89 +590,23 @@ describe('event CLI', () => {
       'Recorded setup decision',
     ]));
 
-    const result = run(['event-logging', 'validate', '--target', target]);
+    const result = await run(['event-logging', 'validate', '--target', target]);
 
     assertOk(result);
     assert.match(result.stdout, /OK: 2 file\(s\), 2 event\(s\) validated/);
   });
 
-  it('event validate passes when no event logs exist', () => {
+  it('event validate passes when no event logs exist', async () => {
     const target = makeTarget('missing-event-logs');
-    const result = run(['event', 'validate', '--target', target]);
+    const result = await run(['event', 'validate', '--target', target]);
 
     assertOk(result);
     assert.match(result.stdout, /No event logs found/);
   });
 
-  it('validate passes when no event logs exist and validates an existing event log', () => {
-    const withoutLogs = makeTarget('validate-no-event-logs');
-    assertOk(run(['init', '--target', withoutLogs]));
-
-    const noLogsResult = run(['validate', '--target', withoutLogs]);
-    assertOk(noLogsResult);
-    assert.doesNotMatch(noLogsResult.stdout, /Event Logs/);
-
-    const withLogs = makeTarget('validate-with-event-logs');
-    assertOk(run(['init', '--target', withLogs]));
-    writeValidTaskRecord(withLogs, 'T-001');
-    assertOk(run([
-      'event',
-      'task.created',
-      '--target',
-      withLogs,
-      '--task',
-      'T-001',
-      '--role',
-      'maintainer',
-      '--summary',
-      'Created files task record',
-    ]));
-
-    const withLogsResult = run(['validate', '--target', withLogs]);
-    assertOk(withLogsResult);
-    assert.match(withLogsResult.stdout, /Event Logs - OK/);
-    assert.ok(withLogsResult.stdout.includes(join(withLogs, '.agenticloop', 'logs')));
-  });
-
-  it('agenticloop validate checks every default event log file', () => {
-    const target = makeTarget('validate-command-all-logs');
-    assertOk(run(['init', '--target', target]));
-    writeValidTaskRecord(target, 'T-001');
-
-    assertOk(run([
-      'event',
-      'task.created',
-      '--target',
-      target,
-      '--task',
-      'T-001',
-      '--role',
-      'maintainer',
-      '--summary',
-      'Created files task record',
-    ]));
-    assertOk(run([
-      'event',
-      'decision.recorded',
-      '--target',
-      target,
-      '--output',
-      eventLogPath(target, 'manual.jsonl'),
-      '--role',
-      'maintainer',
-      '--summary',
-      'Recorded setup decision',
-    ]));
-
-    const result = run(['validate', '--target', target]);
-
-    assertOk(result);
-    assert.match(result.stdout, /OK: 2 file\(s\), 2 event\(s\) validated/);
-  });
-
-  it('rejects unsafe task ids before creating out-of-directory event log paths', () => {
+  it('rejects unsafe task ids before creating out-of-directory event log paths', async () => {
     const target = makeTarget('unsafe-task-id');
-    const result = run([
+    const result = await run([
       'event',
       'task.started',
       '--target',
@@ -690,60 +624,60 @@ describe('event CLI', () => {
     assert.ok(!existsSync(join(target, '.agenticloop', 'logs', 'escape.jsonl')));
   });
 
-  it('event-logging audit passes when required event types are present', () => {
+  it('event-logging audit passes when required event types are present', async () => {
     const target = makeTarget('audit-pass');
     writeProjectMap(target, { eventLogging: 'enabled' });
     writeValidTaskRecord(target, 'T-001');
-    appendAuditFixtureEvents(target, 'T-001');
+    await appendAuditFixtureEvents(target, 'T-001');
 
-    const result = run(['event-logging', 'audit', '--target', target, '--task', 'T-001']);
+    const result = await run(['event-logging', 'audit', '--target', target, '--task', 'T-001']);
 
     assertOk(result);
     assert.match(result.stdout, /agenticloop event-logging audit/);
     assert.match(result.stdout, /OK: 5 event\(s\) validated for strict audit/);
   });
 
-  it('event-logging audit fails when enabled and no log exists for the task', () => {
+  it('event-logging audit fails when enabled and no log exists for the task', async () => {
     const target = makeTarget('audit-missing-log');
     writeProjectMap(target, { eventLogging: 'enabled' });
     writeValidTaskRecord(target, 'T-001');
 
-    const result = run(['event-logging', 'audit', '--target', target, '--task', 'T-001']);
+    const result = await run(['event-logging', 'audit', '--target', target, '--task', 'T-001']);
 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Missing task event log/);
   });
 
-  it('event-logging audit fails when a required event type is missing', () => {
+  it('event-logging audit fails when a required event type is missing', async () => {
     const target = makeTarget('audit-missing-type');
     writeProjectMap(target, { eventLogging: 'enabled' });
     writeValidTaskRecord(target, 'T-001');
-    appendAuditFixtureEvents(target, 'T-001', ['role.invoked', 'task.started', 'check.run', 'review.result']);
+    await appendAuditFixtureEvents(target, 'T-001', ['role.invoked', 'task.started', 'check.run', 'review.result']);
 
-    const result = run(['event-logging', 'audit', '--target', target, '--task', 'T-001']);
+    const result = await run(['event-logging', 'audit', '--target', target, '--task', 'T-001']);
 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Missing required event types: task\.closed/);
   });
 
-  it('event-logging audit reports disabled logging without failure by default', () => {
+  it('event-logging audit reports disabled logging without failure by default', async () => {
     const target = makeTarget('audit-disabled-default');
     writeProjectMap(target, { eventLogging: 'disabled' });
 
-    const result = run(['event-logging', 'audit', '--target', target, '--task', 'T-001']);
+    const result = await run(['event-logging', 'audit', '--target', target, '--task', 'T-001']);
 
     assertOk(result);
     assert.match(result.stdout, /event_logging: disabled/);
     assert.match(result.stdout, /skipping strict audit/);
   });
 
-  it('event-logging audit with explicit --require still checks a disabled project log', () => {
+  it('event-logging audit with explicit --require still checks a disabled project log', async () => {
     const target = makeTarget('audit-disabled-explicit');
     writeProjectMap(target, { eventLogging: 'disabled' });
     writeValidTaskRecord(target, 'T-001');
-    appendAuditFixtureEvents(target, 'T-001', ['role.invoked']);
+    await appendAuditFixtureEvents(target, 'T-001', ['role.invoked']);
 
-    const result = run([
+    const result = await run([
       'event-logging',
       'audit',
       '--target',
@@ -759,11 +693,11 @@ describe('event CLI', () => {
     assert.match(result.stdout, /OK: 1 event\(s\) validated for strict audit/);
   });
 
-  it('event-logging report summarizes checks, reviews, delegation, and refs from an existing task log', () => {
+  it('event-logging report summarizes checks, reviews, delegation, and refs from an existing task log', async () => {
     const target = makeTarget('report-complete-trace');
     writeProjectMap(target, { taskBackend: 'github', eventLogging: 'enabled' });
 
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'role.invoked',
       '--target',
@@ -788,7 +722,7 @@ describe('event CLI', () => {
         reason: 'Implementation ready',
       }),
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'task.started',
       '--target',
@@ -802,7 +736,7 @@ describe('event CLI', () => {
       '--ref',
       'github:issue:42',
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'check.run',
       '--target',
@@ -822,7 +756,7 @@ describe('event CLI', () => {
       '--data-json',
       JSON.stringify({ command: 'npm test', exit_code: 0, passed: 128, failed: 0, skipped: 2, duration_ms: 15000, attempt: 1 }),
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'check.run',
       '--target',
@@ -842,7 +776,7 @@ describe('event CLI', () => {
       '--data-json',
       JSON.stringify({ command: 'npm run lint', exit_code: 1, passed: 0, failed: 3, skipped: 0, duration_ms: 8000, attempt: 1 }),
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'check.run',
       '--target',
@@ -862,7 +796,7 @@ describe('event CLI', () => {
       '--data-json',
       JSON.stringify({ command: 'npm run smoke', exit_code: 1, passed: 0, failed: 0, skipped: 1, duration_ms: 5000, attempt: 2 }),
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'review.result',
       '--target',
@@ -880,7 +814,7 @@ describe('event CLI', () => {
       '--data-json',
       JSON.stringify({ review_round: 1, review_mode: 'host_subagent', artifact_revision: 'abc123', pr_head: 'abc123' }),
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'role.invoked',
       '--target',
@@ -903,7 +837,7 @@ describe('event CLI', () => {
         reason: 'Review tool unavailable',
       }),
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'review.result',
       '--target',
@@ -923,7 +857,7 @@ describe('event CLI', () => {
       '--data-json',
       JSON.stringify({ review_round: 2, review_mode: 'single_agent_fallback', artifact_revision: 'def456', pr_head: 'def456' }),
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'task.closed',
       '--target',
@@ -942,7 +876,7 @@ describe('event CLI', () => {
       'github:pr:17',
     ]));
 
-    const result = run(['event-logging', 'report', '--target', target, '--task', 'T-001']);
+    const result = await run(['event-logging', 'report', '--target', target, '--task', 'T-001']);
 
     assertOk(result);
     assert.match(result.stdout, /agenticloop event-logging report/);
@@ -958,12 +892,12 @@ describe('event CLI', () => {
     assert.match(result.stdout, /refs summary: .*github:pr:17=8/);
   });
 
-  it('event-logging audit prints a clear durable task.closed error', () => {
+  it('event-logging audit prints a clear durable task.closed error', async () => {
     const target = makeTarget('audit-durable-closure-error');
     writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'files' });
     writeValidTaskRecord(target, 'T-001');
-    appendAuditFixtureEvents(target, 'T-001', ['role.invoked', 'task.started', 'check.run', 'review.result']);
-    assertOk(run([
+    await appendAuditFixtureEvents(target, 'T-001', ['role.invoked', 'task.started', 'check.run', 'review.result']);
+    assertOk(await run([
       'event-logging',
       'task.closed',
       '--target',
@@ -978,18 +912,18 @@ describe('event CLI', () => {
       'success',
     ]));
 
-    const result = run(['event-logging', 'audit', '--target', target, '--task', 'T-001']);
+    const result = await run(['event-logging', 'audit', '--target', target, '--task', 'T-001']);
 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Durable task\.closed not satisfied/);
     assert.match(result.stderr, /role was engineer/);
   });
 
-  it('event-logging report prints durable task.closed status', () => {
+  it('event-logging report prints durable task.closed status', async () => {
     const passing = makeTarget('report-durable-closure-yes');
     writeProjectMap(passing, { eventLogging: 'enabled', taskBackend: 'github' });
-    appendAuditFixtureEvents(passing, 'T-001', ['role.invoked', 'task.started', 'check.run', 'review.result']);
-    assertOk(run([
+    await appendAuditFixtureEvents(passing, 'T-001', ['role.invoked', 'task.started', 'check.run', 'review.result']);
+    assertOk(await run([
       'event-logging',
       'task.closed',
       '--target',
@@ -1008,14 +942,14 @@ describe('event CLI', () => {
       'github:pr:17',
     ]));
 
-    const passingResult = run(['event-logging', 'report', '--target', passing, '--task', 'T-001']);
+    const passingResult = await run(['event-logging', 'report', '--target', passing, '--task', 'T-001']);
     assertOk(passingResult);
     assert.match(passingResult.stdout, /durable task\.closed: yes/);
 
     const failing = makeTarget('report-durable-closure-no');
     writeProjectMap(failing, { eventLogging: 'enabled', taskBackend: 'github' });
-    appendAuditFixtureEvents(failing, 'T-002', ['role.invoked', 'task.started', 'check.run', 'review.result']);
-    assertOk(run([
+    await appendAuditFixtureEvents(failing, 'T-002', ['role.invoked', 'task.started', 'check.run', 'review.result']);
+    assertOk(await run([
       'event-logging',
       'task.closed',
       '--target',
@@ -1032,18 +966,18 @@ describe('event CLI', () => {
       'github:issue:42',
     ]));
 
-    const failingResult = run(['event-logging', 'report', '--target', failing, '--task', 'T-002']);
+    const failingResult = await run(['event-logging', 'report', '--target', failing, '--task', 'T-002']);
     assertOk(failingResult);
     assert.match(failingResult.stdout, /durable task\.closed: no \(/);
     assert.match(failingResult.stdout, /missing github:pr ref/);
   });
 
-  it('event-logging report prints accepted imperfect checks separately', () => {
+  it('event-logging report prints accepted imperfect checks separately', async () => {
     const target = makeTarget('report-accepted-imperfect-cli');
     writeProjectMap(target, { eventLogging: 'enabled', taskBackend: 'files' });
     writeValidTaskRecord(target, 'T-001');
 
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'role.invoked',
       '--target',
@@ -1057,7 +991,7 @@ describe('event CLI', () => {
       '--data-json',
       '{"target_role":"engineer","delegation_mode":"host_subagent","fallback":false}',
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'task.started',
       '--target',
@@ -1069,7 +1003,7 @@ describe('event CLI', () => {
       '--summary',
       'Started implementation',
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'check.run',
       '--target',
@@ -1087,7 +1021,7 @@ describe('event CLI', () => {
       '--data-json',
       JSON.stringify({ command: 'npm test', exit_code: 1, passed: 10, failed: 1, triaged_unrelated: true, required: true }),
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'check.run',
       '--target',
@@ -1105,7 +1039,7 @@ describe('event CLI', () => {
       '--data-json',
       JSON.stringify({ command: 'npm run lint', exit_code: 1, accepted_known_failure: true }),
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'review.result',
       '--target',
@@ -1121,7 +1055,7 @@ describe('event CLI', () => {
       '--data-json',
       '{"review_round":1,"review_mode":"host_subagent"}',
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event-logging',
       'task.closed',
       '--target',
@@ -1136,7 +1070,7 @@ describe('event CLI', () => {
       'success',
     ]));
 
-    const result = run(['event-logging', 'report', '--target', target, '--task', 'T-001']);
+    const result = await run(['event-logging', 'report', '--target', target, '--task', 'T-001']);
 
     assertOk(result);
     assert.match(result.stdout, /accepted imperfect checks \(not clean success\):/);
@@ -1146,10 +1080,10 @@ describe('event CLI', () => {
     assert.doesNotMatch(result.stdout, /failed\/blocked checks:[\s\S]*Known pre-existing lint failure/);
   });
 
-  it('event-logging report fails when the task log is missing', () => {
+  it('event-logging report fails when the task log is missing', async () => {
     const target = makeTarget('report-missing-log');
 
-    const result = run(['event-logging', 'report', '--target', target, '--task', 'T-404']);
+    const result = await run(['event-logging', 'report', '--target', target, '--task', 'T-404']);
 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Missing task event log: \.agenticloop\/logs\/T-404\.jsonl/);
@@ -1157,14 +1091,14 @@ describe('event CLI', () => {
 });
 
 describe('event-logging host inference', () => {
-  it('infers host from a single generated adapter marker when --host is omitted', () => {
+  it('infers host from a single generated adapter marker when --host is omitted', async () => {
     const target = makeTarget('host-inference-single');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     mkdirSync(join(target, '.opencode', 'agents'), { recursive: true });
     writeFileSync(join(target, '.opencode', 'agents', 'orchestrator.md'), '# orchestrator\n', 'utf-8');
     writeValidTaskRecord(target, 'T-001');
 
-    assertOk(run([
+    assertOk(await run([
       'event-logging', 'task.started', '--target', target, '--task', 'T-001', '--role', 'engineer', '--summary', 'Started task',
     ]));
 
@@ -1172,14 +1106,14 @@ describe('event-logging host inference', () => {
     assert.equal(event.host, 'opencode');
   });
 
-  it('preserves explicit --host over inferred adapter', () => {
+  it('preserves explicit --host over inferred adapter', async () => {
     const target = makeTarget('host-explicit-wins');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     mkdirSync(join(target, '.opencode', 'agents'), { recursive: true });
     writeFileSync(join(target, '.opencode', 'agents', 'orchestrator.md'), '# orchestrator\n', 'utf-8');
     writeValidTaskRecord(target, 'T-001');
 
-    assertOk(run([
+    assertOk(await run([
       'event-logging', 'task.started', '--target', target, '--task', 'T-001', '--role', 'engineer', '--host', 'custom-host', '--summary', 'Started task',
     ]));
 
@@ -1187,16 +1121,16 @@ describe('event-logging host inference', () => {
     assert.equal(event.host, 'custom-host');
   });
 
-  it('records host unknown when adapter detection is ambiguous', () => {
+  it('records host unknown when adapter detection is ambiguous', async () => {
     const target = makeTarget('host-inference-ambiguous');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     mkdirSync(join(target, '.opencode', 'agents'), { recursive: true });
     writeFileSync(join(target, '.opencode', 'agents', 'orchestrator.md'), '# orchestrator\n', 'utf-8');
     mkdirSync(join(target, '.claude', 'agents'), { recursive: true });
     writeFileSync(join(target, '.claude', 'agents', 'maintainer.md'), '# maintainer\n', 'utf-8');
     writeValidTaskRecord(target, 'T-001');
 
-    assertOk(run([
+    assertOk(await run([
       'event-logging', 'task.started', '--target', target, '--task', 'T-001', '--role', 'engineer', '--summary', 'Started task',
     ]));
 
@@ -1206,26 +1140,26 @@ describe('event-logging host inference', () => {
 });
 
 describe('event-logging aggregate report', () => {
-  it('reports across task logs and survives malformed and empty logs', () => {
+  it('reports across task logs and survives malformed and empty logs', async () => {
     const target = makeTarget('aggregate-report-cli');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'T-001');
     writeValidTaskRecord(target, 'T-002');
 
     mkdirSync(join(target, '.opencode', 'agents'), { recursive: true });
     writeFileSync(join(target, '.opencode', 'agents', 'orchestrator.md'), '# orchestrator\n', 'utf-8');
-    appendAuditFixtureEvents(target, 'T-001');
+    await appendAuditFixtureEvents(target, 'T-001');
 
-    assertOk(run(['event-logging', 'task.started', '--target', target, '--task', 'T-002', '--role', 'engineer', '--summary', 'Started T-002']));
-    assertOk(run(['event-logging', 'review.result', '--target', target, '--task', 'T-002', '--role', 'maintainer', '--outcome', 'accepted', '--summary', 'Accepted T-002', '--data-json', '{"review_round":1,"review_mode":"single_agent_fallback","continuation_reason":"direct maintainer continuation"}']));
+    assertOk(await run(['event-logging', 'task.started', '--target', target, '--task', 'T-002', '--role', 'engineer', '--summary', 'Started T-002']));
+    assertOk(await run(['event-logging', 'review.result', '--target', target, '--task', 'T-002', '--role', 'maintainer', '--outcome', 'accepted', '--summary', 'Accepted T-002', '--data-json', '{"review_round":1,"review_mode":"single_agent_fallback","continuation_reason":"direct maintainer continuation"}']));
 
-    assertOk(run(['event-logging', 'task.started', '--target', target, '--task', 'T-003', '--role', 'engineer', '--host', 'unknown', '--summary', 'Unknown host event']));
+    assertOk(await run(['event-logging', 'task.started', '--target', target, '--task', 'T-003', '--role', 'engineer', '--host', 'unknown', '--summary', 'Unknown host event']));
 
     mkdirSync(join(target, '.agenticloop', 'logs'), { recursive: true });
     writeFileSync(join(target, '.agenticloop', 'logs', 'broken.jsonl'), 'not json\n', 'utf-8');
     writeFileSync(join(target, '.agenticloop', 'logs', 'empty.jsonl'), '', 'utf-8');
 
-    const result = run(['event-logging', 'report', '--target', target]);
+    const result = await run(['event-logging', 'report', '--target', target]);
 
     assertOk(result);
     assert.match(result.stdout, /agenticloop event-logging report/);
@@ -1243,31 +1177,31 @@ describe('event-logging aggregate report', () => {
     assert.match(result.stdout, /T-003/);
   });
 
-  it('prints aggregate delegation, fallback, and affected task ids', () => {
+  it('prints aggregate delegation, fallback, and affected task ids', async () => {
     const target = makeTarget('aggregate-delegation-cli');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'T-001');
     writeValidTaskRecord(target, 'T-002');
 
-    assertOk(run([
+    assertOk(await run([
       'event-logging', 'role.invoked', '--target', target, '--task', 'T-001', '--role', 'orchestrator',
       '--summary', 'Delegated engineer', '--data-json',
       JSON.stringify({ target_role: 'engineer', delegation_mode: 'host_subagent', fallback: false }),
     ]));
-    assertOk(run(['event-logging', 'task.started', '--target', target, '--task', 'T-001', '--role', 'engineer', '--summary', 'Started T-001']));
-    assertOk(run([
+    assertOk(await run(['event-logging', 'task.started', '--target', target, '--task', 'T-001', '--role', 'engineer', '--summary', 'Started T-001']));
+    assertOk(await run([
       'event-logging', 'role.invoked', '--target', target, '--task', 'T-001', '--role', 'orchestrator',
       '--summary', 'Fallback maintainer', '--data-json',
       JSON.stringify({ target_role: 'maintainer', delegation_mode: 'single_agent_fallback', fallback: true, fallback_cause: 'mechanism_absent', reason: 'No subagent mechanism available in this host' }),
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event-logging', 'task.closed', '--target', target, '--task', 'T-001', '--role', 'maintainer',
       '--outcome', 'success', '--summary', 'Closed T-001',
     ]));
 
-    assertOk(run(['event-logging', 'task.started', '--target', target, '--task', 'T-002', '--role', 'engineer', '--summary', 'Started T-002']));
+    assertOk(await run(['event-logging', 'task.started', '--target', target, '--task', 'T-002', '--role', 'engineer', '--summary', 'Started T-002']));
 
-    const result = run(['event-logging', 'report', '--target', target]);
+    const result = await run(['event-logging', 'report', '--target', target]);
 
     assertOk(result);
     assert.match(result.stdout, /role\.invoked targets: engineer=1, maintainer=1/);
@@ -1276,65 +1210,65 @@ describe('event-logging aggregate report', () => {
     assert.match(result.stdout, /tasks missing task\.closed: 1 \(T-002\)/);
   });
 
-  it('marks mixed-task log rows when host unknown is attached to event task ids', () => {
+  it('marks mixed-task log rows when host unknown is attached to event task ids', async () => {
     const target = makeTarget('aggregate-mixed-task-host-quality');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'T-001');
     writeValidTaskRecord(target, 'T-002');
     const mixedLog = eventLogPath(target, 'mixed.jsonl');
 
-    assertOk(run([
+    assertOk(await run([
       'event-logging', 'task.started', '--target', target, '--task', 'T-001', '--role', 'engineer',
       '--host', 'unknown', '--summary', 'Started T-001', '--output', mixedLog,
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event-logging', 'task.started', '--target', target, '--task', 'T-002', '--role', 'engineer',
       '--host', 'unknown', '--summary', 'Started T-002', '--output', mixedLog,
     ]));
 
-    const result = run(['event-logging', 'report', '--target', target]);
+    const result = await run(['event-logging', 'report', '--target', target]);
 
     assertOk(result);
     assert.match(result.stdout, /events with host=unknown: 2/);
     assert.match(result.stdout, /mixed\s+2\s+role\.invoked, check\.run, review\.result, task\.closed\s+missing\/failing\s+none\s+0\/0\/0\s+unknown present/);
   });
 
-  it('handles aggregate report errors cleanly', () => {
+  it('handles aggregate report errors cleanly', async () => {
     const target = makeTarget('aggregate-report-error');
     mkdirSync(join(target, '.agenticloop'), { recursive: true });
     writeFileSync(join(target, '.agenticloop', 'logs'), 'not a directory', 'utf-8');
 
-    const result = run(['event-logging', 'report', '--target', target]);
+    const result = await run(['event-logging', 'report', '--target', target]);
 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Failed to generate aggregate event log report/);
     assert.doesNotMatch(result.stderr, /\s+at\s+/);
   });
 
-  it('keeps per-task report backward compatible', () => {
+  it('keeps per-task report backward compatible', async () => {
     const target = makeTarget('aggregate-report-per-task-compat');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'T-001');
-    appendAuditFixtureEvents(target, 'T-001');
+    await appendAuditFixtureEvents(target, 'T-001');
 
-    const result = run(['event-logging', 'report', '--target', target, '--task', 'T-001']);
+    const result = await run(['event-logging', 'report', '--target', target, '--task', 'T-001']);
 
     assertOk(result);
     assert.match(result.stdout, /task: T-001/);
     assert.match(result.stdout, /strict audit missing: none/);
   });
 
-  it('event-logging report --features works over existing review.result logs', () => {
+  it('event-logging report --features works over existing review.result logs', async () => {
     const target = makeTarget('report-features-historical');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'P23-16');
     // Three review.result events -> three derived review rounds, no producer telemetry.
     for (let i = 0; i < 2; i += 1) {
-      assertOk(run(['event', 'review.result', '--target', target, '--task', 'P23-16', '--role', 'maintainer', '--summary', `Round ${i + 1}`, '--outcome', 'needs_revision', '--data-json', JSON.stringify({ review_round: i + 1, review_mode: 'single_agent_fallback', continuation_reason: 'direct maintainer continuation' })]));
+      assertOk(await run(['event', 'review.result', '--target', target, '--task', 'P23-16', '--role', 'maintainer', '--summary', `Round ${i + 1}`, '--outcome', 'needs_revision', '--data-json', JSON.stringify({ review_round: i + 1, review_mode: 'single_agent_fallback', continuation_reason: 'direct maintainer continuation' })]));
     }
-    assertOk(run(['event', 'review.result', '--target', target, '--task', 'P23-16', '--role', 'maintainer', '--summary', 'Accepted', '--outcome', 'accepted', '--data-json', JSON.stringify({ review_round: 3, review_mode: 'single_agent_fallback', continuation_reason: 'direct maintainer continuation' })]));
+    assertOk(await run(['event', 'review.result', '--target', target, '--task', 'P23-16', '--role', 'maintainer', '--summary', 'Accepted', '--outcome', 'accepted', '--data-json', JSON.stringify({ review_round: 3, review_mode: 'single_agent_fallback', continuation_reason: 'direct maintainer continuation' })]));
 
-    const result = run(['event-logging', 'report', '--features', '--target', target]);
+    const result = await run(['event-logging', 'report', '--features', '--target', target]);
 
     assertOk(result);
     assert.match(result.stdout, /report --features/);
@@ -1343,11 +1277,11 @@ describe('event-logging aggregate report', () => {
     assert.match(result.stdout, /feature telemetry warnings: none/);
   });
 
-  it('event-logging report --features surfaces emitted telemetry', () => {
+  it('event-logging report --features surfaces emitted telemetry', async () => {
     const target = makeTarget('report-features-telemetry');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'P23-16');
-    assertOk(run([
+    assertOk(await run([
       'event', 'task.created', '--target', target, '--task', 'P23-16', '--role', 'maintainer',
       '--summary', 'Created integration sweep',
       '--data-json', JSON.stringify({
@@ -1359,7 +1293,7 @@ describe('event-logging aggregate report', () => {
       }),
     ]));
 
-    const result = run(['event-logging', 'report', '--features', '--target', target]);
+    const result = await run(['event-logging', 'report', '--features', '--target', target]);
 
     assertOk(result);
     assert.match(result.stdout, /tasks with feature telemetry: 1/);
@@ -1368,23 +1302,23 @@ describe('event-logging aggregate report', () => {
     assert.match(result.stdout, /context overflow risk: medium=1/);
   });
 
-  it('event-logging report --features prints context-risk omission candidates', () => {
+  it('event-logging report --features prints context-risk omission candidates', async () => {
     const target = makeTarget('report-features-omission');
-    assertOk(run(['init', '--target', target]));
+    writeProjectMap(target);
     writeValidTaskRecord(target, 'P40-10');
-    assertOk(run([
+    assertOk(await run([
       'event', 'task.created', '--target', target, '--task', 'P40-10', '--role', 'maintainer',
       '--summary', 'Created', '--data-json', JSON.stringify({
         feature_telemetry_version: 1, minimalism: 'none', minimalism_trigger: 'ordinary-default',
       }),
     ]));
-    assertOk(run([
+    assertOk(await run([
       'event', 'task.closed', '--target', target, '--task', 'P40-10', '--role', 'maintainer',
       '--summary', 'Closed', '--outcome', 'success', '--data-json', JSON.stringify({
         feature_telemetry_version: 1, context_pressure_encountered: true,
       }),
     ]));
-    const result = run(['event-logging', 'report', '--features', '--target', target]);
+    const result = await run(['event-logging', 'report', '--features', '--target', target]);
     assertOk(result);
     assert.match(result.stdout, /context-risk omission candidates/);
     assert.match(result.stdout, /pressure hit but no risk predicted \(higher confidence\): 1 \(P40-10\)/);
