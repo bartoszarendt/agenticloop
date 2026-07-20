@@ -163,6 +163,14 @@ task-record obligation.
   triage and profile promotion. Lane-local observations stay in status/summary
   and batch findings use parallel routing. Do not create records indiscriminately,
   change accepted decisions, or write when lane ownership is unclear.
+- Recognize a supported Project Operating Fact candidate (see the Project
+  Operating Facts section in `agenticloop/AGENTIC_LOOP.md`) but do not edit the
+  shared `## Project Operating Facts` profile in `.agenticloop/project.md` from an
+  implementation lane. Place an ordinary candidate in the implementation
+  return or `## Process Observations`, returning the evidence, the proposed
+  concise fact, a proposed source, and a revisit trigger for maintainer triage.
+  Use the cross-lane finding route only when the candidate affects sibling
+  assumptions or current batch correctness.
 - Use the exact task id from the task record in branch names, pull request titles,
   labels, and commit trailers when `task_backend: github` is set.
 - Honor any delegation lease from the orchestrator, including observable-step

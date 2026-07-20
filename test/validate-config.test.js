@@ -1111,6 +1111,40 @@ describe('Files-backed task-record frontmatter validation', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Project Operating Facts project-map compatibility
+// ---------------------------------------------------------------------------
+
+describe('Project Operating Facts project-map compatibility', () => {
+  it('accepts an existing project map without a Project Operating Facts section', () => {
+    const d = makeFilesFirstTarget('pof-absent-');
+    const { errors } = validateConfig(d);
+    const mapErrors = errors.filter(
+      e => e.includes('project.md') || e.includes('Project Operating Facts')
+    );
+    assert.deepEqual(mapErrors, [], `expected no project-map errors, got: ${JSON.stringify(mapErrors)}`);
+  });
+
+  it('accepts a project map with a populated Project Operating Facts section', () => {
+    const d = makeFilesFirstTarget('pof-present-');
+    const projectPath = join(d, '.agenticloop', 'project.md');
+    const base = readFileSync(projectPath, 'utf-8');
+    writeFileSync(
+      projectPath,
+      base +
+        '\n\n## Project Operating Facts\n\n' +
+        '- `PF-local-postgres-tests` — Local PostgreSQL tests use the Compose `test`\n' +
+        '  profile and port 5436. Source: `docs/testing.md#local-postgres-tests`.\n' +
+        '  Revisit when: the test service, port, or test runner changes.\n'
+    );
+    const { errors } = validateConfig(d);
+    const mapErrors = errors.filter(
+      e => e.includes('project.md') || e.includes('Project Operating Facts')
+    );
+    assert.deepEqual(mapErrors, [], `expected no project-map errors, got: ${JSON.stringify(mapErrors)}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // .agenticloop/tmp/ and .gitignore checks
 // ---------------------------------------------------------------------------
 

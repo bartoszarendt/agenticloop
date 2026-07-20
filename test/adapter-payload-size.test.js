@@ -38,12 +38,19 @@ const TOLERANCE = 0.05;
 // Knowledge coordination and combined verification must remain within these
 // established budgets; concise canonical rules and cross-links absorb the new
 // behavior without rebasing payload growth.
+// Baselines were deliberately raised again for the Project Operating Facts tier:
+// the maintainer/engineer/orchestrator roles gained concise recognition and
+// capture responsibilities (agentDefinitions), and the decision-capture and
+// parallel-delegation skills gained the fact-vs-decision boundary and the
+// shared-state parallel-write rule (referenceLibrary). The full canonical
+// definition lives only in AGENTIC_LOOP.md, which is not part of any generated
+// adapter payload, so role/skill growth stays concise.
 const ADAPTERS = [
-  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 7996, agentDefinitions: 7397, activationSurface: 599 } },
-  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 44928, agentDefinitions: 7863, activationSurface: 889, referenceLibrary: 36176 } },
-  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 35896, agentDefinitions: 6987, activationSurface: 1342, referenceLibrary: 27567 } },
-  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 43037, agentDefinitions: 7585, activationSurface: 874, referenceLibrary: 34578 } },
-  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 42858, agentDefinitions: 7582, activationSurface: 698, referenceLibrary: 34578 } },
+  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 8487, agentDefinitions: 7888, activationSurface: 599 } },
+  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 47453, agentDefinitions: 8366, activationSurface: 889, referenceLibrary: 38198 } },
+  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 37885, agentDefinitions: 7478, activationSurface: 1342, referenceLibrary: 29065 } },
+  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 45475, agentDefinitions: 8076, activationSurface: 874, referenceLibrary: 36525 } },
+  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 45296, agentDefinitions: 8073, activationSurface: 698, referenceLibrary: 36525 } },
 ];
 
 let tmpDir;

@@ -47,6 +47,28 @@ function collectNested(rootDir, filename, matches = []) {
 }
 
 describe('generateCopilotArtifacts', () => {
+  it('each role agent inherits a distinctive Project Operating Facts responsibility', () => {
+    const fx = makeFixture();
+    const cfg = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+    const out = mkdtempSync(join(tmpDir, 'out-'));
+    generateCopilotArtifacts(cfg, fx, out);
+
+    const read = (role) => readFileSync(join(out, '.github', 'agents', `${role}.agent.md`), 'utf-8');
+    const orchestrator = read('orchestrator');
+    const maintainer = read('maintainer');
+    const engineer = read('engineer');
+
+    assert.match(orchestrator, /Project Operating Fact/);
+    assert.match(maintainer, /Own the current mutable `## Project Operating Facts` profile/);
+    assert.match(engineer, /Project Operating Fact candidate/);
+    assert.match(orchestrator, /capture offer/);
+
+    for (const body of [orchestrator, maintainer, engineer]) {
+      assert.ok(!body.includes('not already explicit or cheaply discoverable'),
+        'adapter role body must not copy the canonical recognition test');
+    }
+  });
+
   it('produces the required Copilot agents, public skill, backend references, and prompt file', () => {
     const fx = makeFixture();
     const cfg = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));

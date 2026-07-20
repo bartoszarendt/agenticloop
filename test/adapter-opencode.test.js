@@ -170,6 +170,28 @@ describe('renderOpencodeCommandMarkdown', () => {
 });
 
 describe('generateOpencodeArtifacts', () => {
+  it('each role artifact inherits a distinctive Project Operating Facts responsibility', () => {
+    const outputDir = join(tmpDir, 'pof-generated');
+    const fx = makeFixture();
+    const alConfig = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+    generateOpencodeArtifacts(alConfig, fx, outputDir);
+
+    const read = (role) => readFileSync(join(outputDir, '.opencode', 'agents', `${role}.md`), 'utf-8');
+    const orchestrator = read('orchestrator');
+    const maintainer = read('maintainer');
+    const engineer = read('engineer');
+
+    assert.match(orchestrator, /Project Operating Fact/);
+    assert.match(maintainer, /Own the current mutable `## Project Operating Facts` profile/);
+    assert.match(engineer, /Project Operating Fact candidate/);
+    assert.match(orchestrator, /capture offer/);
+
+    for (const body of [orchestrator, maintainer, engineer]) {
+      assert.ok(!body.includes('not already explicit or cheaply discoverable'),
+        'adapter role body must not copy the canonical recognition test');
+    }
+  });
+
   it('writes only markdown agents and the OpenCode command', () => {
     const outputDir = join(tmpDir, 'generated');
     const fx = makeFixture();

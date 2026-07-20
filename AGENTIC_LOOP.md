@@ -93,6 +93,11 @@ target projects do not need toolkit-root `docs/` files at runtime.
   `.agenticloop/project.md` about a project-wide check, identified as `VF-...`.
   It records observed behavior and a current strategy; it is not by itself a
   policy decision.
+- **Project Operating Fact**: a current, mutable, maintainer-owned, source-linked,
+  non-binding, project-wide operating fact in `.agenticloop/project.md`,
+  identified as `PF-...`. It records reusable project operating reality; it is
+  not a decision and does not by itself constrain future work. See the Project
+  Operating Facts section for the full definition.
 - **Proof pressure**: the optional task-record practice of naming a completion
   oracle, final proof required, and likely misfire to keep work aligned with the
   owner's outcome. Proof pressure complements acceptance criteria; it does not
@@ -186,7 +191,8 @@ role contracts.
 
 At the start of a non-trivial task, read `.agenticloop/project.md` for
 `task_backend`, task naming, optional grouping settings, typed document
-selections, and relevant current verification operating facts.
+selections, and relevant current verification operating facts and Project
+Operating Facts.
 
 Document roles are:
 
@@ -658,6 +664,103 @@ prediction, and triage shapes, retry limits, and event procedure are owned by
 [[verification-evidence]]. Backend placement and append-only behavior are owned
 by the matching backend projection.
 
+## Project Operating Facts
+
+`## Project Operating Facts` in `.agenticloop/project.md` is the one current,
+mutable, maintainer-owned profile for lightweight project-wide operating
+knowledge. A Project Operating Fact is current, mutable, maintainer-owned,
+source-linked, non-binding, and project-wide. It records an operating reality
+worth reusing; it is not a policy decision and does not by itself constrain
+future work. This section is the canonical owner of the full definition; role
+and skill files carry concise responsibilities and refer here rather than
+restating it.
+
+Project Operating Facts follow the Verification Operating Facts profile as a
+precedent, not its verification-specific schema. Each fact is one compact bullet
+with a stable `PF-...` identifier, a concise statement of current project
+behavior or operating reality, a durable source reference, and a concrete
+"Revisit when" trigger. Sources may include a task record, issue or PR, commit,
+durable Markdown document, or directly relevant canonical source file. A fact
+may wrap across physical lines but remains one logical bullet.
+
+### Recognition test
+
+Treat knowledge as a Project Operating Fact candidate only when all of these
+hold:
+
+1. it is likely to matter beyond the current task;
+2. it describes current project-wide operating reality rather than one attempt;
+3. it is not already recorded in an appropriate durable source, or is important
+   enough to warrant a compact project-map pointer;
+4. reconstructing it later would be costly, error-prone, or likely to lead to
+   the wrong operational choice;
+5. it is supported by identifiable evidence;
+6. it is non-binding; otherwise it belongs in a decision record.
+
+Use "not already explicit or cheaply discoverable" rather than "non-derivable":
+a fact may be technically recoverable from several files while still being
+expensive or error-prone to reconstruct.
+
+### Routing
+
+Route reusable knowledge to one durable destination. This is routing, not a
+linear promotion sequence; a detailed runbook and a compact project-map pointer
+may coexist.
+
+| Knowledge type | Durable destination |
+|---|---|
+| Temporary observation or task-specific evidence | Current task record |
+| Detailed command sequence, setup procedure, or operator runbook | Relevant project documentation |
+| Compact pointer to an important runbook | Project Operating Facts |
+| Current, non-binding project-wide operating fact | Project Operating Facts |
+| Binding convention, policy, architecture, security, quality, or release rule | Proposed/accepted decision record |
+| Repeated Agentic Loop process friction | Human-invoked retrospective or improvement artifact |
+| Personal preference spanning repositories | Host memory outside Agentic Loop |
+
+Keep detailed runbooks in normal project documentation; a fact may link to one
+instead of duplicating it. Promote a fact to a decision record when it
+constrains future implementation, architecture, security, quality, release
+behavior, or accepted project conventions -- see [[decision-capture]]. A project
+fact may cite a decision, but a fact is not approval.
+
+### Ownership and updates
+
+The maintainer owns this profile. Keep one active entry per fact; update or
+remove a stale fact rather than accumulating contradictory entries; keep entries
+compact. Never store secrets, credentials, raw transcripts, prompt logs, full
+tool output, personal data, temporary debugging observations, or speculative
+conclusions. Do not use a project fact to impose binding policy.
+
+When recording the first fact, replace the canonical empty-state sentence,
+`No project-wide operating facts are currently recorded.` When removing the
+last fact, restore that sentence. Never retain the empty-state sentence beside
+active `PF-...` entries.
+
+### Capture at a natural checkpoint
+
+When work reveals a supported Project Operating Fact candidate, report it at the
+next natural checkpoint. If recording it is already within the authorized work,
+the maintainer may update the profile. Otherwise, offer one concrete destination
+and ask whether to preserve it. Consolidate and deduplicate multiple candidates
+before offering; do not interrupt implementation for a candidate unless it
+affects current correctness or another active lane; do not ask again after the
+human declines; and do not silently expand task scope to write unrelated
+documentation or shared workflow state. Declining or deferring capture does not
+by itself block task acceptance or closeout.
+
+### Existing targets and parallel writes
+
+The section is optional and Markdown-first. Its absence in an existing project
+map is valid; add `## Project Operating Facts` when the first fact is approved,
+and never overwrite a target-owned project map to insert it. `.agenticloop/project.md`
+is shared mutable state: engineer implementation lanes do not append or edit
+Project Operating Facts and always return candidates. A maintainer-owned
+coordination lane may mutate the profile only when the concurrency plan grants
+it explicit exclusive ownership of `.agenticloop/project.md` and proves no
+collision. Otherwise, sibling-affecting candidates use cross-lane findings and
+one serial maintainer-owned join step applies approved facts. See
+[[parallel-delegation]].
+
 ## Task Backends
 
 The active task backend defines where task records live. Read `task_backend`
@@ -856,7 +959,10 @@ Rules:
 - No decision index is maintained.
 - Record decisions that constrain future work, especially process,
   architecture, backend, role, quality, security, release, product direction,
-  or accepted project conventions.
+  or accepted project conventions. Accepted project conventions and other
+  binding prescriptions remain decisions and still require decision governance;
+  a current, non-binding Project Operating Fact is not a decision. Promote a
+  fact only when it becomes binding.
 - Any role may create a new `status: proposed` decision record when it
   directly discovers evidence that constrains future work. Proposed records
   must include provenance fields (`proposed_at`, `proposed_by_role`,

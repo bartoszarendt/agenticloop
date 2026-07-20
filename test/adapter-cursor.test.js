@@ -45,6 +45,28 @@ function collectNested(rootDir, filename, matches = []) {
 }
 
 describe('generateCursorArtifacts', () => {
+  it('each role agent inherits a distinctive Project Operating Facts responsibility', () => {
+    const fx = makeFixture();
+    const cfg = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+    const out = mkdtempSync(join(tmpDir, 'out-'));
+    generateCursorArtifacts(cfg, fx, out);
+
+    const read = (role) => readFileSync(join(out, '.cursor', 'agents', `${role}.md`), 'utf-8');
+    const orchestrator = read('orchestrator');
+    const maintainer = read('maintainer');
+    const engineer = read('engineer');
+
+    assert.match(orchestrator, /Project Operating Fact/);
+    assert.match(maintainer, /Own the current mutable `## Project Operating Facts` profile/);
+    assert.match(engineer, /Project Operating Fact candidate/);
+    assert.match(orchestrator, /capture offer/);
+
+    for (const body of [orchestrator, maintainer, engineer]) {
+      assert.ok(!body.includes('not already explicit or cheaply discoverable'),
+        'adapter role body must not copy the canonical recognition test');
+    }
+  });
+
   it('produces Cursor agents, one public skill, and backend references without rules or root plugin packaging', () => {
     const fx = makeFixture();
     const cfg = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));

@@ -156,6 +156,35 @@ indiscriminate full-file loading remain prohibited. Discovery that exceeds the
 bound, crosses into a new domain, or contradicts the task scope routes to
 `needs_context`. See Context Read Discipline in `agenticloop/AGENTIC_LOOP.md`.
 
+## Routing durable project knowledge
+
+While implementing, work often turns up knowledge worth keeping. Route each kind
+to one durable destination instead of one catch-all store. A generic example:
+
+- A task-specific observation ("this run needed `--no-cache` once") stays in the
+  current task record and goes no further.
+- A reusable operator runbook (how to stand up the local test database) is
+  written to normal project documentation, for example `docs/testing.md`.
+- A compact, current, non-binding project-wide operating fact is recorded in
+  `## Project Operating Facts` in `.agenticloop/project.md`, linking to that
+  runbook rather than duplicating it:
+
+  ```markdown
+  - `PF-local-postgres-tests` — Local PostgreSQL tests use the Compose `test`
+    profile and port 5436. Source: `docs/testing.md#local-postgres-tests`.
+    Revisit when: the test service, port, or test runner changes.
+  ```
+
+- A binding rule ("all new services must use the shared connection pool") is
+  escalated to a proposed/accepted decision record under
+  `.agenticloop/decisions/`, not a project fact.
+
+The detailed runbook and the compact project-map pointer may coexist. When work
+reveals a supported fact, the engineer returns it as a candidate, the
+orchestrator offers capture at a natural checkpoint, and the maintainer records
+it; declining or deferring capture never blocks task completion. See the Project
+Operating Facts section in `agenticloop/AGENTIC_LOOP.md`.
+
 ## Review provenance and independent review
 
 Every recorded review outcome carries a `review_mode` describing how it was

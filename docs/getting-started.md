@@ -252,6 +252,23 @@ task record; a timed-out foreground run must be recorded before a retry or
 handoff. See `agenticloop/skills/verification-evidence/SKILL.md` for the
 canonical entry and one bounded-escalation rule.
 
+### Project operating facts
+
+The project-map body also holds `## Project Operating Facts`: the maintainer-
+owned profile for current, mutable, non-binding project-wide operating knowledge.
+Each fact is one compact bullet with a stable `PF-...` identifier, a durable
+source reference, and a "Revisit when" trigger. Detailed workflows still live in
+normal project documentation; a fact provides a compact current fact or a pointer
+to that documentation. Binding conventions and policies route to decision records
+instead, and fact capture is optional and non-blocking.
+
+New installations receive the empty section from the scaffold. Existing
+`.agenticloop/project.md` files are target-owned and are never overwritten;
+`agenticloop init`, refresh, and ordinary update do not rewrite the project map,
+so an existing project without the section stays valid and a maintainer can add
+the section on the first approved capture. See the Project Operating Facts section
+in `agenticloop/AGENTIC_LOOP.md` for the recognition test and routing ladder.
+
 To confirm defaults manually, update the setup fields in the same file. Example:
 
 ```yaml

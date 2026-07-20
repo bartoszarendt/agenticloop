@@ -30,3 +30,9 @@ memory/
 `init` copies scaffold seed files into `.agenticloop/` only when absent.
 Record-shape files are installed to `agenticloop/memory/` for reference but
 are never copied into `.agenticloop/`.
+
+The target-owned `.agenticloop/project.md` project map also carries the current
+maintainer-owned `## Verification Operating Facts` and `## Project Operating
+Facts` profiles. Project Operating Facts are lightweight, non-binding,
+source-linked project-wide operating facts (`PF-...`); see the Project Operating
+Facts section in `AGENTIC_LOOP.md` for the full definition.

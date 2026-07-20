@@ -470,6 +470,23 @@ Collision rule:
   treated as generated output and may be
   regenerated
 
+## Project State and Activation Boundaries
+
+Generated role bodies embed the canonical role contracts, so they carry the
+standing recognition behavior for durable project state -- including the Project
+Operating Facts responsibilities -- without any adapter-specific template edits.
+
+Activated Agentic Loop roles read the live `.agenticloop/project.md` (its
+`## Verification Operating Facts` and `## Project Operating Facts` profiles
+included) before acting. Because that project map is target-owned mutable state,
+build-time embedding of its contents into generated adapters would become stale
+and must not be used; adapters point roles at the live file by path.
+
+Ordinary sessions outside Agentic Loop activation are not required to load
+Agentic Loop project state. Do not add "read `.agenticloop/project.md` at every
+session start" to global host instructions. Host-specific ambient memory remains
+outside the core methodology.
+
 ## Registry and Marketplace
 
 A registry, marketplace, or package index is not an active target. See

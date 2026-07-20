@@ -87,7 +87,39 @@ current supported truth rather than retaining competing active facts for the
 same command. Task-specific runs belong in each task record's append-only
 `## Verification Attempts` section.
 
-## Conventions
+## Project Operating Facts
+
+No project-wide operating facts are currently recorded.
+
+This is the current, mutable, maintainer-owned profile for lightweight
+project-wide operating knowledge. A Project Operating Fact is current, mutable,
+source-linked, and non-binding; it is not a policy decision. Use one compact
+bullet per fact with a stable `PF-...` identifier, a concise statement of
+current project behavior, a durable source reference, and a concrete "Revisit
+when" trigger. Keep one active entry per fact and update or remove a stale fact
+rather than accumulating contradictory entries.
+
+When recording the first fact, replace `No project-wide operating facts are
+currently recorded.` with the fact bullet. When removing the last fact, restore
+that sentence. Never keep the empty-state sentence beside active `PF-...`
+entries.
+
+Keep detailed runbooks in normal project documentation; a fact may link to one
+instead of duplicating it. Route binding conventions, policies, architecture,
+security, quality, or release rules to a decision record instead. Never store
+secrets, credentials, raw transcripts, full tool output, personal data, or
+speculative conclusions here. The full recognition test and routing ladder live
+in `agenticloop/AGENTIC_LOOP.md`.
+
+Example (illustrative only; delete when recording real facts):
+
+```markdown
+- `PF-local-postgres-tests` — Local PostgreSQL tests use the Compose `test`
+  profile and port 5436. Source: `docs/testing.md#local-postgres-tests`.
+  Revisit when: the test service, port, or test runner changes.
+```
+
+## Document Lookup Conventions
 
 Agentic Loop uses convention-first document lookup. If a typed document role is
 not selected in the frontmatter above, the toolkit checks the bounded candidate

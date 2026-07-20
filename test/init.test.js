@@ -189,6 +189,28 @@ describe('init - .agenticloop/project.md handling', () => {
     assert.match(content, /No project-wide verification operating facts are currently recorded\./);
   });
 
+  it('project.md includes the canonical empty Project Operating Facts section', async () => {
+    const d = makeEmptyTarget();
+    await init({ target: d });
+    const content = readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8');
+    assert.match(content, /## Project Operating Facts/);
+    assert.match(content, /No project-wide operating facts are currently recorded\./);
+  });
+
+  it('leaves an existing target-owned project.md byte-for-byte unchanged during init and refresh', async () => {
+    const d = makeEmptyTarget();
+    // A pre-existing project map without the Project Operating Facts section.
+    const original = '---\nsetup_status: confirmed\nsetup_confirmed_at: "2026-01-01"\nsetup_confirmed_by: "maintainer"\ntask_backend: files\n---\n# Existing map without the new section\n';
+    mkdirSync(join(d, '.agenticloop'), { recursive: true });
+    writeFileSync(join(d, '.agenticloop', 'project.md'), original);
+
+    await init({ target: d });
+    assert.equal(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'), original);
+
+    await init({ target: d, refreshAssets: true });
+    assert.equal(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'), original);
+  });
+
   it('generated project.md accepts the default T-001 task id shape', async () => {
     const d = makeEmptyTarget();
     await init({ target: d });

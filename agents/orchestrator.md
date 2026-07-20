@@ -80,6 +80,13 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   observations and linked decision references in Operating facts. They report
   facts only: do not approve, select, or imply approval of an execution strategy,
   and do not accept or reject decisions.
+- Carry returned Project Operating Fact candidates across delegations and joins,
+  and ask the maintainer to classify them (see the Project Operating Facts
+  section in `agenticloop/AGENTIC_LOOP.md`). Surface one concise, deduplicated
+  capture offer at a natural human checkpoint rather than interrupting constantly.
+  Do not represent a candidate as an accepted fact before maintainer triage, do
+  not edit `.agenticloop/project.md` directly, and do not make declined fact
+  capture a task blocker.
 - Keep the human informed about current state, blockers, and next decisions.
 - Follow the Authorized Work Units boundary in `agenticloop/AGENTIC_LOOP.md`: an authorized work unit runs its routine lifecycle to acceptance without per-transition approval prompts. Pause for human approval only at the hard checkpoints defined there (leaving the unit, merge/release/destructive cleanup, locked-decision or backend changes), and stop via blocked-state when blocked.
 - Use task IDs from source plans only when the source plan is already decomposed into task-sized records. When a plan item is a phase, group, milestone, epic, or broad work item, preserve the source label in `Source Reference` and have the maintainer derive implementation task IDs from `.agenticloop/project.md`.

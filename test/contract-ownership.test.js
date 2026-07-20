@@ -203,6 +203,79 @@ describe('contract ownership', () => {
     }
   });
 
+  it('AGENTIC_LOOP.md owns the full Project Operating Facts definition', () => {
+    const body = read('AGENTIC_LOOP.md');
+    assert.match(body, /^## Project Operating Facts$/m);
+    assert.match(body, /### Recognition test/);
+    assert.match(body, /not already explicit or cheaply discoverable/);
+    assert.match(body, /Never retain the empty-state sentence beside\s+active `PF-\.\.\.` entries/);
+    // The distinctive recognition-test phrasing lives only in the methodology.
+    const recognitionOwners = ownersOf(b => b.includes('not already explicit or cheaply discoverable'));
+    assert.deepEqual(recognitionOwners, ['AGENTIC_LOOP.md'], recognitionOwners.join(', '));
+    // The routing ladder lives only in the methodology, too.
+    const routingOwners = ownersOf(b =>
+      b.includes('Personal preference spanning repositories | Host memory outside Agentic Loop')
+    );
+    assert.deepEqual(routingOwners, ['AGENTIC_LOOP.md'], routingOwners.join(', '));
+  });
+
+  it('maintainer owns Project Operating Facts profile mutation', () => {
+    const maintainer = read('agents/maintainer.md');
+    assert.match(maintainer, /Own the current mutable `## Project Operating Facts` profile/);
+    assert.match(maintainer, /`## Project Operating Facts` profiles as authorized mutable state/);
+  });
+
+  it('engineer reports Project Operating Fact candidates without editing shared state', () => {
+    const engineer = read('agents/engineer.md');
+    assert.match(engineer, /Project Operating Fact candidate/);
+    assert.match(engineer, /do not edit the\s+shared `## Project Operating Facts` profile/);
+    assert.match(engineer, /from an\s+implementation lane/);
+    assert.ok(
+      !engineer.includes('Own the current mutable `## Project Operating Facts` profile'),
+      'engineer must not claim maintainer profile ownership'
+    );
+  });
+
+  it('orchestrator owns the human-facing Project Operating Facts capture offer', () => {
+    const orchestrator = read('agents/orchestrator.md');
+    assert.match(orchestrator, /deduplicated\s+capture offer/);
+    assert.ok(
+      !orchestrator.includes('Own the current mutable `## Project Operating Facts` profile'),
+      'orchestrator must not own profile mutation'
+    );
+  });
+
+  it('role files reference the Project Operating Facts definition without copying it', () => {
+    for (const role of ['orchestrator', 'maintainer', 'engineer']) {
+      const body = read(`agents/${role}.md`);
+      assert.match(body, /Project Operating Fact/, `${role} must carry the concise trigger`);
+      assert.ok(
+        !body.includes('not already explicit or cheaply discoverable'),
+        `${role} must not copy the canonical recognition test`
+      );
+      assert.ok(
+        !/^### Recognition test$/m.test(body),
+        `${role} must not copy the canonical recognition-test section`
+      );
+    }
+  });
+
+  it('reserves parallel Project Operating Facts mutation for an exclusively owned maintainer lane or serial join', () => {
+    const methodology = read('AGENTIC_LOOP.md');
+    const parallel = read('skills/parallel-delegation/SKILL.md');
+    for (const [label, body] of [
+      ['methodology', methodology],
+      ['parallel delegation', parallel],
+    ]) {
+      assert.match(body, /engineer implementation lanes do not append or edit\s+Project\s+Operating Facts/i,
+        `${label} must keep engineer lanes read-only for the shared profile`);
+      assert.match(body, /maintainer-owned\s+coordination\s+lane may mutate the profile only when the concurrency plan grants\s+it explicit\s+exclusive ownership/,
+        `${label} must name the exclusive maintainer-lane exception`);
+      assert.match(body, /serial maintainer-owned join step applies\s+approved facts/,
+        `${label} must retain the serial-join fallback`);
+    }
+  });
+
   it('every referenced skill exists', () => {
     const known = new Set(skillNames());
     // Documentation placeholder used to explain the [[skill-name]] convention.

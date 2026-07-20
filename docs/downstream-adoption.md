@@ -47,6 +47,16 @@ overwritten by `agenticloop update`. Edit it to record setup confirmation, typed
 document selections, backend choice, task naming, and optional grouping. Do
 not put model IDs here.
 
+The project map also carries the maintainer-owned `## Verification Operating
+Facts` and `## Project Operating Facts` profiles. Project Operating Facts are
+lightweight, current, non-binding, source-linked project-wide operating facts
+(`PF-...`). New installs receive an empty section from the scaffold; existing
+project maps are never rewritten, so a project without the section stays valid,
+and a maintainer adds the section on the first approved capture. Detailed
+workflows belong in normal project documentation, while a fact provides a compact
+current fact or a pointer to it; binding conventions route to decision records.
+See the Project Operating Facts section in `agenticloop/AGENTIC_LOOP.md`.
+
 `.agenticloop/decisions/` holds target-owned decision records for durable
 project decisions that constrain future work. Keep those records short and
 separate from task records, summaries, and raw transcripts.

@@ -431,6 +431,34 @@ describe('generateClaudeCodeArtifacts', () => {
       'agent file should include an adapter-generated trailer');
   });
 
+  it('each role artifact inherits a distinctive Project Operating Facts responsibility', () => {
+    const fx = makeFixture();
+    const cfg = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+    const out = mkdtempSync(join(tmpDir, 'out-'));
+    generateClaudeCodeArtifacts(cfg, fx, out);
+
+    const orchestrator = readClaudeAgent(out, 'orchestrator');
+    const maintainer = readClaudeAgent(out, 'maintainer');
+    const engineer = readClaudeAgent(out, 'engineer');
+
+    // Each role carries the concise trigger via the embedded canonical body.
+    assert.match(orchestrator, /Project Operating Fact/);
+    assert.match(maintainer, /Project Operating Facts/);
+    assert.match(engineer, /Project Operating Fact candidate/);
+    // Distinct per-role responsibilities.
+    assert.match(orchestrator, /deduplicated\s+capture offer/);
+    assert.match(maintainer, /Own the current mutable `## Project Operating Facts` profile/);
+    assert.match(engineer, /do not edit the\s+shared `## Project Operating Facts` profile/);
+
+    // The full canonical methodology is not copied into adapter role bodies.
+    for (const body of [orchestrator, maintainer, engineer]) {
+      assert.ok(
+        !body.includes('not already explicit or cheaply discoverable'),
+        'adapter role body must not copy the canonical recognition test'
+      );
+    }
+  });
+
   it('generates one public agenticloop skill with internal reference copies', () => {
     const fx = makeFixture();
     mkdirSync(join(fx, 'agenticloop', 'skills', 'example-extra', 'references'), { recursive: true });

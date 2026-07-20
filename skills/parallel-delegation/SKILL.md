@@ -122,6 +122,19 @@ If a finding must be consumed before implementation can safely continue, the
 two-wave pattern (or serial execution) is mandatory: do not start parallel
 implementation writes and hope to route the finding mid-flight.
 
+## Project Operating Facts In Parallel Lanes
+
+`.agenticloop/project.md`, including its `## Project Operating Facts` profile, is
+shared mutable state. Engineer implementation lanes do not append or edit Project
+Operating Facts and always return candidates. A maintainer-owned coordination
+lane may mutate the profile only when the concurrency plan grants it explicit
+exclusive ownership of `.agenticloop/project.md` and proves no collision.
+Otherwise, a candidate that affects a sibling lane's assumptions uses the
+cross-lane finding route below, a non-sibling-affecting candidate stays a process
+observation or status item, and one serial maintainer-owned join step applies
+approved facts. See the Project Operating Facts section in
+`agenticloop/AGENTIC_LOOP.md`.
+
 ## Cross-Lane Findings
 
 Every parallel lane declares cross-lane findings at each configured lease

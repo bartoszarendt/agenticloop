@@ -61,7 +61,22 @@ Do not create a decision record for:
 - raw meeting notes,
 - raw chat transcripts,
 - temporary debugging observations,
-- one-off local experiments that do not constrain later work.
+- one-off local experiments that do not constrain later work,
+- a current, non-binding project operating fact -- record it in
+  `## Project Operating Facts` in `.agenticloop/project.md` instead,
+- a compact pointer to a runbook -- that is a Project Operating Fact, not a
+  decision.
+
+## Project operating facts
+
+A Project Operating Fact is current, mutable, non-binding project knowledge in
+`## Project Operating Facts` in `.agenticloop/project.md`; it is owned by the
+maintainer and defined in `agenticloop/AGENTIC_LOOP.md`. If a project fact
+becomes binding policy or constrains future implementation, security,
+architecture, quality, or release behavior, promote it through the normal
+proposed -> accepted decision path here. A fact may cite a decision, but a fact
+is not approval, and preserving a runbook pointer never by itself warrants a
+decision record.
 
 ## Who May Create Proposed Records
 

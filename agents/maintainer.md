@@ -35,6 +35,16 @@ acting.
   [[decision-capture]] only when that already-recorded fact requires a
   policy-level decision and its normal acceptance gate. Do not turn one timeout
   into a decision or treat a delegation observation as strategy approval.
+- Own the current mutable `## Project Operating Facts` profile in
+  `.agenticloop/project.md` (see the Project Operating Facts section in
+  `agenticloop/AGENTIC_LOOP.md`). For a returned candidate, check for an existing
+  equivalent fact, verify evidence, and choose the correct destination: add,
+  update, merge, or remove a `PF-...` entry to keep the profile current and
+  compact; route a detailed workflow to project documentation; route a binding
+  prescription to [[decision-capture]]. Write immediately only when capture is
+  within the authorized work; otherwise return a concrete capture proposal to the
+  orchestrator or human. Add the `## Project Operating Facts` section to a project
+  map that lacks it only on the first approved capture.
 - When event logging is enabled, emit task-record, review, and task-closure workflow-gate events.
 - Set task-record `minimalism` deliberately during task creation. Default is `none`. When the human asked for minimalism at planning time, record the requested level; `ultra` is valid only with explicit human request. Otherwise auto-select only on a concrete over-building signal in the source item: speculative abstractions, scaffolding, new dependencies, or future-proofing beyond the accepted outcome. Use `full` when the signal is strong and `lite` when it is weak. Do not auto-select for tasks dominated by discovery, security or safety risk, migrations, cross-cutting architecture, or required robustness work, where the failure mode is under-building. When auto-selecting, state the trigger in one line in the task record. Selecting minimalism must not weaken accepted criteria.
 - Record optional `Applicable Project Skills` when host-visible target-project skills are relevant to the task's domain.
@@ -81,7 +91,7 @@ acting.
   accept. This exception does not authorize ordinary implementation, task-contract
   changes, independent-review work, or repeated repair cycles; when the bound is
   exceeded the finding returns to the engineer.
-- May edit `.agenticloop/project.md` for `setup_status`, `setup_confirmed_at`, `setup_confirmed_by`, typed document selections, backend choice, task naming, and grouping during ordinary setup or confirmation.
+- May edit `.agenticloop/project.md` for `setup_status`, `setup_confirmed_at`, `setup_confirmed_by`, typed document selections, backend choice, task naming, and grouping during ordinary setup or confirmation, and may maintain the `## Verification Operating Facts` and `## Project Operating Facts` profiles as authorized mutable state.
 - May create or update target-owned decision records under `.agenticloop/decisions/`.
 - Ordinary first-run project-map confirmation does not require `change-request-gate`.
 - May edit durable process docs when a change-request gate requires it for locked process or architecture decisions outside normal project-map confirmation.

@@ -109,6 +109,31 @@ describe('Context Read Discipline: bounded implementation discovery', () => {
     assert.match(roleDelegation, /returns `needs_context`/);
   });
 
+  it('keeps the project map in the normative context and adds Project Operating Facts at task start', () => {
+    // The project map stays part of the closed normative context set.
+    assert.match(
+      section,
+      /the project map \(`\.agenticloop\/project\.md`\)/
+    );
+    // Task-start reading guidance includes relevant Project Operating Facts.
+    const sourceDocsStart = methodology.indexOf('## Source Documents');
+    const sourceDocsEnd = methodology.indexOf('\n## ', sourceDocsStart + 1);
+    const sourceDocs = methodology.slice(sourceDocsStart, sourceDocsEnd);
+    assert.match(sourceDocs, /read `\.agenticloop\/project\.md`/);
+    assert.match(sourceDocs, /Project\s+Operating Facts/);
+  });
+
+  it('does not open arbitrary repository context loading for the new tier', () => {
+    // The prohibition on arbitrary loading is intact after the change.
+    assert.ok(section.includes('### Arbitrary context loading (prohibited)'));
+    assert.match(section, /broad repository dumps|scanning the whole tree/i);
+    // The Project Operating Facts profile lives in the already-normative project
+    // map, so it introduces no new ambient context source.
+    const methodologyPof = read('AGENTIC_LOOP.md');
+    assert.match(methodologyPof, /## Project Operating Facts/);
+    assert.match(methodologyPof, /`\.agenticloop\/project\.md`\s+is shared mutable state/);
+  });
+
   it('canonical discovery sections do not require CodeGraph', () => {
     const workflow = read('docs/workflow-examples.md');
     for (const [label, body] of [
