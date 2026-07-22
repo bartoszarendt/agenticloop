@@ -182,6 +182,24 @@ describe('lifecycle CLI', () => {
     assert.ok(!existsSync(join(d, '.claude-plugin')), 'plain update must not create Claude Code plugin artifacts for an OpenCode-only target');
   });
 
+  it('ordinary update preserves explicit Codex model choices', () => {
+    const d = makeTarget();
+    assertOk(run(['init', '--target', d, '--adapter', 'codex']));
+
+    const configPath = join(d, 'agenticloop.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+    config.adapters.codex.roleSettings.engineer.model = 'custom-engineer';
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+
+    assertOk(run(['update', '--target', d]));
+
+    const updated = JSON.parse(readFileSync(configPath, 'utf-8'));
+    assert.equal(updated.adapters.codex.roleSettings.engineer.model, 'custom-engineer');
+    const toml = readFileSync(join(d, '.codex', 'agents', 'engineer.toml'), 'utf-8');
+    assert.ok(toml.includes('model = "custom-engineer"'));
+    assert.ok(toml.includes('model_reasoning_effort = "xhigh"'));
+  });
+
   it('update does not infer Codex from a stale generated skills directory alone', () => {
     const d = makeTarget();
     assertOk(run(['init', '--target', d, '--adapter', 'opencode']));

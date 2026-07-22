@@ -288,6 +288,10 @@ describe('update preserves adapter artifact model settings', () => {
   it('backfills Codex TOML model settings before update regenerates Codex artifacts and preserves supported reasoning effort', () => {
     const d = makeTarget('codex');
     const tomlPath = join(d, '.codex', 'agents', 'engineer.toml');
+    const cfgPath = join(d, 'agenticloop.json');
+    const cfgBeforeUpdate = loadJsonFile(cfgPath);
+    delete cfgBeforeUpdate.adapters.codex.roleSettings.engineer;
+    writeFileSync(cfgPath, JSON.stringify(cfgBeforeUpdate, null, 2) + '\n', 'utf-8');
     writeFileSync(tomlPath, [
       '# local target edit',
       'name = "engineer"',
@@ -311,6 +315,10 @@ describe('update preserves adapter artifact model settings', () => {
   it('normalizes legacy Codex TOML model prefixes during update preservation', () => {
     const d = makeTarget('codex');
     const tomlPath = join(d, '.codex', 'agents', 'engineer.toml');
+    const cfgPath = join(d, 'agenticloop.json');
+    const cfgBeforeUpdate = loadJsonFile(cfgPath);
+    delete cfgBeforeUpdate.adapters.codex.roleSettings.engineer;
+    writeFileSync(cfgPath, JSON.stringify(cfgBeforeUpdate, null, 2) + '\n', 'utf-8');
     writeFileSync(tomlPath, [
       '# local target edit',
       'name = "engineer"',

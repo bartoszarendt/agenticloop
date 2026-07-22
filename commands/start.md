@@ -4,6 +4,13 @@ argument-hint: "[task-id or task description]"
 disable-model-invocation: true
 ---
 
+Before any setup check, orientation, document loading, task selection, or
+delegation, normalize the supplied argument by trimming surrounding whitespace.
+If and only if it equals `stop` (case-insensitive), immediately follow
+`agenticloop/commands/stop.md` and return. Do not continue this start workflow.
+`stop now`, `stop-gap fix`, and other non-exact task or context arguments are
+ordinary inputs, not deactivation requests. Do not treat `exit` as an alias.
+
 Path convention: toolkit source (`AGENTIC_LOOP.md`, `agents/`, `skills/`,
 `backends/`) lives under `agenticloop/` (no leading dot). Target project state
 (`project.md`, `tasks/`, `decisions/`, `improvements/`) lives under `.agenticloop/` (leading

@@ -56,6 +56,11 @@ model. Model and reasoning settings still live in
 `adapters.opencode.roleSettings.<role>` in `agenticloop.json`, which render to
 the generated agent frontmatter `model` and `variant` fields.
 
+Use `/agenticloop stop` to deactivate Agentic Loop for the current conversation.
+It checkpoints unfinished work without accepting or closing the task, committing,
+pushing, merging, or cleaning up worktrees. Resume with `/agenticloop <task or
+context>`.
+
 During `agenticloop setup` or `agenticloop configure models --adapter opencode`,
 the interactive picker first tries `opencode models` and uses those account-local
 model IDs when available. If OpenCode is not installed, not connected, or returns

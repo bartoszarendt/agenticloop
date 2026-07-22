@@ -45,12 +45,14 @@ const TOLERANCE = 0.05;
 // shared-state parallel-write rule (referenceLibrary). The full canonical
 // definition lives only in AGENTIC_LOOP.md, which is not part of any generated
 // adapter payload, so role/skill growth stays concise.
+// Baselines were deliberately raised for the host-neutral stop command. Its
+// compact checkpoint/deactivation route is packaged in every activation surface.
 const ADAPTERS = [
-  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 8487, agentDefinitions: 7888, activationSurface: 599 } },
-  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 47453, agentDefinitions: 8366, activationSurface: 889, referenceLibrary: 38198 } },
-  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 37885, agentDefinitions: 7478, activationSurface: 1342, referenceLibrary: 29065 } },
-  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 45475, agentDefinitions: 8076, activationSurface: 874, referenceLibrary: 36525 } },
-  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 45296, agentDefinitions: 8073, activationSurface: 698, referenceLibrary: 36525 } },
+  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 8487, agentDefinitions: 7888, activationSurface: 661 } },
+  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 47453, agentDefinitions: 8366, activationSurface: 951, referenceLibrary: 38198 } },
+  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 37885, agentDefinitions: 7478, activationSurface: 1466, referenceLibrary: 29065 } },
+  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 45475, agentDefinitions: 8076, activationSurface: 936, referenceLibrary: 36525 } },
+  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 45296, agentDefinitions: 8073, activationSurface: 760, referenceLibrary: 36525 } },
 ];
 
 let tmpDir;

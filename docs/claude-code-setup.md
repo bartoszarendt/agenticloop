@@ -21,9 +21,15 @@ activation, not a hook and not a managed `CLAUDE.md` override.
 
 - Repo-local Mode B: run `/agenticloop [task-id or task description]`
 - Plugin Mode A: run `/agenticloop:start [task-id or task description]`
+- Repo-local Mode B stop: run `/agenticloop stop`
+- Plugin Mode A stop: run `/agenticloop:stop`
 
 Both commands read `.agenticloop/project.md` first, route or confirm setup when
 `setup_status` is `unconfirmed`, and then enter the normal Agentic Loop flow.
+Stop instead deactivates the current conversation before setup or task selection,
+checkpoints unfinished work when needed, and does not perform closeout, commits,
+pushes, merges, or worktree cleanup. Resume with the matching normal activation
+command.
 
 ## Delegation Topology
 

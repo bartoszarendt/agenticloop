@@ -8,6 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSyn
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { PassThrough } from 'node:stream';
 
 import {
@@ -18,11 +19,13 @@ import {
   createPrompts,
   promptModelSettings,
 } from '../src/configure-models.js';
+import { getDefaultRoleSettings } from '../src/adapter-role-defaults.js';
 import { adapterDiscoverySummary } from '../src/adapter-discovery.js';
 import { loadJsonFile } from '../src/json.js';
 import { seedTargetLayout } from './helpers/layout-fixture.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const BIN = join(REPO_ROOT, 'bin', 'agenticloop.js');
 
 let tmpDir;
 
@@ -216,6 +219,82 @@ describe('configureModels', () => {
     const cfg = loadJsonFile(join(d, 'agenticloop.json'));
     assert.equal(cfg.adapters.cursor.roleSettings.engineer.model, 'gpt-5.5');
     assert.equal(cfg.adapters.cursor.roleSettings.engineer.reasoningEffort, undefined);
+  });
+
+  it('applies the recommended Codex profile without replacing explicit fields', () => {
+    const d = makeTarget();
+    writeFileSync(join(d, 'agenticloop.json'), JSON.stringify({
+      extends: './agenticloop/config.json',
+      adapters: {
+        codex: {
+          roleSettings: {
+            orchestrator: { model: 'custom-orchestrator' },
+            maintainer: { reasoningEffort: 'minimal' },
+          },
+        },
+      },
+    }, null, 2) + '\n');
+
+    const result = configureModels(d, { adapter: 'codex', profile: 'recommended' });
+
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.updated.includes('adapters.codex.roleSettings.orchestrator.reasoningEffort'));
+    assert.ok(result.preserved.includes('adapters.codex.roleSettings.orchestrator.model'));
+    assert.ok(result.preserved.includes('adapters.codex.roleSettings.maintainer.reasoningEffort'));
+    const cfg = loadJsonFile(join(d, 'agenticloop.json'));
+    assert.equal(cfg.adapters.codex.roleSettings.orchestrator.model, 'custom-orchestrator');
+    assert.equal(cfg.adapters.codex.roleSettings.orchestrator.reasoningEffort, 'xhigh');
+    assert.equal(cfg.adapters.codex.roleSettings.maintainer.model, 'gpt-5.6-sol');
+    assert.equal(cfg.adapters.codex.roleSettings.maintainer.reasoningEffort, 'minimal');
+    assert.deepEqual(cfg.adapters.codex.roleSettings.engineer, {
+      model: 'gpt-5.6-terra',
+      reasoningEffort: 'xhigh',
+    });
+  });
+
+  it('keeps default-profile objects isolated between callers', () => {
+    const first = getDefaultRoleSettings('codex');
+    first.engineer.model = 'changed';
+    assert.equal(getDefaultRoleSettings('codex').engineer.model, 'gpt-5.6-terra');
+    assert.deepEqual(getDefaultRoleSettings('unknown'), {});
+  });
+
+  it('reports added and preserved fields for the Codex recommended CLI profile', () => {
+    const d = makeTarget();
+    writeFileSync(join(d, 'agenticloop.json'), JSON.stringify({
+      extends: './agenticloop/config.json',
+      adapters: { codex: { roleSettings: { orchestrator: { model: 'custom' } } } },
+    }, null, 2) + '\n');
+
+    const result = spawnSync(process.execPath, [
+      BIN, 'configure', 'models', '--target', d, '--adapter', 'codex', '--profile', 'recommended',
+    ], { encoding: 'utf-8' });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /added: adapters\.codex\.roleSettings\.orchestrator\.reasoningEffort/);
+    assert.match(result.stdout, /kept: adapters\.codex\.roleSettings\.orchestrator\.model/);
+    assert.match(result.stdout, /agenticloop generate codex/);
+  });
+
+  it('rejects a recommended profile mixed with explicit model mutations', () => {
+    const d = makeTarget();
+    const result = spawnSync(process.execPath, [
+      BIN, 'configure', 'models', '--target', d, '--adapter', 'codex', '--profile', 'recommended',
+      '--role', 'engineer', '--model', 'other',
+    ], { encoding: 'utf-8' });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /cannot be combined/);
+  });
+
+  it('rejects the recommended profile for a non-Codex adapter', () => {
+    const d = makeTarget();
+    const result = spawnSync(process.execPath, [
+      BIN, 'configure', 'models', '--target', d, '--adapter', 'opencode', '--profile', 'recommended',
+    ], { encoding: 'utf-8' });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /available only for --adapter codex/);
   });
 });
 

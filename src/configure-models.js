@@ -11,6 +11,7 @@ import { writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadJsonFile } from './json.js';
 import { CODEX_SUPPORTED_REASONING_EFFORTS_DISPLAY } from './codex-models.js';
+import { ensureAdapterRoleSettings } from './adapter-role-defaults.js';
 import {
   OPENCODE_AGENT_RELATIVE_PATHS,
   OPENCODE_COMMAND_RELATIVE_PATH,
@@ -388,19 +389,21 @@ export async function promptModelSettingsInteractive(
  * @param {string} targetDir  Directory containing agenticloop.json.
  * @param {object} options
  * @param {string} options.adapter  Host adapter name (opencode, codex, claude-code, copilot, cursor).
- * @param {Array<{role: string, model?: string, reasoningEffort?: string}>} options.mutations
+ * @param {Array<{role: string, model?: string, reasoningEffort?: string}>} [options.mutations]
+ * @param {'recommended'} [options.profile] Named profile to apply without replacing explicit fields.
  * @param {boolean} [options.warnJsoncComments] Deprecated no-op retained for compatibility.
- * @returns {{ errors: string[], warnings: string[], updated: string[] }}
+ * @returns {{ errors: string[], warnings: string[], updated: string[], preserved: string[] }}
  */
 export function configureModels(targetDir, options) {
   const errors = [];
   const warnings = [];
   const updated = [];
+  const preserved = [];
 
   const cfgPath = join(targetDir, 'agenticloop.json');
   if (!existsSync(cfgPath)) {
     errors.push(`agenticloop.json not found at ${cfgPath}`);
-    return { errors, warnings, updated };
+    return { errors, warnings, updated, preserved };
   }
 
   let config;
@@ -408,41 +411,55 @@ export function configureModels(targetDir, options) {
     config = loadJsonFile(cfgPath);
   } catch (e) {
     errors.push(`Failed to parse agenticloop.json: ${e.message}`);
-    return { errors, warnings, updated };
+    return { errors, warnings, updated, preserved };
   }
 
   const host = options.adapter;
   const hostError = validateHost(host);
   if (hostError) {
     errors.push(hostError);
-    return { errors, warnings, updated };
+    return { errors, warnings, updated, preserved };
   }
 
   config.adapters = config.adapters ?? {};
   config.adapters[host] = config.adapters[host] ?? {};
   config.adapters[host].roleSettings = config.adapters[host].roleSettings ?? {};
 
-  for (const mutation of options.mutations ?? []) {
-    const { role, model, reasoningEffort } = mutation;
-    if (!role) {
-      warnings.push('Skipping model setting with no role');
-      continue;
+  if (options.profile !== undefined) {
+    if (options.profile !== 'recommended') {
+      errors.push(`Unknown model profile '${options.profile}'. Use: recommended`);
+    } else if (host !== 'codex') {
+      errors.push("Model profile 'recommended' is currently available only for --adapter codex.");
+    } else if ((options.mutations ?? []).length > 0) {
+      errors.push("--profile recommended cannot be combined with --role, --model, or --reasoning-effort.");
+    } else {
+      const result = ensureAdapterRoleSettings(config, host);
+      updated.push(...result.added);
+      preserved.push(...result.kept);
     }
-
-    config.adapters[host].roleSettings[role] =
-      config.adapters[host].roleSettings[role] ?? {};
-
-    if (model !== undefined) {
-      config.adapters[host].roleSettings[role].model = model;
-      updated.push(`adapters.${host}.roleSettings.${role}.model`);
-    }
-    if (reasoningEffort !== undefined) {
-      if (!supportsReasoningEffort(host)) {
-        warnings.push(`Skipping reasoningEffort for ${host}; this adapter uses only model settings.`);
+  } else {
+    for (const mutation of options.mutations ?? []) {
+      const { role, model, reasoningEffort } = mutation;
+      if (!role) {
+        warnings.push('Skipping model setting with no role');
         continue;
       }
-      config.adapters[host].roleSettings[role].reasoningEffort = reasoningEffort;
-      updated.push(`adapters.${host}.roleSettings.${role}.reasoningEffort`);
+
+      config.adapters[host].roleSettings[role] =
+        config.adapters[host].roleSettings[role] ?? {};
+
+      if (model !== undefined) {
+        config.adapters[host].roleSettings[role].model = model;
+        updated.push(`adapters.${host}.roleSettings.${role}.model`);
+      }
+      if (reasoningEffort !== undefined) {
+        if (!supportsReasoningEffort(host)) {
+          warnings.push(`Skipping reasoningEffort for ${host}; this adapter uses only model settings.`);
+          continue;
+        }
+        config.adapters[host].roleSettings[role].reasoningEffort = reasoningEffort;
+        updated.push(`adapters.${host}.roleSettings.${role}.reasoningEffort`);
+      }
     }
   }
 
@@ -454,7 +471,7 @@ export function configureModels(targetDir, options) {
     }
   }
 
-  return { errors, warnings, updated };
+  return { errors, warnings, updated, preserved };
 }
 
 /**

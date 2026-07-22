@@ -7,8 +7,9 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadAgenticLoopConfig } from './json.js';
+import { loadAgenticLoopConfig, loadJsonFile } from './json.js';
 import { generateAdapterArtifacts } from './adapter-generation.js';
+import { ensureAdapterRoleSettings, getDefaultRoleSettings } from './adapter-role-defaults.js';
 import {
   CONFIG_RELATIVE_PATH,
   TARGET_CONFIG_TEMPLATE_RELATIVE_PATH,
@@ -20,11 +21,9 @@ const IMPLEMENTED_ADAPTERS = ['opencode', 'codex', 'claude-code', 'copilot', 'cu
 const TARGET_CFG_TEMPLATE = bundledToolkitPath(TARGET_CONFIG_TEMPLATE_RELATIVE_PATH);
 
 function renderAdapterEntry(host, indent = '    ') {
-  return [
-    `${indent}"${host}": {`,
-    `${indent}  "roleSettings": {}`,
-    `${indent}}`,
-  ].join('\n');
+  const entry = JSON.stringify({ roleSettings: getDefaultRoleSettings(host) }, null, 2)
+    .replace(/\n/g, `\n${indent}`);
+  return `${indent}"${host}": ${entry}`;
 }
 
 function renderTargetConfigForAdapter(selectedAdapter) {
@@ -50,7 +49,19 @@ function renderTargetConfigForAdapter(selectedAdapter) {
  */
 export function ensureAdapterConfig(target, adapter) {
   const targetConfigPath = join(target, 'agenticloop.json');
-  if (existsSync(targetConfigPath)) return null;
+  if (existsSync(targetConfigPath)) {
+    if (adapter !== 'codex' && adapter !== 'all') return null;
+    try {
+      const config = loadJsonFile(targetConfigPath);
+      const { added } = ensureAdapterRoleSettings(config, 'codex');
+      if (added.length > 0) {
+        writeFileSync(targetConfigPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+      }
+      return null;
+    } catch (error) {
+      return `Cannot apply Codex role defaults: ${error.message}`;
+    }
+  }
   if (!existsSync(TARGET_CFG_TEMPLATE)) {
     return `Source asset missing from package: ${TARGET_CONFIG_TEMPLATE_RELATIVE_PATH}`;
   }

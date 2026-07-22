@@ -75,6 +75,24 @@ Adapter init additionally creates `agenticloop.json`,
 `agenticloop/config.json`, and artifacts for the selected host. Use
 `--adapter all` to generate artifacts for every supported host adapter.
 
+Fresh Codex setup writes this opinionated target-owned cost/quality profile:
+
+| Role | Model | Reasoning effort |
+|---|---|---|
+| orchestrator | `gpt-5.6-luna` | `xhigh` |
+| maintainer | `gpt-5.6-sol` | `high` |
+| engineer | `gpt-5.6-terra` | `xhigh` |
+
+Explicit `agenticloop.json` values override these defaults. To adopt only
+missing fields in an existing Codex installation, run:
+
+```text
+npx agenticloop configure models --adapter codex --profile recommended
+```
+
+The profile reports added fields and preserved explicit fields, and does not
+regenerate artifacts. Run `npx agenticloop generate codex` afterward when needed.
+
 For Claude Code, `init --adapter claude-code` is the repo-local Mode B adapter:
 it generates `.claude/commands/agenticloop.md`, `.claude/agents/`, and one public
 `.claude/skills/agenticloop/SKILL.md` with internal
@@ -145,6 +163,17 @@ data. Its `transaction.json` maps original target paths to the remaining backup
 files. Resolve the reported filesystem obstruction and recover those paths from
 the journal before removing it; an incomplete rollback is not a completed
 removal.
+
+## Stop the Loop
+
+Use `stop` as the exact activation argument to deactivate Agentic Loop for this
+conversation: `/agenticloop stop` in OpenCode, Claude Code repo-local, Copilot
+CLI, and Cursor; `$agenticloop stop` in Codex; and `/agenticloop:stop` in the
+Claude Code plugin. Stop safely checkpoints unfinished work without changing its
+status merely because the user stopped, and does not commit, push, close tasks,
+merge, or clean up worktrees. Resume with the normal host activation command and
+a task or context argument. It is separate from host exit, host terminal stop,
+task closeout, and worktree cleanup; see [Host Adapters](host-adapters.md#stop-agentic-loop).
 
 ## Adoption Modes
 

@@ -45,6 +45,9 @@ Cursor activation is explicit:
 
 - open Cursor Agent chat in the target project
 - invoke `/agenticloop`
+- invoke `/agenticloop stop` to deactivate the current Agentic Loop conversation
+  safely; it checkpoints unfinished work without closeout, commits, pushes,
+  merges, or worktree cleanup, and `/agenticloop <task or context>` resumes
 - let the active Cursor session stay the coordinator/orchestrator
 
 The generated public skill tells Cursor to:

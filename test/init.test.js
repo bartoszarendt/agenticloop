@@ -525,10 +525,11 @@ describe('init - copies canonical assets', () => {
     );
   });
 
-  it('creates agenticloop/commands/start.md and agenticloop/manifest.json', async () => {
+  it('creates canonical start and stop commands with the manifest', async () => {
     const d = makeEmptyTarget();
     await init({ target: d });
     assert.ok(existsSync(join(d, 'agenticloop', 'commands', 'start.md')));
+    assert.ok(existsSync(join(d, 'agenticloop', 'commands', 'stop.md')));
     assert.ok(existsSync(join(d, 'agenticloop', 'manifest.json')));
   });
 
@@ -644,6 +645,11 @@ describe('init - adapter generation creates JSON', () => {
     await init({ target: d, adapter: 'codex' });
     const cfg = loadJsonFile(join(d, 'agenticloop.json'));
     assert.deepEqual(Object.keys(cfg.adapters ?? {}), ['codex']);
+    assert.deepEqual(cfg.adapters.codex.roleSettings, {
+      orchestrator: { model: 'gpt-5.6-luna', reasoningEffort: 'xhigh' },
+      maintainer: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
+      engineer: { model: 'gpt-5.6-terra', reasoningEffort: 'xhigh' },
+    });
     assert.ok(existsSync(join(d, '.codex', 'agents', 'orchestrator.toml')), 'Codex orchestrator TOML should exist');
     assert.ok(existsSync(join(d, '.codex', 'agents', 'maintainer.toml')), 'Codex maintainer TOML should exist');
     assert.ok(existsSync(join(d, '.codex', 'agents', 'engineer.toml')), 'Codex engineer TOML should exist');
@@ -651,6 +657,45 @@ describe('init - adapter generation creates JSON', () => {
     assert.ok(existsSync(join(d, '.agents', 'skills', 'agenticloop', 'agents', 'openai.yaml')), 'Codex openai metadata should exist');
     assert.ok(!existsSync(join(d, '.agents', 'skills', 'agenticloop-start', 'SKILL.md')), 'Legacy Codex start skill should not exist');
     assert.ok(!existsSync(join(d, '.codex-plugin', 'plugin.json')), 'Codex plugin manifest should not exist by default');
+
+    for (const [role, model, effort] of [
+      ['orchestrator', 'gpt-5.6-luna', 'xhigh'],
+      ['maintainer', 'gpt-5.6-sol', 'high'],
+      ['engineer', 'gpt-5.6-terra', 'xhigh'],
+    ]) {
+      const toml = readFileSync(join(d, '.codex', 'agents', `${role}.toml`), 'utf-8');
+      assert.ok(toml.includes(`model = "${model}"`));
+      assert.ok(toml.includes(`model_reasoning_effort = "${effort}"`));
+      assert.ok(!toml.includes('openai/gpt-5.6-'));
+    }
+  });
+
+  it('fills only missing Codex defaults when Codex is explicitly added', async () => {
+    const d = makeEmptyTarget();
+    await init({ target: d });
+    writeFileSync(join(d, 'agenticloop.json'), JSON.stringify({
+      extends: './agenticloop/config.json',
+      adapters: {
+        codex: {
+          roleSettings: {
+            orchestrator: { model: 'custom-orchestrator' },
+            maintainer: { reasoningEffort: 'minimal' },
+          },
+        },
+      },
+    }, null, 2) + '\n');
+
+    await init({ target: d, adapter: 'codex' });
+
+    const cfg = loadJsonFile(join(d, 'agenticloop.json'));
+    assert.deepEqual(cfg.adapters.codex.roleSettings, {
+      orchestrator: { model: 'custom-orchestrator', reasoningEffort: 'xhigh' },
+      maintainer: { model: 'gpt-5.6-sol', reasoningEffort: 'minimal' },
+      engineer: { model: 'gpt-5.6-terra', reasoningEffort: 'xhigh' },
+    });
+    const orchestratorToml = readFileSync(join(d, '.codex', 'agents', 'orchestrator.toml'), 'utf-8');
+    assert.ok(orchestratorToml.includes('model = "custom-orchestrator"'));
+    assert.ok(orchestratorToml.includes('model_reasoning_effort = "xhigh"'));
   });
 
   it('generates Claude Code artifacts with --adapter claude-code', async () => {
@@ -698,6 +743,7 @@ describe('init - adapter generation creates JSON', () => {
     await init({ target: d, adapter: 'all' });
     const cfg = loadJsonFile(join(d, 'agenticloop.json'));
     assert.deepEqual(Object.keys(cfg.adapters ?? {}), ['opencode', 'codex', 'claude-code', 'copilot', 'cursor']);
+    assert.equal(cfg.adapters.codex.roleSettings.engineer.model, 'gpt-5.6-terra');
     assert.ok(existsSync(join(d, '.opencode', 'agents', 'orchestrator.md')), 'OpenCode orchestrator agent should be generated');
     assert.ok(existsSync(join(d, '.opencode', 'commands', 'agenticloop.md')), 'OpenCode command should be generated');
     assert.ok(!existsSync(join(d, 'opencode.jsonc')), 'opencode.jsonc should not be generated');

@@ -195,6 +195,25 @@ describe('setup CLI', () => {
     assert.ok(existsSync(join(d, 'agenticloop.json')));
   });
 
+  it('guided Codex setup writes the recommended target-owned role defaults', () => {
+    const d = makeEmptyTarget();
+    writeFileSync(join(d, 'AGENTS.md'), '# AGENTS\n');
+    writeFileSync(join(d, 'README.md'), '# README\n');
+    writeFileSync(join(d, 'IMPLEMENTATION_PLAN.md'), '# Plan\n');
+
+    const result = run(['setup', '--target', d, '--adapter', 'codex'], {
+      input: ['yes', '', '', ''].join('\n'),
+    });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    const cfg = loadJsonFile(join(d, 'agenticloop.json'));
+    assert.deepEqual(cfg.adapters.codex.roleSettings, {
+      orchestrator: { model: 'gpt-5.6-luna', reasoningEffort: 'xhigh' },
+      maintainer: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
+      engineer: { model: 'gpt-5.6-terra', reasoningEffort: 'xhigh' },
+    });
+  });
+
   it('blank input does not confirm setup', () => {
     const d = makeEmptyTarget();
     writeFileSync(join(d, 'AGENTS.md'), '# AGENTS\n');
