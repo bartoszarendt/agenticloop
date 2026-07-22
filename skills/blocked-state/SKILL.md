@@ -148,6 +148,7 @@ Append dated notes under `## Comments` or a blocker section. Record:
 | `ci-failure` | Required remote checks are failing or incomplete. |
 | `no-artifact` | Implementation ran but produced no reviewable artifact and no better marker. |
 | `no-progress` | The attempt budget or self-loop guard tripped: repeated equivalent attempts, or a restated intended next action never performed, with no new progress. |
+| `permission-denied` | An exact OpenCode permission request was rejected and no safe configured route remains. |
 
 ## Engineer escape hatch
 

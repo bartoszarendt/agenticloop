@@ -12,6 +12,10 @@ metadata:
 
 The maintainer reviews the implementation artifact against the task record.
 
+The optional supervisor is never a reviewer or acceptance authority. Recovery,
+fresh sessions, or root replacement preserve artifact-bound review provenance;
+they do not create an accepted review result or relax independent-review rules.
+
 ## Recording the review outcome
 
 Review has exactly two outcomes, and every recorded outcome carries its

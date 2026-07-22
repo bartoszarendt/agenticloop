@@ -17,6 +17,18 @@ and which lifecycle gates emit which events. This skill owns the operational
 procedure: resolving the command, honoring the disabled and non-blocking rules,
 and keeping entries concise.
 
+Optional supervision may add compact control-plane events only when event
+logging is enabled: registration, assessment, reconciliation, message, cancel,
+retry, root replacement, exact permission decision, verified termination, and
+budget exhaustion. Use role `supervisor`, `controller`, or `operator` and small
+identifier/evidence data only. Never put the controller credential, raw
+supervisor output, prompts, transcript, or private reasoning in an event.
+The canonical event names are `supervision.registered`, `supervision.assessed`,
+`supervision.reconciled`, `supervision.message`, `supervision.cancelled`,
+`supervision.retried`, `supervision.root_replaced`,
+`supervision.permission_decided`, `supervision.terminated`, and
+`supervision.exhausted`. Internal host observations are not public events.
+
 ## When event logging is off
 
 Read `.agenticloop/project.md` before writing any event. Agents must not attempt

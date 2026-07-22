@@ -15,6 +15,10 @@ typically `type: change-request`; in GitHub-backed task records it is typically 
 `type:change-request` label. It changes a locked decision, so the decision must be reviewed as
 documentation before code follows it.
 
+Optional supervision does not alter this gate. Its model and kernel may record a
+block or request the operator, but may not approve the docs-only change, change
+the locked decision, or route around the human approval marker.
+
 ## Gate
 
 1. The maintainer drafts or updates the affected durable docs. Use [[decision-capture]] when the decision should be tracked under `.agenticloop/decisions/`. Use an ADR only when the decision earns one.

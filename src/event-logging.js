@@ -40,10 +40,20 @@ export const VALID_EVENT_TYPES = new Set([
   'needs_context',
   'task.closed',
   'summary.published',
+  'supervision.registered',
+  'supervision.assessed',
+  'supervision.reconciled',
+  'supervision.message',
+  'supervision.cancelled',
+  'supervision.retried',
+  'supervision.root_replaced',
+  'supervision.permission_decided',
+  'supervision.terminated',
+  'supervision.exhausted',
 ]);
 
 export const VALID_EVENT_BACKENDS = new Set(['files', 'github', 'unknown']);
-export const VALID_EVENT_ROLES = new Set(['orchestrator', 'maintainer', 'engineer', 'human', 'unknown']);
+export const VALID_EVENT_ROLES = new Set(['orchestrator', 'maintainer', 'engineer', 'supervisor', 'controller', 'operator', 'human', 'unknown']);
 export const VALID_EVENT_OUTCOMES = new Set([
   'success',
   'failure',
@@ -51,6 +61,9 @@ export const VALID_EVENT_OUTCOMES = new Set([
   'needs_context',
   'accepted',
   'needs_revision',
+  'cancelled',
+  'rejected',
+  'exhausted',
   'unknown',
 ]);
 
@@ -68,6 +81,16 @@ const VALID_EVENT_OUTCOMES_BY_TYPE = new Map([
   ['needs_context', ['needs_context']],
   ['task.closed', ['success', 'failure', 'unknown']],
   ['summary.published', ['success', 'failure', 'unknown']],
+  ['supervision.registered', ['success', 'failure', 'unknown']],
+  ['supervision.assessed', ['success', 'failure', 'unknown']],
+  ['supervision.reconciled', ['success', 'failure', 'unknown']],
+  ['supervision.message', ['success', 'failure', 'unknown']],
+  ['supervision.cancelled', ['cancelled', 'failure']],
+  ['supervision.retried', ['success', 'failure', 'exhausted']],
+  ['supervision.root_replaced', ['success', 'failure', 'exhausted']],
+  ['supervision.permission_decided', ['success', 'rejected', 'failure']],
+  ['supervision.terminated', ['success', 'failure', 'unknown']],
+  ['supervision.exhausted', ['exhausted']],
 ]);
 
 const VALID_TOP_LEVEL_KEYS = new Set([
@@ -77,6 +100,8 @@ const VALID_TOP_LEVEL_KEYS = new Set([
   'trace_id',
   'parent_event_id',
   'task_id',
+  'scope',
+  'run_id',
   'backend',
   'host',
   'role',
@@ -86,6 +111,25 @@ const VALID_TOP_LEVEL_KEYS = new Set([
   'refs',
   'data',
 ]);
+
+// Optional event scope. Historical and ordinary task events omit both keys and
+// are treated as task-scoped. `scope: 'run'` is the narrow extension that lets
+// the optional supervision controller record control-plane facts that belong to
+// a run rather than to any single task.
+export const VALID_EVENT_SCOPES = new Set(['task', 'run']);
+export const RUN_SCOPED_EVENT_TYPES = new Set([
+  'supervision.registered',
+  'supervision.assessed',
+  'supervision.reconciled',
+  'supervision.message',
+  'supervision.cancelled',
+  'supervision.retried',
+  'supervision.root_replaced',
+  'supervision.permission_decided',
+  'supervision.terminated',
+  'supervision.exhausted',
+]);
+const RUN_SCOPED_EVENT_ROLES = new Set(['controller', 'supervisor', 'operator']);
 
 const BANNED_PRIVACY_KEYS = new Set([
   'prompt',
@@ -595,6 +639,10 @@ export function resolveLogDirectory(target) {
   return join(resolvedTarget, DEFAULT_LOG_DIR);
 }
 
+// Run-scoped supervision control-plane logs live one level below the task logs
+// so a run log can never collide with a task file name.
+export const SUPERVISION_LOG_SUBDIR = 'supervision';
+
 export function listEventLogFiles(target) {
   const directory = resolveLogDirectory(target);
   if (!existsSync(directory)) {
@@ -603,22 +651,36 @@ export function listEventLogFiles(target) {
 
   const files = readdirSync(directory, { withFileTypes: true })
     .filter(entry => entry.isFile() && entry.name.endsWith('.jsonl'))
-    .map(entry => join(directory, entry.name))
-    .sort((a, b) => a.localeCompare(b));
+    .map(entry => join(directory, entry.name));
 
-  return { directory, files };
+  const supervisionDirectory = join(directory, SUPERVISION_LOG_SUBDIR);
+  if (existsSync(supervisionDirectory)) {
+    files.push(
+      ...readdirSync(supervisionDirectory, { withFileTypes: true })
+        .filter(entry => entry.isFile() && entry.name.endsWith('.jsonl'))
+        .map(entry => join(supervisionDirectory, entry.name))
+    );
+  }
+
+  return { directory, files: files.sort((a, b) => a.localeCompare(b)) };
 }
 
 export function buildEvent(input = {}, now = new Date()) {
   const taskId = normalizeNullableString(input.task_id ?? input.taskId ?? input.task);
+  const scope = normalizeNullableString(input.scope);
+  const runId = normalizeNullableString(input.run_id ?? input.runId);
 
   return {
     schema_version: EVENT_SCHEMA_VERSION,
     event_id: normalizeNullableString(input.event_id ?? input.eventId) ?? randomUUID(),
     occurred_at: normalizeTimestamp(input.occurred_at ?? input.occurredAt, now),
-    trace_id: resolveTraceId(input, taskId),
+    trace_id: resolveTraceId(input, taskId ?? (scope === 'run' ? runId : null)),
     parent_event_id: normalizeNullableString(input.parent_event_id ?? input.parentEventId),
     task_id: taskId,
+    // Both keys stay absent unless a caller opts in, so existing producers and
+    // historical logs keep their exact shape.
+    ...(scope ? { scope } : {}),
+    ...(scope === 'run' && runId ? { run_id: runId } : {}),
     backend: asTrimmedString(input.backend) || 'unknown',
     host: asTrimmedString(input.host) || 'unknown',
     role: asTrimmedString(input.role) || 'unknown',
@@ -672,6 +734,26 @@ export function validateEvent(event, options = {}) {
 
   if (event.task_id !== null && !asTrimmedString(event.task_id)) {
     errors.push('task_id must be a non-empty string or null');
+  }
+
+  const scope = event.scope === undefined ? 'task' : event.scope;
+  if (!VALID_EVENT_SCOPES.has(scope)) {
+    errors.push(`scope must be one of: ${[...VALID_EVENT_SCOPES].join(', ')}`);
+  } else if (scope === 'run') {
+    if (!asTrimmedString(event.run_id)) {
+      errors.push('run-scoped events require a non-empty run_id');
+    }
+    if (event.task_id !== null && event.task_id !== undefined) {
+      errors.push('run-scoped events must not carry a task_id; task-scoped work belongs in the task event log');
+    }
+    if (!RUN_SCOPED_EVENT_TYPES.has(event.event_type)) {
+      errors.push(`run-scoped events must use an approved control-plane event_type: ${[...RUN_SCOPED_EVENT_TYPES].join(', ')}`);
+    }
+    if (!RUN_SCOPED_EVENT_ROLES.has(event.role)) {
+      errors.push(`run-scoped events require controller, supervisor, or operator provenance (role is '${event.role}')`);
+    }
+  } else if (event.run_id !== undefined) {
+    errors.push("run_id is only supported on run-scoped events (scope: 'run')");
   }
 
   const taskIdError = unsafeTaskIdError(event.task_id);

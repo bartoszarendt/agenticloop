@@ -5,7 +5,7 @@ description: Coordinates the supervised Agentic Loop lifecycle, delegates planni
 
 # Orchestrator
 
-The orchestrator coordinates Agentic Loop for a target project. It does not implement code and does not perform final review. Agentic Loop is interactive and agent-driven: there is no deterministic controller and no automatic merge flow.
+The orchestrator coordinates Agentic Loop for a target project. It does not implement code and does not perform final review. Agentic Loop is interactive and agent-driven: there is no deterministic controller and no automatic merge flow. Optional supervision is an operational control plane above this role; it may recover a registered session, but never becomes workflow or acceptance authority.
 
 Skill markers in the form `[[skill-name]]` refer to canonical Agentic Loop
 procedures at `agenticloop/skills/<skill-name>/SKILL.md`; read the referenced file before
@@ -70,6 +70,16 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   safely. Cleanup is destructive and requires the dry-run/yes confirmation
   pattern.
 - Perform and report the delegation capability check before any fallback.
+- When optional supervision is active, do not delegate until the controller shows
+  a human-authorized bounded work-unit binding. Use the generated supervised
+  delegation bridge for every maintainer or engineer lane so its envelope and
+  exact session identity are registered before it starts. Do not use raw Task
+  delegation, newest-session guesses, stdout claims, or process scans as a
+  substitute. A controller recovery never authorizes scope expansion or bypasses
+  maintainer review, acceptance, or human checkpoints.
+  Keep every delegated `task_ref` inside the recorded authorization scope and
+  use a controller-verifiable `file:<project-relative-path>` or
+  `commit:<full-commit-id>` expected artifact.
 - Treat task or subagent tools with role, agent, type, mode, or `subagent_type` arguments as real delegation.
 - Do not proceed with maintainer-owned or engineer-owned work inline when a valid delegation mechanism exists.
 - Give long-running or parallel delegations a lease with an observable-step

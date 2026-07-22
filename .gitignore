@@ -18,6 +18,7 @@ node_modules/
 # or keep the legacy root tmp/ path only for compatibility.
 opencode.jsonc
 .agenticloop/tmp/
+.agenticloop/state/
 # Per-lane parallel worktrees live inside the repo root to stay within the
 # host's workspace sandbox; never report them as untracked.
 .agenticloop/worktrees/

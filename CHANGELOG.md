@@ -3,6 +3,59 @@
 ## 0.1.0 (Unreleased)
 
 ### Added
+- Phase 26: optional, dormant-by-default attached OpenCode supervision. Ordinary
+  `/agenticloop` behaviour is unchanged; nothing loads, spawns, or observes until
+  a target explicitly sets `supervision.enabled: true` and a human runs
+  `/agenticloop --supervised`. No OpenCode SDK runtime dependency is added to
+  Markdown-only installations.
+  - **Controller, kernel, IPC, and CLI.** A run-scoped external controller owns
+    one project at a time behind an ownership lock, communicates with the
+    generated OpenCode bridge over authenticated run- and project-bound loopback
+    IPC, and stores non-authoritative recovery state under
+    `.agenticloop/state/supervision/<run-id>/`. Task records, artifacts,
+    verification, and review provenance remain the workflow truth. The
+    mechanical kernel records identities, generations, events, budgets, and
+    permission state; the restricted supervisor model only proposes enumerated
+    actions bound to an immutable, single-use action context. `npx agenticloop
+    supervision ...` provides factual status, pause, resume, cancel, permissions,
+    notifications, and stop without requiring a model.
+  - **Exact permission decisions.** Requests are registered with immutable
+    identity and mechanically risk-classified. OpenCode `once` and `reject` are
+    the only supervisor-eligible decisions; `always`, high-impact categories, and
+    supervisor self-approval are human-only. A permission commits only after the
+    host reply succeeds. Arbitrary permission commands, patterns, paths, and
+    targets never leave the ephemeral classifier: public status and model state
+    carry counts plus a run-keyed one-way scope fingerprint, while exact scope stays in
+    OpenCode's native permission UI. Credential-bearing requests are marked
+    `sensitive_material_redacted` and forced human-only. Controller stderr is
+    drained without being retained or surfaced.
+  - **Recovery and capability ceilings.** Per-lane leases drive no-progress
+    detection from verified durable checkpoints rather than message traffic.
+    Rate-limited routes defer their entire reassessment to a generation-bound
+    deadline instead of retrying immediately. Unknown-outcome, no-artifact,
+    retry, fallback, replacement, wakeup, cost, and time budgets are separate,
+    and exhaustion stops further prohibited provider or retry activity rather
+    than only logging. Cancellation failure is recorded durably as
+    `failed_cancellation` and never reported as success. Batch joins require a
+    verified artifact or an explicit durable lane disposition from the current
+    session generation; a retry clears stale dispositions. A reconnecting
+    bridge rebuilds its lane registry only from server-reconciled sessions;
+    incidental plugin disposal preserves controller state instead of stopping it.
+  - **Public status, notifications, and events.** `status --json` uses a
+    dedicated, redacted public schema with explicit pagination on every
+    collection; human-readable status reports authorization, server/bridge state,
+    lifecycle, budgets, cost enforcement, timing, unsupported capabilities, and
+    paging guidance without printing permission command text. Notification read
+    state is an authenticated acknowledgment cursor. Lane events project to the
+    task JSONL and run control-plane events to a canonical run-scoped
+    `.agenticloop/logs/supervision/<run-id>.jsonl`.
+  - **Provider-backed acceptance is still pending.** The provider-free real-host
+    smoke proves plugin load, server health, session API, and delegation-tool
+    registration on the pinned OpenCode range. The provider-backed scenario is a
+    real opt-in driver gated on an explicitly marked disposable fixture. It
+    invokes both engineer generations through OpenCode and requires the recovered
+    engineer, never the driver, to create the artifact. Until that fixture runs,
+    Phase 26 acceptance remains partial and no provider-backed claim is made.
 - Hardened Maintainer Review Fixup follow-up enforcement: GitHub review audit now
   checks same-task replacement PR history before allowing a fixup, files/event
   cross-checks ignore malformed fixup flags, and non-maintainer review results are

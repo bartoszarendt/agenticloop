@@ -1,8 +1,11 @@
 # Agentic Loop Methodology
 
-Agentic Loop is a supervised implementation workflow for AI coding agents. It
-turns a vague request into a durable task record, a scoped implementation,
-evidence, review, and closeout.
+Agentic Loop is a Markdown-defined supervised implementation workflow for AI
+coding agents. It turns a vague request into a durable task record, a scoped
+implementation, evidence, review, and closeout. An optional run-scoped
+model-supervised runtime may observe and operationally control registered
+OpenCode sessions after explicit activation; it does not replace the normal
+workflow roles, durable artifacts, review, acceptance, or human gates.
 
 The methodology is host-neutral. All five implemented host adapters — OpenCode,
 Codex, Claude Code, GitHub Copilot, and Cursor — are supported. The workflow
@@ -35,6 +38,12 @@ the generated engineer as an ordinary bounded subagent for a normal engineering
 subtask. Standalone engineer use requires no activation, task ID, or task record
 and creates no Agentic Loop workflow state. See the Glossary entries for
 **Activation** and **Standalone engineer**.
+
+**Supervised activation is not work-unit authorization.** `/agenticloop
+--supervised` may attach an optional controller before orientation, but it may
+not create tasks, delegate roles, answer permissions, recover sessions, or begin
+unattended work until a human authorizes one bounded work unit. The controller
+then binds the named unit to the registered root; it never expands that binding.
 
 ## Core Objects
 
@@ -154,6 +163,16 @@ target projects do not need toolkit-root `docs/` files at runtime.
 - **Toolkit-owned source**: canonical Agentic Loop package assets installed
   under `agenticloop/` in target repos.
 - **Target-owned state**: durable project records under `.agenticloop/`.
+- **Supervision runtime**: an optional run-scoped OpenCode control plane made of
+  a mechanical kernel and a required restricted supervisor model session. It is
+  non-authoritative recovery metadata, not a task store or workflow role.
+- **Supervisor**: the restricted model session that interprets bounded runtime
+  facts and proposes enumerated operational actions. It is not an orchestrator,
+  maintainer, engineer, reviewer, or acceptance authority.
+- **Attached supervision**: the initial OpenCode mode in which the current TUI
+  and server already exist. It can control only exact registered sessions while
+  that server stays live; server restart and unproven process termination are
+  unsupported.
 
 ## Directory Layout
 
@@ -186,6 +205,11 @@ The canonical role definitions live in `agenticloop/agents/`:
 
 Host adapters should bind to those role files rather than defining separate
 role contracts.
+
+The optional supervisor is a separate operational role defined in
+`agenticloop/agents/supervisor.md`. It may inspect bounded evidence and propose
+recovery, but it must not silently assume any of the three workflow roles or
+accept or close work.
 
 ## Source Documents
 
@@ -771,6 +795,70 @@ Backend projection docs live in `agenticloop/backends/`:
 - `agenticloop/backends/files.md` maps task records to local Markdown files under `.agenticloop/`.
 - `agenticloop/backends/github.md` maps task records to GitHub issues, labels, comments, and pull requests.
 
+## Optional Supervised Execution
+
+The optional supervision runtime is an operational control plane above the
+orchestrator, not a deterministic recovery brain or a fourth workflow authority.
+The orchestrator remains workflow coordinator; maintainer remains planning,
+review, acceptance, and closeout authority; engineer remains implementation
+authority. The mechanical kernel waits, records identities, enforces locks,
+budgets, authorization, capability, and exact permission checks. A required
+restricted supervisor model interprets progress and consequences and proposes
+one structured action; the kernel never invents a semantic retry, route change,
+permission approval, or root replacement while that model is unavailable.
+
+The initial host is same-host OpenCode attached mode. Its generated plugin
+intercepts `/agenticloop --supervised [task]` before the command reaches the
+orchestrator model, starts or reuses `npx agenticloop supervise --adapter
+opencode`, registers the exact root, and displays a fail-closed handshake.
+`/agenticloop` without the flag remains ordinary configurable activation.
+Supervisor TUI commands and `npx agenticloop supervision ...` address the same
+authenticated local controller API without requiring an orchestrator turn.
+
+Supervised delegation extends the existing `role-delegation` envelope; it does
+not create a second task workflow. Before a real worker starts, the bridge
+registers its lane, task/artifact expectation, route, scope, lease, and bounded
+handoff, then binds the exact OpenCode session ID. A returned invocation without
+its expected durable artifact is no-artifact, not completion; this uses an
+allowance distinct from periodic no-progress assessment. A registered lane may
+renew its observation lease only through a host-verified expected artifact or
+checkpoint declared in its immutable delegation envelope. Liveness traffic alone
+cannot do so.
+Successful sibling artifacts and review provenance remain intact when another
+lane fails; joins stay closed until every lane has a valid artifact or explicit
+disposition.
+
+`waiting_permission` is a live invocation state. `permission_rejected` is an
+outcome. An exact eligible request may receive only a supervisor-assessed,
+kernel-validated `once` or `reject`; `always` and high-impact categories are
+human-only, and operator `always` requires an explicit `--confirm-always` command
+after native scope review. A pending request affects only its exact session:
+unrelated runnable lanes remain observed and continue accumulating active time.
+A rejection that leaves no safe route uses [[blocked-state]] category
+`permission-denied`, not a fabricated transport or no-progress result.
+
+Every supervisor disposition is bound to a kernel-issued immutable action
+context: allowed actions, exact target and kind, exact permission request when
+applicable, allowed routes, authorization unit/scope, wake identity, and target
+generation. Model output cannot substitute a different lane, root, supervisor,
+or request. Stale contexts after pause, stop, reauthorization, replacement, or
+generation change are rejected. Public status is a dedicated secret-safe schema
+with explicit pagination metadata, not generic redaction.
+
+Attached mode reports rather than compensates for its ceiling: server recovery,
+managed-process termination, and reliable live message injection are unsupported
+unless a pinned host test proves them. Supported bridge capabilities are derived
+from authenticated OpenCode client-API probes rather than a static adapter claim.
+After bridge loss, one bounded loopback health probe distinguishes a live server
+from `server_lost`; neither result implies recovery. It never identifies sessions by recency,
+scans ports/process names, parses terminal output, kills ambiguous processes,
+stores transcripts, or treats a model claim as completion. Runtime state lives at
+`.agenticloop/state/supervision/<run-id>/`, is gitignored, atomic, secret-safe,
+and non-authoritative. Its bearer credential lives separately in a
+mode-restricted OS runtime file outside the target project and is removed on
+graceful shutdown. See the package's OpenCode supervision documentation for
+operating detail.
+
 ## Event Logging
 
 Event logging is optional. Agents must not attempt CLI event logging unless
@@ -824,16 +912,42 @@ Use event logging for these recommended default gates:
 - `blocked` or `needs_context` when work cannot continue.
 - `task.closed` when the task is durably closed.
 - `summary.published` when the closeout status marker is posted.
+- `supervision.registered`, `supervision.assessed`, `supervision.reconciled`,
+  `supervision.message`, `supervision.cancelled`, `supervision.retried`,
+  `supervision.root_replaced`, `supervision.permission_decided`,
+  `supervision.terminated`, and `supervision.exhausted` for compact optional
+  control-plane facts when supervision is enabled. Top-level role is
+  `supervisor`, `controller`, or `operator`; data contains only identifiers,
+  bounded rationale, counters, and durable evidence references.
 
 When events in the same target share a `task_id`, the CLI derives the same
 deterministic `trace_id` automatically unless `--trace-id` is supplied.
+
+### Event Scope
+
+Events are task-scoped by default. Ordinary and historical events carry neither
+`scope` nor `run_id`, and their shape is unchanged.
+
+Optional supervision adds one narrow extension for control-plane facts that
+belong to a run rather than to any single task -- root and supervisor
+registration, root replacement, exhaustion, and termination. Such an event sets
+`scope: "run"`, carries a non-empty `run_id`, has a null `task_id`, uses
+`controller`, `supervisor`, or `operator` provenance, and must be one of the
+approved supervision control-plane event types. It is appended to
+`.agenticloop/logs/supervision/<run-id>.jsonl` through the same canonical
+validation and append path as task logs.
+
+Lane events keep their `task_ref` and stay in the normal task JSONL. One logical
+event is projected to exactly one store; a run-scoped event never duplicates a
+task-scoped one.
 
 Do not record every chat turn. Do not write raw prompts, raw assistant text,
 full tool output, transcript payloads, or host runtime exports. Keep entries to
 short summaries, references, and small structured data only.
 
-Keep the top-level event schema unchanged. Use `refs` and `data` for small,
-structured context only.
+Apart from the optional `scope` and `run_id` keys described above, keep the
+top-level event schema unchanged. Use `refs` and `data` for small, structured
+context only.
 
 Recommended `refs` values:
 

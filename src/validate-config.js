@@ -125,6 +125,7 @@ import {
 } from './maintainer-fixup.js';
 import { loadEvents, resolveEventLogPath } from './event-logging.js';
 import { validateVerificationAttempts } from './verification-learning.js';
+import { validateSupervisionConfig } from './supervision/config.js';
 
 const PLACEHOLDER_PATTERNS = [
   /\bTBD\b/i,
@@ -1360,6 +1361,8 @@ function validateResolvedTaskBackend(repoRoot, taskBackendResolution, config, er
 
 function validateJsoncConfig(config, rawConfig, cfgPath, repoRoot, forced, errors, warnings) {
   const rawAdapters = rawConfig?.adapters ?? {};
+  const supervisionValidation = validateSupervisionConfig(config.supervision);
+  errors.push(...supervisionValidation.errors);
   // --- Source directories --------------------------------------------------
   const agentsSrcDir = config.agents?.sourceDirectory ?? AGENTS_SOURCE_DIRECTORY;
   const skillsSrcDir = config.skills?.sourceDirectory ?? SKILLS_SOURCE_DIRECTORY;

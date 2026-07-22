@@ -46,6 +46,8 @@ import {
   PACKAGE_SOURCE_RELATIVE_PATHS,
   SCRATCH_DIRECTORY_RELATIVE_PATH,
   SCRATCH_GITIGNORE_PATTERNS,
+  SUPERVISION_STATE_DIRECTORY_RELATIVE_PATH,
+  SUPERVISION_STATE_GITIGNORE_PATTERNS,
   WORKTREES_DIRECTORY_RELATIVE_PATH,
   WORKTREES_GITIGNORE_PATTERNS,
   TARGET_STATE_DIRECTORY,
@@ -201,10 +203,10 @@ function instantiateMemoryScaffold(target, skipped, created, errors) {
 }
 
 // Agentic Loop-owned directories that must be gitignored in the target repo:
-// the scratch dir and the per-lane worktrees dir (kept inside the repo root so
-// parallel write lanes stay within the host's workspace sandbox).
+// scratch, non-authoritative recovery state, and per-lane worktrees.
 const MANAGED_GITIGNORE_ENTRIES = Object.freeze([
   { dir: SCRATCH_DIRECTORY_RELATIVE_PATH, patterns: SCRATCH_GITIGNORE_PATTERNS },
+  { dir: SUPERVISION_STATE_DIRECTORY_RELATIVE_PATH, patterns: SUPERVISION_STATE_GITIGNORE_PATTERNS },
   { dir: WORKTREES_DIRECTORY_RELATIVE_PATH, patterns: WORKTREES_GITIGNORE_PATTERNS },
 ]);
 

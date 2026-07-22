@@ -1,6 +1,6 @@
 # Agentic Loop
 
-> Practical loop engineering for AI coding agents -- a Markdown-first overlay that gives your agent a task contract, role boundaries, verification rules, and durable memory: the process a good engineering team already has.
+> Practical loop engineering for AI coding agents -- a Markdown-first overlay that gives your agent a task contract, role boundaries, verification rules, and durable memory. An optional run-scoped OpenCode supervisor can recover registered execution without replacing the workflow's human gates.
 
 AI coding agents are useful, but they are unreliable at sustained software work. They drift scope, skip verification, repeat failing approaches, and lose context between sessions. The problem is not that the models are not smart enough. The problem is that they lack process: a clear task contract, role boundaries, verification rules, and durable project memory.
 
@@ -70,6 +70,7 @@ No role grades its own exam. When ready tasks are independent, the orchestrator 
 | **Cost-quality routing** | Configure different model and reasoning settings per role, so cheap coordinator work does not consume the same model budget as high-judgment review. |
 | **Host adapters** | Generate host-native shims for OpenCode, Claude Code, Codex, GitHub Copilot, and Cursor from one canonical Markdown source. |
 | **Optional event logs** | Record compact JSONL workflow-gate events for local audit and summary generation without storing raw transcripts. |
+| **Optional OpenCode supervision** | Run-scoped model-backed operational control for registered roots and lanes, with durable recovery state and hard human gates. |
 
 ## The core loop
 
@@ -235,6 +236,17 @@ Run Agentic Loop with no argument when you want the agent to orient itself in th
 /agenticloop
 ```
 
+OpenCode users can opt into fail-closed attached supervision after configuring
+the optional component:
+
+```text
+/agenticloop --supervised [task-id or task description]
+```
+
+This starts a controller observationally; it does not authorize work. See
+[OpenCode supervision](docs/supervision.md) for setup, commands, cost/safety
+policy, and attached-mode limitations.
+
 In orientation mode, the agent should read `.agenticloop/project.md`, check setup state, inspect configured project documents, look for existing task records, summarize the current project/task state, and ask which task to take next.
 
 Add a task ID or task description when you want to route directly to a known work unit:
@@ -311,7 +323,8 @@ The active backend is selected in `.agenticloop/project.md`.
 Agentic Loop is intentionally narrow. It is not:
 
 - a deterministic autonomous controller or self-running pipeline;
-- an agent runtime, SDK, or framework;
+- a required agent runtime, SDK, or framework; the optional OpenCode component is
+  a bounded run-scoped control plane, not workflow or acceptance authority;
 - a replacement for your existing project docs;
 - a marketplace, registry, or centralized trust service;
 - a telemetry collector or raw transcript store;
@@ -377,6 +390,7 @@ npx agenticloop generate <host|all>                  Generate host adapter artif
 npx agenticloop configure models --adapter <host>    Configure per-role models (requires agenticloop.json)
 npx agenticloop bootstrap-labels                     Create GitHub labels via the gh CLI (needs gh auth + repo)
 npx agenticloop event-logging <event> [options]      Append/validate/audit/report optional workflow-gate events
+npx agenticloop supervision status [--json]          Query an attached supervision controller
 npx agenticloop guidance check                       Report the repository-rules activation-guidance block status
 npx agenticloop guidance apply                       Create/append/refresh the activation-guidance block (idempotent)
 npx agenticloop guidance remove                      Remove the owned activation-guidance block
@@ -472,6 +486,7 @@ updates. Canonical toolkit assets (agents, skills, backends) always live under
 | [docs/event-logging.md](docs/event-logging.md) | Optional workflow-gate event logging. |
 | [docs/registry-horizon.md](docs/registry-horizon.md) | Why registry and marketplace work is deferred. |
 | [docs/opencode-setup.md](docs/opencode-setup.md) | OpenCode setup. |
+| [docs/supervision.md](docs/supervision.md) | Optional OpenCode supervision setup and controls. |
 | [docs/claude-code-setup.md](docs/claude-code-setup.md) | Claude Code setup. |
 | [docs/codex-setup.md](docs/codex-setup.md) | Codex setup. |
 | [docs/copilot-setup.md](docs/copilot-setup.md) | GitHub Copilot setup. |

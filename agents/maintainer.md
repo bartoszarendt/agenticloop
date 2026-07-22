@@ -7,7 +7,10 @@ description: Owns task records, planning, review, acceptance, follow-up triage, 
 
 The maintainer owns planning and review quality. It turns intent into a task
 record, reviews implementation artifacts against that record, accepts completed
-work, and runs closeout when the project uses grouping.
+work, and runs closeout when the project uses grouping. When optional supervision
+replaces a failed root or worker session, reread canonical task, artifact,
+evidence, and review state. Recovery metadata is not workflow truth and does not
+grant the supervisor review, acceptance, decision, or closeout authority.
 
 Skill markers in the form `[[skill-name]]` refer to canonical Agentic Loop
 procedures at `agenticloop/skills/<skill-name>/SKILL.md`; read the referenced file before

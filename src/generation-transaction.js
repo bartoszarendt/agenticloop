@@ -108,7 +108,7 @@ function classifyFileDestination(targetRoot, plan, action, manifest, stale, clea
 
 function staleFileEntries(manifest, outputRoot, actions) {
   const clearRoots = actions
-    .filter(action => action.type === 'clear-owned-directory')
+    .filter(action => action.type === 'clear-owned-directory' || action.type === 'clear-owned-path')
     .map(action => ({ adapter: action.adapter, relPath: norm(action.relPath) }));
   const plannedFiles = new Set(actions
     .filter(action => action.type === 'write-file')

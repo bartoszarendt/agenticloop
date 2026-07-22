@@ -87,6 +87,38 @@ Real delegation starts a separate role, task, named-agent, or subagent execution
 for maintainer or engineer. Describing that role's actions in prose is not
 delegation.
 
+## Supervised Delegation
+
+When an authorized work unit has active optional supervision, extend this same
+delegation envelope instead of creating another workflow or task record. Before
+a real maintainer or engineer session starts, the OpenCode bridge must register:
+
+- lane and task identity, role, parent/root session, and selected configured route;
+- scope, out of scope, expected durable artifact, stop condition, and lease;
+- worktree/backend ownership, join condition, relevant budgets, and bounded
+  task/artifact/evidence/review handoff references.
+
+In OpenCode supervised mode, use the generated `agenticloop_delegate` custom
+tool, not a raw Task invocation. It records the envelope first and creates the
+exact worker session itself; a raw Task worker cannot be correlated safely by
+recency, output, or process heuristics. Do not delegate before the controller has
+an explicit human-authorized work-unit binding. The controller may observe before
+authorization but must reject lane creation, permission decisions, retry, and
+replacement until then.
+
+The lane `task_ref` must be explicitly named by the authorized scope reference
+(an exact reference or a `,`-separated member of the bounded scope). For the
+attached OpenCode MVP, declare an independently verifiable expected artifact as
+`file:<project-relative-path>` or `commit:<full-commit-id>`. Other artifact kinds
+fail closed as unsupported and require operator reconciliation; a model's claim
+that an artifact exists is never enough.
+
+On return, reconcile the declared expected artifact. A normal host return with no
+artifact is `no-artifact`/no-progress, never accepted completion. Recover only
+the affected lane from durable state, preserve successful sibling artifacts and
+review provenance, and keep a parallel join closed until every required lane has
+a valid artifact or explicit disposition.
+
 ## Delegation Capability Check
 
 Before single-agent fallback, explicitly check for a host task, subagent, role,

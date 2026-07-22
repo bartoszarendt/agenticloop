@@ -65,6 +65,7 @@ export const PROJECT_MAP_RELATIVE_PATH = '.agenticloop/project.md';
 export const TASKS_DIRECTORY_RELATIVE_PATH = '.agenticloop/tasks';
 export const DECISIONS_DIRECTORY_RELATIVE_PATH = '.agenticloop/decisions';
 export const LOGS_DIRECTORY_RELATIVE_PATH = '.agenticloop/logs';
+export const SUPERVISION_STATE_DIRECTORY_RELATIVE_PATH = '.agenticloop/state';
 export const SCRATCH_DIRECTORY_RELATIVE_PATH = '.agenticloop/tmp';
 export const LEGACY_SCRATCH_DIRECTORY_RELATIVE_PATH = 'tmp';
 
@@ -124,6 +125,7 @@ export const TARGET_STATE_RELATIVE_PATHS = Object.freeze([
   TASKS_DIRECTORY_RELATIVE_PATH,
   DECISIONS_DIRECTORY_RELATIVE_PATH,
   LOGS_DIRECTORY_RELATIVE_PATH,
+  SUPERVISION_STATE_DIRECTORY_RELATIVE_PATH,
   SCRATCH_DIRECTORY_RELATIVE_PATH,
 ]);
 
@@ -160,6 +162,13 @@ export const SCRATCH_GITIGNORE_PATTERNS = Object.freeze([
   '.agenticloop/tmp/',
   '/.agenticloop/tmp',
   '/.agenticloop/tmp/',
+]);
+
+export const SUPERVISION_STATE_GITIGNORE_PATTERNS = Object.freeze([
+  '.agenticloop/state',
+  '.agenticloop/state/',
+  '/.agenticloop/state',
+  '/.agenticloop/state/',
 ]);
 
 export const LEGACY_SCRATCH_GITIGNORE_PATTERNS = Object.freeze([

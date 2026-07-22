@@ -28,6 +28,27 @@ function writeManifest(root, entries) {
 }
 
 describe('generation transaction ownership regressions', () => {
+  it('removes an exact owned optional plugin without clearing sibling plugins', () => {
+    const root = target();
+    const relPath = '.opencode/plugins/agenticloop-supervision.ts';
+    const sibling = join(root, '.opencode', 'plugins', 'target-owned.ts');
+    mkdirSync(join(root, '.opencode', 'plugins'), { recursive: true });
+    writeFileSync(sibling, 'target owned');
+    const installed = executeGenerationPlan(root, plan([
+      { type: 'clear-owned-path', adapter: 'opencode', relPath },
+      { type: 'write-file', adapter: 'opencode', relPath, content: 'generated', marker: 'generated' },
+    ]));
+    assert.equal(installed.ok, true);
+    assert.equal(existsSync(join(root, relPath)), true);
+
+    const disabled = executeGenerationPlan(root, plan([
+      { type: 'clear-owned-path', adapter: 'opencode', relPath },
+    ]));
+    assert.equal(disabled.ok, true);
+    assert.equal(existsSync(join(root, relPath)), false);
+    assert.equal(readFileSync(sibling, 'utf8'), 'target owned');
+  });
+
   it('rejects hostile manifest paths before removal can reach outside the target', () => {
     const root = target();
     const outside = join(base, 'outside.json');

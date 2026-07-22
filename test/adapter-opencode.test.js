@@ -4,20 +4,24 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import ts from 'typescript';
 
 import {
   generateOpencodeAgentRecords,
   generateOpencodeArtifacts,
+  planOpencodeArtifacts,
   renderOpencodeAgentMarkdown,
   renderOpencodeCommandMarkdown,
+  renderOpencodeSupervisorAgentMarkdown,
 } from '../src/adapters/opencode.js';
 import { parseFrontmatter } from '../src/frontmatter.js';
 import { loadAgenticLoopConfig } from '../src/json.js';
 import { seedTargetLayout } from './helpers/layout-fixture.js';
+import { renderOpencodeSupervisionPlugin } from '../src/adapters/opencode-supervision-plugin.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -169,7 +173,61 @@ describe('renderOpencodeCommandMarkdown', () => {
   });
 });
 
+describe('renderOpencodeSupervisorAgentMarkdown', () => {
+  it('renders a restricted supervisor that cannot edit, delegate, or ask for approval', () => {
+    const fx = makeFixture();
+    const alConfig = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+    alConfig.supervision = { supervisor: { model: 'provider/supervisor' } };
+    const [frontmatter, body] = parseFrontmatter(renderOpencodeSupervisorAgentMarkdown(alConfig));
+
+    assert.equal(frontmatter?.mode, 'subagent');
+    assert.equal(frontmatter?.model, 'provider/supervisor');
+    assert.equal(frontmatter?.permission?.edit, 'deny');
+    assert.equal(frontmatter?.permission?.task, 'deny');
+    assert.match(body, /must not edit files, accept work, close tasks/);
+  });
+});
+
 describe('generateOpencodeArtifacts', () => {
+  it('executes the generated plugin module and preserves exact command-token boundaries', async () => {
+    const generated = renderOpencodeSupervisionPlugin()
+      .replace('import { tool } from "@opencode-ai/plugin"', 'const tool = globalThis.__agenticloopTool');
+    const compiled = ts.transpileModule(generated, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+    }).outputText;
+    const modulePath = join(tmpDir, 'generated-supervision-' + Date.now() + '.mjs');
+    writeFileSync(modulePath, compiled, 'utf8');
+    const schema = { optional() { return this; } };
+    const toolStub = definition => definition;
+    toolStub.schema = { string: () => ({ ...schema }) };
+    globalThis.__agenticloopTool = toolStub;
+    try {
+      const module = await import(pathToFileURL(modulePath).href + '?v=' + Date.now());
+      let hostCalls = 0;
+      const plugin = await module.AgenticLoopSupervision({
+        directory: tmpDir,
+        client: {
+          session: {
+            create: async () => { hostCalls += 1; },
+            abort: async () => { hostCalls += 1; },
+            prompt: async () => { hostCalls += 1; },
+            promptAsync: async () => { hostCalls += 1; },
+            list: async () => { hostCalls += 1; },
+          },
+          postSessionIdPermissionsPermissionId: async () => { hostCalls += 1; },
+          tui: { showToast: async () => { hostCalls += 1; } },
+        },
+      });
+      await plugin['command.execute.before']({ command: 'agenticloop', arguments: 'supervisor-facing work' }, { parts: [] });
+      await plugin['command.execute.before']({ command: 'agenticloop', arguments: '--supervisedX work' }, { parts: [] });
+      assert.equal(hostCalls, 0, 'prefix lookalikes remain ordinary commands and never start supervision');
+      assert.ok(plugin.tool.agenticloop_delegate);
+      assert.ok(plugin.tool.agenticloop_checkpoint);
+    } finally {
+      delete globalThis.__agenticloopTool;
+    }
+  });
+
   it('each role artifact inherits a distinctive Project Operating Facts responsibility', () => {
     const outputDir = join(tmpDir, 'pof-generated');
     const fx = makeFixture();
@@ -192,20 +250,81 @@ describe('generateOpencodeArtifacts', () => {
     }
   });
 
-  it('writes only markdown agents and the OpenCode command', () => {
+  it('writes the separately enabled supervision bridge artifacts', () => {
     const outputDir = join(tmpDir, 'generated');
     const fx = makeFixture();
     const alConfig = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+    alConfig.supervision = { enabled: true, supervisor: { model: 'provider/supervisor' } };
 
     const { files } = generateOpencodeArtifacts(alConfig, fx, outputDir);
 
     assert.deepEqual(files.sort(), [
+      '.opencode/agents/agenticloop-supervisor.md',
       '.opencode/agents/engineer.md',
       '.opencode/agents/maintainer.md',
       '.opencode/agents/orchestrator.md',
       '.opencode/commands/agenticloop.md',
+      '.opencode/plugins/agenticloop-supervision.ts',
     ]);
     assert.equal(readFileSync(join(outputDir, '.opencode', 'agents', 'orchestrator.md'), 'utf-8').includes('mode: "primary"'), true);
+    const plugin = readFileSync(join(outputDir, '.opencode', 'plugins', 'agenticloop-supervision.ts'), 'utf-8');
+    assert.match(plugin, /command\.execute\.before/);
+    assert.match(plugin, /agenticloop_delegate/);
+    assert.match(plugin, /raw Task delegation is unavailable in supervised mode/);
+    assert.match(plugin, /event\.type === "permission\.updated"/);
+    assert.doesNotMatch(plugin, /event\.type === "permission\.asked"/);
+    assert.doesNotMatch(plugin, /outputFormat:/);
+    assert.match(plugin, /payload\.parts/);
+    assert.match(plugin, /postSessionIdPermissionsPermissionId/);
+    assert.match(plugin, /missingClientMethods/);
+    assert.match(plugin, /registeredSessionIDs\.has/);
+    assert.match(plugin, /activeSocket\.once\("close"/);
+    assert.match(plugin, /reconciliation \}/);
+    assert.match(plugin, /host\.lane\.create/);
+    assert.match(plugin, /host\.lane\.start/);
+    assert.match(plugin, /action_context/);
+    assert.match(plugin, /delegation_envelope/);
+    assert.match(plugin, /dispose: async/);
+    assert.match(plugin, /taskkill\.exe/);
     assert.equal(existsSync(join(outputDir, 'opencode.jsonc')), false);
+  });
+
+  it('embeds the shared event contract and keeps the bridge free of synthetic identities', () => {
+    const outputDir = join(tmpDir, 'generated-contract');
+    const fx = makeFixture();
+    const alConfig = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+    alConfig.supervision = { enabled: true, supervisor: { model: 'provider/supervisor' } };
+    generateOpencodeArtifacts(alConfig, fx, outputDir);
+    const plugin = readFileSync(join(outputDir, '.opencode', 'plugins', 'agenticloop-supervision.ts'), 'utf-8');
+
+    assert.match(plugin, /function extractOpencodeEventId\(/);
+    assert.match(plugin, /function classifyOpencodeOutcome\(/);
+    assert.match(plugin, /const eventID = extractOpencodeEventId\(event\)/);
+    assert.match(plugin, /classifyOpencodeOutcome\(properties\)/);
+    // No synthetic per-event identity may be reintroduced.
+    assert.doesNotMatch(plugin, /"session-error-"/);
+    assert.doesNotMatch(plugin, /"lane-idle-"/);
+    assert.doesNotMatch(plugin, /"root-idle-"/);
+    assert.doesNotMatch(plugin, /properties\.eventID \|\| properties\.id/);
+    // Reattachment and lifecycle behaviour.
+    assert.match(plugin, /bridge\.reattach/);
+    assert.match(plugin, /rebuildRegistriesFromController/);
+    assert.match(plugin, /laneRegistry\.clear\(\)/);
+    assert.match(plugin, /drainControllerStderr/);
+    const dispose = plugin.slice(plugin.indexOf('dispose: async'));
+    assert.doesNotMatch(dispose, /command: "stop"/);
+    assert.doesNotMatch(plugin, /orphaned_process/);
+  });
+
+  it('does not install the optional supervision component for ordinary OpenCode generation', () => {
+    const outputDir = join(tmpDir, 'generated-ordinary');
+    const fx = makeFixture();
+    const alConfig = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+    const { files } = generateOpencodeArtifacts(alConfig, fx, outputDir);
+    assert.equal(files.includes('.opencode/agents/agenticloop-supervisor.md'), false);
+    assert.equal(files.includes('.opencode/plugins/agenticloop-supervision.ts'), false);
+    const plan = planOpencodeArtifacts(alConfig, fx, outputDir);
+    assert.ok(plan.actions.some(action => action.type === 'clear-owned-path' && action.relPath === '.opencode/plugins/agenticloop-supervision.ts'));
+    assert.equal(plan.actions.some(action => action.type === 'write-file' && action.relPath === '.opencode/plugins/agenticloop-supervision.ts'), false);
   });
 });

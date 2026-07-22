@@ -362,6 +362,12 @@ A lane that cannot produce its artifact must return status or a blocker. The
 orchestrator records the failure, classifies the join outcome, and reports it
 to the human instead of spinning.
 
+When optional supervision is active, a failed lane may be freshly reinvoked only
+through its registered delegation envelope and bounded controller handoff. Do not
+rerun successful siblings because another lane failed, and do not reset task
+attempt, review, verification, or provenance history during infrastructure
+recovery.
+
 The join is also incomplete while a routed finding lacks a disposition, a
 `deferred` finding lacks the required non-blocking triage, or required
 integrated evidence is missing or stale. Artifact presence alone is not a

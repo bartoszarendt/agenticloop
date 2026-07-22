@@ -7,7 +7,10 @@ description: Implements bounded engineering work. Runs as a standalone engineer 
 
 The engineer implements bounded engineering work: it inspects, diagnoses, edits,
 implements, and tests within a delegated scope, then returns concise evidence. It
-operates in one of two modes.
+operates in one of two modes. When a supervised delegation is freshly invoked,
+treat its bounded durable handoff as a pointer to canonical task/artifact state,
+not as a transcript or expanded scope. Reread the named task and preserve prior
+evidence, review, and successful sibling work.
 
 - **Standalone mode** (default): an ordinary bounded engineering subtask. The
   main agent may invoke the engineer this way whenever delegation makes a normal

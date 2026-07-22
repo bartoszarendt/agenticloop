@@ -104,10 +104,19 @@ import {
   removeAgenticLoopWorktree,
   resolveAgenticLoopStateConflicts,
 } from './worktree.js';
+import { supervise, supervision } from './supervision-cli.js';
 
 const DEFAULT_LOG_DIR_DISPLAY = DEFAULT_LOG_DIR.replaceAll('\\', '/');
 const TASK_EVENT_LOG_PATH_DISPLAY = `${DEFAULT_LOG_DIR_DISPLAY}/<task-id>.jsonl`;
 const DEFAULT_EVENT_LOG_GLOB_DISPLAY = `${DEFAULT_LOG_DIR_DISPLAY}/*.jsonl`;
+
+async function cmdSupervise(args) {
+  await supervise(args);
+}
+
+async function cmdSupervision(args) {
+  await supervision(args);
+}
 
 function parseRequiredEventTypesOption(value) {
   if (value === undefined) {
@@ -319,6 +328,8 @@ Commands:
   worktree              Manage guarded Agentic Loop Git worktrees (add, guard, list, remove, cleanup, resolve-state, prune).
   event-logging         Write events (bare event type), validate, audit, or report optional durable workflow event logs.
   event                 Compatibility alias for event-logging.
+  supervise             Internal OpenCode attached-supervision bootstrap.
+  supervision           Query or control a running supervision controller.
   configure models      Set per-host role model settings in agenticloop.json.
   status                Show configured adapters, generated artifacts, and next steps.
   bootstrap-labels      Create required GitHub labels in a target repo.
@@ -2012,6 +2023,12 @@ async function dispatchLegacy(command, rest) {
         break;
       case 'generate':
         await cmdGenerate(rest);
+        break;
+      case 'supervise':
+        await cmdSupervise(rest);
+        break;
+      case 'supervision':
+        await cmdSupervision(rest);
         break;
       default:
         console.error(`Unknown command: ${command}`);

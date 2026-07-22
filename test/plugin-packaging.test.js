@@ -71,14 +71,15 @@ describe('Claude Code plugin packaging', () => {
     }
   });
 
-  it('does not leave extra Markdown files in the plugin agent directory', () => {
+  it('keeps the restricted OpenCode-only supervisor out of the Claude public agent list', () => {
     const plugin = readJson('.claude-plugin/plugin.json');
     const listedAgents = new Set(plugin.agents.map(relPath => relPath.replace(/\\/g, '/')));
     const agentFiles = readdirSync(join(REPO_ROOT, 'agents'))
       .filter(name => name.endsWith('.md'))
       .map(name => `./agents/${name}`);
 
-    assert.deepEqual(agentFiles.sort(), [...listedAgents].sort());
+    assert.deepEqual(agentFiles.filter(path => path !== './agents/supervisor.md').sort(), [...listedAgents].sort());
+    assert.ok(agentFiles.includes('./agents/supervisor.md'));
   });
 
   it('uses canonical agent frontmatter with name and description but no model', () => {

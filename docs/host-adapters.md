@@ -176,6 +176,24 @@ serial delegation instead, and require each role prompt to include an
 observable-step checkpoint cadence, no-progress budget, and status-return stop
 condition.
 
+### Supervision Support Levels
+
+Runtime supervision claims are host/transport-specific:
+
+| Level | Required surface | Claim |
+|---|---|---|
+| Full live | Exact sessions, running/terminal events, permission reply, cancellation, fresh invocation | Live supervised recovery |
+| Bounded stream | Machine-readable events and cancellation with incomplete child or permission detail | Bounded serial or short-batch recovery |
+| Terminal | Reliable terminal result/failure only | Reconcile and retry after return |
+| Artifact only | No trustworthy runtime API | Artifact reconciliation only |
+
+Attached OpenCode currently documents bounded-stream and terminal behavior from
+provider-free checks. It does not claim Full live until the explicit
+provider-backed assessment/recovery gate passes. Its handshake derives live
+capabilities from authenticated client-method probes; unavailable or unproven
+methods remain false. Bridge loss is distinct from server loss, which requires a
+failed bounded loopback health probe and still carries no restart capability.
+
 ## Concurrency Guidance
 
 Serial execution is the default safety floor, not a preference. For an authorized

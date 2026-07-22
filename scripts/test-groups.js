@@ -25,6 +25,7 @@ const MANIFEST = {
     'test/model-catalog.test.js',
     'test/model-picker.test.js',
     'test/schema-validation.test.js',
+    'test/supervision.test.js',
   ],
   integration: [
     'test/activation-scorer.test.js',

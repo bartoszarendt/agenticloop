@@ -21,6 +21,10 @@ import {
   resolveRoleModel,
   buildRoleRecord,
 } from './shared.js';
+import {
+  OPENCODE_SUPERVISION_PLUGIN_RELATIVE_PATH,
+  renderOpencodeSupervisionPlugin,
+} from './opencode-supervision-plugin.js';
 
 export const OPENCODE_ROLE_NAMES = Object.freeze(['orchestrator', 'maintainer', 'engineer']);
 export const OPENCODE_AGENT_RELATIVE_PATHS = Object.freeze({
@@ -29,6 +33,7 @@ export const OPENCODE_AGENT_RELATIVE_PATHS = Object.freeze({
   engineer: '.opencode/agents/engineer.md',
 });
 export const OPENCODE_COMMAND_RELATIVE_PATH = '.opencode/commands/agenticloop.md';
+export const OPENCODE_SUPERVISOR_RELATIVE_PATH = '.opencode/agents/agenticloop-supervisor.md';
 
 const OPENCODE_START_COMMAND = bundledToolkitPath('agenticloop/commands/start.md');
 
@@ -61,6 +66,7 @@ function buildPrompt(roleName, roleSourceFile, requiredSkills, roleBody, skillsS
     prompt += ' Agentic Loop is serial by default. For authorized multi-task units with 2+ ready task records, load parallel-delegation before choosing serial or parallel execution.';
     prompt += ' Start parallel role work only when the parallel-delegation skill plan, lease, backend ownership, and join condition requirements are satisfied; otherwise record the concrete serial reason.';
     prompt += ' In OpenCode, use the Task tool or explicit @maintainer / @engineer invocation when available; inline fallback is allowed only after the delegation capability check in role-delegation.';
+    prompt += ' When /agenticloop --supervised is active, use the generated agenticloop_delegate custom tool for every maintainer or engineer lane instead of raw Task invocation; it registers an exact lane session before it starts.';
   } else {
     prompt += ' Honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, wrong branch/worktree, or no-progress budget requires it.';
   }
@@ -173,6 +179,28 @@ export function renderOpencodeAgentMarkdown(agentRecord, roleName) {
   return lines.join('\n');
 }
 
+export function renderOpencodeSupervisorAgentMarkdown(alConfig) {
+  const supervisor = alConfig.supervision?.supervisor ?? {};
+  return [
+    '---',
+    'description: "Restricted Agentic Loop operational supervisor"',
+    'mode: "subagent"',
+    `model: ${quoteYamlScalar(supervisor.model ?? '')}`,
+    'permission:',
+    '  edit: deny',
+    '  bash: deny',
+    '  task: deny',
+    '  question: deny',
+    '  webfetch: deny',
+    '---',
+    '',
+    GENERATED_BANNER,
+    '',
+    'Read agenticloop/agents/supervisor.md before acting. Return only the structured disposition requested by the controller. You may inspect bounded canonical task, artifact, and event evidence, but you must not edit files, accept work, close tasks, approve your own permission, select always, or bypass workflow gates.',
+    '',
+  ].join('\n');
+}
+
 export function generateOpencodeArtifacts(alConfig, repoRoot, outputDir) {
   mkdirSync(outputDir, { recursive: true });
   const files = [];
@@ -189,6 +217,18 @@ export function generateOpencodeArtifacts(alConfig, repoRoot, outputDir) {
   mkdirSync(dirname(commandPath), { recursive: true });
   writeFileSync(commandPath, renderOpencodeCommandMarkdown(), 'utf-8');
   files.push(relative(outputDir, commandPath).replace(/\\/g, '/'));
+
+  if (alConfig.supervision?.enabled === true) {
+    const supervisorPath = join(outputDir, OPENCODE_SUPERVISOR_RELATIVE_PATH);
+    mkdirSync(dirname(supervisorPath), { recursive: true });
+    writeFileSync(supervisorPath, renderOpencodeSupervisorAgentMarkdown(alConfig), 'utf-8');
+    files.push(relative(outputDir, supervisorPath).replace(/\\/g, '/'));
+
+    const pluginPath = join(outputDir, OPENCODE_SUPERVISION_PLUGIN_RELATIVE_PATH);
+    mkdirSync(dirname(pluginPath), { recursive: true });
+    writeFileSync(pluginPath, renderOpencodeSupervisionPlugin(), 'utf-8');
+    files.push(relative(outputDir, pluginPath).replace(/\\/g, '/'));
+  }
 
   return { files };
 }
@@ -208,6 +248,7 @@ export function planOpencodeArtifacts(alConfig, repoRoot, outputDir) {
 
   actions.push({ type: 'clear-owned-directory', adapter: 'opencode', relPath: '.opencode/agents' });
   actions.push({ type: 'clear-owned-directory', adapter: 'opencode', relPath: '.opencode/commands' });
+  actions.push({ type: 'clear-owned-path', adapter: 'opencode', relPath: OPENCODE_SUPERVISION_PLUGIN_RELATIVE_PATH });
 
   for (const roleName of OPENCODE_ROLE_NAMES) {
     const relPath = OPENCODE_AGENT_RELATIVE_PATHS[roleName];
@@ -229,6 +270,26 @@ export function planOpencodeArtifacts(alConfig, repoRoot, outputDir) {
     marker: GENERATED_BANNER,
   });
   files.push(OPENCODE_COMMAND_RELATIVE_PATH);
+
+  if (alConfig.supervision?.enabled === true) {
+    actions.push({
+      type: 'write-file',
+      adapter: 'opencode',
+      relPath: OPENCODE_SUPERVISOR_RELATIVE_PATH,
+      content: renderOpencodeSupervisorAgentMarkdown(alConfig),
+      marker: GENERATED_BANNER,
+    });
+    files.push(OPENCODE_SUPERVISOR_RELATIVE_PATH);
+
+    actions.push({
+      type: 'write-file',
+      adapter: 'opencode',
+      relPath: OPENCODE_SUPERVISION_PLUGIN_RELATIVE_PATH,
+      content: renderOpencodeSupervisionPlugin(),
+      marker: '// Generated by Agentic Loop. Do not edit by hand.',
+    });
+    files.push(OPENCODE_SUPERVISION_PLUGIN_RELATIVE_PATH);
+  }
 
   return { actions, files, adapter: 'opencode' };
 }

@@ -17,6 +17,9 @@ import {
   validateNewEvent,
   validateEventLogFile,
   validateEventLogs,
+  RUN_SCOPED_EVENT_TYPES,
+  SUPERVISION_LOG_SUBDIR,
+  VALID_EVENT_SCOPES,
 } from '../src/event-logging.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -136,6 +139,19 @@ function appendFixtureEvent(target, taskId, definition) {
 }
 
 describe('event logging module', () => {
+  it('accepts compact supervision control-plane events without permitting transcript data', () => {
+    const event = buildEvent({
+      eventType: 'supervision.permission_decided',
+      role: 'supervisor',
+      summary: 'Approved one exact registered permission',
+      outcome: 'success',
+      data: { request_id: 'req-1', lane_id: 'lane-1', decision: 'once' },
+    });
+    assert.deepEqual(validateEvent(event).errors, []);
+    const leaked = { ...event, data: { ...event.data, prompt: 'not allowed' } };
+    assert.ok(validateEvent(leaked).errors.some(error => error.includes('privacy-sensitive')));
+  });
+
   it('buildEvent populates required fields and defaults', () => {
     const event = buildEvent(
       {
@@ -2029,5 +2045,80 @@ describe('PR-129 regression sequence (delegated re-review, no spurious fallback)
     assert.equal(report.roleInvoked.fallbackCount, 0);
     // The continuation review does not read as an unbacked round.
     assert.equal(report.provenanceQuality.reviewRoundsWithoutBacking, 0);
+  });
+});
+
+describe('run-scoped supervision control-plane events', () => {
+  it('keeps ordinary task events unchanged and validates the run-scoped extension', () => {
+    const target = makeTarget('run-scope');
+    writeProjectMap(target, { eventLogging: 'enabled' });
+    writeTaskRecord(target, 'T-001');
+
+    const taskEvent = buildEvent({ target, task: 'T-001', host: 'opencode', role: 'controller', eventType: 'supervision.registered', summary: 'lane registered', outcome: 'success' });
+    assert.equal('scope' in taskEvent, false, 'task events keep their historical shape');
+    assert.equal('run_id' in taskEvent, false);
+    assert.deepEqual(validateEvent(taskEvent, { target }).errors, []);
+
+    const runEvent = buildEvent({ target, scope: 'run', run_id: 'sup-run-1', host: 'opencode', role: 'controller', eventType: 'supervision.terminated', summary: 'controller stopped', outcome: 'success' });
+    assert.equal(runEvent.scope, 'run');
+    assert.equal(runEvent.run_id, 'sup-run-1');
+    assert.equal(runEvent.task_id, null);
+    assert.deepEqual(validateEvent(runEvent, { target }).errors, []);
+    assert.ok(VALID_EVENT_SCOPES.has('run'));
+  });
+
+  it('rejects a malformed or unapproved run-scoped event', () => {
+    const target = makeTarget('run-scope-invalid');
+    writeProjectMap(target, { eventLogging: 'enabled' });
+    writeTaskRecord(target, 'T-001');
+    const base = { target, scope: 'run', run_id: 'sup-run-1', host: 'opencode', role: 'controller', eventType: 'supervision.terminated', summary: 'stopped', outcome: 'success' };
+
+    assert.ok(validateEvent({ ...buildEvent(base), run_id: '' }, { target }).errors.some(error => error.includes('run_id')));
+    assert.ok(validateEvent({ ...buildEvent(base), task_id: 'T-001' }, { target }).errors.some(error => error.includes('must not carry a task_id')));
+    assert.ok(validateEvent({ ...buildEvent(base), event_type: 'task.closed' }, { target }).errors.some(error => error.includes('approved control-plane event_type')));
+    assert.ok(validateEvent({ ...buildEvent(base), role: 'engineer' }, { target }).errors.some(error => error.includes('controller, supervisor, or operator provenance')));
+    assert.ok(validateEvent({ ...buildEvent(base), scope: 'workspace' }, { target }).errors.some(error => error.includes('scope must be one of')));
+    const taskScoped = buildEvent({ target, task: 'T-001', host: 'opencode', role: 'controller', eventType: 'supervision.registered', summary: 's', outcome: 'success' });
+    assert.ok(validateEvent({ ...taskScoped, run_id: 'sup-run-1' }, { target }).errors.some(error => error.includes('only supported on run-scoped events')));
+    assert.ok(RUN_SCOPED_EVENT_TYPES.has('supervision.root_replaced'));
+  });
+
+  it('appends and validates a run-scoped log alongside task logs', () => {
+    const target = makeTarget('run-scope-append');
+    writeProjectMap(target, { eventLogging: 'enabled' });
+    writeTaskRecord(target, 'T-001');
+    const runLogPath = join(target, '.agenticloop', 'logs', SUPERVISION_LOG_SUBDIR, 'sup-run-1.jsonl');
+
+    appendEventLog({
+      target,
+      path: runLogPath,
+      event: buildEvent({ target, scope: 'run', run_id: 'sup-run-1', host: 'opencode', role: 'controller', eventType: 'supervision.registered', summary: 'root registered', outcome: 'success' }),
+    });
+    appendEventLog({
+      target,
+      event: buildEvent({ target, task: 'T-001', host: 'opencode', role: 'controller', eventType: 'supervision.reconciled', summary: 'artifact verified', outcome: 'success' }),
+    });
+
+    assert.deepEqual(validateEventLogFile(runLogPath, { target }).errors, []);
+    assert.equal(loadEvents(runLogPath).length, 1);
+    const aggregate = validateEventLogs(target);
+    assert.deepEqual(aggregate.errors, []);
+    assert.equal(aggregate.fileCount, 2, 'validation covers both the task log and the run-scoped supervision log');
+    assert.ok(aggregate.files.some(file => file.includes(SUPERVISION_LOG_SUBDIR)));
+  });
+
+  it('refuses to append a run-scoped event that fails producer validation', () => {
+    const target = makeTarget('run-scope-refuse');
+    writeProjectMap(target, { eventLogging: 'enabled' });
+    const runLogPath = join(target, '.agenticloop', 'logs', SUPERVISION_LOG_SUBDIR, 'sup-run-2.jsonl');
+    assert.throws(
+      () => appendEventLog({
+        target,
+        path: runLogPath,
+        event: buildEvent({ target, scope: 'run', run_id: 'sup-run-2', host: 'opencode', role: 'engineer', eventType: 'supervision.terminated', summary: 'stopped', outcome: 'success' }),
+      }),
+      /Refusing to append invalid event/
+    );
+    assert.equal(existsSync(runLogPath), false);
   });
 });
