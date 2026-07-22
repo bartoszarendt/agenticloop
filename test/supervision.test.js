@@ -489,7 +489,7 @@ describe('mechanical supervision kernel', () => {
   });
 });
 
-describe('Phase 26 attached-mode safety regressions', () => {
+describe('attached-mode safety regressions', () => {
   it('keeps public authorization while omitting secret authorization material and reports explicit collection truncation', () => {
     const value = kernel();
     value.authorizeWorkUnit({ unit_id: 'U-1', scope_ref: 'task-file:T-1', authorized_by: 'operator' });

@@ -3,7 +3,14 @@ import { join } from 'node:path';
 
 import { appendEventLog, buildEvent } from '../event-logging.js';
 import { loadProjectMap } from '../project-map.js';
-import { normalizeLaneLease } from './config.js';
+import { normalizeLaneLease, normalizePermissionRouting } from './config.js';
+import {
+  PermissionDecisionCache,
+  TransientPermissionScopeStore,
+  buildTransientPermissionScope,
+  permissionCacheContext,
+} from './permission-memory.js';
+import { evaluatePermissionRouting, normalizePermissionOperation } from './permission-policy.js';
 import { containsSensitiveMaterial, redactSecrets, safeStructure } from './redaction.js';
 
 export const INVOCATION_OUTCOMES = Object.freeze([
@@ -144,14 +151,27 @@ function isWithinAuthorizedScope(taskRef, authorization) {
  * in-memory input to `permissionRisk`; it is never stored on the permission
  * record, persisted, serialized into status, or sent to the supervisor model.
  */
+function collectRawScope(...candidates) {
+  const values = [];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) values.push(...candidate);
+    else if (typeof candidate === 'string' && candidate.trim()) values.push(candidate);
+  }
+  return values;
+}
+
 function normalizePermissionMetadata(metadata = {}) {
   const value = metadata && typeof metadata === 'object' ? metadata : {};
   return {
     category: rawBoundedText(value.category, 80),
     command: rawBoundedText(value.command, 300),
-    paths: rawNormalizedArray(value.paths ?? value.path ? (value.paths ?? [value.path]) : [], 20),
-    targets: rawNormalizedArray(value.targets ?? value.external_targets ?? value.target ? (value.targets ?? value.external_targets ?? [value.target]) : [], 20),
+    // Every path spelling the pinned contract can use. A target named through
+    // an unrecognized key stays absent, which is incomplete scope, not an
+    // implicitly empty one.
+    paths: rawNormalizedArray(collectRawScope(value.paths, value.path, value.files, value.file, value.filePath, value.file_path, value.filepath), 20),
+    targets: rawNormalizedArray(collectRawScope(value.targets, value.external_targets, value.target, value.url, value.urls), 20),
     maximum_effect: rawBoundedText(value.maximum_effect ?? value.max_effect, 160),
+    working_directory: rawBoundedText(value.working_directory ?? value.cwd ?? value.directory, 300),
   };
 }
 
@@ -168,6 +188,7 @@ function publicPermissionMetadata(privateMetadata, privatePatterns, privateOpera
     privateMetadata.category,
     privateMetadata.command,
     privateMetadata.maximum_effect,
+    privateMetadata.working_directory,
     ...privateMetadata.paths,
     ...privateMetadata.targets,
     ...privatePatterns,
@@ -180,6 +201,7 @@ function publicPermissionMetadata(privateMetadata, privatePatterns, privateOpera
     paths: privateMetadata.paths,
     targets: privateMetadata.targets,
     maximum_effect: privateMetadata.maximum_effect,
+    working_directory: privateMetadata.working_directory,
     patterns: privatePatterns,
   })).digest('hex');
   return {
@@ -205,11 +227,15 @@ function publicPermissionMetadata(privateMetadata, privatePatterns, privateOpera
   };
 }
 
+/**
+ * One canonical public identity per operation, shared with the router.
+ *
+ * Every configured operation -- including `grep`, `glob`, `list`, and `search`,
+ * which previously collapsed to `unknown` here -- keeps the same name in status,
+ * model projection, routing, and the cache key.
+ */
 function publicPermissionOperation(value) {
-  const operation = normalized(value);
-  return new Set(['bash', 'edit', 'read', 'write', 'webfetch', 'task', 'question', 'external_directory']).has(operation)
-    ? operation
-    : 'unknown';
+  return normalizePermissionOperation(value);
 }
 
 function permissionRisk(request, config) {
@@ -319,6 +345,18 @@ function publicPermission(permission) {
     created_at: permission.created_at,
     decided_at: permission.decided_at ?? null,
     decided_by: permission.decided_by ?? null,
+    // Bounded routing and audit facts. The scope fingerprint, the cache key,
+    // and every raw or transient scope field stay private.
+    routing_tier: permission.routing_tier ?? 'legacy',
+    policy_version: permission.policy_version ?? null,
+    scope_complete: permission.scope_complete ?? null,
+    containment: permission.containment ? {
+      checked: permission.containment.checked === true,
+      inside_project: permission.containment.inside_project === true,
+      protected: permission.containment.protected === true,
+    } : null,
+    cache_origin_decision_id: permission.cache_origin_decision_id ?? null,
+    cache_key_version: permission.cache_key_version ?? null,
   };
 }
 
@@ -410,6 +448,16 @@ export function createInitialRuntimeState({ runId, controllerId, projectRoot, co
     batches: [],
     processes: [],
     permissions: [],
+    // Bounded routing counters only. No key, fingerprint, or scope.
+    permission_routing: {
+      mode: config.permissions?.mode ?? 'eligible-once-only',
+      policy_version: config.permissions?.policy?.version ?? 1,
+      policy: 0,
+      assess: 0,
+      human: 0,
+      cache_hits: 0,
+      cache_misses: 0,
+    },
     budgets: {
       ...config.budgets,
       cost_tracking: 'unsupported',
@@ -454,7 +502,7 @@ export function createInitialRuntimeState({ runId, controllerId, projectRoot, co
  * outside this advisory runtime state.
  */
 export class SupervisionKernel {
-  constructor({ state, config, persist = () => {}, host = {}, now = Date.now, projectRoot = null, permissionScopeKey = randomUUID() }) {
+  constructor({ state, config, persist = () => {}, host = {}, now = Date.now, projectRoot = null, permissionScopeKey = randomUUID(), fileSystem = undefined }) {
     this.state = state;
     this.config = config;
     this.persist = persist;
@@ -463,6 +511,35 @@ export class SupervisionKernel {
     this.projectRoot = projectRoot ?? state.controller.project_root;
     this.permissionScopeKey = permissionScopeKey;
     this.permissionRepliesInFlight = new Set();
+    // The effective router is derived once. A version 1 document normalizes to
+    // the legacy envelope, so nothing below can be reached by upgrade alone.
+    this.permissionRouting = normalizePermissionRouting(config);
+    this.permissionFileSystem = fileSystem;
+    // Both stores are private, in-memory, and bounded. Neither is ever
+    // serialized, projected, notified, logged, or persisted.
+    this.transientPermissionScopes = new TransientPermissionScopeStore({
+      maximumEntries: this.permissionRouting.transient_scope.maximum_entries,
+      maximumAgeMs: this.permissionRouting.transient_scope.maximum_age_ms,
+      now,
+    });
+    this.permissionDecisionCache = new PermissionDecisionCache({
+      enabled: this.permissionRouting.decision_cache.enabled,
+      maximumEntries: this.permissionRouting.decision_cache.maximum_entries,
+      policyTtlMs: this.permissionRouting.decision_cache.policy_ttl_ms,
+      supervisorTtlMs: this.permissionRouting.decision_cache.supervisor_ttl_ms,
+      rejectionTtlMs: this.permissionRouting.decision_cache.rejection_ttl_ms,
+      key: permissionScopeKey,
+      now,
+    });
+    this.state.permission_routing = this.state.permission_routing ?? {
+      mode: this.permissionRouting.mode,
+      policy_version: this.permissionRouting.policy.version,
+      policy: 0,
+      assess: 0,
+      human: 0,
+      cache_hits: 0,
+      cache_misses: 0,
+    };
     try {
       this.eventLoggingEnabled = loadProjectMap(this.projectRoot)?.config?.event_logging === 'enabled';
     } catch {
@@ -714,6 +791,9 @@ export class SupervisionKernel {
       generation,
     };
     this.state.controller.status = 'authorized';
+    // A new authorization generation invalidates every remembered decision and
+    // every transient scope bound to the previous one.
+    this.clearPermissionMemory({ full: true });
     this.event('internal.work_unit_authorized', { unit_id, scope_ref, generation });
     this.save();
   }
@@ -884,9 +964,13 @@ export class SupervisionKernel {
     lane.no_progress_exhausted = false;
     lane.no_artifact_exhausted = false;
     lane.terminal_tombstone = null;
+    lane.durable_progress_epoch = 0;
     // A terminal workflow decision belongs to one exact invocation generation.
     // Rebinding reopens the lane; an old disposition can never close its join.
     lane.disposition = null;
+    // A replaced session is a different context: every scope and remembered
+    // decision bound to the previous generation is dropped.
+    this.clearPermissionMemory({ full: true });
     this.updateBatchState(lane);
     this.emitMaterial('supervision.registered', {
       taskRef: lane.task_ref, role: 'controller', outcome: 'success', summary: 'Bound exact OpenCode lane session',
@@ -948,6 +1032,9 @@ export class SupervisionKernel {
         // does not certify completion; only artifact reconciliation does that.
         this.state.budgets.used.lane_no_progress[session.value.id] = 0;
         session.value.no_progress_exhausted = false;
+        // Durable task context materially changed, so a semantic supervisor
+        // judgment recorded against the old context may no longer replay.
+        session.value.durable_progress_epoch = (session.value.durable_progress_epoch ?? 0) + 1;
       }
     }
     if (state === 'idle') {
@@ -1070,18 +1157,52 @@ export class SupervisionKernel {
     return clone(lane);
   }
 
+  /**
+   * Route one request through the three-tier evaluator.
+   *
+   * Kept separate from `recordPermission` so the routing decision stays a pure
+   * function of the exact scope plus the immutable identity facts the kernel
+   * owns. The raw scope is an argument here and is never returned.
+   */
+  routePermission(request, session, privateMetadata, privatePatterns, sensitive) {
+    const configuredHumanOnly = new Set([...NON_NEGOTIABLE_HUMAN_ONLY, ...this.config.permissions.human_only.map(normalized)]);
+    return evaluatePermissionRouting({
+      operation: request.operation,
+      category: privateMetadata.category,
+      command: privateMetadata.command,
+      maximumEffect: privateMetadata.maximum_effect,
+      patterns: privatePatterns,
+      paths: privateMetadata.paths,
+      targets: privateMetadata.targets,
+      humanOnlyCategories: configuredHumanOnly,
+      hostHumanOnly: request.human_only === true,
+      sensitive,
+      supervisorSelf: session.kind === 'supervisor',
+      authorized: Boolean(this.state.authorization),
+      policy: this.permissionRouting.policy,
+      projectRoot: this.projectRoot,
+      workingDirectory: rawBoundedText(request.working_directory ?? privateMetadata.working_directory, 300) || null,
+      transientScopeEnabled: this.permissionRouting.transient_scope.enabled,
+      ...(this.permissionFileSystem ? { fileSystem: this.permissionFileSystem } : {}),
+    });
+  }
+
   recordPermission(request) {
     if (!request?.id || !request?.session_id || !request?.operation) throw new Error('permission registration requires exact request, session, and operation ids');
     const session = this.findSession(request.session_id);
     if (!session) throw new Error('permission request came from an unregistered session');
     // The unredacted metadata exists only inside this call, as the input to the
-    // mechanical risk classifier. Nothing below stores or forwards it.
+    // mechanical router and the bounded transient store. Nothing below forwards
+    // it into durable, public, notified, or logged state.
     const privateMetadata = normalizePermissionMetadata(request.metadata);
     const privatePatterns = rawNormalizedArray(request.patterns);
     const risk = request.human_only
       ? { authority: 'human-only', categories: ['host_human_only'], consequence: 'host marked this request human-only' }
       : permissionRisk({ ...request, metadata: privateMetadata }, this.config);
     const { metadata, patterns, scopeFingerprint, sensitive } = publicPermissionMetadata(privateMetadata, privatePatterns, request.operation, this.permissionScopeKey);
+    const routed = this.permissionRouting.router_active
+      ? this.routePermission(request, session, privateMetadata, privatePatterns, sensitive)
+      : null;
     const immutable = {
       session_id: request.session_id,
       session_generation: session.value.session_generation ?? 0,
@@ -1099,13 +1220,19 @@ export class SupervisionKernel {
     // Credential detection removes confidence in the classifier's bounded
     // scope, so the request stops being supervisor-eligible. All raw scope is
     // withheld from serialization regardless of this authority decision.
-    const authority = session.kind === 'supervisor' ? 'human-only' : sensitive ? 'human-only' : risk.authority;
-    const categories = session.kind === 'supervisor'
-      ? ['supervisor_self_request']
-      : sensitive ? ['sensitive_material_redacted', ...risk.categories] : risk.categories;
-    const consequence = session.kind === 'supervisor'
-      ? 'supervisor self-approval is prohibited'
-      : sensitive ? 'request carries credential-like material; its scope cannot be shown or trusted for autonomous approval' : risk.consequence;
+    const authority = routed
+      ? routed.authority
+      : session.kind === 'supervisor' ? 'human-only' : sensitive ? 'human-only' : risk.authority;
+    const categories = routed
+      ? routed.canonical_categories
+      : session.kind === 'supervisor'
+        ? ['supervisor_self_request']
+        : sensitive ? ['sensitive_material_redacted', ...risk.categories] : risk.categories;
+    const consequence = routed
+      ? routed.consequence
+      : session.kind === 'supervisor'
+        ? 'supervisor self-approval is prohibited'
+        : sensitive ? 'request carries credential-like material; its scope cannot be shown or trusted for autonomous approval' : risk.consequence;
     const permission = {
       id: request.id,
       ...immutable,
@@ -1117,7 +1244,38 @@ export class SupervisionKernel {
       risk_categories: categories,
       consequence,
       created_at: nowIso(this.now),
+      // Bounded routing facts. Booleans and a version, never a path or prefix.
+      routing_tier: routed ? routed.tier : 'legacy',
+      policy_version: routed ? routed.policy_version : null,
+      containment: routed ? { ...routed.containment } : null,
+      scope_complete: routed ? routed.scope_complete === true : null,
     };
+    if (routed) {
+      this.state.permission_routing[routed.tier] += 1;
+      // The assess tier is the only path that may hold an exact scope, and only
+      // when transient projection is explicitly configured. A sensitive or
+      // human-only request never reaches this branch.
+      if (routed.tier === 'assess' && this.permissionRouting.transient_scope.enabled) {
+        const scope = buildTransientPermissionScope({
+          request_id: request.id,
+          operation: immutable.operation,
+          command: privateMetadata.command,
+          patterns: privatePatterns,
+          paths: privateMetadata.paths,
+          targets: privateMetadata.targets,
+          working_directory: rawBoundedText(request.working_directory ?? privateMetadata.working_directory, 300) || null,
+          containment: routed.containment,
+          lane_id: session.kind === 'lane' ? session.value.id : null,
+          task_ref: session.kind === 'lane' ? session.value.task_ref : null,
+          expected_artifact: session.kind === 'lane' ? session.value.expected_artifact : null,
+          authorization_generation: this.state.authorization?.generation ?? null,
+          session_id: request.session_id,
+          session_generation: immutable.session_generation,
+        });
+        if (scope) this.transientPermissionScopes.insert(request.id, scope);
+        else this.diagnostic('transient_permission_scope_refused', { request_id: request.id, reason: 'sensitive_material' });
+      }
+    }
     // Entering a permission wait changes which timing bucket applies.
     if (!this.state.permissions.some(entry => entry.status === 'pending')) this.beginTransition();
     this.state.permissions.push(permission);
@@ -1128,23 +1286,48 @@ export class SupervisionKernel {
     return clone(permission);
   }
 
-  previewPermissionDecision(requestId, decision, { principal, rationale = '', evidence_refs = [] } = {}) {
+  /**
+   * The only verified internal principals. `policy` and `cache` are controller
+   * -internal decision sources with strictly narrower authority than the
+   * supervisor: neither may reject on its own judgment, and neither may ever
+   * issue an OpenCode `always`.
+   */
+  previewPermissionDecision(requestId, decision, { principal, rationale = '', evidence_refs = [], cache_context: cacheContext = null, cache_entry: cacheEntry = null } = {}) {
     const permission = this.state.permissions.find(entry => entry.id === requestId);
     if (!permission) throw new Error(`permission request not found: ${requestId}`);
     if (permission.status !== 'pending') throw new Error('permission request is stale or was already answered');
     if (!['once', 'reject', 'always'].includes(decision)) throw new Error('permission decision must be once, always, or reject');
+    let audit = { decided_by: principal, policy_version: null, cache_origin_decision_id: null, cache_key_version: null };
     if (principal === 'supervisor') {
       this.assertAuthorized();
       if (decision === 'always') throw new Error('OpenCode always permission approval is human-only');
       if (permission.authority !== 'supervisor-eligible') throw new Error('supervisor may not answer this permission request');
       if (permission.session_id === this.state.sessions.supervisor?.id) throw new Error('supervisor self-approval is prohibited');
+    } else if (principal === 'policy') {
+      this.assertAuthorized();
+      if (decision !== 'once') throw new Error('the deterministic policy tier may only approve a request once');
+      if (permission.routing_tier !== 'policy' || permission.authority !== 'policy-eligible') throw new Error('policy may not answer this permission request');
+      if (permission.policy_version !== this.permissionRouting.policy.version) throw new Error('policy decision does not match the active policy version');
+      if (permission.session_id === this.state.sessions.supervisor?.id) throw new Error('supervisor self-approval is prohibited');
+      audit = { ...audit, policy_version: permission.policy_version };
+    } else if (principal === 'cache') {
+      this.assertAuthorized();
+      if (decision === 'always') throw new Error('a replayed decision may never become an OpenCode always grant');
+      if (!cacheEntry || !cacheContext) throw new Error('a replayed decision requires its complete cache context');
+      if (cacheEntry.decision !== decision) throw new Error('a replayed decision must match the stored decision exactly');
+      if (this.permissionDecisionCache.keyFor(cacheContext) !== cacheEntry.key) throw new Error('replayed cache context does not match its stored key');
+      const current = this.permissionCacheContextFor(permission);
+      if (!current || exactJson(current) !== exactJson(cacheContext)) throw new Error('replayed cache context is stale for this request');
+      if (permission.authority === 'human-only') throw new Error('cache may not answer a human-only permission request');
+      if (permission.session_id === this.state.sessions.supervisor?.id) throw new Error('supervisor self-approval is prohibited');
+      audit = { ...audit, policy_version: permission.policy_version, cache_origin_decision_id: boundedText(cacheEntry.origin_decision_id, 120), cache_key_version: cacheEntry.key_version };
     } else if (principal !== 'operator') {
-      throw new Error('permission decisions require verified supervisor or operator provenance');
+      throw new Error('permission decisions require verified policy, supervisor, cache, or operator provenance');
     }
     return {
       ...clone(permission),
       status: decision === 'once' ? 'approved_once' : decision === 'always' ? 'approved_always' : 'rejected',
-      decided_by: principal,
+      ...audit,
       decided_at: nowIso(this.now),
       rationale: boundedText(rationale, 300),
       evidence_refs: normalizedArray(evidence_refs, 10),
@@ -1157,12 +1340,16 @@ export class SupervisionKernel {
     // Leaving the last permission wait changes which timing bucket applies.
     if (this.state.permissions.filter(entry => entry.status === 'pending').length === 1) this.beginTransition();
     Object.assign(permission, decided);
+    // The exact scope this decision answered is no longer needed anywhere.
+    this.transientPermissionScopes.delete(requestId);
     this.recordOutcome(permission.session_id, decision === 'reject' ? 'permission_rejected' : 'running', { session_id: permission.session_id, event_id: `permission-decision:${requestId}` });
     this.emitMaterial('supervision.permission_decided', {
-      taskRef: permission.task_ref, role: options.principal === 'supervisor' ? 'supervisor' : 'operator', outcome: decision === 'reject' ? 'rejected' : 'success', summary: `Permission ${decision} decision recorded`,
-      data: { request_id: requestId, lane_id: permission.lane_id, decision, authority: permission.authority },
+      taskRef: permission.task_ref, role: options.principal === 'supervisor' ? 'supervisor' : options.principal === 'operator' ? 'operator' : 'controller', outcome: decision === 'reject' ? 'rejected' : 'success', summary: `Permission ${decision} decision recorded`,
+      data: { request_id: requestId, lane_id: permission.lane_id, decision, authority: permission.authority, decided_by: permission.decided_by, routing_tier: permission.routing_tier },
     });
-    this.notify('permission_decision', `Permission ${decision === 'once' ? 'approved once' : decision === 'always' ? 'approved for matching requests by operator' : 'rejected'}`, { request_id: requestId, lane_id: permission.lane_id });
+    this.notify('permission_decision', `Permission ${decision === 'once' ? 'approved once' : decision === 'always' ? 'approved for matching requests by operator' : 'rejected'}`, { request_id: requestId, lane_id: permission.lane_id, decided_by: permission.decided_by });
+    // Remember only what a bounded replay may reuse: never an operator `always`.
+    if (options.principal !== 'cache' && decision !== 'always') this.rememberPermissionDecision(permission, decision, options.principal);
     this.save();
     return clone(permission);
   }
@@ -1172,11 +1359,94 @@ export class SupervisionKernel {
     const candidate = this.previewPermissionDecision(requestId, decision, options);
     this.permissionRepliesInFlight.add(requestId);
     try {
+      // Preview, then host reply, then durable commit. A failed host reply
+      // leaves the record pending for every principal.
       await this.host.permissionReply?.(candidate);
       return this.decidePermission(requestId, decision, options);
     } finally {
       this.permissionRepliesInFlight.delete(requestId);
     }
+  }
+
+  /**
+   * Full cache context for one pending request.
+   *
+   * Every boundary the replay must not cross is a key component, so a hit is
+   * possible only within the same project, authorization generation, lane,
+   * session generation, task, operation, policy version, and durable-progress
+   * epoch. Returns null when the request cannot be keyed at all.
+   */
+  permissionCacheContextFor(permission) {
+    if (!permission || !this.state.authorization) return null;
+    if (!permission.scope_fingerprint) return null;
+    const lane = permission.lane_id ? this.findLane(permission.lane_id) : null;
+    return permissionCacheContext({
+      project_identity: this.state.controller.project_root,
+      authorization_generation: this.state.authorization.generation ?? null,
+      lane_id: permission.lane_id,
+      session_id: permission.session_id,
+      session_generation: permission.session_generation,
+      task_ref: permission.task_ref,
+      operation: permission.operation,
+      policy_version: this.permissionRouting.policy.version,
+      scope_fingerprint: permission.scope_fingerprint,
+      // A lane whose durable progress advanced is materially different context
+      // for a semantic judgment, so an older supervisor decision cannot replay.
+      progress_epoch: lane?.durable_progress_epoch ?? 0,
+    });
+  }
+
+  /** Look up a bounded replayable decision, counting the hit or miss. */
+  lookupPermissionDecision(permission) {
+    if (!this.permissionDecisionCache.enabled) return null;
+    if (permission.authority === 'human-only') return null;
+    const context = this.permissionCacheContextFor(permission);
+    if (!context) return null;
+    const entry = this.permissionDecisionCache.get(context);
+    if (entry) this.state.permission_routing.cache_hits += 1;
+    else this.state.permission_routing.cache_misses += 1;
+    return entry ? { context, entry } : null;
+  }
+
+  rememberPermissionDecision(permission, decision, principal) {
+    if (!this.permissionDecisionCache.enabled) return;
+    if (principal !== 'policy' && principal !== 'supervisor') return;
+    const context = this.permissionCacheContextFor(permission);
+    if (!context) return;
+    this.permissionDecisionCache.set(context, { decision, principal, origin_decision_id: permission.id });
+  }
+
+  /**
+   * Read the bounded transient scope for one assess-tier request.
+   *
+   * Identity, authorization generation, and session generation are revalidated
+   * on every read, so a stale, evicted, or replaced entry is reported as absent
+   * and the caller routes to the operator.
+   */
+  transientPermissionScope(requestId) {
+    const permission = this.state.permissions.find(entry => entry.id === requestId);
+    if (!permission || permission.status !== 'pending') return null;
+    const session = this.findSession(permission.session_id);
+    if (!session || registeredSessionId(session.value) !== permission.session_id) return null;
+    if ((session.value.session_generation ?? 0) !== permission.session_generation) return null;
+    return this.transientPermissionScopes.read(requestId, {
+      authorization_generation: this.state.authorization?.generation ?? null,
+      session_generation: permission.session_generation,
+    });
+  }
+
+  /**
+   * Drop private permission memory that a lifecycle change invalidated.
+   * `full` also clears the decision cache; a decision may never survive an
+   * authorization change, session replacement, or controller stop.
+   */
+  clearPermissionMemory({ full = false, requestId = null } = {}) {
+    if (requestId) {
+      this.transientPermissionScopes.delete(requestId);
+      return;
+    }
+    this.transientPermissionScopes.clear();
+    if (full) this.permissionDecisionCache.clear();
   }
 
   incrementBudget(name, key = 'run', amount = 1) {
@@ -1191,6 +1461,15 @@ export class SupervisionKernel {
     used[key] = (used[key] ?? 0) + amount;
     this.noteBudgetPressure(name, key, used[key], limit);
     return limit === 0 ? false : used[key] <= limit;
+  }
+
+  /** Check a budget without consuming it, used to reserve coupled charges. */
+  canIncrementBudget(name, key = 'run', amount = 1) {
+    const used = this.state.budgets.used[name];
+    if (used === undefined) throw new Error(`unknown budget '${name}'`);
+    const limit = this.state.budgets[name];
+    const current = typeof used === 'number' ? used : (used[key] ?? 0);
+    return limit !== 0 && current + amount <= limit;
   }
 
   /** True once a nonzero cost ceiling has been reached or exceeded. */
@@ -1436,6 +1715,9 @@ export class SupervisionKernel {
       if (action === 'request_operator') {
         this.beginTransition();
         this.state.controller.status = 'waiting_operator';
+        // The operator reviews the exact scope in OpenCode's native prompt, so
+        // the transient copy has no further purpose once the model escalates.
+        if (issued.request_id) this.clearPermissionMemory({ requestId: issued.request_id });
         this.notify('operator_action', 'Supervisor requires operator action', { target: issued.target, rationale });
       }
       this.save();
@@ -1601,6 +1883,8 @@ export class SupervisionKernel {
     this.state.bridge.status = 'lost';
     this.state.bridge.last_lost_at = nowIso(this.now);
     if (this.state.controller.status !== 'stopped') this.state.controller.status = 'bridge_lost';
+    // No host can accept a reply now, so no pending scope may be projected.
+    this.clearPermissionMemory({ full: true });
     this.event('internal.bridge_lost', { reason });
     this.notify('controller_loss', 'Attached OpenCode bridge disconnected; model and host actions are paused', { reason });
     this.save();
@@ -1610,6 +1894,7 @@ export class SupervisionKernel {
     this.beginTransition();
     this.state.server.status = 'lost';
     if (this.state.controller.status !== 'stopped') this.state.controller.status = 'server_lost';
+    this.clearPermissionMemory({ full: true });
     this.event('internal.server_lost', { reason });
     this.notify('server_loss', 'Attached OpenCode server recovery is unsupported; controller state was preserved', { reason });
     this.save();
@@ -1619,6 +1904,9 @@ export class SupervisionKernel {
     if (this.state.controller.status === 'stopped') throw new Error('supervision controller is stopped');
     this.beginTransition();
     this.state.controller.status = 'paused';
+    // A paused controller answers nothing, so no transient scope stays live.
+    // Remembered decisions survive a pause/resume within the same generation.
+    this.clearPermissionMemory();
     this.event('internal.paused');
     this.save();
   }
@@ -1637,6 +1925,7 @@ export class SupervisionKernel {
     if (this.state.controller.status === 'stopped') return;
     this.beginTransition();
     this.state.controller.status = 'stopped';
+    this.clearPermissionMemory({ full: true });
     this.emitMaterial('supervision.terminated', { role: 'operator', outcome: 'success', summary: 'Supervision controller stopped', data: { run_id: this.state.controller.run_id } });
     this.notify('terminal', 'Supervision controller stopped', {});
     this.save();
@@ -1723,6 +2012,7 @@ export class SupervisionKernel {
       sessions: status.sessions,
       batches: status.batches,
       permissions: status.permissions,
+      permission_routing: status.permission_routing,
       budgets: status.budgets,
       timing: { active_minutes: status.timing.active_minutes, absolute_age_minutes: status.timing.absolute_age_minutes },
       last_outcome: status.last_outcome,
@@ -1794,6 +2084,25 @@ export class SupervisionKernel {
       processes: this.state.processes.map(process => ({ id: process.id, status: process.status, provenance: process.provenance ?? 'unsupported' })),
       process_capability: { supported: this.state.capabilities.process_termination, provenance: this.state.capabilities.process_termination ? 'host-verified' : 'attached-mode-unavailable' },
       permissions: { pending: pending.items, decided: decided.items },
+      // Aggregate routing and replay metrics only: counts, never a key, a
+      // fingerprint, or a scope.
+      permission_routing: {
+        mode: this.permissionRouting.mode,
+        policy_version: this.permissionRouting.policy.version,
+        transient_scope: this.permissionRouting.transient_scope.mode,
+        transient_entries: this.transientPermissionScopes.size,
+        routed: {
+          policy: this.state.permission_routing.policy,
+          assess: this.state.permission_routing.assess,
+          human: this.state.permission_routing.human,
+        },
+        cache: {
+          enabled: this.permissionDecisionCache.enabled,
+          entries: this.permissionDecisionCache.size,
+          hits: this.state.permission_routing.cache_hits,
+          misses: this.state.permission_routing.cache_misses,
+        },
+      },
       budgets: {
         configured: Object.fromEntries(Object.entries(this.state.budgets).filter(([key]) => !['used', 'cost_tracking', 'cost_exhausted'].includes(key))),
         used: clone(this.state.budgets.used),

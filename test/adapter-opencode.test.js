@@ -21,7 +21,11 @@ import {
 import { parseFrontmatter } from '../src/frontmatter.js';
 import { loadAgenticLoopConfig } from '../src/json.js';
 import { seedTargetLayout } from './helpers/layout-fixture.js';
-import { renderOpencodeSupervisionPlugin } from '../src/adapters/opencode-supervision-plugin.js';
+import {
+  buildOpencodeSupervisorPrompt,
+  normalizeOpencodePermissionRequest,
+  renderOpencodeSupervisionPlugin,
+} from '../src/adapters/opencode-supervision-plugin.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -185,6 +189,40 @@ describe('renderOpencodeSupervisorAgentMarkdown', () => {
     assert.equal(frontmatter?.permission?.edit, 'deny');
     assert.equal(frontmatter?.permission?.task, 'deny');
     assert.match(body, /must not edit files, accept work, close tasks/);
+  });
+});
+
+describe('OpenCode supervision bridge helpers', () => {
+  it('projects one bounded permission scope into only its own supervisor prompt', () => {
+    const scoped = buildOpencodeSupervisorPrompt({
+      action_context: { request_id: 'req-1', target: 'lane-a' },
+      question: 'Assess the permission',
+      state: { controller: { status: 'running' } },
+      permission_scope: { request_id: 'req-1', operation: 'bash', command: 'npm test' },
+    });
+    assert.match(scoped, /Permission scope:/);
+    assert.match(scoped, /"request_id":"req-1"/);
+    assert.match(scoped, /"command":"npm test"/);
+
+    const unscoped = buildOpencodeSupervisorPrompt({
+      action_context: { target: 'root' },
+      question: 'Routine health assessment',
+      state: { controller: { status: 'running' } },
+    });
+    assert.doesNotMatch(unscoped, /Permission scope:/);
+    assert.doesNotMatch(unscoped, /npm test/);
+    assert.match(renderOpencodeSupervisionPlugin(), /buildOpencodeSupervisorPrompt\(params\)/);
+  });
+
+  it('normalizes pinned permission event fields without inventing metadata paths', () => {
+    assert.deepEqual(
+      normalizeOpencodePermissionRequest({ id: 'read-1', sessionID: 'session-1', type: 'read', pattern: ['src/index.js'], metadata: {} }, 'C:/project'),
+      { id: 'read-1', session_id: 'session-1', operation: 'read', patterns: ['src/index.js'], metadata: {}, working_directory: 'C:/project' },
+    );
+    assert.deepEqual(
+      normalizeOpencodePermissionRequest({ id: 'edit-1', sessionID: 'session-1', type: 'edit', pattern: 'src/new.js', metadata: { filepath: 'src/new.js' } }, 'C:/project').patterns,
+      ['src/new.js'],
+    );
   });
 });
 

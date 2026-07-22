@@ -58,6 +58,7 @@ Enable the optional component in target-project `agenticloop.json` after review:
       "fail_closed": true
     },
     "permissions": {
+      "mode": "eligible-once-only",
       "supervisor_decision": "eligible-once-only",
       "always": "human",
       "high_impact": "human",
@@ -67,6 +68,11 @@ Enable the optional component in target-project `agenticloop.json` after review:
   }
 }
 ```
+
+That is the configuration schema version 1 envelope and remains the default. The
+three-tier permission router is opt-in through `permissions.mode`; see
+[Three-Tier Permission Routing](#three-tier-permission-routing) for the version 2
+sections and their migration.
 
 The validator rejects unsupported adapters, launch modes, disabled required
 supervisors, non-fail-closed activation, autonomous `always`, and malformed
@@ -298,12 +304,17 @@ copied into a TUI error.
 Permission commands, patterns, paths, targets, error text, rationales, and event
 and notification data are host-derived and may contain credentials. The
 unredacted permission scope exists only as the in-memory input to the mechanical
-risk classifier and in OpenCode's native pending-permission UI. Agentic Loop
-never persists or model-projects those arbitrary strings, even when the current
-redaction patterns consider them benign. Public permission state carries only
-the normalized operation, scope counts, consequence/risk categories, and a
-run-keyed HMAC-SHA-256 scope fingerprint used to reject request-id reuse with
-changed fields without exposing a reusable unsalted digest.
+router, in the bounded transient store described below when the operator
+explicitly enables it, and in OpenCode's native pending-permission UI. Agentic
+Loop never persists those arbitrary strings, even when the current redaction
+patterns consider them benign, and model-projects them only through the
+explicitly configured assess-tier egress. The durable internal permission record
+carries the normalized operation, scope counts, consequence/risk categories,
+and a run-keyed HMAC-SHA-256 scope fingerprint used to reject request-id reuse
+with changed fields without exposing a reusable unsalted digest. The current
+public and model projections omit the counts and fingerprint as well as the raw
+scope. They expose only the bounded permission identity, normalized operation,
+empty scope fields, sensitivity flag, authority, and canonical risk result.
 
 Authorization headers, cookies, custom auth headers, bearer/basic tokens, API
 keys, credential-shaped environment assignments, URLs with userinfo, OAuth
@@ -315,6 +326,267 @@ When sensitive material is detected, `sensitive_material_redacted` is set and
 the request is forced human-only. The operator reviews its exact scope in
 OpenCode's native prompt; the supervision CLI intentionally does not reconstruct
 or echo it.
+
+### Three-Tier Permission Routing
+
+Attached supervision ships two permission models. `permissions.mode` selects
+which one is in force, and configuration schema version 1 documents keep the
+first one until they are explicitly migrated.
+
+| `permissions.mode` | Behaviour |
+|---|---|
+| `eligible-once-only` (default) | The version 1 envelope. Every newly registered request charges one `permission_assessments` allowance and wakes the supervisor, which may answer `once` only inside `eligible_operations` / `eligible_bash_patterns`. |
+| `policy-assess-human` | The three-tier router below. |
+
+Upgrading the package never changes routing: an unmigrated document normalizes
+to `eligible-once-only`, with transient scope disabled, decision memory
+disabled, and an empty policy.
+
+#### The Three Tiers
+
+| Tier | Selection | Decision path |
+|---|---|---|
+| `policy` | Complete, mechanically proven low-impact scope | Replies `once` immediately through the ordinary atomic host-reply path. No model call, no assessment or wakeup charge. |
+| `assess` | Complete scope that is neither mechanically safe nor human-only | Wakes the supervisor with a bounded transient scope. The supervisor may approve `once`, reject, or request the operator. Charges one assessment and one wakeup. |
+| `human` | Sensitive, protected, incomplete, contradictory, unknown, supervisor-self, pre-authorization, or non-negotiable high-impact scope | Stays pending for the operator. The model is never woken and no budget is charged. |
+
+Evaluation order is fixed and fail-closed: supervisor-self, credential
+detection, a host `human_only` marker, and missing authorization route to the
+operator before anything else is considered; then non-negotiable categories;
+then exact scope; and only then the narrow proofs that can yield `policy`. A
+host-supplied category may narrow authority but can never make a request safer.
+
+`always` remains operator-only. It installs host permission patterns whose
+effective lifetime and sharing are controlled by OpenCode rather than by the
+run-scoped controller, and Agentic Loop cannot reliably revoke them. A replayed
+Agentic Loop decision sends an exact host `once` response and never becomes an
+OpenCode `always` grant.
+
+#### Configuration
+
+```json
+{
+  "supervision": {
+    "permissions": {
+      "mode": "policy-assess-human",
+      "supervisor_decision": "eligible-once-only",
+      "always": "human",
+      "high_impact": "human",
+
+      "transient_scope": {
+        "mode": "redacted-provider",
+        "maximum_age_seconds": 120,
+        "maximum_entries": 50
+      },
+
+      "policy": {
+        "version": 1,
+        "auto_operations": ["read", "edit", "write", "list"],
+        "protected_paths": ["config/secrets"],
+        "bash_rules": [
+          { "executable": "git", "subcommand": "status", "allowed_flags": ["--short", "--porcelain", "--branch"], "allow_paths": false },
+          { "executable": "git", "subcommand": "diff", "allowed_flags": ["--stat", "--staged", "--cached", "--name-only", "--name-status"], "allow_paths": true },
+          { "executable": "git", "subcommand": "log", "allowed_flags": ["--oneline", "--stat", "--graph", "--decorate"], "allow_paths": true },
+          { "executable": "git", "subcommand": "show", "allowed_flags": ["--stat", "--name-only"], "allow_paths": true }
+        ]
+      },
+
+      "decision_cache": {
+        "enabled": true,
+        "maximum_entries": 200,
+        "policy_ttl_seconds": 900,
+        "supervisor_ttl_seconds": 300,
+        "rejection_ttl_seconds": 600
+      }
+    }
+  }
+}
+```
+
+Every section is strictly validated and every bound is explicit. The validator
+rejects unknown keys, absolute or traversing `protected_paths`, pattern-shaped
+protected entries, free-form command prefixes in `bash_rules`, output-capable
+flags, executables that run project-controlled or downloaded code, unbounded
+cache settings, and a `supervisor_ttl_seconds` longer than
+`policy_ttl_seconds`. `auto_operations` accepts only `read`, `edit`, `write`,
+`grep`, `glob`, `list`, and `search`; `bash` is proven by a structured rule, and
+`webfetch`, `task`, `question`, and `external_directory` can never be
+mechanically approved.
+
+Configuring `transient_scope`, `decision_cache.enabled`, or any policy grant
+while `mode` is still `eligible-once-only` is an error rather than a silently
+ignored setting, so an operator cannot believe the router is active when it is
+not.
+
+**Migration.** Set `permissions.mode` to `policy-assess-human`, then opt each
+capability in separately. Enabling the mode alone approves nothing: the shipped
+`policy` section is empty. Enabling `transient_scope` is a deliberate provider
+egress decision, and `decision_cache` is deliberate memory. The legacy
+`eligible_operations` and `eligible_bash_patterns` fields remain valid and
+continue to describe the version 1 envelope; they have no effect in the new
+mode.
+
+#### Deterministic Policy Tier
+
+Path-bearing operations must prove that *every* effective target is inside the
+exact project root and outside the protected set. This applies to reads and
+searches, not only writes. Absolute paths, relative paths resolved against the
+host-reported working directory, Windows drive letters and case, UNC paths, `..`
+traversal, symlinks, junctions, and other reparse points are all handled. A new
+write target has its nearest existing ancestor resolved before the remaining
+lexical segments are appended, so a file created *below* a junction cannot land
+outside the project through a path that merely looks contained. A drive-relative
+path such as `C:src` is unresolvable rather than guessed. One escaping target
+disqualifies the whole request.
+
+The protected set always includes VCS internals and hooks, CI workflow
+definitions, dotenv and credential files, private key material, `.ssh`, `.gnupg`,
+`.aws`, Agentic Loop authorization and runtime state, and host or agent
+permission configuration. A configured `protected_paths` list extends that set;
+it never replaces it. Protection is path-specific and segment-exact, so
+`src/auth/session.js`, `src/permissions/index.js`, `src/merge/strategy.js`, and
+`src/delete-queue.js` are ordinary source files again.
+
+Wildcard scope is reduced to its literal prefix only to prove the search root is
+contained. It never reaches the policy tier, because a contained root says
+nothing about what the expansion would match inside it.
+
+Bash policy validates a structured executable, subcommand, arguments, and
+working directory. The parser proves a deliberately narrow grammar and refuses
+everything else: `&&`, `||`, pipes, semicolons, newlines, backticks, command and
+parameter substitution, redirection, background operators, quoting, backslashes,
+environment mutation, executable paths, unrecognized tokens, unrecognized flags,
+and any output-capable flag. A refusal is not a verdict about the command -- it
+means the parser cannot prove what the command does, so the request leaves the
+policy tier. `npm test` and `npx ...` are never intrinsically read-only: they
+execute project-controlled or unpinned downloaded code and are refused at
+configuration time.
+
+A command that parses cleanly and matches a configured executable but names a
+protected or escaping path is a proven boundary violation, not merely an
+unprovable one: it routes to the operator rather than being offered to the
+supervisor.
+
+#### Transient Supervisor Scope
+
+The `assess` tier passes a request-bound transient view containing the
+normalized operation, bounded command, patterns, paths, targets, working
+directory, containment booleans, lane id, task reference, expected artifact,
+and authorization and session generations. It travels in
+its own `permission_scope` field on `host.supervisor.assess`; it is never
+interpolated into the free-form question, and the durable `modelView()` payload
+stays redacted and unchanged.
+
+**This is provider egress.** Sending a scope to a supervisor model sends it to
+the configured model provider. Keeping it out of `state.json` does not mean the
+provider cannot retain it. That is why `transient_scope.mode` must be set
+explicitly and defaults to `disabled`; when it is disabled, every assess
+candidate routes to the operator instead.
+
+Secret detection runs *before* insertion. A credential-bearing request is never
+inserted and never model-projected, and redaction plus bounded structured
+serialization run afterwards as defence in depth rather than as the boundary.
+The store is in memory, bounded in entry count, string length, array length, and
+age. A duplicate host event cannot replace the immutable scope a pending
+decision is bound to, and every read revalidates the request id, authorization
+generation, and session generation. Entries are removed on a decision,
+rejection, assessment failure, operator escalation, authorization change,
+session replacement, bridge or server loss, pause, stop, TTL expiry, and
+capacity eviction. If the entry is missing, stale, or inconsistent at the moment
+of the provider call, the request routes to the operator. No transient scope
+reaches public status, `modelView()`, diagnostics, notifications, JSONL, or
+durable run state.
+
+#### Fingerprint-Scoped Decision Memory
+
+Decision replay is bounded Agentic Loop memory, not a host `always` grant. The
+cache key covers project identity, authorization generation, lane id, session id
+and generation, task reference, normalized operation, policy version, the
+run-keyed scope fingerprint, and the lane's durable-progress epoch. A change in
+any of them is a different decision, not a hit. The published key is itself a
+run-keyed HMAC, so neither a reusable digest nor the scope can be recovered.
+
+The cache is in memory, size-bounded, and evicts least-recently-used entries
+deterministically. Policy decisions live for the current generation, supervisor
+approvals expire sooner, and rejections carry their own bounded lifetime so a
+stale semantic judgment cannot create an unbounded denial loop. A durable
+checkpoint advances the lane's progress epoch and therefore invalidates
+supervisor decisions recorded against the older task context. Every replay still
+performs the exact atomic host `once` (or bounded rejection) reply for the new
+request and records `decided_by: cache`, the originating decision id, and the
+cache key version. A failed host reply leaves the request pending. The whole
+cache is cleared on authorization change, session replacement, bridge or server
+loss, and stop.
+
+#### Atomicity, Budgets, And Projection
+
+All four principals -- `policy`, `supervisor`, `cache`, and `operator` -- use the
+same order: preview authority and exact request, perform the host permission
+reply, then commit the decision. Nothing mutates durable permission state before
+the host accepts the reply, and a failed reply leaves the record pending for
+every principal.
+
+`policy` may approve `once` only, requires a current policy-tier result for the
+exact request at the active policy version, and may neither reject nor issue
+`always`. `cache` may replay only its stored decision, must present a complete
+cache context that still matches the request, and may never issue `always`.
+`supervisor` keeps its existing authorization, authority, action-context, and
+self-approval checks and may answer only `once` or `reject`. `operator` keeps
+exact manual `once`/`reject`/`always`, with `always` still requiring
+`--confirm-always`.
+
+Only a request that actually enters `assess` and begins a provider call consumes
+`permission_assessments` and `supervisor_wakeups`. Policy, cache, human-only,
+pre-authorization, sensitive, duplicate, and malformed requests consume neither,
+and `assessment_scheduled` is never reported true when no assessment could be
+scheduled.
+
+Status and `status --json` publish the routing mode, policy version, transient
+scope mode and live entry count, per-tier routing counts, and aggregate cache
+hits, misses, and entries. Each permission additionally carries its routing
+tier, policy version, scope-completeness flag, containment booleans, the
+deciding principal, and -- for a replay -- the originating decision id and cache
+key version. No raw scope, fingerprint, or cache key is published, and no safe
+public field is populated from an arbitrary host string. Every configured
+operation, including `grep`, `glob`, `list`, and `search`, now keeps one
+canonical identity across routing, the cache key, and public projection;
+operations outside the pinned contract stay `unknown` and human-only.
+
+#### Measured Routing And Remaining Limitations
+
+`test/fixtures/opencode-permission-corpus.js` pins 39 sanitized OpenCode
+permission event shapes. Each entry declares its provenance as
+`sanitized-host-shape` (real pinned-host field shape, rewritten with neutral
+project-relative paths and invented identifiers) or `synthetic` (constructed to
+exercise a boundary the observed traffic did not contain). No entry carries a
+credential, a personal path, a real session id, or transcript text.
+
+Under the recommended policy above, that corpus routes **10 policy (25.6%),
+7 assess (17.9%), and 22 human (56.4%)**. That is a measurement over a
+deliberately adversarial-heavy fixture set, not a prediction about real traffic
+and not an acceptance threshold. No automatic-approval percentage is claimed.
+
+Operations and cases that still route to `assess` or the operator because exact
+scope cannot be proven:
+
+- `grep`, `glob`, and `search` in practice, because their scope is normally a
+  wildcard pattern and a contained search root is not proof of what it matches;
+- any bash command outside a narrow configured structured rule, including every
+  quoted argument, backslash path, `npm`/`npx`/`node` invocation, and any
+  command carrying an output-capable flag;
+- `webfetch`, `task`, `question`, and `external_directory`, which are never
+  policy-eligible;
+- any request whose working directory the host does not report, whose paths use
+  a spelling outside the recognized `paths` / `path` / `files` / `file` /
+  `filePath` / `file_path` / `filepath` keys, or whose declared paths and
+  patterns describe different scopes;
+- drive-relative paths, UNC shares, and anything the filesystem cannot resolve.
+
+The pinned OpenCode `permission.updated` event carries only `id`, `sessionID`,
+`type`, `pattern`, and a free-form `metadata` object. The generated bridge adds
+the exact project directory from `ctx.directory`. Where that contract does not
+supply enough exact information for an operation, that operation routes to
+`assess` or the operator by design.
 
 ### Time Accounting
 
@@ -365,10 +637,12 @@ generation, only `request_operator`, `record_block`, and `cancel_session` remain
 offered; no further ordinary recovery retry is scheduled. The counters reset only
 for a genuinely new authorized lane generation.
 
-Every newly registered permission request consumes one
-`permission_assessments` allowance before a supervisor wake is scheduled. When
-that run-scoped budget is exhausted, the exact request remains pending and is
-routed to the operator without another model assessment.
+In `eligible-once-only` mode, every newly registered permission request consumes
+one `permission_assessments` allowance before a supervisor wake is scheduled.
+In `policy-assess-human` mode, the assessment and wakeup allowances are reserved
+together only when an assess-tier request is about to cross the provider
+boundary. If either allowance is unavailable, the exact request remains pending
+and is routed to the operator without a model assessment.
 
 A completed invocation without a verified expected artifact consumes the lane
 no-artifact allowance (`lane_no_artifact`). Periodic durable-progress assessment
@@ -469,4 +743,4 @@ supervision controller owns the project.
   `.agenticloop/tmp/` containing identities, classifications, generations,
   actions, timings, and artifact references -- never prompts, model responses,
   credentials, or private reasoning. Without the fixture the scenario is skipped
-  and Phase 26 acceptance stays partial.
+  and provider-backed acceptance stays partial.

@@ -4,7 +4,27 @@
  * starts a controller or acquires runtime dependencies.
  */
 
-export const SUPERVISION_CONFIG_VERSION = 1;
+import {
+  CANONICAL_PERMISSION_OPERATIONS,
+  DEFAULT_PROTECTED_PATHS,
+  POLICY_ELIGIBLE_AUTO_OPERATIONS,
+  normalizePermissionOperation,
+  validateBashRule,
+} from './permission-policy.js';
+
+/**
+ * Configuration schema version.
+ *
+ * Version 1 is the once-only envelope shipped with the permission bridge.
+ * Version 2 adds the three-tier `policy` / `assess` / `human` router, transient
+ * supervisor scope, structured command rules, and bounded decision memory.
+ * Existing version 1 configuration keeps version 1 behaviour: the new router is
+ * reached only by setting `permissions.mode` explicitly.
+ */
+export const SUPERVISION_CONFIG_VERSION = 2;
+
+export const PERMISSION_ROUTING_MODES = Object.freeze(['eligible-once-only', 'policy-assess-human']);
+export const TRANSIENT_SCOPE_MODES = Object.freeze(['disabled', 'redacted-provider']);
 
 /**
  * The one machine-readable definition of the pinned attached-host range. The
@@ -44,9 +64,35 @@ export const DEFAULT_SUPERVISION_CONFIG = Object.freeze({
     fail_closed: true,
   },
   permissions: {
+    // Version 1 behaviour. The three-tier router is opt-in and never reached by
+    // upgrading the package alone.
+    mode: 'eligible-once-only',
     supervisor_decision: 'eligible-once-only',
     always: 'human',
     high_impact: 'human',
+    // Explicit provider egress. `disabled` means the supervisor is never shown
+    // a permission scope, and every assess candidate routes to the operator.
+    transient_scope: {
+      mode: 'disabled',
+      maximum_age_seconds: 120,
+      maximum_entries: 50,
+    },
+    // Deterministic policy tier. Empty by default: enabling the router alone
+    // approves nothing until an operator opts each capability in.
+    policy: {
+      version: 1,
+      auto_operations: [],
+      protected_paths: [],
+      bash_rules: [],
+    },
+    // Bounded, in-memory decision memory. Never an OpenCode `always` grant.
+    decision_cache: {
+      enabled: false,
+      maximum_entries: 200,
+      policy_ttl_seconds: 900,
+      supervisor_ttl_seconds: 300,
+      rejection_ttl_seconds: 600,
+    },
     eligible_operations: ['read', 'grep', 'glob', 'list', 'search', 'webfetch', 'bash'],
     eligible_bash_patterns: [
       'git status',
@@ -132,15 +178,161 @@ function requireString(value, name, errors) {
   if (typeof value !== 'string' || !value.trim()) errors.push(`${name} must be a non-empty string`);
 }
 
+function requireBoundedInteger(value, name, minimum, maximum, errors) {
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    errors.push(`${name} must be an integer between ${minimum} and ${maximum}`);
+  }
+}
+
+const PERMISSION_SUBSECTION_KEYS = Object.freeze({
+  transient_scope: new Set(Object.keys(DEFAULT_SUPERVISION_CONFIG.permissions.transient_scope)),
+  policy: new Set(Object.keys(DEFAULT_SUPERVISION_CONFIG.permissions.policy)),
+  decision_cache: new Set(Object.keys(DEFAULT_SUPERVISION_CONFIG.permissions.decision_cache)),
+});
+
+const CANONICAL_OPERATION_SET = new Set(CANONICAL_PERMISSION_OPERATIONS);
+const POLICY_AUTO_OPERATION_SET = new Set(POLICY_ELIGIBLE_AUTO_OPERATIONS);
+const DEFAULT_PROTECTED_PATH_SET = new Set(DEFAULT_PROTECTED_PATHS);
+
+/**
+ * Validate the version 2 permission router sections.
+ *
+ * Every bound is explicit and every unknown key is rejected. A section that is
+ * configured but unusable in the active mode is an error rather than a silently
+ * ignored setting, so an operator cannot believe transient scope or decision
+ * memory is active when the legacy envelope is still in force.
+ */
+function validatePermissionRouting(permissions, rawPermissions, errors) {
+  if (!PERMISSION_ROUTING_MODES.includes(permissions.mode)) {
+    errors.push(`supervision.permissions.mode must be one of: ${PERMISSION_ROUTING_MODES.join(', ')}`);
+  }
+  for (const [section, allowed] of Object.entries(PERMISSION_SUBSECTION_KEYS)) {
+    if (!isPlainObject(permissions[section])) {
+      errors.push(`supervision.permissions.${section} must be an object`);
+      continue;
+    }
+    if (!isPlainObject(rawPermissions?.[section])) continue;
+    for (const key of Object.keys(rawPermissions[section])) {
+      if (!allowed.has(key)) errors.push(`supervision.permissions.${section}.${key} is not supported`);
+    }
+  }
+  if (errors.length > 0) return;
+
+  const routerActive = permissions.mode === 'policy-assess-human';
+  const transient = permissions.transient_scope;
+  if (!TRANSIENT_SCOPE_MODES.includes(transient.mode)) {
+    errors.push(`supervision.permissions.transient_scope.mode must be one of: ${TRANSIENT_SCOPE_MODES.join(', ')}`);
+  }
+  requireBoundedInteger(transient.maximum_age_seconds, 'supervision.permissions.transient_scope.maximum_age_seconds', 5, 3600, errors);
+  requireBoundedInteger(transient.maximum_entries, 'supervision.permissions.transient_scope.maximum_entries', 1, 500, errors);
+  if (transient.mode !== 'disabled' && !routerActive) {
+    errors.push("supervision.permissions.transient_scope.mode requires supervision.permissions.mode 'policy-assess-human'; the legacy envelope never projects a permission scope");
+  }
+
+  const policy = permissions.policy;
+  if (!Number.isInteger(policy.version) || policy.version < 1) errors.push('supervision.permissions.policy.version must be a positive integer');
+  if (!Array.isArray(policy.auto_operations)) errors.push('supervision.permissions.policy.auto_operations must be an array');
+  else {
+    for (const [index, operation] of policy.auto_operations.entries()) {
+      const label = `supervision.permissions.policy.auto_operations[${index}]`;
+      if (typeof operation !== 'string' || !operation.trim()) { errors.push(`${label} must be a non-empty operation name`); continue; }
+      const normalizedOperation = normalizePermissionOperation(operation);
+      if (!CANONICAL_OPERATION_SET.has(normalizedOperation)) errors.push(`${label} '${operation}' is not a known permission operation`);
+      else if (!POLICY_AUTO_OPERATION_SET.has(normalizedOperation)) {
+        errors.push(`${label} '${operation}' can never be mechanically proven low impact; allowed operations are ${POLICY_ELIGIBLE_AUTO_OPERATIONS.join(', ')}`);
+      }
+    }
+  }
+  if (!Array.isArray(policy.protected_paths)) errors.push('supervision.permissions.policy.protected_paths must be an array');
+  else {
+    for (const [index, entry] of policy.protected_paths.entries()) {
+      const label = `supervision.permissions.policy.protected_paths[${index}]`;
+      if (typeof entry !== 'string' || !entry.trim()) { errors.push(`${label} must be a non-empty project-relative path`); continue; }
+      const value = entry.trim().replace(/\\/g, '/');
+      if (/^(?:[A-Za-z]:|\/|\/\/)/.test(value)) errors.push(`${label} must be project-relative, not absolute`);
+      if (value.split('/').includes('..')) errors.push(`${label} must not traverse outside the project`);
+      if (/[*?]/.test(value)) errors.push(`${label} must be an exact path prefix, not a pattern`);
+    }
+  }
+  if (!Array.isArray(policy.bash_rules)) errors.push('supervision.permissions.policy.bash_rules must be an array');
+  else {
+    for (const [index, rule] of policy.bash_rules.entries()) {
+      errors.push(...validateBashRule(rule, `supervision.permissions.policy.bash_rules[${index}]`));
+    }
+  }
+  if (!routerActive && (policy.auto_operations.length > 0 || (Array.isArray(policy.bash_rules) && policy.bash_rules.length > 0))) {
+    errors.push("supervision.permissions.policy grants require supervision.permissions.mode 'policy-assess-human'");
+  }
+
+  const cache = permissions.decision_cache;
+  requireBoolean(cache.enabled, 'supervision.permissions.decision_cache.enabled', errors);
+  requireBoundedInteger(cache.maximum_entries, 'supervision.permissions.decision_cache.maximum_entries', 1, 1000, errors);
+  requireBoundedInteger(cache.policy_ttl_seconds, 'supervision.permissions.decision_cache.policy_ttl_seconds', 1, 86_400, errors);
+  requireBoundedInteger(cache.supervisor_ttl_seconds, 'supervision.permissions.decision_cache.supervisor_ttl_seconds', 1, 86_400, errors);
+  requireBoundedInteger(cache.rejection_ttl_seconds, 'supervision.permissions.decision_cache.rejection_ttl_seconds', 1, 86_400, errors);
+  if (cache.enabled === true && !routerActive) {
+    errors.push("supervision.permissions.decision_cache.enabled requires supervision.permissions.mode 'policy-assess-human'");
+  }
+  if (Number.isInteger(cache.supervisor_ttl_seconds) && Number.isInteger(cache.policy_ttl_seconds) && cache.supervisor_ttl_seconds > cache.policy_ttl_seconds) {
+    errors.push('supervision.permissions.decision_cache.supervisor_ttl_seconds must not exceed policy_ttl_seconds; a semantic judgment is shorter-lived than a mechanical one');
+  }
+}
+
+/**
+ * Normalize a validated configuration into the exact shape the router consumes.
+ * Deterministic and side-effect free: the same input always yields the same
+ * effective policy, and a version 1 document normalizes to the legacy envelope.
+ */
+export function normalizePermissionRouting(config) {
+  const permissions = config?.permissions ?? DEFAULT_SUPERVISION_CONFIG.permissions;
+  const mode = PERMISSION_ROUTING_MODES.includes(permissions.mode) ? permissions.mode : 'eligible-once-only';
+  const routerActive = mode === 'policy-assess-human';
+  const transient = { ...DEFAULT_SUPERVISION_CONFIG.permissions.transient_scope, ...(permissions.transient_scope ?? {}) };
+  const policy = { ...DEFAULT_SUPERVISION_CONFIG.permissions.policy, ...(permissions.policy ?? {}) };
+  const cache = { ...DEFAULT_SUPERVISION_CONFIG.permissions.decision_cache, ...(permissions.decision_cache ?? {}) };
+  return {
+    schema_version: SUPERVISION_CONFIG_VERSION,
+    mode,
+    router_active: routerActive,
+    transient_scope: {
+      enabled: routerActive && transient.mode === 'redacted-provider',
+      mode: routerActive ? transient.mode : 'disabled',
+      maximum_age_ms: transient.maximum_age_seconds * 1000,
+      maximum_entries: transient.maximum_entries,
+    },
+    policy: {
+      version: policy.version,
+      auto_operations: routerActive ? [...policy.auto_operations].map(normalizePermissionOperation) : [],
+      protected_paths: [...new Set([...DEFAULT_PROTECTED_PATH_SET, ...policy.protected_paths])],
+      bash_rules: routerActive ? policy.bash_rules.map(rule => ({
+        executable: String(rule.executable).trim().toLowerCase(),
+        subcommand: rule.subcommand === null || rule.subcommand === undefined ? null : String(rule.subcommand).trim().toLowerCase(),
+        allowed_flags: [...(rule.allowed_flags ?? [])],
+        allow_paths: rule.allow_paths === true,
+      })) : [],
+    },
+    decision_cache: {
+      enabled: routerActive && cache.enabled === true,
+      maximum_entries: cache.maximum_entries,
+      policy_ttl_ms: cache.policy_ttl_seconds * 1000,
+      supervisor_ttl_ms: cache.supervisor_ttl_seconds * 1000,
+      rejection_ttl_ms: cache.rejection_ttl_seconds * 1000,
+    },
+  };
+}
+
 /**
  * Validate only the optional config object. Its absence is valid and means the
  * Markdown-only workflow remains the active product surface.
  */
 export function validateSupervisionConfig(raw) {
   const errors = [];
-  if (raw === undefined) return { errors, config: structuredClone(DEFAULT_SUPERVISION_CONFIG), configured: false };
+  if (raw === undefined) {
+    const config = structuredClone(DEFAULT_SUPERVISION_CONFIG);
+    return { errors, config, configured: false, routing: normalizePermissionRouting(config) };
+  }
   if (!isPlainObject(raw)) {
-    return { errors: ['supervision must be an object when provided'], config: structuredClone(DEFAULT_SUPERVISION_CONFIG), configured: true };
+    return { errors: ['supervision must be an object when provided'], config: structuredClone(DEFAULT_SUPERVISION_CONFIG), configured: true, routing: null };
   }
 
   const config = merge(DEFAULT_SUPERVISION_CONFIG, raw);
@@ -152,7 +344,7 @@ export function validateSupervisionConfig(raw) {
   for (const section of ['execution', 'supervisor', 'activation', 'permissions', 'budgets', 'recovery', 'notifications']) {
     if (!isPlainObject(config[section])) errors.push(`supervision.${section} must be an object`);
   }
-  if (errors.length > 0) return { errors, config, configured: true };
+  if (errors.length > 0) return { errors, config, configured: true, routing: null };
   for (const [section, allowed] of Object.entries(SECTION_KEYS)) {
     if (!isPlainObject(raw[section])) continue;
     for (const key of Object.keys(raw[section])) {
@@ -201,6 +393,7 @@ export function validateSupervisionConfig(raw) {
   if (!Array.isArray(config.permissions.eligible_bash_patterns) || config.permissions.eligible_bash_patterns.some(value => typeof value !== 'string' || !value.trim())) {
     errors.push('supervision.permissions.eligible_bash_patterns must be an array of non-empty command prefixes');
   }
+  validatePermissionRouting(config.permissions, isPlainObject(raw.permissions) ? raw.permissions : null, errors);
 
   for (const [name, value] of Object.entries(config.budgets)) {
     if (!POSITIVE_BUDGETS.has(name)) {
@@ -231,7 +424,7 @@ export function validateSupervisionConfig(raw) {
     }
   }
 
-  return { errors, config, configured: true };
+  return { errors, config, configured: true, routing: errors.length === 0 ? normalizePermissionRouting(config) : null };
 }
 
 /**

@@ -51,6 +51,37 @@ export function normalizeOpenCodeSupervisorUsage(payload) {
   return stepCosts.length ? { cost_units: stepCosts.reduce((sum, value) => sum + value, 0) } : undefined;
 }
 
+/**
+ * Build the exact text sent to the supervisor session. This helper is
+ * serialized into the generated plugin so unit tests and the shipped bridge
+ * exercise one implementation.
+ */
+export function buildOpencodeSupervisorPrompt(params = {}) {
+  const permissionScope = params.permission_scope && typeof params.permission_scope === 'object'
+    ? `\nPermission scope: ${JSON.stringify(params.permission_scope)}`
+    : '';
+  return 'Assess this bounded controller state and return one JSON object only. '
+    + 'The action context is immutable; copy its exact target, request id, and route without substitution. '
+    + `Action context: ${JSON.stringify(params.action_context || {})}. `
+    + `Question: ${String(params.question || '').slice(0, 1600)}\n`
+    + `State: ${JSON.stringify(params.state)}${permissionScope}`;
+}
+
+/** Normalize the pinned OpenCode permission event into the controller contract. */
+export function normalizeOpencodePermissionRequest(properties = {}, workingDirectory = null) {
+  const patterns = Array.isArray(properties.pattern)
+    ? properties.pattern
+    : properties.pattern ? [properties.pattern] : [];
+  return {
+    id: properties.id,
+    session_id: properties.sessionID,
+    operation: properties.type || 'unknown',
+    patterns,
+    metadata: properties.metadata || {},
+    working_directory: workingDirectory,
+  };
+}
+
 export function renderOpencodeSupervisionPlugin() {
   return `${renderPluginBody().replace('/*__AGENTICLOOP_EVENT_CONTRACT__*/', renderOpencodeEventContract())}`;
 }
@@ -71,6 +102,8 @@ const MAX_FRAME_BYTES = 64 * 1024
 ${parseAgenticLoopArguments.toString()}
 ${probeOpenCodeBridgeCapabilities.toString()}
 ${normalizeOpenCodeSupervisorUsage.toString()}
+${buildOpencodeSupervisorPrompt.toString()}
+${normalizeOpencodePermissionRequest.toString()}
 
 function makeCredential() {
   return crypto.getRandomValues(new Uint8Array(32)).reduce((text, value) => text + value.toString(16).padStart(2, "0"), "")
@@ -310,7 +343,7 @@ export const AgenticLoopSupervision = async (ctx: any) => {
         path: { id: supervisorSessionID },
         body: {
           agent: "agenticloop-supervisor",
-          parts: [{ type: "text", text: "Assess this bounded controller state and return one JSON object only. The action context is immutable; copy its exact target, request id, and route without substitution. Action context: " + JSON.stringify(params.action_context || {}) + ". Question: " + String(params.question || "").slice(0, 1600) + "\nState: " + JSON.stringify(params.state) }],
+          parts: [{ type: "text", text: buildOpencodeSupervisorPrompt(params) }],
         },
       })
       const payload = result.data || result
@@ -556,8 +589,11 @@ export const AgenticLoopSupervision = async (ctx: any) => {
       const eventID = extractOpencodeEventId(event)
       if (event.type === "permission.updated") {
         if (!registeredSessionIDs.has(properties.sessionID)) return
-        const patterns = Array.isArray(properties.pattern) ? properties.pattern : properties.pattern ? [properties.pattern] : []
-        await rpc.call("permission.asked", { permission: { id: properties.id, session_id: properties.sessionID, operation: properties.type || "unknown", patterns, metadata: properties.metadata || {} } })
+        // ctx.directory is the exact OpenCode project directory. Forwarding it
+        // lets the controller resolve a relative permission scope against a
+        // known base instead of guessing one; without it a relative path is
+        // unresolvable scope and routes to the operator.
+        await rpc.call("permission.asked", { permission: normalizeOpencodePermissionRequest(properties, ctx.directory) })
       }
       if (event.type === "session.error") {
         if (!registeredSessionIDs.has(sessionID)) return

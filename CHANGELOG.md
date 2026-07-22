@@ -3,7 +3,7 @@
 ## 0.1.0 (Unreleased)
 
 ### Added
-- Phase 26: optional, dormant-by-default attached OpenCode supervision. Ordinary
+- Optional, dormant-by-default attached OpenCode supervision. Ordinary
   `/agenticloop` behaviour is unchanged; nothing loads, spawns, or observes until
   a target explicitly sets `supervision.enabled: true` and a human runs
   `/agenticloop --supervised`. No OpenCode SDK runtime dependency is added to
@@ -24,11 +24,53 @@
     the only supervisor-eligible decisions; `always`, high-impact categories, and
     supervisor self-approval are human-only. A permission commits only after the
     host reply succeeds. Arbitrary permission commands, patterns, paths, and
-    targets never leave the ephemeral classifier: public status and model state
-    carry counts plus a run-keyed one-way scope fingerprint, while exact scope stays in
-    OpenCode's native permission UI. Credential-bearing requests are marked
+    targets never leave the ephemeral classifier: the durable internal record
+    carries counts plus a run-keyed one-way scope fingerprint, while public and
+    model state omit both the fingerprint and arbitrary scope. Exact scope stays
+    in OpenCode's native permission UI. Credential-bearing requests are marked
     `sensitive_material_redacted` and forced human-only. Controller stderr is
     drained without being retained or surfaced.
+  - **Opt-in three-tier permission autopilot.** Configuration schema version 2
+    adds `supervision.permissions.mode`. Existing version 1 documents normalize
+    to `eligible-once-only` and keep the once-only envelope exactly; the router
+    is reached only by setting `policy-assess-human` explicitly. In that mode a
+    request routes to `policy` (mechanically proven low-impact scope, answered
+    `once` through the ordinary atomic host-reply path with no model call and no
+    budget charge), `assess` (complete but unprovable scope, sent to the
+    supervisor with a bounded request-bound scope), or `human` (sensitive,
+    protected, incomplete, contradictory, unknown, unauthorized, high-impact, or
+    supervisor-self scope, left pending with no model wake and no budget
+    charge). `always` stays operator-only and a replayed decision never becomes
+    an OpenCode `always` grant.
+  - **Exact containment and structured commands.** A new
+    `src/supervision/permission-policy.js` proves every effective target of a
+    read, search, edit, or write is inside the exact project root and outside a
+    protected set, handling absolute and relative paths, Windows drives and
+    case, UNC paths, `..` traversal, symlinks, junctions, and nonexistent write
+    targets resolved through their nearest existing ancestor. Protection is
+    path-specific, so `src/auth/session.js` and `src/permissions/index.js` are
+    ordinary source files again. Bash policy replaces prefix matching with a
+    narrow structured parser that refuses shell composition, substitution,
+    redirection, quoting, environment mutation, unrecognized flags, and every
+    output-capable flag, and refuses `npm`, `npx`, `node`, and shell executables
+    at configuration time. `grep`, `glob`, `list`, and `search` now keep their
+    own public identity instead of normalizing to `unknown`.
+  - **Transient supervisor scope and bounded decision memory.** The assess tier
+    may pass an exact scope in a separate request-bound `permission_scope` field
+    -- explicit provider egress, disabled by default, never persisted, never in
+    status, diagnostics, notifications, or JSONL, and never populated for a
+    credential-bearing request. An in-memory, size- and time-bounded decision
+    cache keyed by project, authorization generation, lane, session generation,
+    task, operation, policy version, scope fingerprint, and durable-progress
+    epoch can replay a bounded `once` or rejection without a model call. Only a
+    request that actually begins a provider call charges
+    `permission_assessments` and `supervisor_wakeups`.
+  - **Sanitized permission corpus.** `test/fixtures/opencode-permission-corpus.js`
+    pins 39 sanitized and synthetic permission cases with declared provenance.
+    Under the documented recommended
+    policy it routes 10 policy / 7 assess / 22 human. That is a measurement over
+    a deliberately adversarial-heavy fixture set, not a claim about real traffic;
+    no automatic-approval percentage is claimed.
   - **Recovery and capability ceilings.** Per-lane leases drive no-progress
     detection from verified durable checkpoints rather than message traffic.
     Rate-limited routes defer their entire reassessment to a generation-bound
@@ -55,7 +97,7 @@
     real opt-in driver gated on an explicitly marked disposable fixture. It
     invokes both engineer generations through OpenCode and requires the recovered
     engineer, never the driver, to create the artifact. Until that fixture runs,
-    Phase 26 acceptance remains partial and no provider-backed claim is made.
+    Provider-backed acceptance remains partial and no provider-backed claim is made.
 - Hardened Maintainer Review Fixup follow-up enforcement: GitHub review audit now
   checks same-task replacement PR history before allowing a fixup, files/event
   cross-checks ignore malformed fixup flags, and non-maintainer review results are

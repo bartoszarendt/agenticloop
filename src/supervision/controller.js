@@ -339,7 +339,7 @@ export class SupervisionController {
     }
   }
 
-  async requestSupervisor(question, actionContext) {
+  async requestSupervisor(question, actionContext, { permissionScope = null, chargePermissionAssessment = false } = {}) {
     if (!this.kernel.state.sessions.supervisor?.id || this.kernel.state.server.status !== 'connected' || this.kernel.state.bridge.status !== 'connected' || this.kernel.state.controller.status === 'paused') return { ok: false, code: 'supervisor_model_unavailable' };
     // Cost enforcement is a pre-gate. Once a nonzero ceiling is reached the
     // provider is never invoked again for this run.
@@ -348,7 +348,21 @@ export class SupervisionController {
       this.kernel.save();
       return { ok: false, code: 'budget_exhausted', budget: 'supervisor_cost_units' };
     }
-    if (!this.kernel.incrementBudget('supervisor_wakeups')) {
+    if (chargePermissionAssessment) {
+      // Permission assessments and their wakeups are one coupled reservation.
+      // Neither counter changes unless both allowances are available and the
+      // controller is about to cross the host/provider boundary.
+      if (!this.kernel.canIncrementBudget('permission_assessments')) {
+        this.kernel.exhaust('permission assessment', actionContext.request_id, { budgetName: 'permission_assessments', budgetKey: 'run' });
+        return { ok: false, code: 'budget_exhausted', budget: 'permission_assessments' };
+      }
+      if (!this.kernel.canIncrementBudget('supervisor_wakeups')) {
+        this.kernel.exhaust('supervisor wakeup', 'supervisor', { budgetName: 'supervisor_wakeups', budgetKey: 'run' });
+        return { ok: false, code: 'budget_exhausted', budget: 'supervisor_wakeups' };
+      }
+      this.kernel.incrementBudget('permission_assessments');
+      this.kernel.incrementBudget('supervisor_wakeups');
+    } else if (!this.kernel.incrementBudget('supervisor_wakeups')) {
       this.kernel.exhaust('supervisor wakeup', 'supervisor');
       return { ok: false, code: 'budget_exhausted', budget: 'supervisor_wakeups' };
     }
@@ -363,6 +377,11 @@ export class SupervisionController {
         // The model receives the bounded model-safe view, not the full operator
         // status surface, and never any unredacted host string.
         state: this.kernel.modelView(),
+        // Assess-tier permission scope travels in its own request-bound field,
+        // never interpolated into the free-form question. It is explicit
+        // provider egress: keeping it out of durable state does not mean the
+        // provider cannot retain it.
+        ...(permissionScope ? { permission_scope: permissionScope } : {}),
       });
     } catch {
       return { ok: false, code: 'supervisor_model_unavailable' };
@@ -374,7 +393,7 @@ export class SupervisionController {
     return { ok: true, disposition, usage: cost };
   }
 
-  scheduleSupervisorWake({ reason, target, requestId = null, allowedActions, allowedRoutes = [], investigationDepth = 0 }) {
+  scheduleSupervisorWake({ reason, target, requestId = null, allowedActions, allowedRoutes = [], investigationDepth = 0, withPermissionScope = false, chargePermissionAssessment = false }) {
     if (this.closed || !this.kernel.state.sessions.supervisor || this.kernel.state.server.status !== 'connected') return;
     this.wakeChain = this.wakeChain.then(async () => {
       if (this.closed || ['stopped', 'paused', 'bridge_lost', 'server_lost'].includes(this.kernel.state.controller.status)) return;
@@ -396,9 +415,28 @@ export class SupervisionController {
         this.kernel.save();
         return;
       }
-      const assessment = await this.requestSupervisor(`${reason}\nTarget: ${target}${requestId ? `\nPermission request: ${requestId}` : ''}`, actionContext);
+      // The scope is read immediately before the provider call and revalidated
+      // against the exact request, authorization generation, and session
+      // generation. A missing, stale, or evicted entry routes to the operator
+      // instead of assessing a request the supervisor cannot actually see.
+      let permissionScope = null;
+      if (withPermissionScope && requestId) {
+        permissionScope = this.kernel.transientPermissionScope(requestId);
+        if (!permissionScope) {
+          this.kernel.notify('operator_action', 'Permission scope was unavailable for assessment; the exact request remains pending for the operator', { request_id: requestId });
+          this.kernel.save();
+          return;
+        }
+      }
+      const assessment = await this.requestSupervisor(`${reason}\nTarget: ${target}${requestId ? `\nPermission request: ${requestId}` : ''}`, actionContext, { permissionScope, chargePermissionAssessment });
       if (!assessment.ok) {
-        if (assessment.code !== 'budget_exhausted') {
+        // A failed assessment ends this request's transient scope; a later
+        // attempt registers a fresh one or routes to the operator.
+        if (requestId) this.kernel.clearPermissionMemory({ requestId });
+        if (requestId && assessment.code === 'budget_exhausted') {
+          this.kernel.notify('operator_action', 'Permission assessment could not begin within the remaining budget; the exact request remains pending for the operator', { request_id: requestId, budget: assessment.budget });
+          this.kernel.save();
+        } else if (assessment.code !== 'budget_exhausted') {
           this.kernel.notify('capability_degraded', 'Supervisor model wakeup was unavailable', { target, code: assessment.code });
           this.kernel.save();
         }
@@ -421,6 +459,8 @@ export class SupervisionController {
           allowedActions,
           allowedRoutes,
           investigationDepth: (result.investigation_depth ?? investigationDepth) + 1,
+          withPermissionScope,
+          chargePermissionAssessment,
         });
       }
     }).catch(error => {
@@ -526,6 +566,113 @@ export class SupervisionController {
     if (!assessment.ok) return assessment;
     const applied = await this.kernel.applyDisposition(assessment.disposition, { actionContext });
     return { ...applied, disposition: assessment.disposition };
+  }
+
+  /**
+   * Legacy (version 1) permission handling: every newly registered request
+   * consumes one assessment allowance and wakes the supervisor, whatever the
+   * operator may ultimately have to answer.
+   */
+  async assessRegisteredPermission(permission) {
+    const eligible = permission.authority === 'supervisor-eligible' && Boolean(this.kernel.state.authorization);
+    if (!this.kernel.incrementBudget('permission_assessments')) {
+      this.kernel.exhaust('permission assessment', permission.id, { budgetName: 'permission_assessments', budgetKey: 'run' });
+      this.kernel.notify('operator_action', 'Permission assessment budget exhausted; the exact request remains pending for the operator', { request_id: permission.id, lane_id: permission.lane_id });
+      this.kernel.save();
+      return { ok: true, permission, assessment_scheduled: false, code: 'budget_exhausted' };
+    }
+    this.kernel.save();
+    this.scheduleSupervisorWake({
+      reason: eligible ? 'Assess the exact permission request and its consequences. Approve once only if it remains inside the configured low-impact envelope.' : 'A human-only or pre-authorization permission request is waiting. Do not approve it; escalate to the operator.',
+      target: permission.lane_id ?? permission.session_id,
+      requestId: permission.id,
+      allowedActions: eligible ? ['continue_observing', 'investigate', 'approve_permission_once', 'reject_permission', 'request_operator'] : ['continue_observing', 'investigate', 'request_operator'],
+    });
+    return { ok: true, permission, assessment_scheduled: true };
+  }
+
+  /**
+   * Answer one request through the exact atomic reply path without a model.
+   *
+   * `preview -> host reply -> durable commit` is unchanged. A failed host reply
+   * leaves the request pending and notifies the operator; it never mutates the
+   * durable permission record.
+   */
+  async replyWithoutModel(permission, decision, options) {
+    try {
+      const decided = await this.kernel.replyPermission(permission.id, decision, options);
+      return { ok: true, permission: decided, assessment_scheduled: false, decided_by: options.principal };
+    } catch (error) {
+      this.kernel.notify('operator_action', 'A permission reply could not be delivered; the exact request remains pending for the operator', {
+        request_id: permission.id,
+        lane_id: permission.lane_id,
+        decided_by: options.principal,
+      });
+      this.kernel.save();
+      return {
+        ok: true,
+        permission: this.kernel.status().permissions.pending.find(entry => entry.id === permission.id) ?? permission,
+        assessment_scheduled: false,
+        code: 'host_reply_failed',
+        message: boundedText(error?.message, 240),
+      };
+    }
+  }
+
+  /**
+   * The three-tier router.
+   *
+   * Budget semantics are the point of this method: only a request that actually
+   * enters `assess` and begins a provider call charges `permission_assessments`
+   * and `supervisor_wakeups`. Policy, cache, human-only, pre-authorization, and
+   * malformed requests charge neither.
+   */
+  async routeRegisteredPermission(permission) {
+    const tier = permission.routing_tier;
+    const replay = tier === 'human' ? null : this.kernel.lookupPermissionDecision(permission);
+    if (replay) {
+      return await this.replyWithoutModel(permission, replay.entry.decision, {
+        principal: 'cache',
+        rationale: `Replayed a bounded ${replay.entry.principal} decision for an identical in-generation request`,
+        cache_context: replay.context,
+        cache_entry: replay.entry,
+      });
+    }
+    if (tier === 'policy') {
+      return await this.replyWithoutModel(permission, 'once', {
+        principal: 'policy',
+        rationale: 'Deterministic policy tier: exact scope proven inside the project root and outside the protected set',
+      });
+    }
+    if (tier === 'assess') {
+      // A stale authorization or a supervisor that cannot be reached means no
+      // assessment can begin, so no allowance is charged.
+      if (!this.kernel.state.authorization || !this.kernel.state.sessions.supervisor?.id
+        || this.kernel.state.server.status !== 'connected' || this.kernel.state.bridge.status !== 'connected'
+        || this.kernel.state.controller.status === 'paused') {
+        this.kernel.notify('operator_action', 'No supervisor assessment is available; the exact request remains pending for the operator', { request_id: permission.id, lane_id: permission.lane_id });
+        this.kernel.clearPermissionMemory({ requestId: permission.id });
+        this.kernel.save();
+        return { ok: true, permission, assessment_scheduled: false, routing_tier: tier, code: 'supervisor_model_unavailable' };
+      }
+      if (!this.kernel.transientPermissionScope(permission.id)) {
+        this.kernel.notify('operator_action', 'Permission scope was unavailable for assessment; the exact request remains pending for the operator', { request_id: permission.id, lane_id: permission.lane_id });
+        this.kernel.save();
+        return { ok: true, permission, assessment_scheduled: false, routing_tier: tier, code: 'permission_scope_unavailable' };
+      }
+      this.scheduleSupervisorWake({
+        reason: 'Assess the exact permission request from its bounded scope. Approve once, reject, or escalate to the operator.',
+        target: permission.lane_id ?? permission.session_id,
+        requestId: permission.id,
+        allowedActions: ['approve_permission_once', 'reject_permission', 'request_operator'],
+        withPermissionScope: true,
+        chargePermissionAssessment: true,
+      });
+      return { ok: true, permission, assessment_scheduled: true, routing_tier: tier };
+    }
+    // Human tier: pending for the operator, no model wake, no budget charge.
+    // `recordPermission` already emitted the safe human-permission notification.
+    return { ok: true, permission, assessment_scheduled: false, routing_tier: 'human' };
   }
 
   async operatorCommand(params) {
@@ -699,22 +846,13 @@ export class SupervisionController {
     if (method === 'permission.asked') {
       const duplicate = this.kernel.state.permissions.some(entry => entry.id === params.permission?.id);
       const permission = this.kernel.recordPermission(params.permission);
+      // A duplicate host event answers from the existing record. It never
+      // charges a budget, schedules another action, or replaces an immutable
+      // scope.
       if (duplicate) return { ok: true, permission, duplicate: true };
-      const eligible = permission.authority === 'supervisor-eligible' && Boolean(this.kernel.state.authorization);
-      if (!this.kernel.incrementBudget('permission_assessments')) {
-        this.kernel.exhaust('permission assessment', permission.id, { budgetName: 'permission_assessments', budgetKey: 'run' });
-        this.kernel.notify('operator_action', 'Permission assessment budget exhausted; the exact request remains pending for the operator', { request_id: permission.id, lane_id: permission.lane_id });
-        this.kernel.save();
-        return { ok: true, permission, assessment_scheduled: false, code: 'budget_exhausted' };
-      }
-      this.kernel.save();
-      this.scheduleSupervisorWake({
-        reason: eligible ? 'Assess the exact permission request and its consequences. Approve once only if it remains inside the configured low-impact envelope.' : 'A human-only or pre-authorization permission request is waiting. Do not approve it; escalate to the operator.',
-        target: permission.lane_id ?? permission.session_id,
-        requestId: permission.id,
-        allowedActions: eligible ? ['continue_observing', 'investigate', 'approve_permission_once', 'reject_permission', 'request_operator'] : ['continue_observing', 'investigate', 'request_operator'],
-      });
-      return { ok: true, permission, assessment_scheduled: true };
+      return this.kernel.permissionRouting.router_active
+        ? await this.routeRegisteredPermission(permission)
+        : await this.assessRegisteredPermission(permission);
     }
     if (method === 'supervisor.failed') {
       if (params.session_id !== this.kernel.state.sessions.supervisor?.id) throw new Error('supervisor failure does not match the registered supervisor session');

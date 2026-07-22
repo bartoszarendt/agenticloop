@@ -57,6 +57,8 @@ const MANIFEST = {
     'test/remove-lifecycle.test.js',
     'test/role-key-validation.test.js',
     'test/setup-state.test.js',
+    'test/stop-contract.test.js',
+    'test/supervision-permission-routing.test.js',
     'test/task-backend.test.js',
     'test/task-cli.test.js',
     'test/template-contract.test.js',
