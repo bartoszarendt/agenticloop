@@ -51,6 +51,36 @@ describe('getCatalogEntries', () => {
     const entries = getCatalogEntries('unknown-host');
     assert.equal(entries.length, 0);
   });
+
+  it('keeps Codex GPT-5.6 IDs bare and OpenCode GPT-5.6 IDs provider-qualified', () => {
+    const codex = getCatalogEntries('codex').filter(entry => entry.id.includes('gpt-5.6-'));
+    const opencode = getCatalogEntries('opencode').filter(entry => entry.id.includes('gpt-5.6-'));
+
+    assert.deepEqual(codex.map(entry => entry.id).sort(), [
+      'gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra',
+    ]);
+    assert.deepEqual(opencode.map(entry => entry.id).sort(), [
+      'openai/gpt-5.6-luna', 'openai/gpt-5.6-sol', 'openai/gpt-5.6-terra',
+    ]);
+    assert.ok(codex.every(entry => !entry.id.includes('/')));
+    assert.ok(opencode.every(entry => entry.id.startsWith('openai/')));
+  });
+
+  it('offers GPT-5.6 Sol for maintainers and engineers, but not orchestrators', () => {
+    for (const host of ['codex', 'opencode']) {
+      const sol = getCatalogEntries(host).find(entry => entry.id.endsWith('gpt-5.6-sol'));
+      assert.deepEqual(sol.roleSuitability, ['maintainer', 'engineer']);
+    }
+
+    assert.ok(getCatalogEntries('codex', 'engineer').some(entry => entry.id === 'gpt-5.6-sol'));
+    assert.ok(getCatalogEntries('opencode', 'engineer').some(entry => entry.id === 'openai/gpt-5.6-sol'));
+    assert.ok(!getCatalogEntries('codex', 'orchestrator').some(entry => entry.id === 'gpt-5.6-sol'));
+    assert.ok(!getCatalogEntries('opencode', 'orchestrator').some(entry => entry.id === 'openai/gpt-5.6-sol'));
+  });
+
+  it('marks native Claude Code catalog entries as not supporting reasoning effort', () => {
+    assert.ok(getCatalogEntries('claude-code').every(entry => entry.supportsReasoningEffort === false));
+  });
 });
 
 // ---------------------------------------------------------------------------

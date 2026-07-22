@@ -65,10 +65,19 @@ describe('Claude Code plugin packaging', () => {
   it('points plugin commands to an existing canonical file', () => {
     const plugin = readJson('.claude-plugin/plugin.json');
 
-    assert.deepEqual(plugin.commands, ['./commands/start.md']);
+    assert.deepEqual(plugin.commands, ['./commands/start.md', './commands/stop.md']);
     for (const relPath of plugin.commands) {
       assert.ok(existsSync(join(REPO_ROOT, relPath)), `missing plugin command: ${relPath}`);
     }
+  });
+
+  it('routes plugin activation stop before start setup', () => {
+    const start = readFileSync(join(REPO_ROOT, 'commands', 'start.md'), 'utf-8');
+    const stop = readFileSync(join(REPO_ROOT, 'commands', 'stop.md'), 'utf-8');
+
+    assert.ok(start.includes('If and only if it equals `stop` (case-insensitive), immediately follow'));
+    assert.ok(start.indexOf('If and only if it equals `stop`') < start.indexOf('Read `.agenticloop/project.md` first.'));
+    assert.ok(stop.includes('Deactivate Agentic Loop for this conversation'));
   });
 
   it('keeps the restricted OpenCode-only supervisor out of the Claude public agent list', () => {

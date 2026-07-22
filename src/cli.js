@@ -503,6 +503,7 @@ Options (configure models):
   --role <role>         Logical role to configure (orchestrator, maintainer, engineer).
   --model <id>          Host-specific model identifier or alias.
   --reasoning-effort <value>  Reasoning effort for hosts that support it (opencode, codex).
+  --profile recommended   Fill missing fields from the Codex recommended profile without replacing explicit settings.
 
 Options (status):
   --target <dir>        Directory containing agenticloop.json (default: current).
@@ -1515,9 +1516,10 @@ async function cmdEvent(args, commandLabel = 'event-logging', io = createIo()) {
 
 async function cmdConfigureModels(args) {
   const { opts } = parseArgs(args);
-  warnUnknownOptions(opts, ['target', 'adapter', 'role', 'model', 'reasoningEffort'], 'configure models');
+  warnUnknownOptions(opts, ['target', 'adapter', 'role', 'model', 'reasoningEffort', 'profile'], 'configure models');
   const target = opts.target ? resolve(opts.target) : process.cwd();
   let adapter = Array.isArray(opts.adapter) ? opts.adapter[0] : opts.adapter;
+  const profile = Array.isArray(opts.profile) ? opts.profile[0] : opts.profile;
 
   if (!adapter) {
     const detected = detectHost(target);
@@ -1539,6 +1541,28 @@ async function cmdConfigureModels(args) {
   if (hostError) {
     console.error(hostError);
     process.exitCode = 1;
+    return;
+  }
+
+  const mutationFlags = new Set(['--role', '--model', '--reasoning-effort']);
+  if (profile !== undefined) {
+    if (args.some(arg => mutationFlags.has(arg))) {
+      console.error('--profile recommended cannot be combined with --role, --model, or --reasoning-effort.');
+      process.exitCode = 1;
+      return;
+    }
+
+    const { errors, warnings, updated, preserved } = configureModels(target, { adapter, profile });
+    for (const w of warnings) console.warn(`  WARN: ${w}`);
+    for (const e of errors) console.error(`  ERROR: ${e}`);
+    for (const u of updated) console.log(`  added: ${u}`);
+    for (const p of preserved) console.log(`  kept: ${p}`);
+
+    if (errors.length === 0 && updated.length > 0) {
+      console.log();
+      console.log(`Run 'agenticloop generate ${adapter}' to refresh adapter artifacts.`);
+    }
+    process.exitCode = errors.length > 0 ? 1 : 0;
     return;
   }
 

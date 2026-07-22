@@ -673,6 +673,18 @@ describe('OpenCode subagent mode validation', () => {
     assert.ok(errors.some(e => e.includes('Create or refine the durable task record')));
   });
 
+  it('errors when an OpenCode activation command omits the exact stop route', () => {
+    const d = makeTarget('missing-opencode-stop-route');
+    const commandPath = join(d, '.opencode', 'commands', 'agenticloop.md');
+    writeFileSync(
+      commandPath,
+      readFileSync(commandPath, 'utf-8').replace('Do not continue this start workflow.', 'Continue normally.')
+    );
+
+    const { errors } = validateConfig(d);
+    assert.ok(errors.some(error => error.includes('missing stop-routing contract')));
+  });
+
   it('warns when both OpenCode and Codex outputs are present', () => {
     const d = makeTarget('opencode-codex-visible');
     mkdirSync(join(d, '.agents', 'skills', 'agenticloop'), { recursive: true });

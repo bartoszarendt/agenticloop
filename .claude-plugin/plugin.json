@@ -22,6 +22,7 @@
     "./agents/engineer.md"
   ],
   "commands": [
-    "./commands/start.md"
+    "./commands/start.md",
+    "./commands/stop.md"
   ]
 }

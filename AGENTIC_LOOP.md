@@ -45,6 +45,27 @@ not create tasks, delegate roles, answer permissions, recover sessions, or begin
 unattended work until a human authorizes one bounded work unit. The controller
 then binds the named unit to the registered root; it never expands that binding.
 
+## Deactivation Boundary
+
+`stop` is the host-neutral Agentic Loop deactivation term. It deactivates the
+methodology only for the current conversation; it does not exit the host,
+terminate unrelated host terminals, close a task, or clean up worktrees. The
+canonical stop contract is `agenticloop/commands/stop.md`.
+
+On stop, authorize no new Agentic Loop work or role spawning. Inspect active
+delegations, background work, and lanes; safely interrupt Agentic Loop work only
+when the host exposes that control, otherwise report it without waiting
+indefinitely. Preserve material unfinished progress with a concise dated task
+record checkpoint when needed, including the last completed action, current
+artifact or branch/worktree, verification already run, and next concrete action.
+Leave the durable task status unchanged unless an independent blocker exists; a
+voluntary stop is not `blocked` or `needs_context`.
+
+Stop never implies acceptance, closeout, commit, push, merge, branch deletion,
+or worktree cleanup. After a stop summary, later user messages do not resume the
+methodology automatically: the user must invoke the normal explicit activation
+surface again.
+
 ## Core Objects
 
 | Object | Meaning |
@@ -70,6 +91,9 @@ target projects do not need toolkit-root `docs/` files at runtime.
   invokes the host activation surface, or asks to implement, continue, review,
   accept, or close a tracked work unit. Installation, discovery, reading the
   methodology, or mentioning a task ID for discussion does not activate it.
+- **Deactivation**: current-conversation termination of Agentic Loop requested
+  with the exact `stop` argument. It checkpoints unfinished work safely without
+  changing task status solely because the user stopped. Reactivation is explicit.
 - **Standalone engineer**: the generated engineer invoked as an ordinary bounded
   subagent without activating Agentic Loop. Standalone delegation takes its scope
   from the parent request and repository rules, requires no task ID or task

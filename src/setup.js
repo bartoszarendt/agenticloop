@@ -301,6 +301,8 @@ export async function setup(options) {
       const agenticloopJsonPath = join(target, 'agenticloop.json');
       if (!existsSync(agenticloopJsonPath)) {
         write(`\nCreating agenticloop.json for adapter: ${selectedAdapter}`);
+      }
+      if (!existsSync(agenticloopJsonPath) || selectedAdapter === 'codex' || selectedAdapter === 'all') {
         const { ensureAdapterConfig } = await import('./setup-generate.js');
         const cfgError = ensureAdapterConfig(target, selectedAdapter);
         if (cfgError) {

@@ -199,13 +199,12 @@ describe('promptModelSettingsInteractive', () => {
   });
 
   it('skip leaves no mutation for that role', async () => {
-    const { choices } = buildModelChoices('opencode', 'orchestrator');
-    const skipChoice = choices.find(c => c.action === 'skip');
+    const skipIndex = role => buildModelChoices('opencode', role).choices.find(c => c.action === 'skip').index;
 
     const lines = [
-      String(skipChoice.index),  // skip orchestrator
-      String(skipChoice.index),  // skip maintainer
-      String(skipChoice.index),  // skip engineer
+      String(skipIndex('orchestrator')),  // skip orchestrator
+      String(skipIndex('maintainer')),    // skip maintainer
+      String(skipIndex('engineer')),      // skip engineer
     ];
     const { prompts } = makePipedPrompts(lines);
     const { mutations, cancelled } = await promptModelSettingsInteractive(
@@ -245,13 +244,12 @@ describe('promptModelSettingsInteractive', () => {
     };
     const { choices } = buildModelChoices('opencode', 'orchestrator', 'existing/model');
     const keepChoice = choices.find(c => c.action === 'keep');
-    const skipChoices = buildModelChoices('opencode', 'maintainer');
-    const skipIdx = skipChoices.choices.find(c => c.action === 'skip').index;
+    const skipIndex = role => buildModelChoices('opencode', role).choices.find(c => c.action === 'skip').index;
 
     const lines = [
       String(keepChoice.index),    // keep current for orchestrator
-      String(skipIdx),             // skip maintainer
-      String(skipIdx),             // skip engineer
+      String(skipIndex('maintainer')), // skip maintainer
+      String(skipIndex('engineer')),   // skip engineer
     ];
     const { prompts } = makePipedPrompts(lines);
     const { mutations, cancelled } = await promptModelSettingsInteractive(

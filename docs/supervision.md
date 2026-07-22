@@ -132,6 +132,13 @@ orchestrator model turn:
 IPC peers, releases project ownership, clears the active-run selection, and lets
 the external controller process exit.
 
+This controller-only command is distinct from `/agenticloop stop`, which runs
+the canonical current-conversation deactivation contract. When a supervision
+controller is active, that contract uses the authenticated controller stop,
+checkpoints material unfinished work when needed, and returns the full
+deactivation summary. Stopping only the controller does not deactivate Agentic
+Loop for the conversation.
+
 The same controls are available from a separate terminal as
 `npx agenticloop supervision ...`; add `--json` to status output. Factual
 kernel commands (`status`, `pause`, `resume`, `cancel`, `permissions`,

@@ -46,6 +46,10 @@ The adapter does not generate `.github/copilot-instructions.md`.
 Copilot activation is explicit.
 
 - In Copilot CLI, invoke `/agenticloop [task-id or task description]`.
+- In Copilot CLI, invoke `/agenticloop stop` to deactivate Agentic Loop for the
+  current conversation. It checkpoints unfinished work when needed and does not
+  close tasks, commit, push, merge, or clean up worktrees. Resume with the
+  normal `/agenticloop <task or context>` invocation.
 - The generated public skill sets `user-invocable: true` and
   `disable-model-invocation: true`, so Copilot can expose `/agenticloop` while
   ordinary chat does not auto-enter Agentic Loop.

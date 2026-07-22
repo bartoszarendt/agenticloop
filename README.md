@@ -268,11 +268,39 @@ Host-specific activation surfaces differ:
 
 See [docs/host-adapters.md](docs/host-adapters.md) for the full adapter matrix and generated file shapes.
 
+## Stop Agentic Loop
+
+Stopping deactivates Agentic Loop only for the current conversation. It safely
+checkpoints unfinished work when needed; it does not accept or close a task,
+commit, push, merge, or clean up a worktree.
+
+`stop` takes no task ID or other arguments: it must be the exact and only
+activation argument. The task or context forms below are separate resume
+invocations.
+
+| Host | Stop | Resume (separate invocation) |
+|---|---|---|
+| OpenCode | `/agenticloop stop` | `/agenticloop <task or context>` |
+| Claude Code repo-local | `/agenticloop stop` | `/agenticloop <task or context>` |
+| Claude Code plugin | `/agenticloop:stop` | `/agenticloop:start <task or context>` |
+| Codex | `$agenticloop stop` | `$agenticloop <task or context>` |
+| Copilot CLI | `/agenticloop stop` | `/agenticloop <task or context>` |
+| Cursor | `/agenticloop stop` | `/agenticloop <task or context>` |
+
+This is not host exit (`/exit` or `/quit`), Codex's built-in `/stop` terminal
+control, task closeout, or worktree cleanup. See [Host Adapters](docs/host-adapters.md#stop-agentic-loop).
+
 ## Cost-quality routing by role
 
 This is [the team](#the-team) with a budget attached: a cheap coordinator, a capable implementer, and the strongest reviewer you can justify. Different roles need different intelligence. Cheap, fast orchestration is appropriate only for serial single-task coordination with clear scope; parallel scans, lease design, backend selection, and authorization-boundary judgment need strong reasoning. The practical savings usually come from splitting implementation and review: use a capable coding model for engineer work, and reserve the strongest reasoning you can justify for maintainer scope, review, and acceptance decisions.
 
 Adapter-local role settings live under `adapters.<host>.roleSettings.<role>` in `agenticloop.json`. OpenCode and Codex support role-specific reasoning effort. Claude Code supports role-specific model and permission mode. Copilot and Cursor currently support role-specific model selection.
+
+Fresh Codex setup uses an opinionated cost/quality profile in target-owned
+`agenticloop.json`: orchestrator `gpt-5.6-luna` with `xhigh`, maintainer
+`gpt-5.6-sol` with `high`, and engineer `gpt-5.6-terra` with `xhigh`.
+Explicit target settings always win. Existing installations can fill only missing
+Codex fields with `npx agenticloop configure models --adapter codex --profile recommended`.
 
 `agenticloop.json` is created only by `agenticloop setup` or `agenticloop init --adapter <host>`; plain `init` is files-only and never writes it. Claude Code Mode B defaults the maintainer and engineer subagents to `acceptEdits` and writes a broad permissions profile to a gitignored `.claude/settings.local.json`; review [docs/host-adapters.md](docs/host-adapters.md) before sharing settings project-wide.
 

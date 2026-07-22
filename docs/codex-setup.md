@@ -6,6 +6,7 @@ Codex support provides a repo-local Codex TUI workflow rendered from the same
 canonical sources as the other hosts:
 
 - `agenticloop/commands/start.md`
+- `agenticloop/commands/stop.md`
 - `agenticloop/agents/<role>.md`
 - `agenticloop/skills/<name>/SKILL.md`
 - `agenticloop/backends/<name>.md`
@@ -41,6 +42,17 @@ is the faster path. This adapter does not generate a repo-local `/agenticloop`
 slash command for Codex. Codex custom prompts can create personal slash
 commands under `~/.codex/prompts`, but that surface is deprecated,
 user-local, and not suitable as the target-project contract.
+
+To deactivate Agentic Loop in the current Codex conversation, run:
+
+```text
+$agenticloop stop
+```
+
+This safely checkpoints unfinished Agentic Loop work and leaves the task
+resumable. It does not exit Codex, close a task, commit, push, merge, or clean
+up worktrees. Codex's built-in `/stop` has a different meaning: it stops
+background terminals. Resume with `$agenticloop <task-id or task description>`.
 
 ## Public Skill Shape
 
@@ -214,14 +226,17 @@ repo-local layout.
 Codex model identifiers and reasoning effort are read from
 `adapters.codex.roleSettings.<role>` in `agenticloop.json`.
 
+Fresh Codex setup uses this opinionated cost/quality profile in target-owned
+configuration:
+
 ```json
 {
   "adapters": {
     "codex": {
       "roleSettings": {
-        "orchestrator": { "model": "<codex-orchestrator-model>", "reasoningEffort": "high" },
-        "maintainer":   { "model": "<codex-maintainer-model>", "reasoningEffort": "medium" },
-        "engineer":     { "model": "<codex-engineer-model>", "reasoningEffort": "high" }
+        "orchestrator": { "model": "gpt-5.6-luna", "reasoningEffort": "xhigh" },
+        "maintainer":   { "model": "gpt-5.6-sol", "reasoningEffort": "high" },
+        "engineer":     { "model": "gpt-5.6-terra", "reasoningEffort": "xhigh" }
       }
     }
   }
@@ -232,6 +247,16 @@ Use the Codex model id directly, without the old `codex-cli/` prefix. Existing
 `codex-cli/<model>` settings are normalized during generation for compatibility,
 but targets should update their config to the bare model id so generated TOML
 matches Codex's custom-agent schema.
+
+Existing explicit target-owned settings are never silently replaced. To adopt
+only missing fields from this profile, run:
+
+```text
+npx agenticloop configure models --adapter codex --profile recommended
+```
+
+The command reports fields it added and fields it kept, and does not regenerate
+TOML. Run `npx agenticloop generate codex` afterward if required.
 
 Codex supports these explicit reasoning-effort values:
 

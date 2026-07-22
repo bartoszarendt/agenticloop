@@ -921,9 +921,15 @@ describe('B. OpenCode event identity and outcome classification', () => {
 
   it('executes the exact generated parser, capability probe, and usage normalizer contracts', () => {
     assert.deepEqual(parseAgenticLoopArguments('supervisor status'), { kind: 'supervisor', rest: 'status' });
+    assert.deepEqual(parseAgenticLoopArguments('supervisor stop'), { kind: 'supervisor', rest: 'stop' });
     assert.deepEqual(parseAgenticLoopArguments('supervisor-facing work'), { kind: 'ordinary', task: 'supervisor-facing work' });
+    assert.deepEqual(parseAgenticLoopArguments('stop'), { kind: 'ordinary', task: 'stop' });
     assert.deepEqual(parseAgenticLoopArguments('--supervised T-1'), { kind: 'supervised', task: 'T-1' });
     assert.deepEqual(parseAgenticLoopArguments('--supervisedX T-1'), { kind: 'ordinary', task: '--supervisedX T-1' });
+
+    const stopContract = readFileSync(new URL('../commands/stop.md', import.meta.url), 'utf-8');
+    assert.match(stopContract, /supervision controller counts as active Agentic Loop work/);
+    assert.match(stopContract, /Stopping only the controller does not replace/);
 
     const partial = probeOpenCodeBridgeCapabilities({ session: { create() {} }, tui: {} });
     assert.equal(partial.root_registration, true);

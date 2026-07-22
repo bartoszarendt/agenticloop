@@ -38,7 +38,8 @@ import { generateCopilotArtifacts } from './adapters/copilot.js';
 import { generateCursorArtifacts } from './adapters/cursor.js';
 import { generateOpencodeArtifacts } from './adapters/opencode.js';
 import { generateAdapterArtifacts } from './adapter-generation.js';
-import { loadAgenticLoopConfig } from './json.js';
+import { loadAgenticLoopConfig, loadJsonFile } from './json.js';
+import { ensureAdapterRoleSettings, getDefaultRoleSettings } from './adapter-role-defaults.js';
 import {
   CONFIG_RELATIVE_PATH,
   INSTALLED_TOOLKIT_ROOT_DIRECTORY,
@@ -239,11 +240,9 @@ function selectedAdapterHosts(selectedAdapter) {
 }
 
 function renderAdapterEntry(host, indent = '    ') {
-  return [
-    `${indent}"${host}": {`,
-    `${indent}  "roleSettings": {}`,
-    `${indent}}`,
-  ].join('\n');
+  const entry = JSON.stringify({ roleSettings: getDefaultRoleSettings(host) }, null, 2)
+    .replace(/\n/g, `\n${indent}`);
+  return `${indent}"${host}": ${entry}`;
 }
 
 function renderTargetConfigForAdapter(selectedAdapter) {
@@ -259,6 +258,27 @@ function renderTargetConfigForAdapter(selectedAdapter) {
     adapterBlockPattern,
     `  "adapters": {\n${entries}\n  }\n}\n`
   );
+}
+
+function selectedAdapterIncludesCodex(selectedAdapter) {
+  return selectedAdapter === 'codex' || selectedAdapter === 'all';
+}
+
+function ensureSelectedCodexDefaults(target, selectedAdapter, errors) {
+  if (!selectedAdapterIncludesCodex(selectedAdapter)) return;
+
+  const targetConfigPath = join(target, 'agenticloop.json');
+  if (!existsSync(targetConfigPath)) return;
+
+  try {
+    const config = loadJsonFile(targetConfigPath);
+    const { added } = ensureAdapterRoleSettings(config, 'codex');
+    if (added.length > 0) {
+      writeFileSync(targetConfigPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+    }
+  } catch (error) {
+    errors.push(`Cannot apply Codex role defaults: ${error.message}`);
+  }
 }
 
 function pruneUnknownToolkitEntries(srcDir, destDir, removed, relBase) {
@@ -426,6 +446,9 @@ export async function init(options = {}) {
         created.push('agenticloop.json');
       }
     }
+
+    // An explicit Codex selection adopts only missing target-owned fields.
+    ensureSelectedCodexDefaults(target, selectedAdapter, errors);
   }
 
   if (selectedAdapter) {
