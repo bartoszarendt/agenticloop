@@ -64,7 +64,7 @@ function issueBody() {
   return ['## Required Checks', '- [RC-1] `npm test`', '', '## Acceptance Criteria', '- done'].join('\n');
 }
 
-function verificationAttempt() {
+function verificationAttempt({ outcome = 'timed_out', candidate = 'one_off' } = {}) {
   return [
     '#### Attempt 1',
     '',
@@ -72,12 +72,12 @@ function verificationAttempt() {
     '- Command: `npm test`',
     '- Strategy: foreground',
     '- Timeout ms: 180000',
-    '- Outcome: timed_out',
+    `- Outcome: ${outcome}`,
     '- Duration ms: 180000',
     '- Required: true',
     '- Partial evidence: test process exceeded the foreground host ceiling',
     '- Proposed next strategy: background',
-    '- Candidate classification: one_off',
+    ...(candidate ? [`- Candidate classification: ${candidate}`] : []),
     '- Recorded by: engineer',
     '- Recorded at: 2026-07-17T12:00:00Z',
   ].join('\n');
@@ -235,7 +235,7 @@ describe('github-ready composite gate', () => {
     assert.match(missingResult.preflight.errors.join('\n'), /lacks final maintainer triage/);
   });
 
-  it('accepts valid final maintainer triage for a timed-out attempt', () => {
+  it('accepts a resolved exceptional attempt on an earlier artifact without a duplicate final-head attempt', () => {
     const issue = makeIssue({
       comments: [{
         body: verificationComment([
@@ -247,6 +247,24 @@ describe('github-ready composite gate', () => {
     const result = runGitHubReady({ pr: 42, commandRunner: makeRunner({ prData: makePr(), issueData: issue }) });
 
     assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.headRefOid, HEAD);
+  });
+
+  it('rejects an unresolved blocked exceptional attempt even when current PR evidence passes', () => {
+    const issue = makeIssue({
+      comments: [{
+        body: verificationComment([
+          verificationAttempt({ outcome: 'blocked', candidate: '' }),
+        ]),
+      }],
+    });
+    const result = runGitHubReady({
+      pr: 42,
+      commandRunner: makeRunner({ prData: makePr(), issueData: issue }),
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.preflight.errors.join('\n'), /remains blocked without final maintainer triage/);
   });
 
   it('accepts project-fact triage only when the local project fact exists', () => {

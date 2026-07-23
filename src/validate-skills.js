@@ -28,12 +28,11 @@ const TRIGGER_PHRASES = ['use when', 'use whenever', 'use before', 'use the mome
 const MIN_WORDS = 50;
 const MAX_WORDS = 5000;
 // review-and-accept owns the full three-lens review, independent-review enforcement,
-// and the Maintainer Review Fixup procedure/disclosure/verdict-line conventions;
-// keeping that single canonical owner intact pushes it past the previous 4000-word
-// hint. Keep the general guardrail at 5000 and grant only that canonical owner a
-// narrow exception so other skills do not silently inherit extra headroom.
+// the Maintainer Review Fixup procedure, and the required revision-review examples.
+// Keep the general guardrail at 5000 and grant only that canonical owner a narrow
+// exception so other skills do not silently inherit extra headroom.
 const MAX_WORDS_BY_SKILL = new Map([
-  ['review-and-accept', 5200],
+  ['review-and-accept', 6500],
 ]);
 const WORD_RE = /[\p{L}\p{N}]+(?:['\u2019\u002d\u2013\u2014][\p{L}\p{N}]+)*/gu;
 

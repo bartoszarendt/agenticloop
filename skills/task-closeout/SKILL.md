@@ -44,8 +44,9 @@ Review:
 - for GitHub-backed normal implementation tasks, the task issue state and the
   merged PR closing relationship,
 - acceptance criteria and required checks,
-- append-only verification attempts and final maintainer triage for every
-  timed-out attempt,
+- canonical current final-state evidence plus any exceptional append-only
+  verification-attempt history and final maintainer triage for every timed-out
+  attempt,
 - proof pressure fields when present and the evidence that satisfies them,
 - known limitations and follow-up recommendations,
 - documentation changes,
@@ -65,12 +66,26 @@ medium/high context overflow risk or actually hit context pressure. The
 the task record, distinct from the per-review `review.result` field used in
 event-log entries.
 
+If the task's first full Lens 2/Lens 3 assessment occurred only after its review
+budget was reached or exceeded, include that timing as a calibration observation
+when useful. It is not a closeout gate or required field.
+
 Do not copy raw agent exchanges into docs. Use task records, implementation artifacts, command output, and reviewed comments as sources of truth.
 
-Pending or missing final triage for any timed-out verification attempt blocks
-closeout completion. Keep the marker at `follow_up_required`, or retain a
-blocked state, until the maintainer records final triage under
-[[verification-evidence]].
+An exceptional verification episode that does not end in a pass or final
+non-blocker maintainer triage blocks closeout completion. Keep the marker at
+`follow_up_required`, or retain a blocked state, until the maintainer records a
+resolving pass or final non-blocker triage under [[verification-evidence]].
+
+Do not require a routine successful final-head attempt entry when canonical
+current evidence is complete. Preserve old exceptional attempts on their actual
+artifacts, and ensure no active retry, unresolved blocker, or pending timeout
+triage is hidden before closeout.
+
+For every recorded check episode, verify that its latest attempt passed or has
+final non-blocker maintainer triage. A latest failed, blocked, or timed-out
+attempt without final triage, or any latest attempt triaged as a blocker, blocks
+closeout.
 
 ### GitHub acceptance verification
 

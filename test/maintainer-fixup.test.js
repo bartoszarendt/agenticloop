@@ -908,6 +908,18 @@ describe('fixup eligibility verdict line is documented', () => {
   it('review-and-accept states that all eight fields are mandatory', () => {
     assert.match(skill, /[Aa]ll eight fields are mandatory/);
   });
+
+  it('keeps Lens 1 and Structural Risk Sweep findings ineligible for fixup', () => {
+    assert.match(skill, /Lens 1 findings,[\s\S]*stay\s+ineligible/i);
+    assert.match(skill, /Structural\s+Risk Sweep findings are likewise fixup-ineligible while Lens 1 (?:is|remains) unclean/i);
+    assert.match(skill, /This excludes every\s+Structural Risk Sweep finding while Lens 1 is unclean/i);
+  });
+
+  it('does not let record-only full later-lens assessment bypass Lens 1 or existing bounds', () => {
+    assert.match(skill, /A record-only review that completed Lens 2\/Lens 3\s+does not authorize a fixup or acceptance while Lens 1 remains unclean/i);
+    assert.match(skill, /`independent_review_required` is not `true`/);
+    assert.match(skill, /At most one fixup episode is allowed per task/i);
+  });
 });
 
 describe('role-delegation delegation-mode prompt contract', () => {

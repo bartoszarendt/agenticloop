@@ -35,6 +35,31 @@ optional `## Trace`) and event-log `refs`/`data` for structured facts. Do not
 create a second parseable receipt block. Output refs remain a deferred policy;
 do not create or rely on them now.
 
+## Current evidence and exceptional history
+
+Current final-state evidence and verification-attempt history are separate.
+Record every required check's final-state verdict in the canonical current
+implementation summary for the exact artifact under review. For GitHub-backed
+work, the mutable PR body is the canonical current-head `## Evidence` surface;
+for files-backed work, retain the current task-summary location and its existing
+exact-artifact rule.
+
+Verification-attempt history is exceptional execution history, not a second
+mandatory copy of routine successful final-state results. Do not create an
+attempt carrier for a routine first-pass success. Put that success in current
+evidence and, when event logging is enabled, in the `check.run` event. Start or
+append exceptional history only for a failed, timed-out, blocked, retried,
+escalated, strategy-changed, or maintainer-triaged check, or for a later attempt
+that resolves an existing exceptional episode.
+
+For `accepted` or `closed` work, the latest attempt in each recorded exceptional
+episode must either pass or have final maintainer triage. A latest `failed`,
+`blocked`, or `timed_out` attempt without final triage is still active. Triage
+classified as `blocker` remains unresolved and blocks terminal state; another
+classification may close the episode when its required durable reference and
+reason are valid. For GitHub, current evidence with verdict `failed` or `blocked`
+must use a stable `RC-N` id and have the matching marked attempt carrier.
+
 ## Required evidence
 
 | Claim | Required evidence | Not sufficient |
@@ -100,7 +125,7 @@ are the configured task id (for example `P25-17`), `task:<TASK-ID>`,
 `commit:<sha>`, an HTTP(S) URL, or a Markdown path with an optional anchor such
 as `docs/testing.md#fast-unit-tests`.
 
-### Append-only task attempt history
+### Append-only exceptional attempt history
 
 New task records use this exact empty state:
 
@@ -110,8 +135,11 @@ New task records use this exact empty state:
 No verification attempts are currently recorded.
 ```
 
-Replace it with one `### RC-N` subsection per check and append only. Never
-rewrite, reorder, or delete earlier entries. Timestamps are ISO-8601 UTC.
+Create one `### RC-N` subsection only when that check has an exceptional episode,
+then append only. Never rewrite, reorder, or delete earlier entries. Timestamps
+are ISO-8601 UTC. Once an episode exists, append each retry and any resolving
+pass that explains the episode; do not overwrite a timeout or failed attempt with
+the later result.
 
 ```text
 ## Verification Attempts
@@ -153,7 +181,8 @@ cover the bounded window and match the retry.
 ```
 
 The maintainer appends triage. `pending` is allowed only while active; accepted
-or closed work cannot retain missing or pending timeout triage.
+or closed work cannot retain an exceptional episode whose latest attempt is
+failed, blocked, or timed out without final non-blocker triage.
 
 ```text
 #### Triage for attempt 1
@@ -176,6 +205,10 @@ Append and emit the real timeout before retrying. Do not rerun unchanged. Change
 strategy on evidence, make the one bounded escalation above, or return
 `blocked`/`needs_context`. If it times out, no further foreground escalation is
 allowed. A worse duration is a regression signal, not automatic timeout growth.
+When a retry resolves an already recorded exceptional episode, append that result
+to the same history carrier with the artifact on which it actually ran. A later
+unrelated implementation commit does not require a duplicate routine pass in an
+old carrier and never changes its recorded artifact.
 
 ## Event Logging
 
@@ -183,9 +216,11 @@ Event logging is optional and off by default. When `event_logging: enabled`,
 resolve the command and honor the disabled/non-blocking rules in
 [[event-logging]] before writing events.
 
-After each required or cited command, append its attempt, then emit `check.run`
-with task, role, real outcome, `command:<...>`, and known small data. The event
-is an audit copy, never the attempt history.
+After each required or cited command, emit `check.run` with task, role, real
+outcome, `command:<...>`, and known small data. Append an attempt only when the
+run begins or continues an exceptional episode. The event is an audit copy, not
+the canonical final evidence and never a substitute for current implementation
+evidence or append-only history where one exists.
 
 Recommended `check.run` data fields:
 
@@ -275,6 +310,12 @@ against. When a required check has a stable `[RC-N]` id, repeat that id after
 are allowed. For GitHub-backed work, run `npx agenticloop github-preflight --pr
 <number>` before requesting review; it fails when the `## Evidence` section is
 missing, incomplete, or cites a head other than the current `headRefOid`.
+
+Marked issue-comment carriers, when an exceptional episode exists, remain
+append-only history. Keep each attempt bound to its actual PR head, retain final
+timeout triage, and append resolution when it belongs to that episode. Do not
+rewrite an old attempt to the latest PR head or require it to duplicate a routine
+final-head success when the current PR-body evidence is complete.
 
 ### Files final state
 

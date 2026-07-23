@@ -172,6 +172,17 @@ describe('task verification attempts', () => {
     assert.deepEqual(result.errors, []);
   });
 
+  it('requires no attempt carrier for a routine first-pass success', () => {
+    const result = validateVerificationAttempts([
+      '## Evidence',
+      '- Required check: [RC-1] `npm test`',
+      '  Verdict: passed',
+      '  Evidence: 128 passing (exit 0)',
+    ].join('\n'), { status: 'accepted' });
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.attempts.length, 0);
+  });
+
   it('warns while active but rejects accepted work with missing final timeout triage', () => {
     const active = validateVerificationAttempts(history([attempt({ candidate: '' })]), { status: 'in-progress' });
     assert.equal(active.errors.length, 0);
@@ -191,7 +202,7 @@ describe('task verification attempts', () => {
     assert.ok(blocker.errors.some(error => error.includes("'blocker' requires")));
   });
 
-  it('accepts every final triage classification with its required reference', () => {
+  it('accepts every non-blocker final triage classification with its required reference', () => {
     const oneOff = validateVerificationAttempts(history([
       attempt(),
       triage({ classification: 'one_off', reference: 'none', reason: 'the local runner was interrupted once' }),
@@ -205,10 +216,6 @@ describe('task verification attempts', () => {
       attempt(), triage({ classification: 'follow_up', reference: 'T-099' }),
     ]), { status: 'accepted', taskExists: id => id === 'T-099' });
     assert.deepEqual(followUp.errors, []);
-    const blocker = validateVerificationAttempts(history([
-      attempt(), triage({ classification: 'blocker', reference: 'blocker:host-ceiling' }),
-    ]), { status: 'accepted' });
-    assert.deepEqual(blocker.errors, []);
   });
 
   it('reports malformed attempt fields through files lifecycle validation', () => {
@@ -230,6 +237,61 @@ describe('task verification attempts', () => {
       prediction(),
       attempt({ number: 2, timeout: 300000, outcome: 'passed', candidate: 'one_off' }),
     ]));
+    assert.deepEqual(result.errors, []);
+  });
+
+  it('preserves an exceptional retry and resolving pass under their actual artifacts', () => {
+    const result = validateVerificationAttempts(history([
+      attempt({ artifact: 'commit:old123', candidate: 'one_off' }),
+      prediction(),
+      attempt({ number: 2, artifact: 'commit:new456', timeout: 300000, outcome: 'passed', candidate: '' }),
+      triage({ classification: 'one_off', reference: 'none', reason: 'The first host run timed out once.' }),
+    ]), { status: 'accepted' });
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.attempts.length, 2);
+    assert.equal(result.attempts[0].artifact, 'commit:old123');
+    assert.equal(result.attempts[1].artifact, 'commit:new456');
+  });
+
+  it('rejects terminal work whose latest failed or blocked attempt lacks final triage', () => {
+    for (const outcome of ['failed', 'blocked']) {
+      const result = validateVerificationAttempts(
+        history([attempt({ outcome, candidate: '' })]),
+        { status: 'accepted' }
+      );
+      assert.ok(
+        result.errors.some(error => error.includes(`remains ${outcome} without final maintainer triage`)),
+        result.errors.join('\n')
+      );
+    }
+  });
+
+  it('allows final non-blocker triage but rejects blocker triage on the latest exceptional attempt', () => {
+    const closed = validateVerificationAttempts(history([
+      attempt({ outcome: 'failed', candidate: '' }),
+      triage({
+        classification: 'one_off',
+        reference: 'none',
+        reason: 'The failure was an isolated host outage.',
+      }),
+    ]), { status: 'closed' });
+    assert.deepEqual(closed.errors, []);
+
+    const blocked = validateVerificationAttempts(history([
+      attempt({ outcome: 'blocked', candidate: '' }),
+      triage({ classification: 'blocker', reference: 'issue:99' }),
+    ]), { status: 'accepted' });
+    assert.ok(
+      blocked.errors.some(error => error.includes('retains blocker triage')),
+      blocked.errors.join('\n')
+    );
+  });
+
+  it('treats a later passing attempt as resolution of an earlier failed episode', () => {
+    const result = validateVerificationAttempts(history([
+      attempt({ outcome: 'failed', candidate: '' }),
+      attempt({ number: 2, artifact: 'commit:new456', outcome: 'passed', candidate: '' }),
+    ]), { status: 'accepted' });
     assert.deepEqual(result.errors, []);
   });
 
@@ -272,6 +334,14 @@ describe('GitHub verification-attempt comments', () => {
     const body = `<!-- AGENTIC_LOOP_VERIFICATION_ATTEMPTS:RC-1 -->\n\n${history([attempt()])}`;
     const duplicate = validateGitHubVerificationAttempts([{ body }, { body }]);
     assert.ok(duplicate.errors.some(error => error.includes('duplicate')));
+  });
+
+  it('rejects a marked carrier for an unknown required check', () => {
+    const body = `<!-- AGENTIC_LOOP_VERIFICATION_ATTEMPTS:RC-2 -->\n\n${history([attempt()]).replace('### RC-1', '### RC-2')}`;
+    const result = validateGitHubVerificationAttempts([{ body }], {
+      requiredChecks: [{ id: 'RC-1' }],
+    });
+    assert.ok(result.errors.some(error => error.includes("unknown required-check id 'RC-2'")), result.errors.join('\n'));
   });
 
   it('ignores quoted, fenced, indented, and differently-authored markers', () => {
@@ -319,6 +389,13 @@ describe('verification contract ownership', () => {
     assert.match(read('memory/task-record.md'), /## Verification Attempts/);
     assert.match(read('backends/github.md'), /AGENTIC_LOOP_VERIFICATION_ATTEMPTS:RC-1/);
     assert.doesNotMatch(read('memory/work-unit-summary.md'), /^## Verification Attempts$/m);
+  });
+
+  it('documents exceptional attempt history without requiring routine-success duplication', () => {
+    const skill = read('skills/verification-evidence/SKILL.md');
+    assert.match(skill, /Do not create an\s+attempt carrier for a routine first-pass success/i);
+    assert.match(skill, /Append an attempt only when the\s+run begins or continues an exceptional episode/i);
+    assert.match(read('backends/github.md'), /no attempt comment is\s+required for a routine first-pass success/i);
   });
 
   it('declares backend-writing trust metadata for verification evidence', () => {

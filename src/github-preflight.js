@@ -284,14 +284,14 @@ export function compareRequiredChecksToEvidence(requiredChecks, evidenceEntries,
       if (rc.id && normalizeCheckText(entry.check) !== rc.normalized) {
         warnings.push(`Evidence for ${rc.id} matched by stable id but its displayed check text differs from the issue`);
       }
-      matches.push({ check: rc.text, via: 'pr-body', verdict });
+      matches.push({ check: rc.text, id: rc.id ?? null, via: 'pr-body', verdict });
       continue;
     }
 
     const statusMatches = matchStatusChecks(rc, statusChecks);
     if (statusMatches.length === 1) {
       const name = statusCheckName(statusMatches[0]);
-      matches.push({ check: rc.text, via: 'status-check', statusCheck: name });
+      matches.push({ check: rc.text, id: rc.id ?? null, via: 'status-check', statusCheck: name });
       statusSubstitutions.push({ check: rc.text, statusCheck: name });
       continue;
     }
@@ -412,6 +412,23 @@ export function evaluatePreflight({
     errors.push(`Required check '${item.check}' has no acceptable evidence: ${item.reason}`);
   }
   warnings.push(...comparison.warnings);
+
+  const exceptionalCarrierIds = new Set(
+    verificationAttempts.records.map(record => record.checkId)
+  );
+  for (const match of comparison.matches.filter(
+    item => item.via === 'pr-body' && (item.verdict === 'failed' || item.verdict === 'blocked')
+  )) {
+    if (!match.id) {
+      errors.push(
+        `Required check '${match.check}' reports verdict '${match.verdict}' and needs a stable [RC-N] id for exceptional attempt history`
+      );
+    } else if (!exceptionalCarrierIds.has(match.id)) {
+      errors.push(
+        `Required check '${match.check}' reports verdict '${match.verdict}' but has no marked exceptional attempt carrier for ${match.id}`
+      );
+    }
+  }
 
   const ok = errors.length === 0;
 

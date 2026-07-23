@@ -544,6 +544,26 @@ export function validateVerificationAttempts(content, options = {}) {
       errors.push(`Verification triage '${triage.checkId}' attempt ${triage.attemptNumber} is pending and cannot be ${options.status}`);
     }
   }
+  if (terminalStatus) {
+    for (const checkId of parsed.checks) {
+      const attempts = parsed.attempts
+        .filter(candidate => candidate.checkId === checkId)
+        .sort((a, b) => a.order - b.order);
+      const latest = attempts.at(-1);
+      if (!latest || latest.outcome === 'passed') continue;
+
+      const label = `Verification attempt '${latest.checkId}' attempt ${latest.number}`;
+      const triage = triagesByAttempt.get(`${latest.checkId}:${latest.number}`);
+      if (latest.outcome !== 'timed_out' && (!triage || triage.classification === 'pending')) {
+        errors.push(
+          `${label} remains ${latest.outcome} without final maintainer triage and cannot be ${options.status}`
+        );
+      }
+      if (triage?.classification === 'blocker') {
+        errors.push(`${label} retains blocker triage and cannot be ${options.status}`);
+      }
+    }
+  }
   validateForegroundEscalations(parsed, errors);
   return { ...parsed, errors, warnings };
 }

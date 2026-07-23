@@ -77,11 +77,13 @@ refs remain a deferred future policy; do not create or rely on them now.
 
 The target project's `## Verification Operating Facts` section in
 `.agenticloop/project.md` is the maintainer-owned mutable current profile. The
-task file's `## Verification Attempts` section is separate append-only history:
-the engineer appends attempts and bounded foreground predictions, and the
-maintainer appends triage. Use the exact shapes and retry procedure in
-[[verification-evidence]]; do not replace task attempts with summary prose or
-project facts.
+task file's `## Verification Attempts` section is separate append-only,
+exceptional execution history: the engineer appends failed, timed-out, blocked,
+retried, escalated, or otherwise triaged attempts and bounded foreground
+predictions, and the maintainer appends triage. Routine first-pass successes stay
+only in current final-state evidence (and `check.run` when enabled). Use the
+exact shapes and retry procedure in [[verification-evidence]]; do not replace an
+existing task attempt with summary prose or project facts.
 
 Closeout does not write a separate summary file. When a human-identified task
 set or configured group finishes, closeout verifies the inline task summaries
@@ -111,7 +113,7 @@ exchanges.
 | Task ID | File name and frontmatter field |
 | Grouping | Optional frontmatter/body field when the project uses grouping |
 | Implementation artifact | Branch, commit range, patch, or local diff reference |
-| Evidence | Current implementation summary (refreshable) plus append-only history sections |
+| Evidence | Current implementation summary (refreshable) plus exceptional append-only history when an episode exists |
 | Verification profile | Current `## Verification Operating Facts` in `.agenticloop/project.md` |
 | Verification attempts | Append-only `## Verification Attempts` in the task file |
 | Review status | Frontmatter field plus review section |
@@ -287,12 +289,13 @@ summary.
 
 ### Record Verification Attempts
 
-For a required or cited check, replace the canonical empty state in
+For an exceptional required or cited check, replace the canonical empty state in
 `## Verification Attempts` on its first record, then append new entries under
-the matching `### RC-N` heading only. Preserve every earlier attempt,
-foreground-escalation prediction, and maintainer triage verbatim. The exact
-entry shapes, retry limit, and final-triage rules are owned by
-[[verification-evidence]].
+the matching `### RC-N` heading only. Routine first-pass passes remain in the
+current summary and need no attempt entry. Preserve every earlier attempt,
+foreground-escalation prediction, and maintainer triage verbatim, including the
+artifact on which it ran. The exact entry shapes, retry limit, and final-triage
+rules are owned by [[verification-evidence]].
 
 Do not update `.agenticloop/project.md` from an engineer attempt. The maintainer
 may update the profile's current `VF-...` fact after final triage; that mutable
@@ -327,6 +330,12 @@ review fields: `review_status`, `review_mode`, `reviewed_artifact`, and
 `human_review_ref` when applicable. The append-only review sections preserve
 earlier rounds. See [[review-and-accept]] for shared review semantics; files
 validation mechanically requires the two artifact fields to match exactly.
+
+For a record-only Lens 1 correction, do not claim same-artifact reuse merely
+because the implementation diff looks unchanged. If updating the durable task
+record changes `implementation_artifact`, prior conclusions are stale unless the
+existing exact-match rule already proves identity. Do not add a content-hash or
+equivalence mechanism.
 
 ### Maintainer Review Fixup (files projection)
 

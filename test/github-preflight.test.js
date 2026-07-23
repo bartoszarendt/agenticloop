@@ -298,7 +298,7 @@ describe('headMatches', () => {
 });
 
 describe('evaluatePreflight', () => {
-  it('allows an issue with no verification-attempt comments', () => {
+  it('accepts complete current-head PR evidence with no routine verification-attempt comments', () => {
     const result = evaluatePreflight({
       prData: {
         number: 42,
@@ -309,6 +309,7 @@ describe('evaluatePreflight', () => {
       issueData: { number: 7, body: issueBody(['[RC-1] `npm test`']), comments: [] },
     });
     assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(result.headRefOid, HEAD);
   });
 
   it('accepts a valid marked verification attempt and ignores unrelated comments', () => {
@@ -725,17 +726,61 @@ describe('evaluatePreflight', () => {
     assert.equal(result.ok, false);
   });
 
-  it('warns but matches when a verdict is failed', () => {
-    const prData = {
-      number: 42,
-      headRefOid: HEAD,
-      body: prBody({ entries: [{ check: '`npm test`', verdict: 'failed', evidence: '1 failing, exit 1' }] }),
-      statusCheckRollup: [],
-    };
-    const issueData = { number: 7, body: issueBody(['`npm test`']) };
-    const result = evaluatePreflight({ prData, issueData });
-    assert.equal(result.ok, true, JSON.stringify(result.errors));
-    assert.ok(result.warnings.some(w => /failed/.test(w)));
+  it('requires matching exceptional history when current evidence is failed or blocked', () => {
+    for (const verdict of ['failed', 'blocked']) {
+      const prData = {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({
+          entries: [{
+            check: '[RC-1] `npm test`',
+            verdict,
+            evidence: `${verdict} on the current head`,
+          }],
+        }),
+        statusCheckRollup: [],
+      };
+      const issue = { number: 7, body: issueBody(['[RC-1] `npm test`']), comments: [] };
+      const missing = evaluatePreflight({ prData, issueData: issue });
+      assert.equal(missing.ok, false);
+      assert.ok(
+        missing.errors.some(error => error.includes('has no marked exceptional attempt carrier')),
+        missing.errors.join('\n')
+      );
+
+      const recorded = evaluatePreflight({
+        prData,
+        issueData: {
+          ...issue,
+          comments: [{
+            body: verificationComment([
+              verificationAttempt({ outcome: verdict, candidate: '' }),
+            ]),
+          }],
+        },
+      });
+      assert.equal(recorded.ok, true, JSON.stringify(recorded.errors));
+      assert.ok(recorded.warnings.some(warning => warning.includes(`'${verdict}'`)));
+    }
+  });
+
+  it('requires a stable check id for exceptional current evidence', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({
+          entries: [{ check: '`npm test`', verdict: 'failed', evidence: '1 failing, exit 1' }],
+        }),
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.ok, false);
+    assert.ok(
+      result.errors.some(error => error.includes('needs a stable [RC-N] id')),
+      result.errors.join('\n')
+    );
   });
 });
 

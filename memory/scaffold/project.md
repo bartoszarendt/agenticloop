@@ -116,8 +116,9 @@ repeated evidence supports a project fact. The canonical entry shape is owned by
 
 Setup preserves this section and never invents facts. Update a fact to the
 current supported truth rather than retaining competing active facts for the
-same command. Task-specific runs belong in each task record's append-only
-`## Verification Attempts` section.
+same command. Exceptional task-specific runs belong in each task record's
+append-only `## Verification Attempts` section; routine first-pass successes stay
+in current final-state evidence.
 
 ## Project Operating Facts
 

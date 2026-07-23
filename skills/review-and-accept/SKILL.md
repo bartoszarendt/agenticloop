@@ -75,7 +75,9 @@ The verdict line is explanatory and does not replace the durable
 Lens 1 findings, new or changed tests, and independent-review tasks stay
 ineligible, and at most one fixup episode is allowed per task. Older review bodies
 that predate this convention are warned, not hard-failed; newly generated review
-instructions require the line.
+instructions require the line. A record-only review that completed Lens 2/Lens 3
+does not authorize a fixup or acceptance while Lens 1 remains unclean. Structural
+Risk Sweep findings are likewise fixup-ineligible while Lens 1 is unclean.
 
 ### Independent-review enforcement
 
@@ -235,11 +237,14 @@ Count only markers that:
 Read `review_status` from frontmatter as the authoritative current value; review detail is in
 the appended review sections (append-only history).
 
-## Review round and Lens 1: Task Compliance
+## Review depth and Lens 1: Task Compliance
 
-One review round runs Lens 1, Lens 2, and Lens 3 in order in one maintainer turn
-and one combined durable review body. Do not start Lens 2 or Lens 3 until Lens 1
-is clean.
+A **full review** runs Lens 1, Lens 2, and Lens 3 in order in one maintainer
+turn and one combined durable review body. A **revision review** runs Lens 1 plus
+a bounded Structural Risk Sweep only when Lens 1 requires an implementation
+change and a full quality/coherence review would target a moving artifact. These
+are review depths, not new review modes: preserve one `review.started`, one
+`review.result`, and the existing review provenance for every maintainer review.
 
 Check:
 
@@ -329,12 +334,199 @@ Do not accept if:
   exists,
 - a revision corrected a previously published claim, evidence, or artifact reference without a
   dated `## Revision Log` or `## Comments` entry recording the correction,
-- a timed-out verification attempt lacks maintainer triage or retains
-  `Classification: pending`,
+- an exceptional verification episode does not end in a pass or final
+  non-blocker maintainer triage,
 - `review_status` is stale for the current implementation artifact.
 
-If Lens 1 fails, post `needs_revision` without padding the review with optional
-Lens 2 or Lens 3 commentary.
+When Lens 1 finds a problem, enumerate every concrete Lens 1 finding before
+classifying the requested revision in plain Markdown. Do not add a task field or
+event field solely for this classification.
+
+### Decision flow after Lens 1
+
+1. Complete Lens 1 and list all concrete findings.
+2. Classify the requested revision as `implementation-changing` or `record-only`.
+3. Issue one consolidated `needs_revision` packet containing every Lens 1 finding
+   and every applicable later finding. Lens 1 remains unclean and blocks
+   acceptance in both branches.
+
+Use `implementation-changing` when satisfying the packet requires source, test,
+dependency, generated contract artifact, implementation configuration, or any
+other reviewed implementation-artifact change. Do not issue clean or complete
+Lens 2 or Lens 3 verdicts. Run the Structural Risk Sweep when the diff is
+available and reviewable; add every concrete finding to `Required Revisions` with
+normal severity. State under both Lens 2 and Lens 3 that full assessment is
+deferred because implementation revision is pending. If the artifact cannot be
+meaningfully inspected, state why the sweep could not run. The later changed
+artifact requires a fresh full review before acceptance.
+
+Use `record-only` only when all of these hold:
+
+- the task contract is valid and sufficiently concrete;
+- the exact implementation artifact and diff are available and technically
+  reviewable;
+- the correction changes only backend records such as a PR body, issue comment,
+  task metadata, evidence presentation, review linkage, or bookkeeping;
+- no source, test, dependency, generated artifact, or implementation
+  configuration change is requested;
+- missing evidence does not prevent meaningful engineering assessment.
+
+For `record-only`, keep the overall verdict `needs_revision`, but run full Lens
+2 and Lens 3 in the same review and bind both conclusions to the exact
+implementation artifact. Combine Lens 1 corrections and any Lens 2/Lens 3
+findings in one revision packet. Do not accept until Lens 1 is corrected and all
+ordinary acceptance gates pass.
+
+### Structural Risk Sweep
+
+The sweep is bounded early detection, not a partial Lens 2 or Lens 3 verdict. It
+looks only for concrete, artifact-grounded hazards that become costly after a
+revision:
+
+- unnecessary dependencies, files, abstractions, frameworks, or extension points;
+- duplicate mechanisms or second sources of truth;
+- tests that validate a helper, mock, or parallel path rather than the public or
+  production path;
+- out-of-scope work, secrets, database dumps, generated caches, raw outputs,
+  scratch files, or debug instrumentation;
+- patch-in-every-caller workarounds where an authorized root correction is
+  smaller and safer;
+- obvious stage-inappropriate structural churn.
+
+Do not add speculative style advice or theoretical alternatives without material
+benefit. A clean sweep does not imply Lens 2 or Lens 3 is clean. Do not label a
+concrete sweep finding non-blocking solely because it came from the sweep. Add it
+to `Required Revisions` with normal severity. Sweep findings are never eligible
+for a Maintainer Review Fixup while Lens 1 remains unclean.
+
+### Artifact-bound re-review
+
+For the same exact implementation artifact, revalidate Lens 1. A previously
+completed full Lens 2/Lens 3 assessment may be reused only when the new durable
+review body cites the prior review reference, explicitly says the artifact is
+unchanged, and contains or clearly incorporates the final Lens 2/Lens 3
+conclusions. A GitHub PR-body or issue-comment correction may use this path only
+when it leaves the PR head SHA unchanged.
+
+For a new implementation artifact, previous Lens 2/Lens 3 conclusions are stale
+for acceptance. Run a fresh ordered full review against the new exact artifact.
+Reviewers may focus investigation on the delta, but the verdict covers the whole
+artifact. Files-backed work keeps its exact `implementation_artifact ==
+reviewed_artifact` validation: when a task-record edit changes recorded artifact
+identity, do not reuse prior assessment unless the existing backend rules already
+prove exact identity. Do not add a content-hash or equivalence mechanism.
+
+Acceptance always requires final Lens 1, Lens 2, and Lens 3 conclusions for the
+exact accepted artifact. A same-artifact accepting review may incorporate cited
+prior full conclusions; a changed artifact must receive fresh full conclusions.
+
+### Review body examples
+
+Implementation-changing `needs_revision`:
+
+```md
+## Review Status
+Verdict: needs_revision
+Revision classification: implementation-changing
+
+## Lens 1: Task Compliance
+- `app.openapi()` still serves the framework default instead of the required
+  deterministic schema implemented by this task.
+
+## Structural Risk Sweep
+- `src/adapter.js` adds an unused framework wrapper outside task scope.
+
+## Lens 2: Engineering Quality
+Deferred -- full assessment deferred because implementation revision is pending.
+
+## Lens 3: Necessity and Coherence
+Deferred -- full assessment deferred because implementation revision is pending.
+
+## Required Revisions
+1. Wire the deterministic schema through the public `app.openapi()` path and
+   refresh final-state evidence for the resulting artifact.
+2. Remove or justify the out-of-scope wrapper.
+
+Maintainer Review Fixup: ineligible -- Lens 1 not clean
+AGENT_REVIEW_STATUS: needs_revision
+AGENT_REVIEW_MODE: host_subagent
+AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+
+[[agent: maintainer]]
+```
+
+Record-only `needs_revision` with full Lens 2/Lens 3:
+
+```md
+## Review Status
+Verdict: needs_revision
+Revision classification: record-only
+
+## Lens 1: Task Compliance
+- PR body omits the required `Current PR head` marker.
+
+## Lens 2: Engineering Quality
+Verdict: clean for artifact `<full-pr-head-sha>`.
+
+## Lens 3: Necessity and Coherence
+Verdict: clean for artifact `<full-pr-head-sha>`.
+
+## Required Revisions
+1. Restore the current-head marker and complete current PR-body evidence.
+
+Maintainer Review Fixup: ineligible -- Lens 1 not clean
+AGENT_REVIEW_STATUS: needs_revision
+AGENT_REVIEW_MODE: host_subagent
+AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+
+[[agent: maintainer]]
+```
+
+Acceptance after a record-only correction on an unchanged artifact:
+
+```md
+## Review Status
+Verdict: accepted
+
+## Lens 1: Task Compliance
+Current PR-body evidence is complete for `<full-pr-head-sha>`.
+
+## Lens 2: Engineering Quality
+Reused from review `<review-reference>`: clean. Artifact is unchanged:
+`<full-pr-head-sha>`.
+
+## Lens 3: Necessity and Coherence
+Reused from review `<review-reference>`: clean. Artifact is unchanged:
+`<full-pr-head-sha>`.
+
+AGENT_REVIEW_STATUS: accepted
+AGENT_REVIEW_MODE: host_subagent
+AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+
+[[agent: maintainer]]
+```
+
+Acceptance after a changed artifact:
+
+```md
+## Review Status
+Verdict: accepted
+
+## Lens 1: Task Compliance
+Freshly reviewed for `<new-full-pr-head-sha>`.
+
+## Lens 2: Engineering Quality
+Fresh full assessment for `<new-full-pr-head-sha>`: clean.
+
+## Lens 3: Necessity and Coherence
+Fresh full assessment for `<new-full-pr-head-sha>`: clean.
+
+AGENT_REVIEW_STATUS: accepted
+AGENT_REVIEW_MODE: host_subagent
+AGENT_REVIEW_ARTIFACT: <new-full-pr-head-sha>
+
+[[agent: maintainer]]
+```
 
 ## Lens 2: Engineering Quality
 
@@ -356,8 +548,8 @@ Quality findings must be concrete and grounded in files or behavior.
 
 ## Lens 3: Necessity and Coherence
 
-After Lens 1 is clean and Lens 2 has run, assess the accepted implementation,
-not a replacement task contract:
+In a full review, after Lens 2 has run, assess the implementation, not a
+replacement task contract:
 
 - Is every new abstraction, dependency, file, framework, extension point, and
   compatibility layer required by accepted current scope?
@@ -404,10 +596,12 @@ A fixup may begin only when every condition holds. When any is uncertain, fail c
 the finding to the engineer through the normal revision path.
 
 1. Lens 1 task compliance is already clean: the task record is valid; scope and acceptance
-   criteria are satisfied; the implementation artifact and backend linkage are valid; the
-   canonical implementation summary exists; and required implementation evidence exists and is
-   current for the pre-fix artifact. A finding that the summary, evidence, linkage, or acceptance
-   work is missing is not fixup-eligible and stays `needs_revision`.
+    criteria are satisfied; the implementation artifact and backend linkage are valid; the
+    canonical implementation summary exists; and required implementation evidence exists and is
+    current for the pre-fix artifact. A finding that the summary, evidence, linkage, or acceptance
+    work is missing is not fixup-eligible and stays `needs_revision`. This excludes every
+    Structural Risk Sweep finding while Lens 1 is unclean, even when a record-only review has
+    completed Lens 2 and Lens 3.
 2. `independent_review_required` is not `true`.
 3. The task does not belong to a category that should have required independent review: security
    or authorization boundaries; secrets, credentials, or permissions; destructive or irreversible
@@ -617,9 +811,12 @@ Do not hand back for review until all hold:
 - `review_status` in the task file is not stale for the current implementation artifact.
   `review_status` is mutable current state; a stale value for a newer artifact is a blocker.
 
-A re-review request that fails any item is a revision defect. The maintainer returns
-`needs_revision` on the handoff itself and does not re-run full code review until the
-handoff is clean.
+A re-review request that fails any item is a Lens 1 revision defect. The
+maintainer returns `needs_revision` on the handoff itself. Classify it under the
+Lens 1 decision flow: when it is record-only and the exact implementation
+artifact remains available and meaningfully reviewable, complete full Lens 2/Lens
+3 in that same review; otherwise use the implementation-changing revision review
+and its Structural Risk Sweep. Do not accept until the handoff is clean.
 
 ## Disputed items
 
@@ -633,10 +830,11 @@ Distinct from a single sustained-and-disputed item: once `needs_revision` rounds
 
 ## Mandatory triage before accepting
 
-Before posting `accepted`, final-triage every timed-out verification attempt in
-the append-only history under [[verification-evidence]]. The maintainer may
-classify it as `one_off`, `project_fact`, `decision`, `follow_up`, or `blocker`,
-but may not leave it missing or `pending`. A `project_fact` may update the
+Before posting `accepted`, ensure every exceptional verification episode in the
+append-only history under [[verification-evidence]] ends in a pass or final
+non-blocker maintainer triage. The maintainer may classify triage as `one_off`,
+`project_fact`, `decision`, `follow_up`, or `blocker`, but may not leave it
+missing or `pending`, and `blocker` cannot close the episode. A `project_fact` may update the
 current profile; a `decision` is only a policy-level promotion of an existing
 fact through [[decision-capture]].
 

@@ -43,7 +43,7 @@ template, grouping profile) stays in `.agenticloop/project.md`.
 | Implementation artifact | Pull request linked to the issue by a recognized closing keyword |
 | Evidence | PR body for normal implementation evidence; comments and PR review bodies for status markers, later evidence updates, and documented exceptions |
 | Verification profile | Current `## Verification Operating Facts` in `.agenticloop/project.md` |
-| Verification attempts | One marked, append-only task-issue comment per required check id |
+| Verification attempts | Optional marked, append-only task-issue history for an exceptional check episode; at most one carrier per check id when one exists |
 | Review status | Review comment or PR review body marker |
 | Blocked state | Issue label plus status marker comment |
 | Completion summary | Inline in the PR body (per task) |
@@ -164,8 +164,15 @@ new comment.
 ### Record Verification Attempts
 
 Verification attempt history belongs on the **task issue**, not in the PR body
-or an unmarked comment. For each check id, create exactly one agent-authored,
-editable comment with exactly one marker and exactly one matching check section:
+or an unmarked comment, but it is exceptional execution history rather than a
+per-check mirror of PR-body evidence. Do not create a marked comment for a
+routine first-pass success; record that result in the current PR-body evidence
+and, when enabled, the `check.run` event. Create a carrier when a check fails,
+times out, is blocked, needs a retry, escalation, strategy change, maintainer
+triage, or a later resolution of an already recorded episode.
+
+For an exceptional check id, create exactly one agent-authored, editable comment
+with exactly one marker and exactly one matching check section:
 
 ```text
 <!-- AGENTIC_LOOP_VERIFICATION_ATTEMPTS:RC-1 -->
@@ -182,7 +189,10 @@ comment, or change, delete, or reorder an earlier entry. Before appending, fetch
 the existing marked comment for that `RC-N`; ambiguous posting requires fetching
 comments before retrying. The comment is an editable carrier for append-only
 history, so the updater appends and retains prior text rather than replacing the
-history. Keep the final [[github-attribution]] role trailer.
+history. Keep every attempt bound to the PR head on which it actually ran; an old
+resolved carrier is not rewritten to the latest head and does not need a duplicate
+routine final-head pass when the PR body has complete current-head evidence. Keep
+the final [[github-attribution]] role trailer.
 
 The maintainer may update the separate current `VF-...` profile in
 `.agenticloop/project.md` only after final triage. The profile does not replace
@@ -216,8 +226,9 @@ checks that:
   the current `headRefOid` (a stale or missing marker fails);
 - every required check has acceptable PR-body evidence, or an unambiguous
   successful status check that matches it;
-- paginated marked attempts are live, authenticated, attributed, valid, within
-  retry limits, and locally referenced;
+- any existing paginated marked attempts are live, authenticated, attributed,
+  valid, within retry limits, and locally referenced; no attempt comment is
+  required for a routine first-pass success;
   `github-ready` also requires final timeout triage.
 
 This gate does not change `agenticloop validate`. Normal validation performs
@@ -263,6 +274,19 @@ Because any push to the pull request branch changes `headRefOid`, it
 invalidates prior PR-body evidence. Rerun the required checks against the new
 head and update the `## Evidence` section (including the `Current PR head`
 marker) before requesting review again.
+
+Current PR-body evidence must match the final head even when an old resolved
+exceptional attempt carrier names an earlier head. That carrier remains valid
+history if it is structurally valid, attributed, internally consistent, and has
+final timeout triage where required. A missing final-head entry in such history
+is not itself a Lens 1 blocker.
+
+When current PR-body evidence reports `failed` or `blocked`, the required check
+must have a stable `RC-N` id and the task issue must contain its matching marked
+exceptional-history carrier. Preflight rejects the exceptional verdict when that
+carrier is absent. For terminal work, the latest attempt in each carrier must
+pass or have final non-blocker maintainer triage; an active failed, blocked, or
+timed-out attempt and blocker triage prevent readiness.
 
 ### Link Implementation Artifact
 
@@ -385,6 +409,14 @@ request. The audit verifies:
 
 See [[review-and-accept]] for shared semantics.
 
+When a Lens 1 correction is record-only and leaves this SHA exactly unchanged,
+the maintainer may reuse a prior full Lens 2/Lens 3 assessment by citing the
+prior review reference and stating that the artifact is unchanged in the new
+durable review body. The accepting review must contain or clearly incorporate
+those final conclusions. A new PR head invalidates prior Lens 2/Lens 3
+conclusions for acceptance and requires a fresh full review. Existing
+`github-review-audit` markers and `github-ready` behavior remain unchanged.
+
 #### Maintainer Review Fixup (GitHub projection)
 
 [[review-and-accept]] owns the eligibility gate and full procedure. GitHub-specific
@@ -458,7 +490,10 @@ accepting.
 
 For every timed-out attempt in a marked verification-attempt comment, final
 maintainer triage must be present and not `pending`. Missing or pending timeout
-triage blocks acceptance and closure.
+triage blocks acceptance and closure. No active retry, pending timeout triage,
+or unresolved blocker may be hidden in attempt history. The absence of a
+final-head entry from an older resolved carrier is not a blocker when canonical
+current-head PR-body evidence is complete.
 
 Close through the merged pull request. After merge, verify that the task issue
 is closed before emitting `task.closed` or treating the task as durably closed.
@@ -495,8 +530,8 @@ AGENT_CLOSEOUT_STATUS: complete
 AGENT_CLOSEOUT_STATUS: follow_up_required
 ```
 
-Pending or missing final triage for any timed-out verification attempt blocks
-`AGENT_CLOSEOUT_STATUS: complete`.
+An exceptional verification episode that does not end in a pass or final
+non-blocker maintainer triage blocks `AGENT_CLOSEOUT_STATUS: complete`.
 
 ## Bootstrap Labels (GitHub-Only First Run Setup)
 

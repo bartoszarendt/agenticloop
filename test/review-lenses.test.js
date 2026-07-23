@@ -9,13 +9,33 @@ const review = readFileSync(join(REPO_ROOT, 'skills', 'review-and-accept', 'SKIL
 const loop = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf-8').replace(/\s+/g, ' ');
 
 describe('three-lens review contract', () => {
-  it('orders lenses and short-circuits after Lens 1 failure', () => {
+  it('orders full reviews and classifies Lens 1 failures without the obsolete short circuit', () => {
     assert.match(review, /Lens 1: Task Compliance/);
     assert.match(review, /Lens 2: Engineering Quality/);
     assert.match(review, /Lens 3: Necessity and Coherence/);
-    assert.match(review, /Do not start Lens 2 or Lens 3 until Lens 1 is clean/i);
-    assert.match(review, /Lens 1 fails.*needs_revision.*without.*Lens 2 or Lens 3 commentary/i);
+    assert.match(review, /A \*\*full review\*\* runs Lens 1, Lens 2, and Lens 3 in order/i);
+    assert.match(review, /classify the requested revision as `implementation-changing` or `record-only`/i);
+    assert.match(review, /Lens 1 remains unclean and blocks acceptance/i);
+    assert.doesNotMatch(review, /Do not start Lens 2 or Lens 3 until Lens 1 is clean/i);
+    assert.doesNotMatch(review, /without padding the review with optional Lens 2 or Lens 3 commentary/i);
     assert.doesNotMatch(review, /\bpass[- ]1\b|\bpass[- ]2\b/i);
+  });
+
+  it('requires a bounded sweep for implementation-changing Lens 1 failures without implying clean later lenses', () => {
+    assert.match(review, /Run the Structural Risk Sweep when the diff is available and reviewable/i);
+    assert.match(review, /State under both Lens 2 and Lens 3 that full assessment is deferred because implementation revision is pending/i);
+    assert.match(review, /The sweep is bounded early detection, not a partial Lens 2 or Lens 3 verdict/i);
+    assert.match(review, /A clean sweep does not imply Lens 2 or Lens 3 is clean/i);
+    assert.match(review, /Add it to `Required Revisions` with normal severity/i);
+  });
+
+  it('runs full later lenses for record-only failures and preserves artifact-bound reuse rules', () => {
+    assert.match(review, /For `record-only`, keep the overall verdict `needs_revision`, but run full Lens 2 and Lens 3/i);
+    assert.match(review, /For the same exact implementation artifact, revalidate Lens 1/i);
+    assert.match(review, /cites the prior review reference, explicitly says the artifact is unchanged/i);
+    assert.match(review, /For a new implementation artifact, previous Lens 2\/Lens 3 conclusions are stale/i);
+    assert.match(review, /Acceptance always requires final Lens 1, Lens 2, and Lens 3 conclusions for the exact accepted artifact/i);
+    assert.match(loop, /Final acceptance always requires Lens 1, Lens 2, and Lens 3 conclusions for the exact accepted artifact/i);
   });
 
   it('defines concrete Lens 3 blocking and non-blocking boundaries', () => {

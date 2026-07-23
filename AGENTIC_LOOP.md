@@ -727,14 +727,40 @@ uses the canonical `### VF-...` entries and fields in
 current operational strategy; update or replace it when evidence changes rather
 than accumulating competing facts for the same command.
 
-`## Verification Attempts` in a task record is append-only per-check evidence.
-New task records start with its canonical empty state. When a required or cited
-check times out, the engineer appends the attempt; the maintainer later appends
-the final triage. An `accepted` or `closed` task cannot retain a timed-out
-attempt with missing or `pending` triage. The exact attempt, foreground
-prediction, and triage shapes, retry limits, and event procedure are owned by
-[[verification-evidence]]. Backend placement and append-only behavior are owned
-by the matching backend projection.
+Current final-state evidence and verification-attempt history serve different
+purposes. The current implementation summary is the mutable, canonical evidence
+surface for the exact artifact now under review. It lists every required check
+and its final-state verdict. GitHub projects keep that surface in the PR body;
+files-backed projects keep it in the current task summary under their existing
+exact-artifact rules.
+
+`## Verification Attempts` is exceptional, append-only execution history, not a
+second mandatory copy of routine successful final-state results. New task
+records start with its canonical empty state. Create or append an attempt episode
+when a required or cited check fails, times out, is blocked, needs a retry,
+foreground escalation, strategy change, or maintainer triage, or when a later
+attempt resolves an already recorded episode. A routine first-pass success stays
+in current evidence and, when event logging is enabled, its existing `check.run`
+event. An `accepted` or `closed` task cannot retain a timed-out attempt with
+missing or `pending` triage. Attempts retain the exact artifact on which they
+ran; never rewrite old attempts to a newer artifact merely because current
+evidence moved. The exact attempt, foreground prediction, triage shapes, retry
+limits, and event procedure are owned by [[verification-evidence]]. Backend
+placement and append-only behavior are owned by the matching backend projection.
+
+Acceptance requires canonical current evidence for the final implementation
+artifact and valid, attributed, internally consistent exceptional history where
+it exists. A pending timeout triage, active retry, or unresolved blocker cannot
+be hidden. The absence of a final-artifact entry in an old resolved attempt
+carrier is not itself a Lens 1 blocker when current final-state evidence is
+complete.
+
+For `accepted` or `closed` work, the latest recorded attempt in an exceptional
+per-check episode must either pass or carry final maintainer triage. A latest
+`failed`, `blocked`, or `timed_out` attempt without final triage remains active;
+a latest attempt triaged as `blocker` remains unresolved. Both block terminal
+state. GitHub current evidence that reports `failed` or `blocked` must use a
+stable `RC-N` id and have the matching marked exceptional-history carrier.
 
 ## Project Operating Facts
 
@@ -1221,15 +1247,19 @@ after posting, and mention it in evidence only when it affects reproducibility.
 
 ## Review Loop
 
-One review round has three ordered lenses in one review turn, one combined
+A **full review** has three ordered lenses in one review turn, one combined
 durable review body, one `review.started`, and one `review.result`:
 
 1. **Lens 1: Task Compliance**
 2. **Lens 2: Engineering Quality**
 3. **Lens 3: Necessity and Coherence**
 
-Same-turn lenses are not independent review and never satisfy
-`independent_review_required`; existing `review_mode` values remain unchanged.
+A **revision review** is narrower: it runs Lens 1 plus a bounded Structural
+Risk Sweep only when Lens 1 finds that the requested correction changes the
+implementation artifact. It is not a new review mode, agent, event pair, or
+per-lens routing mechanism. Same-turn lenses are not independent review and
+never satisfy `independent_review_required`; existing `review_mode` values
+remain unchanged.
 
 Lens 1: task compliance.
 
@@ -1237,8 +1267,9 @@ Lens 1: task compliance.
 - Out-of-scope work is absent or justified.
 - Acceptance criteria are met.
 - Required checks were run on the final state.
-- Timed-out verification attempts have final maintainer triage; no required
-  check retains `pending` triage.
+- Every exceptional verification episode ends in a pass or final non-blocker
+  maintainer triage; no required check remains failed, blocked, timed out,
+  `pending`, or triaged as a blocker.
 - New behavior has RED-to-GREEN or equivalent evidence.
 - Locked process or architecture decisions did not change accidentally.
 
@@ -1250,8 +1281,8 @@ Lens 2: engineering quality.
 - No secrets, caches, dumps, or raw transcripts were committed.
 - Known limitations and follow-ups are triaged.
 
-Lens 3: necessity and coherence. Run it only after Lens 1 is clean, after Lens
-2 in the same round. Check whether every new abstraction, dependency, file,
+Lens 3: necessity and coherence. In a full review, run it after Lens 2. Check
+whether every new abstraction, dependency, file,
 framework, extension point, or compatibility layer is required by accepted
 scope; existing project/platform/standard-library/installed-dependency capability
 could satisfy it; the root cause is fixed rather than patched in callers; a
@@ -1274,8 +1305,75 @@ the accepted task contract. Ponytail remains opt-in; Lens 3 is always active and
 only additionally checks Ponytail intensity and `ponytail:` limitations when the
 task explicitly activates Ponytail.
 
-If Lens 1 fails, return `needs_revision` without optional Lens 2 or Lens 3
-comments. Otherwise request revision for a concrete failing lens. If review
+When Lens 1 finds any concrete problem, enumerate every concrete Lens 1 finding
+and classify the requested revision in plain Markdown:
+
+- `implementation-changing` when correction requires changing source, tests,
+  dependencies, generated contract artifacts, implementation configuration, or
+  another part of the reviewed implementation artifact;
+- `record-only` only when the task contract is valid and concrete, the exact
+  implementation artifact and diff are technically reviewable, correction is
+  limited to records or evidence presentation, no implementation artifact change
+  is requested, and missing evidence does not prevent meaningful engineering
+  assessment.
+
+Both classifications return `needs_revision`; Lens 1 always gates acceptance.
+For `implementation-changing`, run the Structural Risk Sweep when the artifact
+is available and reviewable, put every concrete sweep finding in the same
+revision packet, and explicitly defer full Lens 2 and Lens 3 because the
+implementation will move. If meaningful inspection is impossible, state why the
+sweep could not run. A sweep is early hazard detection, not a clean or complete
+Lens 2 or Lens 3 verdict.
+
+For `record-only`, complete the full ordered Lens 2 and Lens 3 assessment in the
+same durable review body, bound to the exact implementation artifact. Combine
+their findings with Lens 1 corrections in one revision packet. The task remains
+`needs_revision` until Lens 1 is corrected and all ordinary acceptance gates
+pass.
+
+### Structural Risk Sweep
+
+The bounded Structural Risk Sweep looks only for concrete, artifact-grounded
+hazards that become more expensive after implementation revision:
+
+- unnecessary dependencies, files, abstractions, frameworks, or extension
+  points;
+- duplicate mechanisms or second sources of truth;
+- tests of helpers, mocks, or parallel paths rather than public or production
+  paths;
+- out-of-scope work, secrets, dumps, generated caches, raw outputs, scratch
+  files, or debug instrumentation;
+- patch-in-every-caller workarounds where an authorized root correction is
+  smaller and safer;
+- obvious stage-inappropriate structural churn.
+
+Findings must be concrete and actionable. Do not add speculative style advice
+or theoretical alternatives without material benefit, and do not call a concrete
+sweep finding non-blocking merely because it came from the sweep. Put it in
+`Required Revisions` with normal severity. A clean sweep does not imply Lens 2
+or Lens 3 is clean. While Lens 1 is unclean, no Lens 1 or sweep finding is
+eligible for a Maintainer Review Fixup.
+
+### Artifact-bound re-review
+
+When the implementation artifact is exactly unchanged, revalidate Lens 1.
+Previously completed full Lens 2 and Lens 3 assessments may be reused only when
+the new durable review body cites the prior review reference, says the artifact
+is unchanged, and contains or clearly incorporates the final Lens 2 and Lens 3
+conclusions. This supports record-only PR-body or issue-comment corrections that
+leave the PR head unchanged.
+
+When the implementation artifact changed, prior Lens 2 and Lens 3 conclusions
+are stale for acceptance. Run a fresh full review against the new exact artifact;
+the investigation may focus on the delta, but its verdict covers the complete
+artifact. Files-backed work retains its exact artifact-match rule: a task-record
+edit that changes the recorded implementation artifact makes prior assessments
+stale unless existing backend rules already prove exact identity. Do not invent a
+content-hash or equivalence mechanism.
+
+Final acceptance always requires Lens 1, Lens 2, and Lens 3 conclusions for the
+exact accepted artifact, whether a same-artifact review incorporates a cited
+prior full assessment or a changed artifact receives a fresh one. If review
 feedback is disputed, resolve the dispute with evidence rather than repeated
 assertion.
 
@@ -1293,6 +1391,11 @@ Every review outcome records its mode and the exact artifact revision reviewed.
 Final acceptance requires current, non-stale provenance. Tasks requiring
 independent review cannot be accepted through same-session fallback. See
 [[review-and-accept]] and [[task-record-contract]].
+
+The Review Round Checkpoint is unchanged. If the first full Lens 2 and Lens 3
+assessment occurs only after the review budget has been reached or exceeded, the
+maintainer should mention that timing in review or closeout observations as a
+calibration signal. It is not an additional gate or required schema field.
 
 ## Blocked and Needs Context
 
@@ -1383,7 +1486,8 @@ Closeout checks:
   issue, or any exception/manual correction is recorded
 - acceptance criteria
 - required checks
-- final triage for timed-out verification attempts
+- resolution of every exceptional verification episode by a pass or final
+  non-blocker maintainer triage
 - documentation changes
 - known gaps
 - follow-up task records

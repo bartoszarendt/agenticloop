@@ -47,12 +47,17 @@ const TOLERANCE = 0.05;
 // adapter payload, so role/skill growth stays concise.
 // Baselines were deliberately raised for the host-neutral stop command. Its
 // compact checkpoint/deactivation route is packaged in every activation surface.
+// Baselines were raised for the review-lifecycle revision policy: the canonical
+// review skill now carries the implementation-changing/record-only decision
+// flow, bounded Structural Risk Sweep, artifact-bound reuse rules, and required
+// durable review-body examples. The verification-history separation also updates
+// the packaged role and backend references.
 const ADAPTERS = [
-  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 8487, agentDefinitions: 7888, activationSurface: 661 } },
-  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 47453, agentDefinitions: 8366, activationSurface: 951, referenceLibrary: 38198 } },
-  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 37885, agentDefinitions: 7478, activationSurface: 1466, referenceLibrary: 29065 } },
-  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 45475, agentDefinitions: 8076, activationSurface: 936, referenceLibrary: 36525 } },
-  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 45296, agentDefinitions: 8073, activationSurface: 760, referenceLibrary: 36525 } },
+  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 9066, agentDefinitions: 8379, activationSurface: 661 } },
+  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 51432, agentDefinitions: 8850, activationSurface: 951, referenceLibrary: 41605 } },
+  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 41491, agentDefinitions: 7953, activationSurface: 1466, referenceLibrary: 32004 } },
+  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 49467, agentDefinitions: 8567, activationSurface: 936, referenceLibrary: 39922 } },
+  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 49272, agentDefinitions: 8564, activationSurface: 760, referenceLibrary: 39922 } },
 ];
 
 let tmpDir;

@@ -162,12 +162,13 @@ task-record obligation.
   preflight is a revision defect, not a reviewer task.
 - Address review feedback or dispute it with evidence.
 - May create `status: proposed` decisions from current evidence only for existing
-  `quality`, `architecture`, `process`, or accepted-project scopes. Verification
-  observations stay in `## Verification Attempts`: do not create a
-  `scope: verification` decision directly. Return them to the maintainer for
-  triage and profile promotion. Lane-local observations stay in status/summary
-  and batch findings use parallel routing. Do not create records indiscriminately,
-  change accepted decisions, or write when lane ownership is unclear.
+  `quality`, `architecture`, `process`, or accepted-project scopes. Exceptional
+  verification observations stay in `## Verification Attempts`; routine passes
+  stay in current final-state evidence. Do not create a `scope: verification`
+  decision directly. Return observations to the maintainer for triage and profile
+  promotion. Lane-local observations stay in status/summary and batch findings
+  use parallel routing. Do not create records indiscriminately, change accepted
+  decisions, or write when lane ownership is unclear.
 - Recognize a supported Project Operating Fact candidate (see the Project
   Operating Facts section in `agenticloop/AGENTIC_LOOP.md`) but do not edit the
   shared `## Project Operating Facts` profile in `.agenticloop/project.md` from an

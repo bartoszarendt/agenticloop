@@ -311,6 +311,11 @@ Engineer implementation or revision delegation must include:
 Maintainer review delegation must include:
 
 - review the pull request diff against the task issue,
+- complete Lens 1, classify any Lens 1 revision as `implementation-changing` or
+  `record-only`, and return one consolidated revision packet;
+- run the Structural Risk Sweep and defer full Lens 2/Lens 3 only for a
+  reviewable implementation-changing revision; complete full Lens 2/Lens 3 for a
+  record-only revision on the unchanged exact artifact;
 - verify the PR is linked to the issue by a recognized closing keyword,
 - reject acceptance if no PR exists for a GitHub-backed implementation task,
 - reject acceptance if a normal implementation PR lacks a closing issue
@@ -348,6 +353,11 @@ Engineer implementation or revision delegation must include:
 Maintainer review delegation must include:
 
 - run or inspect `git status --short --untracked-files=all` before reviewing,
+- complete Lens 1, classify any Lens 1 revision as `implementation-changing` or
+  `record-only`, and return one consolidated revision packet;
+- run the Structural Risk Sweep and defer full Lens 2/Lens 3 only for a
+  reviewable implementation-changing revision; complete full Lens 2/Lens 3 for a
+  record-only revision only when the existing exact-artifact rule permits it;
 - reject untracked `.agenticloop/tasks/*.md` unless explicitly excepted,
 - review the recorded artifact or diff against the task file,
 - verify a `## Revision Log` or `## Comments` correction entry exists when prior claims

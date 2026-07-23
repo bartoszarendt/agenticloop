@@ -53,19 +53,21 @@ acting.
 - Set task-record `minimalism` deliberately during task creation. Default is `none`. When the human asked for minimalism at planning time, record the requested level; `ultra` is valid only with explicit human request. Otherwise auto-select only on a concrete over-building signal in the source item: speculative abstractions, scaffolding, new dependencies, or future-proofing beyond the accepted outcome. Use `full` when the signal is strong and `lite` when it is weak. Do not auto-select for tasks dominated by discovery, security or safety risk, migrations, cross-cutting architecture, or required robustness work, where the failure mode is under-building. When auto-selecting, state the trigger in one line in the task record. Selecting minimalism must not weaken accepted criteria.
 - Record optional `Applicable Project Skills` when host-visible target-project skills are relevant to the task's domain.
 - Set `independent_review_required: true` in the task record before implementation for tasks touching security or authorization boundaries, secrets/credentials/permissions, destructive or irreversible data operations, production or release controls, or public API/schema migrations, so acceptance cannot rest on same-session `single_agent_fallback` review. See [[task-record-contract]] and [[review-and-accept]].
-- Review implementation artifacts with the ordered three-lens review from `agenticloop/AGENTIC_LOOP.md`.
-- Record review provenance through [[review-and-accept]]; stale or insufficient provenance cannot accept work.
+- Review implementation artifacts with the ordered three-lens review from `agenticloop/AGENTIC_LOOP.md`. When Lens 1 is unclean, enumerate its concrete findings, classify the packet as `implementation-changing` or `record-only`, and follow the matching review depth in [[review-and-accept]].
+- For an implementation-changing Lens 1 failure, run the bounded Structural Risk Sweep when the artifact is reviewable, state why it could not run when it is not, and mark full Lens 2/Lens 3 assessment deferred rather than clean. For a record-only failure, complete full Lens 2/Lens 3 against the exact artifact while retaining `needs_revision`.
+- Issue one consolidated revision packet containing every Lens 1 finding and every applicable sweep or full-lens finding. Record review provenance and exact-artifact binding through [[review-and-accept]]; stale or insufficient provenance cannot accept work.
 - During an active eligible review, may apply one bounded Maintainer Review Fixup per [[review-and-accept]] for one Lens 2 or Lens 3 finding: evaluate and record the eligibility decision before editing, disclose the fixup and attribute maintainer-authored commits, refresh final-state evidence for the artifact just changed, re-review all three lenses against the result, and accept with `review_mode: single_agent_fallback`. Hand the finding to the engineer whenever eligibility fails or the shared one-fixup bound is exceeded. A successful fixup is part of the current review round, not a `needs_revision` round. Every `needs_revision` review carries one concise `Maintainer Review Fixup: ineligible -- <reason>` verdict line, and an applied fixup records `Maintainer Review Fixup: applied -- <finding>`, per [[review-and-accept]].
 - For GitHub-backed pull request reviews, check existing agent-authored review markers for
   the current PR head before posting a new review.
 - Require fresh verification evidence with command verdicts or relevant excerpts before accepting work.
-- Reject acceptance when a timed-out verification attempt lacks final triage or
-  retains `Classification: pending`.
+- Reject acceptance when an exceptional verification episode does not end in a
+  pass or final non-blocker triage, including missing or `pending` triage and
+  triage classified as `blocker`.
 - When `## Proof Pressure` is present in the task record, verify that the completion oracle was checked, the final proof is present, and the likely misfire was avoided.
 - For files-backed work, reject untracked `.agenticloop/tasks/*.md` task records unless
   explicitly excepted. Reject silent summary rewrites that erase previously published
   corrections without a dated `## Revision Log` or `## Comments` entry.
-- Request revisions when scope, quality, or evidence is insufficient.
+- Request revisions when scope, quality, or evidence is insufficient. If the first full Lens 2/Lens 3 assessment occurs only at or beyond the task's review budget, mention that timing in review or closeout observations as a calibration signal; do not make it a new gate.
 - Triage known limitations as accepted, follow-up, or blocker.
 - Run closeout when the configured grouping says closeout is enabled, or when a human-identified task set finishes. After acceptance and integration, run `npx agenticloop worktree cleanup --dry-run` to preview which `.agenticloop/worktrees/*` lanes are safe to remove, then `npx agenticloop worktree cleanup --yes` to remove them. Cleanup is destructive filesystem cleanup and requires the dry-run/yes confirmation pattern. Keep open PRs, locked worktrees, worktrees with blocking dirty source or shared `.agenticloop` state, external or detached worktrees, and lanes with active task state. Task-specific lane-local `.agenticloop` state is flat only (`logs`, `tasks`, `summaries` (legacy; preserved for migration only -- current projects do not create a summaries directory), and `decisions` files directly under `.agenticloop/<dir>/`); it is preserved before removal and does not by itself block cleanup. Nested or shared `.agenticloop` files are not lane-local and dirty shared state blocks cleanup. Git worktree removal may be forced internally only after preservation succeeds. For `.jsonl` lane-local files, preservation is safe when the root file already contains every lane line (a root superset). If lane-local preservation conflicts with existing root state, use `npx agenticloop worktree resolve-state <task-id|path> --strategy <prefer-root|prefer-worktree|union-jsonl> --yes` (default `--dry-run`) to resolve before cleanup: `prefer-root` copies the root file into the lane, `prefer-worktree` copies the lane file into the root, and `union-jsonl` computes a root-first max-count multiset union and writes the result to both files. resolve-state never removes worktrees or branches. Shared `.agenticloop` files are not preserved. Project-root bare coordinator repos are supported. Branch deletion is not part of v1 cleanup.
 - Honor any delegation lease from the orchestrator, including observable-step
@@ -232,11 +234,18 @@ For review, use:
 ## Lens 1: Task Compliance
 ## Lens 2: Engineering Quality
 ## Lens 3: Necessity and Coherence
+## Structural Risk Sweep   (optional; implementation-changing Lens 1 failure only)
 ## Maintainer Review Fixup   (optional; only when an eligible fixup was applied, per [[review-and-accept]])
 ## Evidence Checked
 ## Required Revisions
 ## Follow-Ups
 ```
+
+For an implementation-changing Lens 1 failure, retain the Lens 2 and Lens 3
+headings but state that full assessment is deferred because implementation
+revision is pending. Do not imply clean verdicts. Every `needs_revision` review
+uses this one body to carry its consolidated revision packet and exact-artifact
+reference.
 
 ## Composition
 

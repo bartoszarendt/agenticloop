@@ -207,13 +207,13 @@ describe('Word count warnings', () => {
     assert.ok(report.skills['above-long-limit'].warnings.some(w => w.includes('Body is long (5001 words)')));
   });
 
-  it('keeps a narrow 5200-word exception for the canonical review contract only', () => {
+  it('keeps a narrow 6500-word exception for the canonical review contract only', () => {
     const d = mkdtempSync(join(tmpDir, 'review-long-body-'));
-    makeSkill(d, 'review-and-accept', null, 'word '.repeat(5100));
-    makeSkill(d, 'ordinary-skill', null, 'word '.repeat(5100));
+    makeSkill(d, 'review-and-accept', null, 'word '.repeat(6400));
+    makeSkill(d, 'ordinary-skill', null, 'word '.repeat(6400));
     const report = validateSkills(d);
     assert.ok(!report.skills['review-and-accept'].warnings.some(w => w.includes('Body is long')));
-    assert.ok(report.skills['ordinary-skill'].warnings.some(w => w.includes('Body is long (5100 words)')));
+    assert.ok(report.skills['ordinary-skill'].warnings.some(w => w.includes('Body is long (6400 words)')));
   });
 });
 

@@ -129,8 +129,9 @@ The maintainer writes checklist items specific to this task. Minimum required it
 - [ ] Task scope verified against source documents listed in "Source Documents Reviewed".
 - [ ] Out-of-scope files: any files touched outside "Expected Files or Areas" are justified.
 - [ ] Required checks run on the final state with concise verdict lines or relevant excerpts.
-- [ ] Every timed-out verification attempt has final maintainer triage; no timed-out
-  attempt remains missing triage or `pending` at acceptance.
+- [ ] Every exceptional verification episode ends in a pass or final non-blocker
+  maintainer triage; none remains failed, blocked, timed out, `pending`, or
+  triaged as a blocker at acceptance.
 - [ ] If `## Proof Pressure` is present, completion oracle, final proof, and likely misfire were checked.
 - [ ] Backend canonical current-summary location updated with implementation summary: task file for files-backed work; PR body for normal GitHub-backed work; documented exception location for approved no-PR/no-edit cases.
 - [ ] Implementation artifact linked to the task record.
@@ -174,11 +175,14 @@ the requirement unless the task explicitly changes the check.
 
 For a new task record, place `## Verification Attempts` immediately after
 `## Required Checks` with the exact empty state defined by
-[[verification-evidence]]. When a required or cited check is run, replace that
-empty state with its per-`RC-N` append-only history. The engineer appends
-attempts and any bounded foreground prediction; the maintainer appends final
-triage. Do not use `## Process Observations`, a decision record, or the current
-project profile as a substitute for the task's attempt history.
+[[verification-evidence]]. Replace that empty state only when a required or
+cited check has an exceptional episode: failure, timeout, blocked run, retry,
+escalation, strategy change, maintainer triage, or a resolving attempt. Routine
+first-pass success remains in current final-state evidence and needs no attempt
+entry. The engineer appends attempts and any bounded foreground prediction; the
+maintainer appends final triage. Do not use `## Process Observations`, a decision
+record, or the current project profile as a substitute for an existing task's
+attempt history.
 
 Relevant `VF-...` facts in `.agenticloop/project.md` may be linked from a
 required check as current operating context. The maintainer owns fact updates;

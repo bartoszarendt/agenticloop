@@ -12,6 +12,12 @@ The shared workflow lives in:
 Backend docs define only the projection from shared task-record operations to a
 storage mechanism.
 
+Each projection keeps one mutable current implementation summary/evidence surface
+for the exact artifact under review. Append-only verification-attempt carriers
+are exceptional execution history: use them for failed, timed-out, blocked,
+retried, escalated, or triaged checks, not as a duplicate record of every routine
+successful final-state check. See [[verification-evidence]] for the shared rule.
+
 ## Backends
 
 | Backend | Status | Projection |
@@ -30,10 +36,11 @@ Every backend must describe how to:
 5. Mark `needs_context`.
 6. Mark `blocked`.
 7. Attach implementation evidence.
-8. Link the implementation artifact.
-9. Record review status.
-10. Close or accept the task.
-11. Run closeout (verify inline summaries and post the status marker) when closeout applies.
+8. Record exceptional verification-attempt history when required.
+9. Link the implementation artifact.
+10. Record review status.
+11. Close or accept the task.
+12. Run closeout (verify inline summaries and post the status marker) when closeout applies.
 
 Skills and roles should use backend-neutral language first. Backend-specific
 commands belong in the backend projection doc.
