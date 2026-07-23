@@ -1,6 +1,6 @@
 ---
 name: review-and-accept
-description: Use when the maintainer reviews an implementation artifact against its task record and decides accepted vs needs_revision, and when the engineer responds to review feedback. Defines GitHub review markers, files-backed `review_status`, two-pass review, evidence rules, disputed-items protocol, and mandatory triage before acceptance.
+description: Use when the maintainer reviews an implementation artifact against its task record and decides accepted vs needs_revision, and when the engineer responds to review feedback. Defines GitHub review markers, files-backed `review_status`, ordered three-lens review, evidence rules, disputed-items protocol, and mandatory triage before acceptance.
 metadata:
   area: review-workflow
   side_effects: writes-backend
@@ -52,7 +52,7 @@ Every `needs_revision` outcome includes exactly one concise verdict line stating
 why a Maintainer Review Fixup was not applied, and every applied fixup states it:
 
 ```text
-Maintainer Review Fixup: ineligible — Pass 1 not clean
+Maintainer Review Fixup: ineligible — Lens 1 not clean
 ```
 
 Use a more specific reason when one applies, for example:
@@ -72,7 +72,7 @@ Maintainer Review Fixup: applied — <short concrete finding>
 
 The verdict line is explanatory and does not replace the durable
 `## Maintainer Review Fixup` subsection. It never loosens the eligibility gate:
-Pass 1 findings, new or changed tests, and independent-review tasks stay
+Lens 1 findings, new or changed tests, and independent-review tasks stay
 ineligible, and at most one fixup episode is allowed per task. Older review bodies
 that predate this convention are warned, not hard-failed; newly generated review
 instructions require the line.
@@ -95,7 +95,8 @@ independence.
 Ordinary tasks without `independent_review_required` may still be accepted
 through an explicitly recorded `single_agent_fallback`. This does not introduce
 blanket provisional acceptance; the two outcomes remain `accepted` and
-`needs_revision`.
+`needs_revision`. Three same-turn lenses are still one review turn and never
+satisfy `independent_review_required`.
 
 Set `independent_review_required: true` (a single boolean gate, not a generic
 task-risk field) before implementation for tasks involving:
@@ -180,8 +181,10 @@ Event logging is optional and off by default. When `event_logging: enabled`,
 resolve the command and honor the disabled/non-blocking rules in
 [[event-logging]] before writing events.
 
-When a real maintainer review pass begins, emit `review.started`. After the durable backend state
-is recorded as accepted or needs_revision, emit `review.result` with the matching outcome.
+When a real maintainer review round begins, emit one `review.started`. After the
+durable backend state is recorded as accepted or needs_revision, emit one
+`review.result` with the matching outcome. Do not add per-lens event fields or
+per-lens model routing.
 
 Keep event summaries short. Do not duplicate the full review body in the event log.
 
@@ -232,9 +235,11 @@ Count only markers that:
 Read `review_status` from frontmatter as the authoritative current value; review detail is in
 the appended review sections (append-only history).
 
-## Pass 1: task compliance
+## Review round and Lens 1: Task Compliance
 
-Do not start code-quality review until pass 1 is clean.
+One review round runs Lens 1, Lens 2, and Lens 3 in order in one maintainer turn
+and one combined durable review body. Do not start Lens 2 or Lens 3 until Lens 1
+is clean.
 
 Check:
 
@@ -286,7 +291,7 @@ Check:
 - Every acceptance criterion is demonstrably met.
 - Required checks were run on the final state with concise verdict lines or relevant excerpts, per [[verification-evidence]].
 - Every timed-out `## Verification Attempts` entry has final maintainer triage;
-  a missing triage or `Classification: pending` is a pass-1 blocker for
+  a missing triage or `Classification: pending` is a Lens 1 blocker for
   `accepted` or `closed` work.
 - New behavior has RED-to-GREEN or equivalent evidence, per [[tdd-implementation]].
 - Bugfixes state the confirmed root cause or explicitly explain why no root cause could be isolated, per [[debugging-before-fixes]].
@@ -328,9 +333,10 @@ Do not accept if:
   `Classification: pending`,
 - `review_status` is stale for the current implementation artifact.
 
-If pass 1 fails, post `needs_revision` without padding the review with optional style feedback.
+If Lens 1 fails, post `needs_revision` without padding the review with optional
+Lens 2 or Lens 3 commentary.
 
-## Pass 2: quality
+## Lens 2: Engineering Quality
 
 Check:
 
@@ -348,10 +354,46 @@ Check:
 
 Quality findings must be concrete and grounded in files or behavior.
 
+## Lens 3: Necessity and Coherence
+
+After Lens 1 is clean and Lens 2 has run, assess the accepted implementation,
+not a replacement task contract:
+
+- Is every new abstraction, dependency, file, framework, extension point, and
+  compatibility layer required by accepted current scope?
+- Could existing project capability, the platform, standard library, or an
+  installed dependency satisfy the need?
+- Does the change fix the root cause instead of patching symptoms in callers?
+- Did a parallel mechanism appear because changing the shared core looked risky?
+- Is the amount of core change appropriate for the confirmed `development_stage`?
+- Are deliberate limitations and concrete upgrade triggers clear where needed?
+- Does simplification preserve correctness, clarity, validation, error handling,
+  security, accessibility, and required evidence?
+
+Block only concrete, artifact-grounded problems: unused or speculative
+abstractions, unnecessary dependencies, hypothetical scaffolding, task-introduced
+dead code, duplicate mechanisms, a patch-in-every-caller workaround when a
+bounded authorized root fix is smaller and safer, compatibility layers with no
+real compatibility contract, stage-inappropriate architectural churn, or
+stage-inappropriate refusal to correct core code. State the file, behavior, or
+demonstrable cost.
+
+Do not block style preference, a theoretically shorter alternative without
+material benefit, removal of an accepted requirement, broad redesign outside the
+task, unrelated historical cleanup, or speculative future optimization. Route an
+observation that changes accepted scope, an accepted decision, or a public
+contract through [[change-request-gate]], a follow-up, or a new task. Lens 3 does
+not relitigate the accepted task contract.
+
+Ponytail remains opt-in through explicit human request or task `minimalism`.
+Lens 3 works when minimalism is omitted or `none`; when Ponytail is active, it
+also verifies the selected intensity and required `ponytail:` limitation markers.
+Development stage does not activate or map to Ponytail.
+
 ## Maintainer Review Fixup
 
 A Maintainer Review Fixup is one bounded edit packet the maintainer applies during an active
-implementation review to correct a single fully understood quality finding, refresh final-state
+implementation review to correct a single fully understood Lens 2 or Lens 3 finding, refresh final-state
 evidence, re-review the resulting artifact, and accept it without an engineer revision handoff.
 This skill solely owns the procedure. It is not general implementation authority; other docs only
 reference or project it, and maintainers otherwise do not edit implementation files.
@@ -361,7 +403,7 @@ reference or project it, and maintainers otherwise do not edit implementation fi
 A fixup may begin only when every condition holds. When any is uncertain, fail closed and route
 the finding to the engineer through the normal revision path.
 
-1. Pass 1 task compliance is already clean: the task record is valid; scope and acceptance
+1. Lens 1 task compliance is already clean: the task record is valid; scope and acceptance
    criteria are satisfied; the implementation artifact and backend linkage are valid; the
    canonical implementation summary exists; and required implementation evidence exists and is
    current for the pre-fix artifact. A finding that the summary, evidence, linkage, or acceptance
@@ -393,8 +435,9 @@ and one coherent edit packet.
 
 ### Procedure
 
-1. Complete Pass 1 successfully.
-2. During Pass 2, identify a concrete quality finding.
+1. Complete Lens 1 successfully.
+2. During Lens 2 or Lens 3, identify one concrete eligible finding. Lens 2 and
+   Lens 3 share this one fixup episode; neither receives a second budget.
 3. Evaluate and record the eligibility decision before editing.
 4. Record the pre-fix artifact: the current PR head SHA for GitHub, or the current
    `implementation_artifact` for files.
@@ -427,7 +470,7 @@ and one coherent edit packet.
     evidence claim, check result, or artifact reference.
 11. For GitHub, run `npx agenticloop github-preflight --pr <number>` only after publishing
     final-head PR evidence. Failure follows the handoff path below.
-12. Complete a fresh Pass 1 and Pass 2 against the post-fix artifact.
+12. Complete a fresh Lens 1, Lens 2, and Lens 3 against the post-fix artifact.
 13. If accepted, append the resulting artifact, files, check verdicts, and outcome to the durable
     record; record `review_status: accepted`, the exact `reviewed_artifact`, and
     `review_mode: single_agent_fallback`. For GitHub, add the accepted markers to the same comment.

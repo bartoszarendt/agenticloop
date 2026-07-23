@@ -219,14 +219,17 @@ condition.
 
 ## Concurrency Guidance
 
-Serial execution is the default safety floor, not a preference. For an authorized
-multi-task unit with 2 or more ready task records, the orchestrator performs a
-Parallel Opportunity Scan before defaulting to serial (see
-`agenticloop/AGENTIC_LOOP.md`). Bounded eligible batches may use up to 3
-implementation lanes by default; choosing serial after eligible candidates exist
-requires a recorded concrete reason. Long-running parallelism carries stronger
-observability requirements (live status/cancellation or strict bounded leases)
-than short bounded join-based batches.
+Serial execution is the default safety floor, not a preference. Every authorized
+multi-task unit receives a current Parallel Opportunity Scan after decomposition
+(see `agenticloop/AGENTIC_LOOP.md`); fewer than two ready tasks still produce a
+truthful not-currently-eligible result and rescan trigger. Bounded eligible
+batches may use at most the target project's configured implementation-lane
+maximum (default five). It is a ceiling, not a target or total-agent budget, and
+does not automatically apply to review, coordination, or integration lanes.
+Choosing serial after eligible candidates exist requires a recorded concrete
+reason. Long-running parallelism carries stronger observability requirements
+(live status/cancellation or strict bounded leases) than short bounded join-based
+batches.
 
 ## Per-Host Role Settings
 

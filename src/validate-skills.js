@@ -11,7 +11,7 @@
  *
  * Warnings (do not fail):
  *   - orphan skill (no inbound [[link]] from another skill)
- *   - body under 50 or over 5000 words
+ *   - body under 50 or over its configured word budget
  *   - description without an explicit trigger phrase
  *
  * [[agent: ...]] attribution markers are not skill links and are ignored.
@@ -26,12 +26,15 @@ const WIKILINK_RE = /\[\[([^\]]+)\]\]/g;
 const REQUIRED_FIELDS = ['name', 'description'];
 const TRIGGER_PHRASES = ['use when', 'use whenever', 'use before', 'use the moment'];
 const MIN_WORDS = 50;
-// review-and-accept owns the full two-pass review, independent-review enforcement,
+const MAX_WORDS = 5000;
+// review-and-accept owns the full three-lens review, independent-review enforcement,
 // and the Maintainer Review Fixup procedure/disclosure/verdict-line conventions;
 // keeping that single canonical owner intact pushes it past the previous 4000-word
-// hint. Raised to 5000 so the progressive-disclosure hint still catches genuine
-// bloat without penalizing the deliberately consolidated review contract.
-const MAX_WORDS = 5000;
+// hint. Keep the general guardrail at 5000 and grant only that canonical owner a
+// narrow exception so other skills do not silently inherit extra headroom.
+const MAX_WORDS_BY_SKILL = new Map([
+  ['review-and-accept', 5200],
+]);
 const WORD_RE = /[\p{L}\p{N}]+(?:['\u2019\u002d\u2013\u2014][\p{L}\p{N}]+)*/gu;
 
 const TRUST_FIELDS = ['side_effects', 'credentials', 'runs_scripts'];
@@ -125,10 +128,11 @@ function validateSkill(skillDir) {
   }
 
   const words = countWords(body);
+  const maxWords = MAX_WORDS_BY_SKILL.get(name) ?? MAX_WORDS;
   notes.push(`word count: ${words}`);
   if (words < MIN_WORDS) {
     warnings.push(`Body is very short (${words} words); may need more content`);
-  } else if (words > MAX_WORDS) {
+  } else if (words > maxWords) {
     warnings.push(`Body is long (${words} words); consider progressive disclosure`);
   }
 

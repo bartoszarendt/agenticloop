@@ -349,8 +349,8 @@ function renderCodexPublicSkill(skillReferenceMap, agentNames, backendEntries) {
 
   body = replaceRequiredTemplateText(
     body,
-    'route `agenticloop/skills/setup-agenticloop/SKILL.md` or confirm the defaults before\nselecting or creating the first task.',
-    `route ${internalReferencePhrase(setupReferencePath)} or confirm the defaults before selecting or\ncreating the first task.`,
+    'confirmed map lacks a valid human-confirmed `development_stage`, route\n`agenticloop/skills/setup-agenticloop/SKILL.md` or confirm the profile before\nselecting or creating the first task.',
+    `confirmed map lacks a valid human-confirmed \`development_stage\`, route ${internalReferencePhrase(setupReferencePath)} or confirm the profile before\nselecting or creating the first task.`,
     'setup routing'
   );
 
@@ -486,7 +486,7 @@ function buildCodexDeveloperInstructions(
 
   if (roleName === 'orchestrator') {
     lines.push(`When maintainer-owned work is needed, explicitly spawn the Codex custom agent \`${maintainerAgent}\`. When engineer-owned work is needed, explicitly spawn the Codex custom agent \`${engineerAgent}\` instead of doing that work inline.`);
-    lines.push('Agentic Loop is serial by default. For authorized multi-task units with 2+ ready task records, load parallel-delegation before choosing serial or parallel execution.');
+    lines.push('Agentic Loop is serial by default. For every authorized multi-task unit, complete a current Parallel Opportunity Scan after decomposition and include its durable result or not-currently-eligible rescan trigger in implementation delegation. Load parallel-delegation before choosing serial or parallel execution.');
     lines.push('Start parallel role work only when the parallel-delegation skill plan, lease, backend ownership, and join condition requirements are satisfied; otherwise record the concrete serial reason.');
     lines.push('Codex delegation contract:');
     lines.push('- Spawn maintainer and engineer custom agents using a single plain-message prompt payload only.');

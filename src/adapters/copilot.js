@@ -277,8 +277,8 @@ function renderCopilotPublicSkill(skillReferenceMap, agentNames, backendEntries)
 
   body = replaceRequiredTemplateText(
     body,
-    'route `agenticloop/skills/setup-agenticloop/SKILL.md` or confirm the defaults before\nselecting or creating the first task.',
-    `route \`${setupReferencePath}\` or confirm the defaults before selecting or creating the first task.`,
+    'confirmed map lacks a valid human-confirmed `development_stage`, route\n`agenticloop/skills/setup-agenticloop/SKILL.md` or confirm the profile before\nselecting or creating the first task.',
+    `confirmed map lacks a valid human-confirmed \`development_stage\`, route \`${setupReferencePath}\` or confirm the profile before\nselecting or creating the first task.`,
     'setup routing'
   );
 
@@ -368,7 +368,7 @@ function buildCopilotAgentBody(
 
   if (roleName === 'orchestrator') {
     lines.push(`When maintainer-owned work is needed, delegate through the Copilot custom agent \`${maintainerAgent}\`. When engineer-owned work is needed, delegate through the Copilot custom agent \`${engineerAgent}\` instead of doing that work inline.`);
-    lines.push('Agentic Loop is serial by default. For authorized multi-task units with 2+ ready task records, load parallel-delegation before choosing serial or parallel execution.');
+    lines.push('Agentic Loop is serial by default. For every authorized multi-task unit, complete a current Parallel Opportunity Scan after decomposition and include its durable result or not-currently-eligible rescan trigger in implementation delegation. Load parallel-delegation before choosing serial or parallel execution.');
     lines.push('Start parallel role work only when the parallel-delegation skill plan, lease, backend ownership, and join condition requirements are satisfied; otherwise record the concrete serial reason.');
     lines.push('Use real Copilot custom-agent, subagent, or handoff delegation where the current surface supports it.');
     lines.push(`If delegation is unavailable after a capability check, record a bounded fallback reason and continue according to \`${roleDelegationReferencePath}\`.`);
@@ -487,7 +487,7 @@ function renderCopilotPromptMarkdown(orchestratorAgent, agentNames) {
     'If `setup_status` is `unconfirmed`, follow `.github/skills/agenticloop/references/skills/setup-agenticloop/reference.md` or confirm the defaults before selecting or creating the first task.',
     `Read \`${PROCESS_DOC_RELATIVE_PATH}\` and the canonical role contracts in \`agenticloop/agents/\` before implementation work starts.`,
     `Keep the active Copilot session as coordinator/orchestrator, route maintainer-owned work through the Copilot custom agent \`${maintainerAgent}\`, route engineer-owned work through the Copilot custom agent \`${engineerAgent}\`, and create or refine the durable task record before implementation.`,
-    'Agentic Loop is serial by default. For authorized multi-task units with 2+ ready task records, load parallel-delegation before choosing serial or parallel execution.',
+    'Agentic Loop is serial by default. For every authorized multi-task unit, complete a current Parallel Opportunity Scan after decomposition and include its durable result or not-currently-eligible rescan trigger in implementation delegation. Load parallel-delegation before choosing serial or parallel execution.',
     'Requested task or context: use the current user request or selected task id as the work unit to coordinate.',
     '',
   ];

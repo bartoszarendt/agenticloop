@@ -110,13 +110,32 @@ describe('detectSetupState', () => {
       setup_status: 'confirmed',
       setup_confirmed_at: '2026-06-22',
       setup_confirmed_by: 'human',
+      development_stage: 'expansion',
       task_backend: 'files',
       grouping_profile: 'flat',
     });
     const state = detectSetupState(d);
 
     assert.equal(state.setupStatus, 'confirmed');
+    assert.equal(state.developmentStage, 'expansion');
+    assert.equal(state.developmentStageConfirmed, true);
     assert.equal(state.setupComplete, true);
+  });
+
+  it('routes a confirmed project missing development stage back through setup', () => {
+    const d = makeTarget();
+    writeProjectMap(d, {
+      setup_status: 'confirmed',
+      setup_confirmed_at: '2026-06-22',
+      setup_confirmed_by: 'human',
+      task_backend: 'files',
+      grouping_profile: 'flat',
+    });
+    const state = detectSetupState(d);
+
+    assert.equal(state.setupComplete, false);
+    assert.equal(state.developmentStageConfirmed, false);
+    assert.ok(nextStepsFromState(state).some(step => step.includes('setup')));
   });
 
   it('detects configured adapters with model settings', () => {

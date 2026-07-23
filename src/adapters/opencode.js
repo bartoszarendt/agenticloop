@@ -58,7 +58,7 @@ function buildPrompt(roleName, roleSourceFile, requiredSkills, roleBody, skillsS
   prompt += `Follow the selected project documents from .agenticloop/project.md and ${PROCESS_DOC_RELATIVE_PATH} as the Agentic Loop methodology.`;
   prompt += ' Path convention: toolkit source (agents/, skills/, backends/) lives under agenticloop/ (no leading dot); target project state (project.md, tasks/, decisions/, improvements/) lives under .agenticloop/ (leading dot). .agenticloop/agents, .agenticloop/skills, and .agenticloop/backends are invalid paths.';
   if (roleName === 'orchestrator') {
-    prompt += ' Agentic Loop is serial by default. For authorized multi-task units with 2+ ready task records, load parallel-delegation before choosing serial or parallel execution.';
+    prompt += ' Agentic Loop is serial by default. For every authorized multi-task unit, complete a current Parallel Opportunity Scan after decomposition and include its durable result or not-currently-eligible rescan trigger in implementation delegation. Load parallel-delegation before choosing serial or parallel execution.';
     prompt += ' Start parallel role work only when the parallel-delegation skill plan, lease, backend ownership, and join condition requirements are satisfied; otherwise record the concrete serial reason.';
     prompt += ' In OpenCode, use the Task tool or explicit @maintainer / @engineer invocation when available; inline fallback is allowed only after the delegation capability check in role-delegation.';
   } else {

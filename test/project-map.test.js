@@ -51,6 +51,8 @@ describe('loadProjectMap', () => {
     assert.equal(result.config.task_backend, 'files');
     assert.equal(result.config.event_logging, 'disabled');
     assert.equal(result.config.event_logging_command, '');
+    assert.equal(result.config.development_stage, 'unconfirmed');
+    assert.equal(result.config.max_parallel_implementation_lanes, 5);
     assert.equal(result.config.task_id_pattern, 'T-<number>');
     assert.equal(result.config.task_id_regex, '^T-\\d{3,}$');
     assert.equal(result.config.grouping_profile, 'flat');
@@ -176,11 +178,100 @@ describe('validateProjectMap', () => {
       'setup_status: confirmed',
       'setup_confirmed_at: "2026-06-16"',
       'setup_confirmed_by: "maintainer"',
+      'development_stage: expansion',
     ], { includeDefaultSetupState: false });
     const result = loadProjectMap(dir);
     const validation = validateProjectMap(result.config, result.raw, dir);
     assert.deepEqual(validation.errors, []);
   });
+
+  for (const stage of ['greenfield', 'expansion', 'stabilization', 'maintenance']) {
+    it(`accepts confirmed development_stage: ${stage}`, () => {
+      const dir = makeProjectMap([
+        'setup_status: confirmed',
+        'setup_confirmed_at: "2026-06-16"',
+        'setup_confirmed_by: "maintainer"',
+        `development_stage: ${stage}`,
+      ], { includeDefaultSetupState: false });
+      const result = loadProjectMap(dir);
+      assert.deepEqual(validateProjectMap(result.config, result.raw, dir).errors, []);
+    });
+  }
+
+  it('rejects missing, unconfirmed, and unknown development stages on confirmed setup', () => {
+    for (const stage of [null, 'unconfirmed', 'prototype']) {
+      const lines = [
+        'setup_status: confirmed',
+        'setup_confirmed_at: "2026-06-16"',
+        'setup_confirmed_by: "maintainer"',
+      ];
+      if (stage) lines.push(`development_stage: ${stage}`);
+      const dir = makeProjectMap(lines, { includeDefaultSetupState: false });
+      const result = loadProjectMap(dir);
+      const validation = validateProjectMap(result.config, result.raw, dir);
+      assert.ok(validation.errors.some(error => error.includes('confirmed setup requires development_stage')));
+    }
+  });
+
+  it('allows an unconfirmed scaffold stage but rejects an unconfirmed real stage', () => {
+    const validDir = makeProjectMap(['development_stage: unconfirmed']);
+    const valid = loadProjectMap(validDir);
+    assert.deepEqual(validateProjectMap(valid.config, valid.raw, validDir).errors, []);
+
+    const invalidDir = makeProjectMap(['development_stage: expansion']);
+    const invalid = loadProjectMap(invalidDir);
+    assert.ok(validateProjectMap(invalid.config, invalid.raw, invalidDir).errors
+      .some(error => error.includes('unconfirmed setup may only use development_stage')));
+  });
+
+  it('validates optional development-stage notes as strings', () => {
+    const dir = makeProjectMap([
+      'development_stage_rationale:',
+      '  reason: not-a-string',
+      'development_stage_revisit_when:',
+      '  reason: not-a-string',
+    ]);
+    const result = loadProjectMap(dir);
+    const validation = validateProjectMap(result.config, result.raw, dir);
+    assert.ok(validation.errors.some(error => error.includes('development_stage_rationale must be a string')));
+    assert.ok(validation.errors.some(error => error.includes('development_stage_revisit_when must be a string')));
+  });
+
+  it('round-trips optional development-stage rationale and revisit strings', () => {
+    const dir = makeProjectMap([
+      'setup_status: confirmed',
+      'setup_confirmed_at: "2026-06-16"',
+      'setup_confirmed_by: "maintainer"',
+      'development_stage: maintenance',
+      'development_stage_rationale: "Public compatibility is documented."',
+      'development_stage_revisit_when: "A supported major migration is approved."',
+    ], { includeDefaultSetupState: false });
+    const result = loadProjectMap(dir);
+
+    assert.equal(result.config.development_stage_rationale, 'Public compatibility is documented.');
+    assert.equal(result.config.development_stage_revisit_when, 'A supported major migration is approved.');
+    assert.deepEqual(validateProjectMap(result.config, result.raw, dir).errors, []);
+  });
+
+  it('accepts the default and a configured positive implementation-lane maximum', () => {
+    const defaultDir = makeProjectMap([]);
+    const defaults = loadProjectMap(defaultDir);
+    assert.equal(defaults.config.max_parallel_implementation_lanes, 5);
+
+    const configuredDir = makeProjectMap(['max_parallel_implementation_lanes: 7']);
+    const configured = loadProjectMap(configuredDir);
+    assert.equal(configured.config.max_parallel_implementation_lanes, 7);
+    assert.deepEqual(validateProjectMap(configured.config, configured.raw, configuredDir).errors, []);
+  });
+
+  for (const value of ['0', '-1', '1.5', '"five"']) {
+    it(`rejects invalid implementation-lane maximum ${value}`, () => {
+      const dir = makeProjectMap([`max_parallel_implementation_lanes: ${value}`]);
+      const result = loadProjectMap(dir);
+      assert.ok(validateProjectMap(result.config, result.raw, dir).errors
+        .some(error => error.includes('max_parallel_implementation_lanes must be a positive integer')));
+    });
+  }
 
   it('fails when confirmed setup date is malformed', () => {
     const dir = makeProjectMap([

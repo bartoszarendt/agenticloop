@@ -490,7 +490,7 @@ function buildClaudeCoordinationLines(maintainerAgent, engineerAgent) {
     'Coordination in Claude Code:',
     `- Route task authoring, review, acceptance, and closeout through the Claude Code subagent \`${maintainerAgent}\`.`,
     `- Route scoped implementation and revision work through the Claude Code subagent \`${engineerAgent}\`.`,
-    '- Agentic Loop is serial by default. For authorized multi-task units with 2+ ready task records, load parallel-delegation before choosing serial or parallel execution.',
+    '- Agentic Loop is serial by default. For every authorized multi-task unit, complete a current Parallel Opportunity Scan after decomposition and include its durable result or not-currently-eligible rescan trigger in implementation delegation. Load parallel-delegation before choosing serial or parallel execution.',
     '- Start parallel role work only when the parallel-delegation skill plan, lease, backend ownership, and join condition requirements are satisfied; otherwise record the concrete serial reason.',
     '- Long-running or parallel role work must include a lease; parallel-specific liveness details live in parallel-delegation.',
     '- Keep this session as the coordinator and do not directly edit implementation files unless the human explicitly asks.',

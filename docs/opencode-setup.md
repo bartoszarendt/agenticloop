@@ -74,7 +74,7 @@ reports the stale roles and suggests `agenticloop update --adapter opencode`.
 
 The command body tells OpenCode to:
 
-1. read `.agenticloop/project.md` first and stop for setup confirmation when `setup_status` is `unconfirmed`
+1. read `.agenticloop/project.md` first and stop for setup/profile confirmation when setup is unconfirmed or `development_stage` is not human-confirmed
 2. follow `agenticloop/AGENTIC_LOOP.md` plus the canonical role contracts in `agenticloop/agents/`
 3. create or refine the durable task record before implementation
 4. route task-record, review, acceptance, and closeout work through maintainer
@@ -153,13 +153,13 @@ subagent invocation and explicit `@maintainer` or `@engineer` invocation.
 5. The orchestrator waits for the subagent output before routing the next step.
 
 OpenCode may support multiple visible subagent sessions, but Agentic Loop is
-serial by default. For an authorized multi-task unit with 2 or more ready task
-records, the orchestrator performs a Parallel Opportunity Scan before defaulting
-to serial; bounded eligible batches may use up to 3 implementation lanes, and
-choosing serial after eligible candidates exist requires a recorded concrete
-reason. The orchestrator should not start parallel maintainer or
+serial by default. Every authorized multi-task unit receives a current Parallel
+Opportunity Scan after decomposition; fewer than two ready tasks still record a
+truthful not-currently-eligible result and rescan trigger. Bounded eligible
+implementation batches use at most the configured project maximum (default five),
+which is a ceiling rather than a total-agent budget. The orchestrator should not start parallel maintainer or
 engineer sessions unless it has recorded the concurrency plan, collision
-criteria, lease, and join condition required by `agenticloop/AGENTIC_LOOP.md`
+criteria, decision scope, shared-design resolution, lease, and join condition required by `agenticloop/AGENTIC_LOOP.md`
 and `agenticloop/skills/role-delegation/SKILL.md`. Long-running parallelism has
 stronger observability requirements than short bounded join-based batches.
 Parallel write lanes that

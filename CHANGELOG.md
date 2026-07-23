@@ -3,6 +3,17 @@
 ## 0.1.0 (Unreleased)
 
 ### Added
+- Phase 25 Set 2 project posture, parallel-scan, and review controls. Confirmed
+  project maps now require one human-confirmed `development_stage` (`greenfield`,
+  `expansion`, `stabilization`, or `maintenance`); existing confirmed projects
+  without it must run interactive `agenticloop setup` once before validation and
+  normal task work can continue. Setup proposals remain advisory, conflicts
+  require an explicit human selection, and later transitions require another
+  confirmation. `max_parallel_implementation_lanes` now defaults to `5` as an
+  implementation-only ceiling, every multi-task work unit receives a current
+  Parallel Opportunity Scan, and maintainer review uses three ordered lenses
+  with one shared Lens 2/Lens 3 fixup budget. Existing projects without the lane
+  field inherit `5`; the safety scan remains the binding constraint.
 - Hardened Maintainer Review Fixup follow-up enforcement: GitHub review audit now
   checks same-task replacement PR history before allowing a fixup, files/event
   cross-checks ignore malformed fixup flags, and non-maintainer review results are
@@ -84,10 +95,10 @@
   warnings. Every `needs_revision` review now carries one concise
   `Maintainer Review Fixup: ineligible -- <reason>` (or `applied -- <finding>`)
   verdict line.
-- Maintainer Review Fixup: a bounded Pass 2 review exception that lets a
+- Maintainer Review Fixup: a bounded Lens 2 review exception that lets a
   reviewing maintainer correct one fully understood quality finding on the
   artifact under review, refresh final-state evidence, re-review, and accept
-  without an engineer revision handoff. Pass 1 must already be clean; the bound is
+  without an engineer revision handoff. Lens 1 must already be clean; the bound is
   one fully understood finding and one coherent edit packet, not a line count. A
   successful fixup stays inside the current review round and does not consume a
   `needs_revision` round; any expanded, uncertain, or failed finding routes back

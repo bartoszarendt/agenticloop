@@ -21,6 +21,7 @@ import {
   inferGroupingProfile,
   inferTaskIdConventions,
   detectBackendEvidence,
+  inferDevelopmentStage,
   detectProjectState,
 } from '../src/project-detection.js';
 
@@ -270,6 +271,90 @@ describe('detectBackendEvidence', () => {
 });
 
 // ---------------------------------------------------------------------------
+// inferDevelopmentStage
+// ---------------------------------------------------------------------------
+
+describe('inferDevelopmentStage', () => {
+  it('proposes a stage from explicit bounded document evidence', () => {
+    const d = mkdtempSync(join(tmpDir, 'stage-expansion-'));
+    writeFileSync(join(d, 'README.md'), '# Project\n\nThis project is focused on capability growth.\n');
+
+    const result = inferDevelopmentStage(d, { documents: { overview: 'README.md' } });
+
+    assert.equal(result.developmentStage, 'expansion');
+    assert.equal(result.confidence, 'medium');
+    assert.ok(result.evidence.some(entry => entry.includes('README.md')));
+  });
+
+  it('surfaces conflicting bounded evidence for human selection', () => {
+    const d = mkdtempSync(join(tmpDir, 'stage-conflict-'));
+    writeFileSync(join(d, 'README.md'), '# Project\n\nThe product is in maintenance mode.\n');
+    writeFileSync(join(d, 'ROADMAP.md'), '# Roadmap\n\nThis is a greenfield project.\n');
+
+    const result = inferDevelopmentStage(d, {
+      documents: { overview: 'README.md', plan: 'ROADMAP.md' },
+    });
+
+    assert.equal(result.developmentStage, null);
+    assert.equal(result.confidence, 'low');
+    assert.equal(result.requiresSelection, true);
+    assert.deepEqual(result.conflicts.sort(), ['greenfield', 'maintenance']);
+    assert.match(result.rationale, /Conflicting bounded evidence/);
+  });
+
+  it('does not treat an explicitly absent compatibility policy as maintenance evidence', () => {
+    const d = mkdtempSync(join(tmpDir, 'stage-negated-maintenance-'));
+    writeFileSync(join(d, 'README.md'), '# Project\n\nThis project has no compatibility policy.\n');
+
+    const result = inferDevelopmentStage(d, { documents: { overview: 'README.md' } });
+
+    assert.equal(result.developmentStage, 'greenfield');
+    assert.equal(result.confidence, 'low');
+    assert.ok(result.evidence.some(entry => entry.includes('explicit absence')));
+  });
+
+  it('keeps a later positive maintenance statement after historical negation', () => {
+    const d = mkdtempSync(join(tmpDir, 'stage-negated-then-maintenance-'));
+    writeFileSync(join(d, 'README.md'), [
+      '# Project',
+      '',
+      'The project previously had no compatibility policy.',
+      'It is now in maintenance mode.',
+      '',
+    ].join('\n'));
+
+    const result = inferDevelopmentStage(d, { documents: { overview: 'README.md' } });
+
+    assert.equal(result.developmentStage, 'maintenance');
+    assert.equal(result.confidence, 'medium');
+  });
+
+  it('does not infer greenfield from an initial-release entry in project history', () => {
+    const d = mkdtempSync(join(tmpDir, 'stage-historical-release-'));
+    writeFileSync(join(d, 'CHANGELOG.md'), '# Changelog\n\n## 1.0.0\n\nInitial release.\n');
+
+    const result = inferDevelopmentStage(d, { documents: { history: 'CHANGELOG.md' } });
+
+    assert.equal(result.developmentStage, 'greenfield');
+    assert.equal(result.confidence, 'low');
+    assert.deepEqual(result.conflicts, []);
+    assert.deepEqual(result.evidence, ['no bounded lifecycle evidence found']);
+  });
+
+  it('retains an existing human-confirmed stage instead of proposing a transition', () => {
+    const d = mkdtempSync(join(tmpDir, 'stage-confirmed-'));
+    const result = inferDevelopmentStage(d,
+      { setup_status: 'confirmed', development_stage: 'maintenance' },
+      { development_stage: 'maintenance' }
+    );
+
+    assert.equal(result.developmentStage, 'maintenance');
+    assert.equal(result.confidence, 'confirmed');
+    assert.equal(result.requiresSelection, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // detectProjectState
 // ---------------------------------------------------------------------------
 
@@ -298,12 +383,14 @@ describe('detectProjectState', () => {
       setup_status: 'confirmed',
       setup_confirmed_at: '2026-06-22',
       setup_confirmed_by: 'human',
+      development_stage: 'expansion',
       task_backend: 'files',
       grouping_profile: 'flat',
     });
 
     const result = detectProjectState(d);
     assert.equal(result.isConfirmed, true);
+    assert.equal(result.hasConfirmedDevelopmentStage, true);
   });
 
   it('detects project name from package.json', () => {

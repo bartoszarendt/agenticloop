@@ -345,7 +345,7 @@ projection:
 - Rerun every required final-state check and refresh the current implementation
   summary and `## Evidence` for the new artifact.
 - Set `reviewed_artifact` to exactly the resulting `implementation_artifact` and
-  accept only after a fresh two-pass review, with `review_mode: single_agent_fallback`.
+  accept only after a fresh three-lens review round, with `review_mode: single_agent_fallback`.
 - Use `closed` only after integration, as before.
 
 ### Close Or Accept Task

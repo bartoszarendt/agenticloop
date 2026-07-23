@@ -1,4 +1,6 @@
 ---
+development_stage: unconfirmed
+max_parallel_implementation_lanes: 5
 task_backend: files
 event_logging: disabled
 event_logging_command: ""
@@ -14,6 +16,11 @@ setup_confirmed_by: ""
 # Optional planning convention. Set when the engineer model's active context
 # window is known and differs from the task-sizing examples in Agentic Loop.
 # engineer_context_window_tokens: 256000
+#
+# Optional human-confirmed stage notes. Setup may propose a stage from bounded
+# evidence, but only a human confirmation may set or change it.
+# development_stage_rationale: "Active capability growth without a frozen compatibility policy."
+# development_stage_revisit_when: "A stable support policy or release freeze is introduced."
 #
 # Optional backend confirmation notes. Use these when setup reviews bounded
 # backend evidence or when files is kept as an explicit exception.
@@ -60,13 +67,38 @@ conventions for this project. Do not put model IDs here; those belong in
 - On the first non-trivial run, confirm the default conventions here or write
   the typed selections this target project needs.
 - `setup_status: confirmed` means document selections, task naming, grouping,
-  and backend choice have been reviewed for this target project, including any
-  explicit files-backend exception.
+  backend choice, and one development stage have been reviewed for this target
+  project, including any explicit files-backend exception.
 - `setup_confirmed_at` should be a `YYYY-MM-DD` date.
 - `setup_confirmed_by` should name the human or role that confirmed the setup.
 - `backend_confirmed_at`, `backend_confirmed_by`, and
   `backend_evidence_summary` are optional durable notes for bounded backend
   evidence review.
+
+## Development Stage
+
+`development_stage` is a human-controlled behavioral prior. A new scaffold is
+`unconfirmed`; confirmed setup must select exactly one of:
+
+- `greenfield`: establish a coherent internal foundation without speculative
+  compatibility layers or extension points.
+- `expansion`: grow capability through shared core mechanisms rather than
+  parallel implementations.
+- `stabilization`: converge behavior, retire temporary paths, and avoid
+  gratuitous churn.
+- `maintenance`: preserve documented compatibility and operational safety with
+  bounded root-cause fixes and explicit migrations.
+
+Setup can propose a value from bounded evidence, but it never writes a real
+stage until a human confirms it. Later changes use the interactive project
+profile update in `agenticloop setup`; agents may propose a transition but must
+not apply one. `development_stage_rationale` and
+`development_stage_revisit_when` are optional strings for the human's context.
+
+`max_parallel_implementation_lanes` defaults to `5` and is a ceiling only for
+otherwise eligible parallel implementation lanes. It is not a total live-agent
+budget and does not apply automatically to review, coordination, or integration
+lanes.
 
 ## Verification Operating Facts
 

@@ -15,7 +15,193 @@ import {
   findFirstExistingDocumentCandidate,
   getDefaultDocumentSelections,
 } from './document-roles.js';
-import { loadProjectMap, PROJECT_MAP_DEFAULTS } from './project-map.js';
+import {
+  DEVELOPMENT_STAGES,
+  hasConfirmedDevelopmentStage,
+  loadProjectMap,
+  PROJECT_MAP_DEFAULTS,
+} from './project-map.js';
+
+const STAGE_DOCUMENT_ROLES = ['rules', 'overview', 'plan', 'spec', 'design', 'context', 'history'];
+const STAGE_DOCUMENT_LIMIT = 8;
+
+const EXPLICIT_STAGE_PATTERNS = [
+  {
+    stage: 'maintenance',
+    pattern: /\b(?:maintenance(?:\s+mode)?|long[- ]term support|LTS|support policy|compatibility policy)\b/i,
+    description: 'explicit maintenance, support, or compatibility statement',
+  },
+  {
+    stage: 'stabilization',
+    pattern: /\b(?:stabili[sz]ation|feature freeze|release freeze|release candidate|hardening|convergence)\b/i,
+    description: 'explicit stabilization or release-freeze statement',
+  },
+  {
+    stage: 'greenfield',
+    pattern: /\b(?:greenfield|from scratch|initial (?:implementation|scaffold)|newly created project)\b/i,
+    description: 'explicit greenfield or initial-foundation statement',
+  },
+  {
+    stage: 'expansion',
+    pattern: /\b(?:capability growth|feature development|expanding (?:the )?(?:product|platform|capability)|roadmap(?:\s+for)?\s+new)\b/i,
+    description: 'explicit capability-growth statement',
+  },
+];
+
+const NEGATED_MAINTENANCE_COMMITMENT = /\b(?:no|without|lacks?|not yet(?:\s+(?:have|having|established))?|does not have|do not have|did not have|has no|have no|had no)\b[^.\n]{0,80}\b(?:maintenance(?:\s+mode)?|long[- ]term support|LTS|support policy|compatibility policy)\b/i;
+
+function signalIsNegated(signal, content) {
+  return signal.stage === 'maintenance' && NEGATED_MAINTENANCE_COMMITMENT.test(content);
+}
+
+function classifyStageSignal(signal, content) {
+  let negated = false;
+  const segments = content.split(/(?:\r?\n)+|(?<=[.!?])\s+/);
+  for (const segment of segments) {
+    if (!signal.pattern.test(segment)) continue;
+    if (signalIsNegated(signal, segment)) {
+      negated = true;
+    } else {
+      return { matched: true, negated };
+    }
+  }
+  return { matched: false, negated };
+}
+
+function existingStageProposal(existingConfig, existingRaw) {
+  const stage = existingRaw?.development_stage;
+  if (hasConfirmedDevelopmentStage({
+    setup_status: existingConfig?.setup_status,
+    development_stage: stage,
+  })) {
+    return {
+      developmentStage: stage.trim(),
+      confidence: 'confirmed',
+      evidence: ['existing human-confirmed project map'],
+      conflicts: [],
+      requiresSelection: false,
+      rationale: 'Existing human-confirmed development stage is retained until a human changes it.',
+    };
+  }
+  return null;
+}
+
+function selectedStageDocuments(target, existingConfig) {
+  const registry = getDocumentRoleRegistry();
+  const paths = [];
+  for (const role of STAGE_DOCUMENT_ROLES) {
+    const selected = existingConfig?.documents?.[role];
+    const detected = findFirstExistingDocumentCandidate(target, registry[role]);
+    const path = typeof selected === 'string' && selected.trim()
+      ? selected.trim()
+      : detected;
+    if (path && !paths.includes(path)) paths.push(path);
+    if (paths.length >= STAGE_DOCUMENT_LIMIT) break;
+  }
+  return paths;
+}
+
+function gitTagEvidence(target) {
+  try {
+    const tags = execSync('git tag --list "v[0-9]*"', {
+      cwd: target,
+      encoding: 'utf-8',
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim().split(/\r?\n/).filter(Boolean);
+    return tags.length > 0 ? `stable release tags detected (${tags.slice(-3).join(', ')})` : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Infer a development-stage proposal from a bounded document set. The result
+ * is advisory only: setup presents it to a human and never persists it first.
+ *
+ * @param {string} target
+ * @param {object} [existingConfig]
+ * @param {object} [existingRaw]
+ * @returns {{ developmentStage: string|null, confidence: string, evidence: string[], conflicts: string[], requiresSelection: boolean, rationale: string }}
+ */
+export function inferDevelopmentStage(target, existingConfig = null, existingRaw = null) {
+  const confirmed = existingStageProposal(existingConfig, existingRaw);
+  if (confirmed) return confirmed;
+
+  const evidence = [];
+  const proposedStages = [];
+  const documentText = [];
+
+  for (const relPath of selectedStageDocuments(target, existingConfig)) {
+    try {
+      const content = readFileSync(join(target, relPath), 'utf-8').slice(0, 12000);
+      documentText.push({ relPath, content });
+      for (const signal of EXPLICIT_STAGE_PATTERNS) {
+        const classification = classifyStageSignal(signal, content);
+        if (classification.matched) {
+          proposedStages.push(signal.stage);
+          evidence.push(`${relPath}: ${signal.description}`);
+        } else if (classification.negated) {
+          evidence.push(`${relPath}: explicit absence of a maintenance or compatibility commitment`);
+        }
+      }
+    } catch { /* Ignore unreadable bounded candidates. */ }
+  }
+
+  const combinedText = documentText.map(entry => entry.content).join('\n');
+  const hasCompatibilityCommitment = /\b(?:public API|backward compatibility|compatibility commitment|migration guide|supported format)\b/i.test(combinedText);
+  const tagEvidence = gitTagEvidence(target);
+  if (tagEvidence) evidence.push(tagEvidence);
+  if (hasCompatibilityCommitment) evidence.push('documented public API, format, migration, or compatibility commitment');
+  if (tagEvidence && hasCompatibilityCommitment) proposedStages.push('maintenance');
+
+  const hasRoadmapActivity = documentText.some(({ relPath, content }) =>
+    /(?:roadmap|changelog|release)/i.test(relPath) && /\b(?:planned|next|upcoming|milestone)\b/i.test(content)
+  );
+  if (hasRoadmapActivity) {
+    evidence.push('bounded roadmap, release, or changelog activity');
+    proposedStages.push('expansion');
+  }
+
+  try {
+    const packageJson = JSON.parse(readFileSync(join(target, 'package.json'), 'utf-8'));
+    if (typeof packageJson.version === 'string') {
+      evidence.push(`supporting metadata: package version ${packageJson.version} (not decisive alone)`);
+    }
+  } catch { /* Package metadata is optional supporting evidence. */ }
+
+  const distinctStages = [...new Set(proposedStages)];
+  if (distinctStages.length > 1) {
+    return {
+      developmentStage: null,
+      confidence: 'low',
+      evidence,
+      conflicts: distinctStages,
+      requiresSelection: true,
+      rationale: `Conflicting bounded evidence suggests ${distinctStages.join(', ')}; human selection is required.`,
+    };
+  }
+
+  if (distinctStages.length === 1) {
+    return {
+      developmentStage: distinctStages[0],
+      confidence: proposedStages.length > 1 ? 'high' : 'medium',
+      evidence,
+      conflicts: [],
+      requiresSelection: false,
+      rationale: `Proposal is based on bounded lifecycle evidence for ${distinctStages[0]}.`,
+    };
+  }
+
+  return {
+    developmentStage: 'greenfield',
+    confidence: 'low',
+    evidence: evidence.length > 0 ? evidence : ['no bounded lifecycle evidence found'],
+    conflicts: [],
+    requiresSelection: false,
+    rationale: 'No decisive lifecycle evidence was found; this is a low-confidence starting proposal for human review.',
+  };
+}
 
 /**
  * Detect candidate documents by role for a target directory.
@@ -270,6 +456,7 @@ export function detectProjectState(target) {
   const grouping = inferGroupingProfile(target, existingConfig);
   const taskId = inferTaskIdConventions(target, existingConfig);
   const backend = detectBackendEvidence(target, existingConfig);
+  const stage = inferDevelopmentStage(target, existingConfig, existingRaw);
 
   const proposedOverrides = {};
   for (const [roleName, info] of Object.entries(documents)) {
@@ -286,11 +473,16 @@ export function detectProjectState(target) {
     grouping,
     taskId,
     backend,
+    stage,
     proposedDocumentOverrides: proposedOverrides,
     existingConfig,
     existingRaw,
     hasExistingProjectMap: projectMapResult !== null,
     isConfirmed: existingConfig?.setup_status === 'confirmed',
+    hasConfirmedDevelopmentStage: hasConfirmedDevelopmentStage({
+      setup_status: existingConfig?.setup_status,
+      development_stage: existingRaw?.development_stage,
+    }),
   };
 }
 

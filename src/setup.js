@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { init } from './init.js';
 import { detectSetupState, formatSetupChecklist, nextStepsFromState } from './setup-state.js';
 import { detectProjectState } from './project-detection.js';
+import { DEVELOPMENT_STAGES, PROJECT_MAP_DEFAULTS } from './project-map.js';
 import { loadAgenticLoopConfig } from './json.js';
 import {
   configureModels,
@@ -73,7 +74,7 @@ function buildProjectMapFrontmatter(values) {
       for (const [docRole, docPath] of Object.entries(val)) {
         lines.push(`  ${docRole}: "${docPath}"`);
       }
-    } else if (typeof val === 'boolean') {
+    } else if (typeof val === 'boolean' || typeof val === 'number') {
       lines.push(`${key}: ${val}`);
     } else {
       lines.push(`${key}: "${val}"`);
@@ -81,6 +82,72 @@ function buildProjectMapFrontmatter(values) {
   }
   lines.push('---');
   return lines.join('\n');
+}
+
+function printProjectMapValues(write, heading, values) {
+  write(`\n${heading}`);
+  for (const [key, val] of Object.entries(values)) {
+    if (key === 'documents' && typeof val === 'object') {
+      for (const [docRole, docPath] of Object.entries(val)) {
+        write(`  documents.${docRole}: "${docPath}"`);
+      }
+    } else {
+      write(`  ${key}: ${JSON.stringify(val)}`);
+    }
+  }
+}
+
+function isValidStage(value) {
+  return DEVELOPMENT_STAGES.includes(value);
+}
+
+function isPositiveInteger(value) {
+  return Number.isInteger(value) && value > 0;
+}
+
+async function promptValidStage(prompts, write, currentValue) {
+  let rejectedInput = false;
+  while (true) {
+    const current = isValidStage(currentValue) ? currentValue : 'selection required';
+    const answer = (await prompts.ask(`  Development stage (${current}): `)).trim();
+    if (!answer) {
+      if (!rejectedInput && isValidStage(currentValue)) {
+        return { value: currentValue, cancelled: false };
+      }
+      write('  Development-stage selection cancelled; enter one exact allowed value to continue.');
+      return { value: currentValue, cancelled: true };
+    }
+    if (isValidStage(answer)) {
+      return { value: answer, cancelled: false };
+    }
+    rejectedInput = true;
+    write(`  Invalid development stage. Choose one of: ${DEVELOPMENT_STAGES.join(', ')}.`);
+  }
+}
+
+async function promptPositiveInteger(prompts, write, label, currentValue) {
+  let rejectedInput = false;
+  while (true) {
+    const answer = (await prompts.ask(`  ${label} (${currentValue}): `)).trim();
+    if (!answer) {
+      if (!rejectedInput) return { value: currentValue, cancelled: false };
+      write(`  ${label} update cancelled; enter a positive integer to continue.`);
+      return { value: currentValue, cancelled: true };
+    }
+    const value = Number(answer);
+    if (isPositiveInteger(value)) return { value, cancelled: false };
+    rejectedInput = true;
+    write(`  ${label} must be a positive integer.`);
+  }
+}
+
+function writeProjectMapUpdate(target, values, write) {
+  const projectMapPath = join(target, PROJECT_MAP_RELATIVE_PATH);
+  if (!existsSync(projectMapPath)) return false;
+  const existing = readFileSync(projectMapPath, 'utf-8');
+  writeFileSync(projectMapPath, mergeProjectMapFrontmatter(existing, values), 'utf-8');
+  write('\nUpdated .agenticloop/project.md with human-confirmed profile values.');
+  return true;
 }
 
 function mergeProjectMapFrontmatter(existingContent, newValues) {
@@ -163,100 +230,181 @@ export async function setup(options) {
     for (const ev of detection.backend.evidence) write(`  - ${ev}`);
   }
 
-  if (detection.isConfirmed) {
+  const stageProposalLabel = detection.stage.developmentStage ?? 'selection required';
+  write(`\nDevelopment stage proposal: ${stageProposalLabel} (confidence: ${detection.stage.confidence})`);
+  write(`  ${detection.stage.rationale}`);
+  for (const evidence of detection.stage.evidence) write(`  - ${evidence}`);
+  if (detection.stage.conflicts.length > 0) {
+    write(`  Conflicting stage evidence: ${detection.stage.conflicts.join(', ')}`);
+  }
+
+  if (detection.isConfirmed && detection.hasConfirmedDevelopmentStage) {
     write('\nProject map is already confirmed.');
+  } else if (detection.isConfirmed) {
+    write('\nProject map is confirmed but needs a human-confirmed development-stage migration.');
   }
 
   // Step 4: Confirm project map
   const prompts = createPrompts(input, output);
 
   try {
-    if (!detection.isConfirmed && !nonInteractive) {
-      const confirmValues = {
-        setup_status: 'confirmed',
-        setup_confirmed_at: new Date().toISOString().slice(0, 10),
-        setup_confirmed_by: 'human',
-        task_backend: detection.backend.backend,
-        task_id_pattern: detection.taskId.taskIdPattern,
-        task_id_regex: detection.taskId.taskIdRegex,
-        grouping_profile: detection.grouping.groupingProfile,
-      };
+    if ((!detection.isConfirmed || !detection.hasConfirmedDevelopmentStage) && !nonInteractive) {
+      const stageMigration = detection.isConfirmed;
+      const confirmValues = stageMigration
+        ? {
+            development_stage: detection.stage.developmentStage,
+            max_parallel_implementation_lanes: detection.existingConfig?.max_parallel_implementation_lanes ??
+              PROJECT_MAP_DEFAULTS.max_parallel_implementation_lanes,
+          }
+        : {
+            setup_status: 'confirmed',
+            setup_confirmed_at: new Date().toISOString().slice(0, 10),
+            setup_confirmed_by: 'human',
+            development_stage: detection.stage.developmentStage,
+            max_parallel_implementation_lanes: PROJECT_MAP_DEFAULTS.max_parallel_implementation_lanes,
+            task_backend: detection.backend.backend,
+            task_id_pattern: detection.taskId.taskIdPattern,
+            task_id_regex: detection.taskId.taskIdRegex,
+            grouping_profile: detection.grouping.groupingProfile,
+          };
 
-      if (Object.keys(detection.proposedDocumentOverrides).length > 0) {
+      if (!stageMigration && Object.keys(detection.proposedDocumentOverrides).length > 0) {
         confirmValues.documents = detection.proposedDocumentOverrides;
       }
 
-      write('\nProposed project map values:');
-      for (const [key, val] of Object.entries(confirmValues)) {
-        if (key === 'documents' && typeof val === 'object') {
-          for (const [docRole, docPath] of Object.entries(val)) {
-            write(`  documents.${docRole}: "${docPath}"`);
-          }
-        } else {
-          write(`  ${key}: ${JSON.stringify(val)}`);
-        }
+      printProjectMapValues(write, stageMigration
+        ? 'Proposed development-stage migration values:'
+        : 'Proposed project map values:', confirmValues);
+
+      const answer = (await prompts.ask(stageMigration
+        ? '\nConfirm development-stage migration? (yes/no/edit): '
+        : '\nConfirm project setup? (yes/no/edit): ')).trim().toLowerCase();
+
+      const mustSelectStage = detection.stage.requiresSelection === true ||
+        !isValidStage(confirmValues.development_stage);
+      const editRequested = answer === 'edit' || answer === 'e' ||
+        ((answer === 'yes' || answer === 'y') && mustSelectStage);
+
+      if ((answer === 'yes' || answer === 'y') && mustSelectStage) {
+        write('  Conflicting lifecycle evidence requires an explicit development-stage selection.');
       }
 
-      const answer = (await prompts.ask('\nConfirm project setup? (yes/no/edit): ')).trim().toLowerCase();
-
       if (answer === 'yes' || answer === 'y') {
-        // confirmed - fall through to write
-      } else if (answer === 'edit' || answer === 'e') {
-        const backendAnswer = (await prompts.ask(`  Task backend (${detection.backend.backend}): `)).trim();
-        if (backendAnswer && (backendAnswer === 'files' || backendAnswer === 'github')) {
-          confirmValues.task_backend = backendAnswer;
-        }
+        // Confirmed unless conflict handling below requires an explicit selection.
+      } else if (!editRequested) {
+        write('Setup cancelled. Explicit "yes" or "edit" required to confirm the human-controlled project profile.');
+        return { errors, warnings };
+      }
 
-        const groupingAnswer = (await prompts.ask(`  Grouping profile (${detection.grouping.groupingProfile}): `)).trim();
-        if (groupingAnswer && ['flat', 'phase', 'milestone', 'epic', 'custom'].includes(groupingAnswer)) {
-          confirmValues.grouping_profile = groupingAnswer;
+      if (editRequested) {
+        const stageResult = await promptValidStage(prompts, write, confirmValues.development_stage);
+        if (stageResult.cancelled) {
+          write('Setup cancelled. Edited project map values were not written.');
+          return { errors, warnings };
         }
+        confirmValues.development_stage = stageResult.value;
 
-        const taskIdAnswer = (await prompts.ask(`  Task ID pattern (${detection.taskId.taskIdPattern}): `)).trim();
-        if (taskIdAnswer) {
-          confirmValues.task_id_pattern = taskIdAnswer;
+        const lanesResult = await promptPositiveInteger(
+          prompts,
+          write,
+          'Maximum implementation lanes',
+          confirmValues.max_parallel_implementation_lanes
+        );
+        if (lanesResult.cancelled) {
+          write('Setup cancelled. Edited project map values were not written.');
+          return { errors, warnings };
         }
+        confirmValues.max_parallel_implementation_lanes = lanesResult.value;
 
-        const taskIdRegexAnswer = (await prompts.ask(`  Task ID regex (${detection.taskId.taskIdRegex}): `)).trim();
-        if (taskIdRegexAnswer) {
-          confirmValues.task_id_regex = taskIdRegexAnswer;
-        }
+        const currentRationale = detection.existingRaw?.development_stage_rationale ?? '';
+        const rationaleAnswer = (await prompts.ask(`  Development stage rationale (${currentRationale || 'optional'}): `)).trim();
+        if (rationaleAnswer) confirmValues.development_stage_rationale = rationaleAnswer;
 
-        write('\nEdited project map values:');
-        for (const [key, val] of Object.entries(confirmValues)) {
-          if (key === 'documents' && typeof val === 'object') {
-            for (const [docRole, docPath] of Object.entries(val)) {
-              write(`  documents.${docRole}: "${docPath}"`);
-            }
-          } else {
-            write(`  ${key}: ${JSON.stringify(val)}`);
+        const currentRevisit = detection.existingRaw?.development_stage_revisit_when ?? '';
+        const revisitAnswer = (await prompts.ask(`  Development stage revisit trigger (${currentRevisit || 'optional'}): `)).trim();
+        if (revisitAnswer) confirmValues.development_stage_revisit_when = revisitAnswer;
+
+        if (!stageMigration) {
+          const backendAnswer = (await prompts.ask(`  Task backend (${detection.backend.backend}): `)).trim();
+          if (backendAnswer && (backendAnswer === 'files' || backendAnswer === 'github')) {
+            confirmValues.task_backend = backendAnswer;
+          }
+
+          const groupingAnswer = (await prompts.ask(`  Grouping profile (${detection.grouping.groupingProfile}): `)).trim();
+          if (groupingAnswer && ['flat', 'phase', 'milestone', 'epic', 'custom'].includes(groupingAnswer)) {
+            confirmValues.grouping_profile = groupingAnswer;
+          }
+
+          const taskIdAnswer = (await prompts.ask(`  Task ID pattern (${detection.taskId.taskIdPattern}): `)).trim();
+          if (taskIdAnswer) {
+            confirmValues.task_id_pattern = taskIdAnswer;
+          }
+
+          const taskIdRegexAnswer = (await prompts.ask(`  Task ID regex (${detection.taskId.taskIdRegex}): `)).trim();
+          if (taskIdRegexAnswer) {
+            confirmValues.task_id_regex = taskIdRegexAnswer;
           }
         }
 
-        const applyEdited = (await prompts.ask('\nApply edited project setup? (yes/no): ')).trim().toLowerCase();
+        printProjectMapValues(write, '\nEdited project map values:', confirmValues);
+
+        const applyEdited = (await prompts.ask(stageMigration
+          ? '\nApply edited development-stage migration? (yes/no): '
+          : '\nApply edited project setup? (yes/no): ')).trim().toLowerCase();
         if (applyEdited !== 'yes' && applyEdited !== 'y') {
           write('Setup cancelled. Edited project map values were not written.');
           return { errors, warnings };
         }
-      } else {
-        write('Setup cancelled. Explicit "yes" or "edit" required to confirm project setup.');
-        return { errors, warnings };
       }
 
-      // Write project map
-      const projectMapPath = join(target, PROJECT_MAP_RELATIVE_PATH);
-      if (existsSync(projectMapPath)) {
-        const existing = readFileSync(projectMapPath, 'utf-8');
-        const updated = mergeProjectMapFrontmatter(existing, confirmValues);
-        writeFileSync(projectMapPath, updated, 'utf-8');
-        write('\nUpdated .agenticloop/project.md with confirmed values.');
-      } else {
+      if (!writeProjectMapUpdate(target, confirmValues, write)) {
         errors.push('.agenticloop/project.md not found. Run agenticloop init first.');
         return { errors, warnings };
       }
-    } else if (!detection.isConfirmed && nonInteractive) {
-      write('\nProject map is unconfirmed. Interactive confirmation required.');
-      errors.push('Non-interactive setup cannot proceed with unconfirmed project map. Run agenticloop setup interactively first, or manually confirm .agenticloop/project.md.');
+    } else if (detection.isConfirmed && !nonInteractive) {
+      const updateProfile = (await prompts.ask(
+        '\nUpdate project profile (including development stage)? (yes/no): '
+      )).trim().toLowerCase();
+      if (updateProfile === 'yes' || updateProfile === 'y') {
+        const updateValues = {};
+        const currentStage = detection.existingConfig.development_stage;
+        const stageResult = await promptValidStage(prompts, write, currentStage);
+        const lanesResult = stageResult.cancelled
+          ? { cancelled: true }
+          : await promptPositiveInteger(
+              prompts,
+              write,
+              'Maximum implementation lanes',
+              detection.existingConfig.max_parallel_implementation_lanes ??
+                PROJECT_MAP_DEFAULTS.max_parallel_implementation_lanes
+            );
+
+        if (stageResult.cancelled || lanesResult.cancelled) {
+          write('Profile update cancelled; continuing setup without profile changes.');
+        } else {
+          updateValues.development_stage = stageResult.value;
+          updateValues.max_parallel_implementation_lanes = lanesResult.value;
+
+          const currentRationale = detection.existingRaw?.development_stage_rationale ?? '';
+          const rationaleAnswer = (await prompts.ask(`  Development stage rationale (${currentRationale || 'optional'}): `)).trim();
+          if (rationaleAnswer) updateValues.development_stage_rationale = rationaleAnswer;
+          const currentRevisit = detection.existingRaw?.development_stage_revisit_when ?? '';
+          const revisitAnswer = (await prompts.ask(`  Development stage revisit trigger (${currentRevisit || 'optional'}): `)).trim();
+          if (revisitAnswer) updateValues.development_stage_revisit_when = revisitAnswer;
+
+          printProjectMapValues(write, 'Proposed profile update values:', updateValues);
+          const confirmUpdate = (await prompts.ask('\nConfirm project profile update? (yes/no): ')).trim().toLowerCase();
+          if (confirmUpdate !== 'yes' && confirmUpdate !== 'y') {
+            write('Profile update cancelled; continuing setup without profile changes.');
+          } else if (!writeProjectMapUpdate(target, updateValues, write)) {
+            errors.push('.agenticloop/project.md not found. Run agenticloop init first.');
+            return { errors, warnings };
+          }
+        }
+      }
+    } else if ((!detection.isConfirmed || !detection.hasConfirmedDevelopmentStage) && nonInteractive) {
+      write('\nProject map is unconfirmed or has no human-confirmed development stage. Interactive confirmation required.');
+      errors.push('Non-interactive setup cannot proceed without a human-confirmed development stage. Run agenticloop setup interactively first.');
       return { errors, warnings };
     }
 

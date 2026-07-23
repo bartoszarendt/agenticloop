@@ -42,10 +42,26 @@ agenticloop/                     toolkit-owned canonical source
 `agenticloop/AGENTIC_LOOP.md` is the primary portable process file.
 
 `.agenticloop/project.md` is target-owned and is created once by
-`agenticloop init`. It starts with `setup_status: unconfirmed` and is never
-overwritten by `agenticloop update`. Edit it to record setup confirmation, typed
-document selections, backend choice, task naming, and optional grouping. Do
-not put model IDs here.
+`agenticloop init`. It starts with `setup_status: unconfirmed` and
+`development_stage: unconfirmed` and is never overwritten by `agenticloop
+update`. Edit it through human-confirmed setup/profile updates to record setup
+confirmation, typed document selections, backend choice, task naming, optional
+grouping, development stage, and the implementation-lane ceiling. Do not put
+model IDs here.
+
+### Upgrading an existing confirmed project map
+
+An existing confirmed `.agenticloop/project.md` created before development-stage
+profiles has no durable stage. After updating Agentic Loop, validation reports an
+actionable setup-required error and normal Agentic Loop task work stops at the
+setup boundary. Run `npx agenticloop setup` interactively, review the bounded
+proposal, and explicitly select or confirm one stage. The one-time migration
+preserves the target-owned project-map body and does not bundle document,
+backend, naming, or grouping changes into the stage confirmation.
+
+Existing maps without `max_parallel_implementation_lanes` inherit the default
+`5`. This is only an implementation-lane ceiling; the current Parallel
+Opportunity Scan may authorize fewer lanes or require serial work.
 
 The project map also carries the maintainer-owned `## Verification Operating
 Facts` and `## Project Operating Facts` profiles. Project Operating Facts are

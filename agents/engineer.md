@@ -125,6 +125,11 @@ task-record obligation.
   of blindly following stale steps.
 - Confirm scope, out of scope, acceptance criteria, required checks, proof
   pressure when present, and expected files or areas.
+- Read the confirmed `development_stage` as a task-shaping prior. Use it only
+  inside authorized scope: do not let it waive TDD, debugging, checks, evidence,
+  security, accessibility, validation, or review requirements, and return
+  `needs_context` when the coherent stage-appropriate solution needs a material
+  out-of-scope core or contract change.
 - If the task record sets `context_overflow_risk: medium|high`, keep discovery
   and tool output tightly tied to the expected files or areas. Summarize
   intermediate findings or return `needs_context` when unexpected context

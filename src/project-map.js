@@ -16,6 +16,8 @@ import { parseVerificationOperatingFacts } from './verification-learning.js';
 export const PROJECT_MAP_PATH = PROJECT_MAP_RELATIVE_PATH;
 
 export const PROJECT_MAP_DEFAULTS = {
+  development_stage: 'unconfirmed',
+  max_parallel_implementation_lanes: 5,
   task_backend: 'files',
   event_logging: 'disabled',
   event_logging_command: '',
@@ -25,6 +27,13 @@ export const PROJECT_MAP_DEFAULTS = {
   grouping_profile: 'flat',
   documents: getDefaultDocumentSelections(),
 };
+
+export const DEVELOPMENT_STAGES = [
+  'greenfield',
+  'expansion',
+  'stabilization',
+  'maintenance',
+];
 
 const GROUPING_PROFILE_DEFAULTS = {
   flat: {
@@ -56,6 +65,7 @@ const LEGACY_FRONTMATTER_KEYS = [
 
 const VALID_EVENT_LOGGING_VALUES = new Set(['disabled', 'enabled']);
 const VALID_SETUP_STATUSES = new Set(['unconfirmed', 'confirmed']);
+const VALID_DEVELOPMENT_STAGES = new Set(DEVELOPMENT_STAGES);
 const YYYY_MM_DD_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 function parseBoolean(value) {
@@ -95,6 +105,23 @@ function normalizeRawFrontmatter(raw) {
     }
   }
 
+  if (typeof normalized.max_parallel_implementation_lanes === 'string') {
+    const trimmedLanes = normalized.max_parallel_implementation_lanes.trim();
+    if (/^\d+$/.test(trimmedLanes)) {
+      normalized.max_parallel_implementation_lanes = Number(trimmedLanes);
+    } else {
+      normalized.max_parallel_implementation_lanes = trimmedLanes;
+    }
+  }
+
+  for (const key of [
+    'development_stage',
+    'development_stage_rationale',
+    'development_stage_revisit_when',
+  ]) {
+    if (typeof normalized[key] === 'string') normalized[key] = normalized[key].trim();
+  }
+
   return normalized;
 }
 
@@ -107,6 +134,11 @@ function mergeDocuments(rawDocuments = {}) {
 
 function getTrimmedString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+export function hasConfirmedDevelopmentStage(config) {
+  return config?.setup_status === 'confirmed' &&
+    VALID_DEVELOPMENT_STAGES.has(getTrimmedString(config.development_stage));
 }
 
 /**
@@ -194,6 +226,34 @@ export function validateProjectMap(config, raw, repoRoot) {
     if (!confirmedBy) {
       errors.push("project.md: setup_confirmed_by is required when setup_status is 'confirmed'");
     }
+  }
+
+  const developmentStage = getTrimmedString(config.development_stage);
+  if (raw.development_stage !== undefined && typeof raw.development_stage !== 'string') {
+    errors.push('project.md: development_stage must be a string');
+  }
+  if (config.setup_status === 'confirmed') {
+    if (!VALID_DEVELOPMENT_STAGES.has(developmentStage)) {
+      errors.push(
+        `project.md: confirmed setup requires development_stage to be one of ${DEVELOPMENT_STAGES.join(', ')}; ` +
+        `got: ${JSON.stringify(config.development_stage)}. Run agenticloop setup interactively to confirm the project profile.`
+      );
+    }
+  } else if (config.setup_status === 'unconfirmed' && raw.development_stage !== undefined && developmentStage !== 'unconfirmed') {
+    errors.push("project.md: unconfirmed setup may only use development_stage: 'unconfirmed'");
+  }
+
+  for (const key of ['development_stage_rationale', 'development_stage_revisit_when']) {
+    if (raw[key] !== undefined && typeof raw[key] !== 'string') {
+      errors.push(`project.md: ${key} must be a string when provided`);
+    }
+  }
+
+  if (
+    !Number.isInteger(config.max_parallel_implementation_lanes) ||
+    config.max_parallel_implementation_lanes <= 0
+  ) {
+    errors.push('project.md: max_parallel_implementation_lanes must be a positive integer');
   }
 
   if (config.task_backend !== 'files' && config.task_backend !== 'github') {

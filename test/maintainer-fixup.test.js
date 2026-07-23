@@ -33,7 +33,7 @@ after(() => { rmSync(tmpDir, { recursive: true, force: true }); });
 
 function fixupSubsection({
   finding = 'Duplicated guard clause in the parser',
-  eligibility = 'eligible -- Pass 1 clean, within allowed paths, no test change',
+  eligibility = 'eligible -- Lens 1 clean, within allowed paths, no test change',
   base = 'commit:aaa111',
   correction = 'Extracted the shared guard into one helper',
   affected = 'src/parser.js',
@@ -891,7 +891,7 @@ describe('fixup eligibility verdict line is documented', () => {
   const skill = readFileSync(join(REPO_ROOT, 'skills', 'review-and-accept', 'SKILL.md'), 'utf-8');
 
   it('review-and-accept documents the ineligible/applied verdict line and reasons', () => {
-    assert.match(skill, /Maintainer Review Fixup: ineligible — Pass 1 not clean/);
+    assert.match(skill, /Maintainer Review Fixup: ineligible — Lens 1 not clean/);
     assert.match(skill, /Maintainer Review Fixup: ineligible — requires changed tests/);
     assert.match(skill, /Maintainer Review Fixup: ineligible — independent review required/);
     assert.match(skill, /Maintainer Review Fixup: ineligible — outside allowed paths/);

@@ -402,7 +402,7 @@ projection:
   Rerun the required checks and update the PR body's `Current PR head` and
   `## Evidence` for the new head.
 - After refreshing the PR body, run `npx agenticloop github-preflight --pr <number>` against the
-  final head, then complete the fresh two-pass review.
+  final head, then complete the fresh three-lens review round.
 - Post the accepted review markers against the final head in the durable fixup comment with
   `AGENT_REVIEW_MODE: single_agent_fallback`. Do not add any new fixup marker.
 - Only after the accepted markers are durable, run the final-head review audit or composite gate:

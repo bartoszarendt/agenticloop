@@ -1,6 +1,6 @@
 ---
 name: setup-agenticloop
-description: Use when a maintainer or human is setting up Agentic Loop in a target project for the first time, when source document names are non-standard or ambiguous, or when .agenticloop/project.md is still unconfirmed. Discovers bounded candidate project docs once, gathers bounded backend evidence, proposes document selections and task conventions, asks for confirmation, and writes confirmed project-map values plus setup confirmation state.
+description: Use when a maintainer or human is setting up Agentic Loop in a target project for the first time, when source document names are non-standard or ambiguous, when .agenticloop/project.md is still unconfirmed, or when a human wants to update its development-stage profile. Discovers bounded candidate project docs once, gathers bounded backend and lifecycle evidence, proposes document selections and task conventions, asks for confirmation, and writes confirmed project-map values plus setup confirmation state.
 metadata:
   area: setup
   side_effects: writes-files
@@ -10,13 +10,16 @@ metadata:
 
 # Setup Agentic Loop
 
-This is a one-time interactive setup skill. It is maintainer-run or human-run.
+This is an interactive setup and human-controlled profile-update skill. It is
+maintainer-run or human-run.
 Run it when:
 
 - setting up Agentic Loop in a target project for the first time,
 - source document names are non-standard or ambiguous,
 - `.agenticloop/project.md` is `setup_status: unconfirmed`,
 - `.agenticloop/project.md` needs confirmed typed document selections.
+- a confirmed project needs its one-time development-stage migration or a human
+  wants to confirm a later development-stage transition.
 
 Do not use this skill for routine runtime document lookup. At runtime, agents read
 `.agenticloop/project.md` for overrides and fall back to conventional names. This skill
@@ -25,7 +28,7 @@ performs one-time discovery so runtime agents do not need to scan the repository
 ## What This Skill Does
 
 1. Scan bounded candidate paths once.
-2. Propose detected documents by role, detected grouping profile, inferred task ID style, and backend choice.
+2. Propose detected documents by role, detected grouping profile, inferred task ID style, backend choice, development stage, and implementation-lane maximum.
 3. Ask the human to confirm before writing.
 4. Write confirmed project-map values and setup confirmation state to `.agenticloop/project.md`.
 5. Preserve existing `.agenticloop/project.md` content where possible.
@@ -39,6 +42,8 @@ Setup is complete only after the maintainer or human confirms:
 - task ID pattern and regex,
 - grouping profile,
 - backend choice.
+- one development stage: `greenfield`, `expansion`, `stabilization`, or
+  `maintenance`.
 
 ## Candidate Files to Detect
 
@@ -127,6 +132,23 @@ Also infer:
   - current branch names that already follow task or grouping conventions
   - presence or absence of local `.agenticloop/tasks/` records
 - the backend choice, defaulting to `files` only when no existing durable backend evidence is present
+- a development-stage proposal using only bounded evidence in this order:
+  1. explicit lifecycle, stability, release, compatibility, maintenance, or
+     support statements in the selected documents;
+  2. stable release tags plus documented public API, format, migration, or
+     compatibility commitments;
+  3. roadmap, release, and changelog activity; and
+  4. package version, repository history, or other cheap metadata only as
+     supporting evidence.
+
+Never decide development stage from commit count, repository age, tests, semver,
+decision-record count, or plan-completion ratio alone. Present confidence,
+evidence, rationale, and conflicting signals to the human. The proposal is not
+durable policy and must not be written before explicit human confirmation.
+Negated or historical language such as "no compatibility policy" or an old
+"initial release" entry is not positive current-stage evidence. When bounded
+signals conflict, present no preselected stage and require the human to choose
+one exact allowed value.
 
 Do not propose a document selection when the conventional default is present and
 no better match exists.
@@ -170,6 +192,16 @@ Backend proposal:
   confidence: high
   rationale: existing durable GitHub issue and label workflow evidence is present
 
+Development-stage proposal:
+  development_stage: expansion
+  confidence: medium
+  rationale: selected roadmap and release notes describe active capability growth
+  evidence: ROADMAP.md, CHANGELOG.md
+
+Implementation-lane maximum:
+  max_parallel_implementation_lanes: 5
+  note: ceiling for eligible implementation lanes only, not a total-agent budget
+
 Proposed .agenticloop/project.md values:
   documents.plan: "ROADMAP.md"
   documents.design: "ARCHITECTURE_PLAN.md"
@@ -178,14 +210,32 @@ Proposed .agenticloop/project.md values:
   task_id_pattern: "P<phase>-<number>"
   task_id_regex: "^P\\d+-\\d{2,}$"
   group_closeout: true
+  development_stage: expansion
+  max_parallel_implementation_lanes: 5
 
-Confirm these document selections, task naming/grouping values, and backend choice? (yes / no / edit)
+Confirm these document selections, task naming/grouping values, backend choice,
+development stage, and implementation-lane maximum? (yes / no / edit)
 ```
 
 Ask the human to confirm before writing. Confirmation may either record typed
 selections or explicitly accept the defaults already shown in the project map.
-If they say "edit", accept their corrections. If they say "no", do not write
-anything and leave `setup_status: unconfirmed`.
+If they say "edit", accept their corrections, including one exact stage from the
+allowed set, optional `development_stage_rationale`, optional
+`development_stage_revisit_when`, and a positive integer implementation-lane
+maximum. Reject and re-prompt invalid stage or lane input; never retain the AI
+proposal as a fallback for a rejected correction. If they say "no", do not
+write anything and leave `setup_status: unconfirmed`.
+
+For an existing confirmed project missing stage, present this as a one-time
+stage migration; do not silently assign a default or bundle document-selection,
+backend, naming, or grouping changes into that confirmation. For an existing
+valid stage, offer a profile update only when a human explicitly chooses it.
+Show the current stage, require the human to enter or retain the exact value,
+then require another explicit confirmation before writing. Declining that
+optional profile update retains the existing values and continues routine setup
+or adapter refresh. Agents may propose a later transition but must never apply
+it themselves. Non-interactive setup fails closed unless a valid stage was
+previously human-confirmed and persisted.
 
 If the human keeps `task_backend: files` despite durable GitHub workflow evidence,
 ask them to state the explicit exception in one short sentence and record that
@@ -203,6 +253,8 @@ After confirmation, always write:
 - `setup_confirmed_at: <YYYY-MM-DD>`
 - `setup_confirmed_by: <human or maintainer>`
 - `task_backend: <confirmed backend choice>`
+- `development_stage: <human-confirmed greenfield|expansion|stabilization|maintenance>`
+- `max_parallel_implementation_lanes: <positive integer; default 5>`
 
 Do this even when no non-conventional document selections are needed and the
 human only confirms the default conventions.
@@ -232,7 +284,8 @@ When `.agenticloop/project.md` already exists:
 
 When `.agenticloop/project.md` does not exist, write a fresh file using the
 project-map shape: YAML frontmatter with `setup_status`,
-`setup_confirmed_at`, `setup_confirmed_by`, `task_backend`,
+   `setup_confirmed_at`, `setup_confirmed_by`, `development_stage`,
+   `max_parallel_implementation_lanes`, `task_backend`,
 `task_id_pattern`, `task_id_regex`, `task_file_template`,
 optional `engineer_context_window_tokens`, and optional typed `documents` keys, followed by a
 `# Agentic Loop Project Map` heading and the canonical empty `## Verification
@@ -251,6 +304,10 @@ After writing, tell the human:
 - which selections were written,
 - which grouping or task-ID conventions were recorded,
 - which backend choice was confirmed and why,
+- which development stage the human confirmed, the bounded rationale, and any
+  revisit trigger,
+- that the implementation-lane maximum is a ceiling only for eligible
+  implementation lanes,
 - who confirmed the setup and on what date,
 - that future runtime agents will use the typed selections plus bounded candidate defaults,
 - that `agenticloop validate` can verify the project map.
@@ -262,3 +319,4 @@ After writing, tell the human:
 - Overwrite the body of `.agenticloop/project.md` beyond frontmatter overrides.
 - Guess at document paths without candidate detection.
 - Run `agenticloop init` automatically; only write confirmed overrides.
+- Persist or transition `development_stage` without explicit human confirmation.

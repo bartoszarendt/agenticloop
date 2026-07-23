@@ -86,6 +86,7 @@ describe('doctor CLI', () => {
       setup_status: 'confirmed',
       setup_confirmed_at: '2026-06-22',
       setup_confirmed_by: 'human',
+      development_stage: 'expansion',
       task_backend: 'files',
       grouping_profile: 'flat',
     });
@@ -128,6 +129,8 @@ describe('setup CLI', () => {
     const content = readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8');
     const [fm] = parseFrontmatter(content);
     assert.equal(fm.setup_status, 'confirmed');
+    assert.equal(fm.development_stage, 'greenfield');
+    assert.equal(fm.max_parallel_implementation_lanes, '5');
   });
 
   it('shows setup checklist in output', () => {
@@ -167,6 +170,7 @@ describe('setup CLI', () => {
       setup_status: 'confirmed',
       setup_confirmed_at: '2026-06-22',
       setup_confirmed_by: 'human',
+      development_stage: 'expansion',
       task_backend: 'files',
       grouping_profile: 'flat',
     });
@@ -283,6 +287,157 @@ describe('setup CLI', () => {
     const [fm] = parseFrontmatter(content);
     assert.notEqual(fm?.setup_status, 'confirmed');
     assert.equal(fm?.task_backend, 'files');
+    assert.equal(fm?.development_stage, 'unconfirmed');
+  });
+
+  it('presents bounded stage evidence and persists only human-confirmed edits', () => {
+    const d = makeEmptyTarget();
+    writeFileSync(join(d, 'AGENTS.md'), '# AGENTS\n');
+    writeFileSync(join(d, 'README.md'), '# Project\n\nThis project is in maintenance mode.\n');
+
+    const input = [
+      'edit',
+      'prod',
+      'stabilization',
+      '0',
+      '4',
+      'Release hardening is the current priority.',
+      'The next capability roadmap is accepted.',
+      '',
+      '',
+      '',
+      '',
+      'yes',
+      '4',
+    ].join('\n');
+    const result = run(['setup', '--target', d], { input });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.match(result.stdout, /Development stage proposal: maintenance/);
+    assert.match(result.stdout, /Invalid development stage/);
+    assert.match(result.stdout, /Maximum implementation lanes must be a positive integer/);
+    const [fm] = parseFrontmatter(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'));
+    assert.equal(fm.development_stage, 'stabilization');
+    assert.equal(fm.max_parallel_implementation_lanes, '4');
+    assert.equal(fm.development_stage_rationale, 'Release hardening is the current priority.');
+    assert.equal(fm.development_stage_revisit_when, 'The next capability roadmap is accepted.');
+  });
+
+  it('does not persist an edited stage when human confirmation is declined', () => {
+    const d = makeEmptyTarget();
+    writeFileSync(join(d, 'README.md'), '# Project\n\nThis project is in maintenance mode.\n');
+    const input = [
+      'edit', 'maintenance', '', '', '', '', '', '', '', 'no',
+    ].join('\n');
+
+    const result = run(['setup', '--target', d], { input });
+
+    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+    const [fm] = parseFrontmatter(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'));
+    assert.equal(fm.development_stage, 'unconfirmed');
+    assert.notEqual(fm.setup_status, 'confirmed');
+    assert.match(result.stdout, /not written/);
+  });
+
+  it('migrates a confirmed project missing stage only after human confirmation and preserves its body', () => {
+    const d = makeTarget();
+    writeFileSync(join(d, 'ROADMAP.md'), '# Roadmap\n\nThis project is in maintenance mode.\n');
+    const body = '# Existing Project Map\n\n## Project Operating Facts\n\n- Preserve this exact body.\n';
+    writeFileSync(join(d, '.agenticloop', 'project.md'), [
+      '---',
+      'setup_status: confirmed',
+      'setup_confirmed_at: "2026-06-22"',
+      'setup_confirmed_by: "human"',
+      'task_backend: files',
+      'grouping_profile: flat',
+      '---',
+      body,
+    ].join('\n'));
+
+    const result = run(['setup', '--target', d], { input: ['yes', '4'].join('\n') });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    const content = readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8');
+    const [fm] = parseFrontmatter(content);
+    assert.ok(['greenfield', 'expansion', 'stabilization', 'maintenance'].includes(fm.development_stage));
+    assert.equal(fm.documents, undefined, 'stage migration must not add unrelated document selections');
+    assert.ok(content.endsWith(body), 'profile migration must preserve project-map body bytes');
+  });
+
+  it('requires an explicit stage selection when bounded evidence conflicts', () => {
+    const d = makeEmptyTarget();
+    writeFileSync(join(d, 'README.md'), '# Project\n\nThe product is in maintenance mode.\n');
+    writeFileSync(join(d, 'ROADMAP.md'), '# Roadmap\n\nThis is a greenfield project.\n');
+
+    const input = [
+      'yes',
+      'stabilization',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      'yes',
+      '4',
+    ].join('\n');
+    const result = run(['setup', '--target', d], { input });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.match(result.stdout, /Development stage proposal: selection required/);
+    assert.match(result.stdout, /requires an explicit development-stage selection/);
+    const [fm] = parseFrontmatter(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'));
+    assert.equal(fm.development_stage, 'stabilization');
+  });
+
+  it('allows a later human-confirmed profile transition without automatic stage changes', () => {
+    const d = makeTarget();
+    writeProjectMap(d, {
+      setup_status: 'confirmed',
+      setup_confirmed_at: '2026-06-22',
+      setup_confirmed_by: 'human',
+      development_stage: 'expansion',
+      max_parallel_implementation_lanes: 5,
+      task_backend: 'files',
+      grouping_profile: 'flat',
+    });
+
+    const transition = run(['setup', '--target', d], {
+      input: ['yes', 'maintenance', '3', 'Compatibility commitments now govern changes.', 'After a planned major migration.', 'yes', '4'].join('\n'),
+    });
+    assert.equal(transition.status, 0, `stdout:\n${transition.stdout}\nstderr:\n${transition.stderr}`);
+    let [fm] = parseFrontmatter(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'));
+    assert.equal(fm.development_stage, 'maintenance');
+    assert.equal(fm.max_parallel_implementation_lanes, '3');
+
+    const nonInteractive = run(['setup', '--target', d, '--adapter', 'opencode', '--yes']);
+    assert.equal(nonInteractive.status, 0, `stderr: ${nonInteractive.stderr}`);
+    [fm] = parseFrontmatter(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'));
+    assert.equal(fm.development_stage, 'maintenance');
+  });
+
+  it('continues setup when a confirmed profile update is declined', () => {
+    const d = makeTarget();
+    writeProjectMap(d, {
+      setup_status: 'confirmed',
+      setup_confirmed_at: '2026-06-22',
+      setup_confirmed_by: 'human',
+      development_stage: 'expansion',
+      max_parallel_implementation_lanes: 5,
+      task_backend: 'files',
+      grouping_profile: 'flat',
+    });
+
+    const result = run(['setup', '--target', d], {
+      input: ['yes', 'maintenance', '', '', '', 'no', '4'].join('\n'),
+    });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.match(result.stdout, /Profile update cancelled; continuing setup without profile changes/);
+    assert.match(result.stdout, /Adapter setup:/);
+    const [fm] = parseFrontmatter(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'));
+    assert.equal(fm.development_stage, 'expansion');
   });
 
   it('--adapter does not generate artifacts before confirmation', () => {
@@ -327,6 +482,22 @@ describe('setup CLI', () => {
     // Should NOT have generated adapter artifacts
     assert.ok(!existsSync(join(d, '.opencode')),
       'adapter artifacts must not exist when project map is unconfirmed in non-interactive mode');
+  });
+
+  it('--yes --adapter fails closed for a confirmed project missing development stage', () => {
+    const d = makeTarget();
+    writeProjectMap(d, {
+      setup_status: 'confirmed',
+      setup_confirmed_at: '2026-06-22',
+      setup_confirmed_by: 'human',
+      task_backend: 'files',
+      grouping_profile: 'flat',
+    });
+
+    const result = run(['setup', '--target', d, '--adapter', 'opencode', '--yes']);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout + result.stderr, /human-confirmed development stage/);
+    assert.ok(!existsSync(join(d, '.opencode')));
   });
 });
 

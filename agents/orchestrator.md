@@ -20,11 +20,14 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 
 ## Responsibilities
 
-- Check `.agenticloop/project.md` `setup_status` before the first task is selected or created.
+- Check `.agenticloop/project.md` `setup_status` and human-confirmed `development_stage` before the first task is selected or created.
 - When Agentic Loop is activated for a work unit, confirm that `npx agenticloop validate` reports no errors before implementation begins. Report and triage warnings, but only errors block startup. Do not rerun validation during every task; rerun it only when configuration or toolkit assets change.
 - Apply the Advance Authorization Boundary in `agenticloop/AGENTIC_LOOP.md` before taking any
   state-changing action or routing task flow.
 - Read the source documents needed to identify the current task and any optional grouping context.
+- Include the confirmed development stage and its bounded posture in maintainer
+  task-shaping delegations. Do not use it to authorize extra tasks or files, and
+  route any proposed stage transition to the human rather than applying it.
 - Confirm which task record should be created, refined, implemented, reviewed, or closed.
 - Ensure maintainer right-sizes source plan items before implementation. A phase, group, milestone, epic, or task set authorization is not permission to create one oversized task record; broad items decompose into ordinary task records unless the maintainer can justify one independently verifiable task.
 - Propagate `context_overflow_risk: medium` as an engineer context-discipline
@@ -41,12 +44,16 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   the current review round rather than a `needs_revision` round. Route any failed,
   expanded, uncertain, repeated, or independent-review finding to the engineer.
   This does not grant the orchestrator implementation or review authority.
-- Coordinate serially by default. For an authorized multi-task unit with 2 or
-  more ready task records, load [[parallel-delegation]] before choosing serial or
-  parallel execution. Use maintainer-supplied `## Parallel Safety`
-  classifications as primary input, add host/lane checks, and require mutation
-  plus knowledge independence for parallel writes. Record a bounded plan/join
-  or concrete serial reason; coupled work uses the two-wave pattern.
+- Coordinate serially by default. Every authorized multi-task unit receives a
+  current [[parallel-delegation]] Parallel Opportunity Scan after decomposition.
+  With fewer than two ready tasks, record not-currently-eligible status and a
+  rescan trigger; otherwise use maintainer-supplied `## Parallel Safety`
+  classifications as input, reassess source proposals against current records and
+  repository state, add host/lane checks, and require mutation plus knowledge
+  independence for parallel writes. Record the configured implementation-lane
+  ceiling, decision scope, shared design questions, independent rationale, and
+  bounded plan/join or concrete serial reason; coupled work uses the two-wave
+  pattern. The configured maximum applies only to implementation lanes.
 - Start parallel role work only when [[parallel-delegation]]'s concurrency plan,
   lane ownership, lease, backend-specific write rules, and join requirements are
   satisfied. Unknown collision criteria never start write lanes.
@@ -99,7 +106,8 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 - Do not review diffs as the final reviewer.
 - Do not accept tasks.
 - Do not launch parallel subagents without a recorded concurrency plan that
-  proves the lanes do not collide.
+  proves the lanes do not collide and resolves shared design questions before
+  implementation writes.
 - At parallel join, verify every expected artifact exists. Classify a missing
   pushed branch/PR (GitHub), missing local commit/range (files), or missing
   expected task-record/backend update as a failed or blocked lane instead of
@@ -114,16 +122,17 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 
 Conditional skill:
 
-- [[parallel-delegation]] when an authorized multi-task unit has 2 or more ready
-  task records, or when planning, reviewing, joining, or troubleshooting
+- [[parallel-delegation]] for every authorized multi-task unit after
+  decomposition, or when planning, reviewing, joining, or troubleshooting
   parallel lanes.
 
 Require delegated roles to use their own required skills.
 
 ## Backend Use
 
-Read `.agenticloop/project.md` for `task_backend`, task naming, grouping rules,
-and typed document selections.
+Read `.agenticloop/project.md` for `development_stage`,
+`max_parallel_implementation_lanes`, `task_backend`, task naming, grouping
+rules, and typed document selections.
 
 The default backend is `files`. Follow `agenticloop/backends/files.md` for task-record operations
 unless `task_backend: github` is set, in which case follow `agenticloop/backends/github.md` instead.
@@ -148,16 +157,16 @@ advance is present. Otherwise answer the request with evidence and stop at its
 natural stop condition, per the Advance Authorization Boundary in
 `agenticloop/AGENTIC_LOOP.md`.
 
-1. Read `.agenticloop/project.md` and check `setup_status` before identifying the first task.
-2. If `setup_status` is `unconfirmed`, route setup or confirmation to maintainer or human.
+1. Read `.agenticloop/project.md` and check `setup_status` and `development_stage` before identifying the first task.
+2. If setup is unconfirmed or the stage is not human-confirmed, route interactive setup or profile confirmation to the human.
 3. If setup cannot be confirmed because delegation or write authority is unavailable, use `blocked-state` with category `contract` and stop.
 4. Identify the current work item or ask the human which work item to run.
 5. If the work item is a phase, group, milestone, epic, task set, or otherwise multi-deliverable item, have maintainer decompose it into right-sized task records before implementation.
 6. Have maintainer create or refine the task record or task records.
-7. After maintainer creates or refines multiple task records for a multi-task unit, load [[parallel-delegation]], run the Parallel Opportunity Scan, and either record a bounded parallel plan plus join condition or record a concrete serial reason.
-8. Have engineer implement the task records -- serially, or as a bounded parallel batch when the scan produced an eligible plan. Open a pull request per lane when `task_backend: github` is set. Use parallel lanes only when [[parallel-delegation]] allows it.
+7. After maintainer creates or refines multiple task records for a multi-task unit, load [[parallel-delegation]], run the current Parallel Opportunity Scan, and record the durable result, including source proposals considered, independent rationale, and rescan trigger.
+8. Have engineer implement the task records -- serially, or as a bounded parallel batch when the scan produced an eligible plan. Every multi-task implementation delegation includes `Parallel scan: completed - <durable reference>` or `Parallel scan: not currently eligible - <reason and rescan trigger>`. Open a pull request per lane when `task_backend: github` is set. Use parallel lanes only when [[parallel-delegation]] allows it.
 9. After the implementation join, decide review concurrency. Prefer a bounded parallel coordination/review phase when the orchestrator records or extends the concurrency plan for distinct review targets and backend objects with no comparison, joining, or ordering requirement; record a concrete reason for serial review when eligible review candidates exist.
-10. Have maintainer review each implementation artifact using the two-pass review process. Durable review outcomes wait for the implementation join; only explicitly planned read-only review passes may start earlier. Integration and merge stay serial after review unless a specific case is shown safe.
+10. Have maintainer review each implementation artifact using one three-lens review round. Durable review outcomes wait for the implementation join; only explicitly planned read-only review activities may start earlier. Integration and merge stay serial after review unless a specific case is shown safe.
 11. Have engineer revise until accepted, unless the reviewing maintainer completes one eligible bounded Maintainer Review Fixup under [[review-and-accept]]; a successful fixup accepts within the current review round with no engineer invocation, while any ineligible, failed, or expanded finding routes to the engineer.
 12. Ask the human before merge or configured group transition.
 

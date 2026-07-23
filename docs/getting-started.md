@@ -19,7 +19,7 @@ This creates:
 
 ```text
 agenticloop/                   toolkit-owned canonical source
-.agenticloop/project.md        project map (starts unconfirmed; backend, naming, grouping, typed docs, optional backend evidence notes)
+.agenticloop/project.md        project map (starts with an unconfirmed human-controlled stage; implementation-lane ceiling, backend, naming, grouping, typed docs, optional evidence notes)
 .agenticloop/decisions/        decision records
 .agenticloop/improvements/     improvement proposals (created on first proposal)
 .agenticloop/tasks/            task record files (completion summaries live inline)
@@ -186,12 +186,12 @@ not yet have its own `AGENTS.md`, `IMPLEMENTATION_PLAN.md`, or architecture
 docs.
 
 Run `npx agenticloop init`. The generated `.agenticloop/project.md` starts with
-`setup_status: unconfirmed`.
+`setup_status: unconfirmed` and `development_stage: unconfirmed`.
 
 Before the first non-trivial task, either:
 
 - ask the agent to run or route `setup-agenticloop`, or
-- manually confirm the defaults by updating the setup fields in `.agenticloop/project.md` after reviewing the backend choice.
+- manually confirm the defaults by updating the setup fields in `.agenticloop/project.md` after reviewing the backend choice and selecting one human-confirmed development stage.
 
 Recommended additions that `init` does not create (target-owned):
 
@@ -223,13 +223,21 @@ If the target project already uses the conventional document names and keeps the
 files backend, still confirm the project map only after reviewing whether the
 repo already shows durable GitHub workflow evidence.
 
+When upgrading a project whose map is already confirmed but has no
+`development_stage`, validation intentionally stops normal task work. Run
+`npx agenticloop setup` interactively and confirm the one-time stage migration.
+The migration preserves the existing project-map body and does not silently
+change document selections, backend, naming, or grouping values. A missing
+`max_parallel_implementation_lanes` field inherits the default `5` ceiling.
+
 ## Configuration
 
 ### Files-first (default)
 
 `.agenticloop/project.md` is the primary project configuration. Edit its
-frontmatter to record setup confirmation, typed document selections, task ID
-pattern, backend choice, optional grouping, or optional process planning
+frontmatter to record setup confirmation, a human-confirmed development stage,
+implementation-lane ceiling, typed document selections, task ID pattern, backend
+choice, optional grouping, or optional process planning
 conventions:
 
 ```yaml
@@ -237,6 +245,8 @@ conventions:
 setup_status: unconfirmed
 setup_confirmed_at: ""
 setup_confirmed_by: ""
+development_stage: unconfirmed
+max_parallel_implementation_lanes: 5
 task_backend: files
 task_id_pattern: "T-<number>"
 task_id_regex: "^T-\\d{3,}$"
@@ -261,8 +271,16 @@ not selected, they use the bounded candidate names from the canonical registry.
 They do not scan the whole repository at runtime.
 
 `setup_status: unconfirmed` means the project map still needs review.
-`setup_status: confirmed` means the document selections, task naming, grouping,
-and backend choice have been reviewed for this target project.
+`setup_status: confirmed` requires a human-confirmed `development_stage` of
+`greenfield`, `expansion`, `stabilization`, or `maintenance`; it means the
+document selections, task naming, grouping, backend choice, and stage have been
+reviewed for this target project. Setup can propose a stage from bounded evidence
+but cannot persist it before human confirmation. A later stage transition uses a
+repeat interactive profile update and also requires human confirmation.
+
+`max_parallel_implementation_lanes` defaults to `5`. It is a ceiling only for
+otherwise eligible implementation lanes, not a total live-agent budget or a
+target; review, coordination, and integration lanes use their own rules.
 
 `backend_confirmed_at`, `backend_confirmed_by`, and `backend_evidence_summary`
 are optional frontmatter notes for the bounded backend-evidence review.
@@ -363,10 +381,11 @@ older targets and should be removed when `.agenticloop/project.md` exists.
 Recommended prompt for hosts without command activation:
 
 ```text
-Use Agentic Loop. Read .agenticloop/project.md for task_backend, task naming,
-grouping rules, and typed document selections. If setup_status is unconfirmed,
-route setup-agenticloop or confirm the defaults before selecting the first
-task. Then identify the next task and create the task record before
+Use Agentic Loop. Read .agenticloop/project.md for development_stage,
+max_parallel_implementation_lanes, task_backend, task naming, grouping rules,
+and typed document selections. If setup_status is unconfirmed or the stage is
+not human-confirmed, route setup-agenticloop or confirm the profile before
+selecting the first task. Then identify the next task and create the task record before
 implementation.
 ```
 

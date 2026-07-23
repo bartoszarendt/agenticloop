@@ -18,8 +18,9 @@ dot). `.agenticloop/agents`, `.agenticloop/skills`, and
 `.agenticloop/backends` are invalid paths -- canonical assets are always
 under `agenticloop/` without the dot.
 
-Read `.agenticloop/project.md` first. If `setup_status` is `unconfirmed`,
-route `agenticloop/skills/setup-agenticloop/SKILL.md` or confirm the defaults before
+Read `.agenticloop/project.md` first. If `setup_status` is `unconfirmed` or a
+confirmed map lacks a valid human-confirmed `development_stage`, route
+`agenticloop/skills/setup-agenticloop/SKILL.md` or confirm the profile before
 selecting or creating the first task.
 
 Then read `agenticloop/AGENTIC_LOOP.md` and the canonical role contracts in `agenticloop/agents/`.
@@ -47,12 +48,13 @@ condition. Long-running or parallel role work must include a lease:
 observable-step checkpoint cadence, no-progress budget, status-return stop
 condition, and any relevant milestone or duration.
 
-For an authorized multi-task unit with 2 or more ready tasks, perform a Parallel
-Opportunity Scan before choosing serial execution. If 2 or more ready tasks are
+For every authorized multi-task unit, perform a current Parallel Opportunity
+Scan after decomposition. With fewer than two ready tasks, record a truthful
+not-currently-eligible result and rescan trigger. If 2 or more ready tasks are
 independent on both the mutation and knowledge dimensions and collision criteria
-are known and disjoint, prefer a bounded parallel batch of up to 3 lanes;
-otherwise record the concrete serial reason or the two-wave pattern for coupled
-work.
+are known and disjoint, prefer a bounded parallel implementation batch up to the
+configured maximum; otherwise record the concrete serial reason or the two-wave
+pattern for coupled work. The maximum is a ceiling only for implementation lanes.
 
 Create or refine the durable task record before any implementation.
 

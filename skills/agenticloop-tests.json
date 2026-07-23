@@ -168,7 +168,8 @@
         "The maintainer reviews the implementation artifact and decides accepted vs needs_revision.",
         "Post the review marker after checking the task record and the diff.",
         "Review the pull request against the task record and triage known limitations.",
-        "Review the files-backed implementation artifact against the task file and update review_status."
+        "Review the files-backed implementation artifact against the task file and update review_status.",
+        "The maintainer reviews this implementation artifact against its task record, applies the necessity and coherence lens, and decides accepted vs needs_revision."
       ],
       "shouldNotTrigger": [
         "Scaffold the initial project overlay.",
@@ -255,7 +256,8 @@
         "Set up Agentic Loop for the first time in this project and discover which source docs are present.",
         "The source document names are non-standard; use the setup skill to write confirmed overrides to project.md.",
         "Run the one-time setup to detect candidate project docs and record overrides in .agenticloop/project.md.",
-        "The project map is unconfirmed; run setup-agenticloop to confirm defaults and write setup_status before the first task."
+        "The project map is unconfirmed; run setup-agenticloop to confirm defaults and write setup_status before the first task.",
+        "A human wants to change the confirmed development stage; run the interactive profile update and require explicit confirmation."
       ],
       "shouldNotTrigger": [
         "Run closeout after all tasks are accepted.",
@@ -269,6 +271,7 @@
     "parallel-delegation": {
       "shouldTrigger": [
         "We have 4 ready independent tasks, can we parallelize?",
+        "Only one task is ready in this multi-task work unit; record not currently eligible and a concrete Parallel Opportunity Scan rescan trigger.",
         "Plan a bounded parallel batch and join condition for these ready task records.",
         "Review whether these parallel lanes have disjoint backend objects, leases, and merge barriers.",
         "Two mutation-disjoint tasks share one verified base run; may both parallel lanes cite it to establish baseline state?",

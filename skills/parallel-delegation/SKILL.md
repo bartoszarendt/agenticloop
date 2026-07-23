@@ -1,6 +1,6 @@
 ---
 name: parallel-delegation
-description: Use when an authorized multi-task work unit has 2 or more ready task records and the orchestrator must decide serial versus parallel execution, or when planning, reviewing, joining, or troubleshooting parallel lanes, leases, backend-specific parallel writes, bounded delegation liveness, knowledge coupling between lanes, cross-lane finding routing, verification topology across base/lane/integrated/merged trees, or a non-publishing integration rehearsal.
+description: Use when an authorized multi-task work unit needs its required current Parallel Opportunity Scan, especially when 2 or more ready independent tasks may parallelize, or the orchestrator must decide serial versus parallel execution, or when planning, reviewing, joining, or troubleshooting parallel lanes, leases, backend-specific parallel writes, bounded delegation liveness, knowledge coupling between lanes, cross-lane finding routing, verification topology across base/lane/integrated/merged trees, or a non-publishing integration rehearsal.
 metadata:
   area: orchestration
   side_effects: writes-backend
@@ -15,15 +15,25 @@ remain in `agenticloop/AGENTIC_LOOP.md`.
 
 ## Parallel Opportunity Scan
 
-**Trigger.** Any authorized work unit (phase, group, milestone, epic, task set,
-or other bounded multi-task unit) that has 2 or more ready task records.
+**Trigger.** Every authorized multi-task work unit (phase, group, milestone,
+epic, task set, or other bounded multi-task unit) receives one current scan
+after decomposition, once per meaningful readiness snapshot. Source plans,
+roadmaps, architecture documents, issue groupings, and maintainer proposals are
+inputs only; none is a scan result or parallel authorization.
 
-Before selecting an execution order, the orchestrator must complete this scan.
-The maintainer supplies per-task code/collision classifications through
-`## Parallel Safety`; the orchestrator uses those classifications as primary
-input, adds host/lane capability checks, and records the final parallel or
-serial decision. Do not jump straight to serial delegation for a multi-task unit
-without this scan.
+Before selecting an execution order, the orchestrator records the scan in the
+canonical `## Concurrency Plan`, an authorized task-record surface, or a
+single-writer coordination output. Do not duplicate it into every task or create
+a shared mutable findings ledger. The maintainer supplies per-task code/collision
+classifications through `## Parallel Safety`; the orchestrator re-evaluates them
+against current task records and repository state, adds host/lane capability
+checks, and records its own final parallel or serial decision.
+
+With fewer than two ready tasks, record `not currently eligible - <n> ready
+task(s)` plus a concrete rescan trigger. With two or more ready tasks, perform
+the complete assessment below. Rescan when ready membership, dependencies, task
+scope or ownership, shared design assumptions, base artifact, host capability,
+backend collision state, or a cross-lane finding changes.
 
 For each ready task, the scan must cover:
 
@@ -51,16 +61,44 @@ For each ready task, the scan must cover:
   surface subagent status, or enforce bounded leases, and whether it can inject
   a message into a running lane.
 
+The durable scan result contains:
+
+```text
+### Parallel Opportunity Scan
+
+- Work unit:
+- Ready-set snapshot:
+- Source proposals considered:
+- Configured maximum implementation lanes:
+- Candidate lanes:
+- Mutation independence:
+- Knowledge independence:
+- Decision scope:
+- Shared design questions:
+- Backend/worktree ownership:
+- Host and liveness capability:
+- Verification/integration implications:
+- Decision: parallel <lane ids> | serial | not currently eligible
+- Independent rationale:
+- Rescan trigger:
+```
+
+The orchestrator records which source proposals it considered, accepts, narrows,
+reorders, or rejects each after current-state reassessment, and states its own
+rationale. A copied proposal conclusion is not a valid scan.
+
 Decision after the scan:
 
 - If 2 or more tasks are independent on both dimensions (no dependency edge
   between them, knowledge classification `independent`) and the collision
   criteria are **known and disjoint**, prefer a bounded parallel batch over
   serial execution.
-- **Default maximum parallel implementation lanes: 3.** Use fewer when fewer
-  independent ready tasks exist or the host cannot safely sustain three lanes.
-  Only exceed 3 when project config or an explicit human instruction raises the
-  limit.
+- **Configured maximum parallel implementation lanes:** read
+  `max_parallel_implementation_lanes` from `.agenticloop/project.md` (default
+  `5`). It applies only to implementation lanes and is a ceiling, never a target
+  or total-live-agent budget. Effective lane count is the minimum of this value,
+  ready mutation-independent and knowledge-independent tasks, and host-supported
+  bounded lanes. Review, coordination, and integration lanes do not inherit it.
 - If tasks are mutation-disjoint but knowledge-coupled, use the two-wave
   pattern (parallel read-only diagnosis, reconciliation, then serial or
   re-planned implementation) instead of parallel implementation writes.
@@ -212,6 +250,8 @@ concurrency plan in the task record or coordination output. The plan must name:
 - worktree path and branch for each write lane that mutates repository files,
 - implementation or workflow artifact for each write lane,
 - allowed files or areas for each lane,
+- decision scope for each lane and the shared design questions that remain with
+  the maintainer or a serial reconciliation step,
 - shared files, generated files, lockfiles, schemas, APIs, and external state
   that could collide,
 - the knowledge-coupling classification (`independent | coupled | unknown`) for
@@ -231,6 +271,12 @@ concurrency plan in the task record or coordination output. The plan must name:
 - liveness checkpoint cadence and stop condition for each delegated lane,
 - join condition before durable review outcome, acceptance, merge, or closeout,
   covering finding dispositions and required integrated evidence.
+
+Shared design questions must be resolved by the maintainer or a serial
+reconciliation step before parallel implementation writes. Alternatively, use
+the two-wave read-only diagnosis and reconciliation pattern. Disjoint files do
+not imply independent design authority, and a lane-local design choice must stay
+within its recorded decision scope.
 
 Safe parallel work is limited to:
 

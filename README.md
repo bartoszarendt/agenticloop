@@ -46,15 +46,15 @@ It probably does not make sense if you only use agents for one-shot questions or
 
 ## The team
 
-Agentic Loop organizes agent work the way a small, disciplined engineering team does. Three roles, three boundaries:
+Agentic Loop organizes agent work into a disciplined engineering team with three roles, three boundaries:
 
 | Role | What it does | What it never does |
 |---|---|---|
 | **Orchestrator** | Plans routing, delegates work, coordinates serial and parallel lanes, tracks progress. | Edit implementation files, act as final reviewer, or accept tasks. |
 | **Engineer** | Implements the smallest useful slice, test-first when applicable, and publishes fresh verification evidence. | Expand scope or accept its own work. |
-| **Maintainer** | Creates and right-sizes task records, reviews in two passes (task compliance, then quality), accepts or requests revisions, owns decisions and closeout. | Accept work without fresh final-state evidence. |
+| **Maintainer** | Creates and right-sizes task records, reviews through task compliance, engineering quality, and necessity/coherence lenses, accepts or requests revisions, owns decisions and closeout. | Accept work without fresh final-state evidence. |
 
-No role grades its own exam. When ready tasks are independent, the orchestrator can run up to three engineer lanes in parallel by default, each in its own guarded repo-internal `git worktree`, with cross-lane findings routed between lanes at checkpoints. In practice it feels like having a well-organized development team at your fingertips: a coordinator, parallel implementers, and a demanding reviewer -- each with its own model budget (see [Cost-quality routing by role](#cost-quality-routing-by-role)).
+No role grades its own exam. When ready tasks are independent, the orchestrator can run up to the configured implementation-lane maximum (default five) in parallel, each in its own guarded repo-internal `git worktree`, after a current Parallel Opportunity Scan. The limit is a ceiling, not a total-agent budget or an eligibility grant. In practice it feels like having a well-organized development team at your fingertips: a coordinator, parallel implementers, and a demanding reviewer -- each with its own model budget (see [Cost-quality routing by role](#cost-quality-routing-by-role)).
 
 ## What it gives your agent
 
@@ -93,9 +93,11 @@ Verification                  │
     the final state           │
   ↓                           │
 Review                        │
-  - pass 1: task compliance   │
-  - pass 2: code and          │
-    documentation quality     │
+  - lens 1: task compliance   │
+  - lens 2: engineering       │
+    quality                   │
+  - lens 3: necessity and     │
+    coherence                 │
   ↓                           │
   needs revision ─────────────┘
   ↓ accepted
@@ -127,7 +129,7 @@ A typical files-backed run, condensed:
 1. You activate with a bare `/agenticloop`. The agent orients itself: it reads the project map and configured docs, reports what the project is and where it currently stands, and proposes the next task -- from open task records, or straight from your implementation plan.
 2. You approve. The maintainer creates `.agenticloop/tasks/T-014.md` with scope, out of scope, acceptance criteria, and required checks.
 3. The engineer implements the smallest useful slice test-first, runs the required checks fresh, and publishes the implementation summary with evidence into the task record.
-4. The maintainer reviews in two passes -- task compliance, then quality -- and accepts or requests revisions with concrete findings.
+4. The maintainer reviews in one ordered three-lens round -- task compliance, engineering quality, then necessity and coherence -- and accepts or requests revisions with concrete findings.
 5. Closeout confirms the inline completion summary and marks the task done. You review a durable record, not a chat scroll.
 
 An implementation plan in the repository is all it needs: bare activation finds the plan, proposes the next task from it, and the loop handles it once you approve. To route directly to a known work unit instead, pass it: `/agenticloop T-014` or a one-line task description.

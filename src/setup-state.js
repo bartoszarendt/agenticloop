@@ -8,7 +8,11 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadAgenticLoopConfig, loadJsonFile } from './json.js';
-import { loadProjectMap } from './project-map.js';
+import {
+  hasConfirmedDevelopmentStage,
+  loadProjectMap,
+  PROJECT_MAP_DEFAULTS,
+} from './project-map.js';
 import {
   INSTALLED_TOOLKIT_ROOT_DIRECTORY,
   MANIFEST_RELATIVE_PATH,
@@ -94,6 +98,9 @@ export function detectSetupState(target, options = {}) {
   let setupStatus = 'absent';
   let taskBackend = null;
   let groupingProfile = null;
+  let developmentStage = null;
+  let maxParallelImplementationLanes = null;
+  let developmentStageConfirmed = false;
 
   if (projectMapExists) {
     const loaded = loadProjectMap(target);
@@ -103,6 +110,10 @@ export function detectSetupState(target, options = {}) {
       setupStatus = projectMap.setup_status ?? 'unconfirmed';
       taskBackend = projectMap.task_backend ?? 'files';
       groupingProfile = projectMap.grouping_profile ?? 'flat';
+      developmentStage = projectMap.development_stage ?? 'unconfirmed';
+      maxParallelImplementationLanes = projectMap.max_parallel_implementation_lanes ??
+        PROJECT_MAP_DEFAULTS.max_parallel_implementation_lanes;
+      developmentStageConfirmed = hasConfirmedDevelopmentStage(projectMap);
     } else {
       setupStatus = 'unconfirmed';
     }
@@ -176,7 +187,8 @@ export function detectSetupState(target, options = {}) {
   const setupComplete =
     toolkitInstalled &&
     projectMapExists &&
-    setupStatus === 'confirmed';
+    setupStatus === 'confirmed' &&
+    developmentStageConfirmed;
 
   const checklist = {
     toolkitInstalled,
@@ -188,6 +200,9 @@ export function detectSetupState(target, options = {}) {
     setupStatus,
     taskBackend,
     groupingProfile,
+    developmentStage,
+    developmentStageConfirmed,
+    maxParallelImplementationLanes,
     stateDirectoryExists,
     tasksDirectoryExists,
     decisionsDirectoryExists,
@@ -239,7 +254,7 @@ export function nextStepsFromState(state) {
     return steps;
   }
 
-  if (state.setupStatus !== 'confirmed') {
+  if (state.setupStatus !== 'confirmed' || state.developmentStageConfirmed === false) {
     steps.push('npx agenticloop setup');
     return steps;
   }
@@ -282,6 +297,12 @@ export function formatSetupChecklist(state) {
   lines.push(`  ${check(state.toolkitInstalled)} Toolkit installed (agenticloop/)`);
   lines.push(`  ${check(state.projectMapExists)} Project map (.agenticloop/project.md)`);
   lines.push(`  ${check(state.setupStatus === 'confirmed')} Setup confirmed`);
+  if (state.developmentStage) {
+    lines.push(`  ${check(state.developmentStageConfirmed)} Development stage: ${state.developmentStage}`);
+  }
+  if (state.maxParallelImplementationLanes) {
+    lines.push(`  ${check(true)} Maximum implementation lanes: ${state.maxParallelImplementationLanes}`);
+  }
 
   if (state.taskBackend) {
     lines.push(`  ${check(true)} Task backend: ${state.taskBackend}`);

@@ -106,12 +106,23 @@ describe('generated orchestrator surfaces route parallel decisions through the c
   }
 });
 
+describe('generated orchestrator surfaces preserve mandatory scan wording', () => {
+  for (const host of HOSTS) {
+    it(`${host.name} orchestrator requires a current scan reference or rescan trigger`, () => {
+      const text = surfaces.get(`${host.name}:orchestrator`);
+      assert.match(text, /Parallel Opportunity Scan after decomposition/i);
+      assert.match(text, /not-currently-eligible status/i);
+      assert.match(text, /rescan trigger/i);
+    });
+  }
+});
+
 describe('canonical Parallel Opportunity Scan policy is documented', () => {
   it('parallel-delegation states the serial justification requirement', () => {
     const text = readFileSync(join(REPO_ROOT, 'skills', 'parallel-delegation', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
     assert.match(text, /only with a concrete recorded reason/i);
     assert.match(text, /sufficient serial reason/i);
-    assert.match(text, /default maximum parallel implementation lanes: 3/i);
+    assert.match(text, /max_parallel_implementation_lanes.*default\s+`?5`?/i);
   });
 
   it('parallel-delegation documents unknown -> read-only discovery -> decide', () => {
@@ -128,6 +139,23 @@ describe('canonical Parallel Opportunity Scan policy is documented', () => {
     assert.match(text, /Short bounded parallel batches/i);
     assert.match(text, /If host limitations make even bounded join-based parallelism unverifiable/i);
     assert.match(text, /run serial and record the host limitation as the concrete reason/i);
+  });
+
+  it('requires a current scan, independent proposal reassessment, and implementation-only ceiling', () => {
+    const text = readFileSync(join(REPO_ROOT, 'skills', 'parallel-delegation', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
+    assert.match(text, /Every authorized multi-task work unit.*current scan/i);
+    assert.match(text, /fewer than two ready tasks.*not currently eligible/i);
+    assert.match(text, /Source plans.*inputs only/i);
+    assert.match(text, /accepts, narrows, reorders, or rejects/i);
+    assert.match(text, /ceiling, never a target or total-live-agent budget/i);
+    assert.match(text, /Review, coordination, and integration lanes do not inherit/i);
+  });
+
+  it('requires every multi-task implementation delegation to carry the scan reference', () => {
+    const text = readFileSync(join(REPO_ROOT, 'skills', 'role-delegation', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
+    assert.match(text, /Parallel scan:\s+`completed - <durable reference>`/i);
+    assert.match(text, /not currently eligible - <reason and rescan trigger>/i);
+    assert.match(text, /Do not delegate multi-task implementation work with the field missing/i);
   });
 });
 
@@ -346,6 +374,19 @@ describe('mutation and knowledge independence are separate eligibility dimension
     assert.match(text, /Knowledge coupling.*`independent`, `coupled`, or `unknown`/i);
     assert.match(text, /Shared assumptions\/invariants/);
     assert.match(text, /Discoveries that could affect other tasks/);
+  });
+});
+
+describe('shared design authority is explicit in parallel planning', () => {
+  it('records decision scope and resolves shared design questions before parallel writes', () => {
+    const parallel = canonicalText(CANONICAL.parallel);
+    const taskRecord = canonicalText(CANONICAL.taskRecord);
+    assert.match(parallel, /Decision scope:/);
+    assert.match(parallel, /Shared design questions:/);
+    assert.match(parallel, /resolved by the maintainer or a serial reconciliation step before parallel implementation writes/i);
+    assert.match(parallel, /Disjoint files do not imply independent design authority/i);
+    assert.match(taskRecord, /Decision scope:/);
+    assert.match(taskRecord, /Shared design questions:/);
   });
 });
 

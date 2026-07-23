@@ -126,7 +126,7 @@ target projects do not need toolkit-root `docs/` files at runtime.
   oracle, final proof required, and likely misfire to keep work aligned with the
   owner's outcome. Proof pressure complements acceptance criteria; it does not
   replace them.
-- **Maintainer Review Fixup**: a bounded Pass 2 review exception in which the
+- **Maintainer Review Fixup**: a bounded Lens 2 or Lens 3 review exception in which the
   maintainer applies one fully understood quality correction to the artifact
   under review, refreshes final-state evidence, re-reviews, and accepts without
   an engineer revision handoff. Eligibility, procedure, and provenance are owned
@@ -146,7 +146,11 @@ target projects do not need toolkit-root `docs/` files at runtime.
   likely discovery in one lane can invalidate another lane's assumptions, plan,
   implementation, or verification interpretation. Classified per task as
   `independent`, `coupled`, or `unknown`; parallel write execution requires
-  both mutation and knowledge independence.
+   both mutation and knowledge independence.
+- **Development stage**: the human-confirmed project posture in
+  `.agenticloop/project.md`: `greenfield`, `expansion`, `stabilization`, or
+  `maintenance`. It guides task shaping and coherence review but never overrides
+  safety, authorization, evidence, review, or accepted-decision rules.
 - **Cross-lane finding**: a fact or invariant discovered in one parallel lane
   that is relevant to another lane, declared at a lease checkpoint or final
   return, routed by the orchestrator, and answered by the recipient with one
@@ -214,9 +218,9 @@ role contracts.
 ## Source Documents
 
 At the start of a non-trivial task, read `.agenticloop/project.md` for
-`task_backend`, task naming, optional grouping settings, typed document
-selections, and relevant current verification operating facts and Project
-Operating Facts.
+`development_stage`, `max_parallel_implementation_lanes`, `task_backend`, task
+naming, optional grouping settings, typed document selections, and relevant
+current verification operating facts and Project Operating Facts.
 
 Document roles are:
 
@@ -237,6 +241,39 @@ runtime.
 The `context` document role is for target-owned domain context, product
 vocabulary, or task-start context. It is not required for Agentic Loop's own
 glossary.
+
+## Development Stage
+
+`development_stage` is a required, human-controlled behavioral prior. Confirmed
+setup requires exactly one of `greenfield`, `expansion`, `stabilization`, or
+`maintenance`; a fresh unconfirmed scaffold may use `unconfirmed`. Missing,
+unconfirmed, or unknown stage on confirmed setup is a setup blocker. Route an
+existing confirmed project missing a stage through the one-time interactive
+profile migration. Agents may propose a transition with bounded evidence, but
+must not persist or apply one; later transitions require another explicit human
+confirmation through the profile-update path.
+
+Stage is subordinate to, in order: safety, authorization, verification, and
+independent-review invariants; explicit human instructions, repository rules,
+accepted decisions, and the current task contract; then the stage; then generic
+Agentic Loop heuristics. It never weakens task scope, TDD, debugging, required
+checks, evidence, security, accessibility, validation, review provenance,
+independent review, decision governance, or the change-request gate. Stage and
+Ponytail minimalism are independent dimensions.
+
+- `greenfield`: establish a coherent foundation; allow bounded internal core
+  reshaping and reject hypothetical compatibility layers or extension points.
+- `expansion`: grow capability without fragmentation; extend or correct shared
+  core mechanisms instead of creating parallel ones.
+- `stabilization`: converge behavior, retire temporary paths, reduce duplication,
+  tighten interfaces, and avoid gratuitous churn.
+- `maintenance`: preserve documented compatibility and operational safety through
+  bounded root-cause fixes, explicit migrations, and minimal blast radius.
+
+Maintainers use the stage to shape task boundaries, expected core areas, and
+compatibility posture. Engineers use it only within authorized scope and return
+`needs_context` when the coherent solution needs a material out-of-scope core or
+contract change. Reviewers use it in Lens 3, never to waive Lens 1 evidence.
 
 ## Context Read Discipline
 
@@ -317,9 +354,11 @@ existing contract-change path.
 At the start of the first non-trivial Agentic Loop task, read
 `.agenticloop/project.md` before creating or selecting the first task.
 
-If `setup_status` is `unconfirmed`, route setup or confirmation before
-continuing. Confirmation may either record typed selections or explicitly accept
-the default document, task naming, grouping, and backend conventions.
+If `setup_status` is `unconfirmed`, or confirmed setup has no valid
+human-confirmed `development_stage`, route interactive setup or profile
+confirmation before continuing. Confirmation may either record typed selections
+or explicitly accept the default document, task naming, grouping, backend, and
+development-stage conventions.
 
 If no legal writer or delegation path is available for that confirmation, use
 `blocked-state` with category `contract` and stop.
@@ -393,16 +432,21 @@ for safe bounded parallelism before defaulting to serial. The default is not
 
 #### Parallel Delegation Summary
 
-Serial is the safety floor, but it is not a reason to skip analysis. When an
-authorized multi-task work unit has 2 or more ready task records, the
-orchestrator must load [[parallel-delegation]] and complete the Parallel
-Opportunity Scan before choosing serial execution.
+Serial is the safety floor, but it is not a reason to skip analysis. Every
+authorized multi-task work unit receives a current Parallel Opportunity Scan
+after decomposition. With fewer than two ready tasks, record a truthful
+not-currently-eligible result and rescan trigger. With two or more ready tasks,
+the orchestrator loads [[parallel-delegation]] and completes the full scan before
+choosing serial execution.
 
 A bounded parallel batch is preferred when 2 or more ready tasks are independent
 on both eligibility dimensions and collision criteria are known and disjoint.
-Default maximum parallel implementation lanes: 3. Use fewer when fewer safe lanes
-exist or the host cannot sustain three; exceed 3 only when project config or
-explicit human instruction raises the limit.
+`max_parallel_implementation_lanes` defaults to `5` and is a ceiling only for
+implementation lanes, never a total live-agent budget or an eligibility grant.
+The effective lane count is the minimum of the configured maximum, ready
+mutation-independent and knowledge-independent tasks, and host-supported bounded
+lanes. Review, coordination, and integration lanes use their separate ownership
+rules and do not inherit this value.
 
 Every parallel write lane needs its own owned backend objects, allowed files or
 areas, implementation or workflow artifact, lease, and join condition. Every
@@ -416,7 +460,11 @@ objects, worktree path and branch for file-mutating lanes, artifact,
 allowed files/areas, collision risks, knowledge-coupling classification,
 liveness cadence, stop condition, and join condition. Backend-specific write
 rules, join behavior, and delegation liveness requirements live in
-[[parallel-delegation]].
+[[parallel-delegation]]. It also records decision scope and shared design
+questions. A shared question is resolved by the maintainer or a serial
+reconciliation step before parallel implementation writes, or by the two-wave
+read-only diagnosis and reconciliation pattern; disjoint files alone do not
+grant independent design authority.
 
 **Mutation independence and knowledge independence.** Parallel write execution
 requires both. Mutation independence means lanes do not collide in writable
@@ -1173,9 +1221,17 @@ after posting, and mention it in evidence only when it affects reproducibility.
 
 ## Review Loop
 
-Review happens in two passes.
+One review round has three ordered lenses in one review turn, one combined
+durable review body, one `review.started`, and one `review.result`:
 
-Pass 1: task compliance.
+1. **Lens 1: Task Compliance**
+2. **Lens 2: Engineering Quality**
+3. **Lens 3: Necessity and Coherence**
+
+Same-turn lenses are not independent review and never satisfy
+`independent_review_required`; existing `review_mode` values remain unchanged.
+
+Lens 1: task compliance.
 
 - Diff matches scope.
 - Out-of-scope work is absent or justified.
@@ -1186,7 +1242,7 @@ Pass 1: task compliance.
 - New behavior has RED-to-GREEN or equivalent evidence.
 - Locked process or architecture decisions did not change accidentally.
 
-Pass 2: code and documentation quality.
+Lens 2: engineering quality.
 
 - Design is appropriate for the task.
 - Names, errors, and boundaries are clear.
@@ -1194,19 +1250,44 @@ Pass 2: code and documentation quality.
 - No secrets, caches, dumps, or raw transcripts were committed.
 - Known limitations and follow-ups are triaged.
 
-If either pass fails, request revision. If review feedback is disputed, resolve
-the dispute with evidence rather than repeated assertion.
+Lens 3: necessity and coherence. Run it only after Lens 1 is clean, after Lens
+2 in the same round. Check whether every new abstraction, dependency, file,
+framework, extension point, or compatibility layer is required by accepted
+scope; existing project/platform/standard-library/installed-dependency capability
+could satisfy it; the root cause is fixed rather than patched in callers; a
+parallel mechanism avoids a bounded core correction; the core change is
+appropriate for the confirmed development stage; limitations have clear upgrade
+triggers; and simplification preserves correctness, clarity, validation, error
+handling, security, accessibility, and evidence.
 
-When Pass 1 is already clean and a Pass 2 finding is minor and fully understood,
-the maintainer may apply one bounded **Maintainer Review Fixup** instead of
-requesting an engineer revision: it corrects the finding on the artifact under
-review, refreshes final-state evidence, re-runs both passes against the result,
-and accepts with `review_mode: single_agent_fallback`. A successful fixup is part
-of the current review round and does not create a `needs_revision` round.
-Independent-review tasks are ineligible, and any finding that expands, becomes
-uncertain, or exceeds one coherent edit packet returns to the normal engineer
-revision path. Merge, integration, issue closure, and closeout gates are
-unchanged. All eligibility and procedure live in [[review-and-accept]].
+Lens 3 blocks only concrete artifact costs: unused or speculative abstractions,
+unnecessary dependencies, hypothetical scaffolding, task-introduced dead code,
+duplicate mechanisms, a smaller safer authorized root fix displaced by
+patch-in-every-caller workarounds, compatibility layers without a real contract,
+stage-inappropriate churn, or stage-inappropriate refusal to correct core code.
+It does not block style preferences, theoretically shorter alternatives without
+material benefit, removal of accepted requirements, broad redesign outside the
+task, unrelated cleanup, or speculative optimization. An observation that would
+change accepted scope, an accepted decision, or a public contract routes through
+[[change-request-gate]], a follow-up, or a new task; Lens 3 does not relitigate
+the accepted task contract. Ponytail remains opt-in; Lens 3 is always active and
+only additionally checks Ponytail intensity and `ponytail:` limitations when the
+task explicitly activates Ponytail.
+
+If Lens 1 fails, return `needs_revision` without optional Lens 2 or Lens 3
+comments. Otherwise request revision for a concrete failing lens. If review
+feedback is disputed, resolve the dispute with evidence rather than repeated
+assertion.
+
+When Lens 1 is clean and one Lens 2 or Lens 3 finding is minor and fully
+understood, the maintainer may apply one bounded **Maintainer Review Fixup**
+instead of requesting an engineer revision. The lenses share one fixup episode
+per task; after the fixup, rerun all three against the resulting artifact and
+accept only with `review_mode: single_agent_fallback`. Independent-review tasks
+are ineligible, and any finding that expands, becomes uncertain, or exceeds one
+coherent edit packet returns to the normal engineer revision path. Merge,
+integration, issue closure, and closeout gates are unchanged. All eligibility and
+procedure live in [[review-and-accept]].
 
 Every review outcome records its mode and the exact artifact revision reviewed.
 Final acceptance requires current, non-stale provenance. Tasks requiring

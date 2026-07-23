@@ -98,14 +98,17 @@ in the delegation output.
 
 Delegation is serial by default. Mutation governs concurrency safety, and
 knowledge coupling governs it alongside mutation: parallel write execution
-requires mutation independence plus knowledge independence. When an
-authorized multi-task unit has 2 or more ready task records, or when planning,
-reviewing, or joining parallel lanes, load [[parallel-delegation]] before routing
-work.
+requires mutation independence plus knowledge independence. Every authorized
+multi-task unit carries a current Parallel Opportunity Scan after decomposition:
+with fewer than two ready tasks it records not-currently-eligible status and a
+rescan trigger; with two or more it loads [[parallel-delegation]] before routing
+implementation work. Planning, reviewing, and joining parallel lanes also load
+that skill.
 
 Role-delegation keeps the delegation prompt contract: the `Concurrency:` line is
 required for delegated work and must be either `serial -- reason: <concrete
-blocker>` or `parallel batch <id> -- lanes: <n>/3; join: <condition>`. The
+blocker>` or `parallel batch <id> -- lanes: <n>/<configured maximum>; join:
+<condition>`. The
 `Lease:` line carries observable-step checkpoint cadence, no-progress budget,
 and any relevant duration or milestone. Parallel plans, backend-specific lane
 rules, join behavior, and parallel liveness details live in [[parallel-delegation]].
@@ -213,9 +216,10 @@ Scope:             <what the role should do>
 Out of scope:      <what the role must not do>
 Expected output:   <what the role should produce>
 Routed findings:   none | <finding ids with fact, evidence ref, and required disposition per finding>
+Parallel scan:     `completed - <durable reference>` | `not currently eligible - <reason and rescan trigger>` (required for multi-task implementation delegation)
 Stop condition:    <when the role must stop and return to orchestrator or human>
 Budgets:           <omit when all defaults/low; else `minimalism=<lite|full|ultra>; attempt_budget=<n>; review_budget=<n>; context_overflow_risk=<medium|high>` for non-default task-record constraints>
-Concurrency:       `serial -- reason: <concrete blocker>`, or `parallel batch <id> -- lanes: <n>/3; join: <condition>`
+Concurrency:       `serial -- reason: <concrete blocker>`, or `parallel batch <id> -- lanes: <n>/<configured maximum>; join: <condition>`
 Lease:             <observable-step checkpoint cadence, no-progress budget, and any relevant max duration or milestone>
 ```
 
@@ -238,6 +242,12 @@ recipient returns `applied`, `already satisfied`, `rejected` with evidence, or
 `deferred` with a reason and effect on correctness, safety, acceptance, and
 evidence. Deferral remains join-blocking pending non-blocking limitation or
 follow-up triage. Do not overload `Operating facts` with raw findings.
+
+For every multi-task implementation delegation, `Parallel scan:` is required.
+The `completed` form points to the current durable scan; the
+`not currently eligible` form names the truthful reason and rescan trigger. A
+source plan or maintainer recommendation does not substitute for this line. Do
+not delegate multi-task implementation work with the field missing.
 
 `Budgets:` propagates non-default task-record minimalism, effort budgets, and
 medium/high context risk; omit it for defaults/low. At a budget or unexpected
@@ -410,7 +420,8 @@ Every orchestrator update must include:
 - Role invoked: <role name>
 - Host delegation check: <tool/mechanism found and used | verified absent by ... | attempted and failed with ...>
 - Host delegation used: <yes | no>
-- Concurrency: <`serial -- reason: <concrete blocker>` | `parallel batch <id> -- lanes: <n>/3; join: <condition>`>
+- Concurrency: <`serial -- reason: <concrete blocker>` | `parallel batch <id> -- lanes: <n>/<configured maximum>; join: <condition>`>
+- Parallel scan: <`completed - <durable reference>` | `not currently eligible - <reason and rescan trigger>` for multi-task implementation>
 - Lease: <none | observable-step checkpoint cadence, no-progress budget, and stop condition>
 - Fallback: <none | single-agent role assumption as maintainer | single-agent role assumption as engineer>
 - Consequence: <none | fallback limited to one role step and boundary enforcement relies on explicit self-policing until return>
@@ -436,8 +447,9 @@ omit the delegation field.
   stays unknown after work starts, or maintainer/engineer work appears inline in orchestrator output.
 - An available host task, subagent, or named-agent mechanism for maintainer or engineer is skipped
   without a recorded failure.
-- A multi-task unit with 2+ ready tasks is delegated serially without the Parallel Opportunity
-  Scan, or serial is chosen with no concrete reason.
+- A multi-task unit lacks a current Parallel Opportunity Scan result, a multi-task
+  implementation delegation omits `Parallel scan:`, or serial is chosen with no
+  concrete reason and rescan trigger.
 - Parallel role work starts without a concurrency plan, lease, stop condition, or join condition;
   write lanes share checkout, branch, worktree, artifact, task record, or mutable files; or a copied
   directory is used as a pseudo-worktree.

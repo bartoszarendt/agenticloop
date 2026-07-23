@@ -249,8 +249,12 @@ restate them. Add stale-assumption triggers that tell the engineer when to retur
 
 ## Concurrency plan
 
-Add `## Concurrency Plan` when the orchestrator authorizes parallel delegation.
-The plan names each lane's id, type (read-only, implementation, or
+Use `## Concurrency Plan` for every current Parallel Opportunity Scan. With fewer
+than two ready tasks, record the truthful `not currently eligible` result and a
+rescan trigger; with two or more ready tasks, record the full scan before any
+implementation delegation. Do not duplicate one scan in every task. When the
+orchestrator authorizes parallel delegation, the same section also names each
+lane's id, type (read-only, implementation, or
 coordination/review), role, read/write mode, owned backend objects, worktree
 path and branch, artifact, allowed files or areas, and shared collision risks
 (including test/fixture/snapshot/shared-helper ownership), plus lease
@@ -262,8 +266,12 @@ trigger and owner (or the recorded reason it is omitted), the intended
 artifact composition order, and the rerun/invalidation trigger for stale
 integrated evidence. The join condition covers finding dispositions and
 required integrated evidence. [[parallel-delegation]] owns the field meanings
-and operational rules. Omit the section, or state serial, when no parallel
-delegation is planned.
+and operational rules, including the durable scan fields: work unit, ready-set
+snapshot, source proposals considered, configured maximum implementation lanes,
+candidate lanes, mutation and knowledge independence, decision scope, shared
+design questions, backend/worktree ownership, host/liveness capability,
+verification/integration implications, decision, independent rationale, and
+rescan trigger.
 
 ## Parallel Safety
 
@@ -284,6 +292,10 @@ Fields:
 - **Backend objects owned**: task file(s), GitHub issue/PR, labels, or other
   records the lane mutates.
 - **Dependency edges**: other tasks in the unit that must finish first.
+- **Decision scope**: the lane-local design decisions this task may make.
+- **Shared design questions**: design decisions affecting multiple lanes, with
+  their maintainer or serial-reconciliation owner. Resolve these before parallel
+  implementation writes or use the two-wave read-only diagnosis pattern.
 - **Shared assumptions/invariants**: behavioral facts, contracts, or
   verification interpretations sibling tasks rely on.
 - **Discoveries that could affect other tasks**: likely findings that would

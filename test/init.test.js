@@ -181,6 +181,14 @@ describe('init - .agenticloop/project.md handling', () => {
     assert.ok(content.includes('setup_status: unconfirmed'), 'project.md should start unconfirmed');
   });
 
+  it('project.md scaffolds an unconfirmed development stage and default implementation-lane ceiling', async () => {
+    const d = makeEmptyTarget();
+    await init({ target: d });
+    const content = readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8');
+    assert.ok(content.includes('development_stage: unconfirmed'));
+    assert.ok(content.includes('max_parallel_implementation_lanes: 5'));
+  });
+
   it('project.md includes the empty verification operating-facts section', async () => {
     const d = makeEmptyTarget();
     await init({ target: d });

@@ -106,8 +106,31 @@ If present, each field must be concrete.
   restate them.
 
 ## Concurrency Plan
-Optional. Required only when the orchestrator allows parallel delegation for
-this task or task batch. Name each lane id, lane type (read-only,
+Required for the current Parallel Opportunity Scan of every authorized multi-task
+work unit. Keep one scan in the task-record or coordination surface rather than
+duplicating it into every task. With fewer than two ready tasks, record `Decision:
+not currently eligible - <n> ready task(s)` and its rescan trigger. With two or
+more ready tasks, record:
+
+### Parallel Opportunity Scan
+
+- Work unit:
+- Ready-set snapshot:
+- Source proposals considered:
+- Configured maximum implementation lanes:
+- Candidate lanes:
+- Mutation independence:
+- Knowledge independence:
+- Decision scope:
+- Shared design questions:
+- Backend/worktree ownership:
+- Host and liveness capability:
+- Verification/integration implications:
+- Decision: parallel <lane ids> | serial | not currently eligible
+- Independent rationale:
+- Rescan trigger:
+
+When parallel delegation is authorized, also name each lane id, lane type (read-only,
 implementation, or coordination/review), role, read/write mode, owned backend
 objects, worktree path and branch for file-mutating write lanes, implementation
 or workflow artifact, allowed files or areas, shared collision risks (including
@@ -147,6 +170,8 @@ orchestrator's Parallel Opportunity Scan can classify the task. It complements
 - Schema/API/lockfile risk:
 - Backend objects owned:
 - Dependency edges:
+- Decision scope:
+- Shared design questions:
 - Shared assumptions/invariants:
 - Discoveries that could affect other tasks:
 - Parallel eligibility: eligible | blocked | unknown
@@ -161,6 +186,11 @@ two-wave pattern (parallel diagnosis, reconciliation, then serial or re-planned
 implementation) applies; `unknown` when the maintainer cannot yet tell. Parallel
 write execution requires `eligible` plus `independent`. Separate worktrees
 never convert coupled or unknown tasks into independent tasks.
+
+Shared design questions belong to the maintainer or a serial reconciliation step,
+not two independent engineers. Resolve them before parallel implementation writes
+or use the two-wave read-only diagnosis and reconciliation pattern. Disjoint
+files do not imply independent design authority.
 
 If code/collision eligibility or knowledge coupling is unknown and 2 or more
 ready tasks could otherwise run in parallel, the maintainer resolves it with one
@@ -186,6 +216,7 @@ here so the engineer knows what evidence to publish.
 - [ ] The durable task record includes the current implementation summary.
 - [ ] The implementation artifact is linked to the task record.
 - [ ] If parallel delegation was used, the concurrency plan was followed and the join condition was met.
+- [ ] For every multi-task work unit, the current Parallel Opportunity Scan has a durable result and rescan trigger; source proposals were independently reassessed.
 - [ ] If parallel delegation was used, the knowledge-coupling classification was recorded, and coupled work used the two-wave reconciliation before implementation continued.
 - [ ] If cross-lane findings were routed, every routed finding has a recorded recipient disposition.
 - [ ] Every deferred cross-lane finding was triaged as non-blocking and accepted/follow-up; otherwise it still blocks the join.

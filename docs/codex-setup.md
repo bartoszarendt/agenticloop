@@ -68,8 +68,9 @@ The public skill is still rendered from the canonical `agenticloop/commands/star
 contract, but the Codex adapter adds host-specific guidance:
 
 1. read `.agenticloop/project.md` first
-2. route setup confirmation through the internal `setup-agenticloop` reference
-   when `setup_status` is `unconfirmed`
+2. route setup/profile confirmation through the internal `setup-agenticloop`
+   reference when `setup_status` is `unconfirmed` or `development_stage` is not
+   human-confirmed
 3. read `agenticloop/AGENTIC_LOOP.md` and canonical role contracts under `agenticloop/agents/`
 4. create or refine the durable task record before implementation
 5. keep the main Codex session as the coordinator/orchestrator
@@ -132,12 +133,14 @@ This addresses the first live Codex smoke failure where a mixed message/items
 spawn attempt was rejected.
 
 Codex may expose multiple custom agents, but Agentic Loop is serial by default.
-For an authorized multi-task unit with 2 or more ready task records, the
-orchestrator performs a Parallel Opportunity Scan before defaulting to serial;
-bounded eligible batches may use up to 3 implementation lanes, and choosing
-serial after eligible candidates exist requires a recorded concrete reason. The
+Every authorized multi-task unit receives a current Parallel Opportunity Scan
+after decomposition; fewer than two ready tasks still record a truthful
+not-currently-eligible result and rescan trigger. Bounded eligible implementation
+batches use at most the configured project maximum (default five), which is a
+ceiling rather than a total-agent budget. The
 orchestrator should not start parallel maintainer or engineer agents unless
-it records the concurrency plan, collision criteria, lease, and join condition
+it records the concurrency plan, collision criteria, decision scope, shared-design
+resolution, lease, and join condition
 required by `agenticloop/AGENTIC_LOOP.md` and
 `agenticloop/skills/role-delegation/SKILL.md`. Long-running parallelism has
 stronger observability requirements than short bounded join-based batches. Parallel write lanes that mutate

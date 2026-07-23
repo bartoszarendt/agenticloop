@@ -291,8 +291,8 @@ function renderCursorPublicSkill(skillReferenceMap, agentNames, backendEntries, 
 
   body = replaceRequiredTemplateText(
     body,
-    'route `agenticloop/skills/setup-agenticloop/SKILL.md` or confirm the defaults before\nselecting or creating the first task.',
-    `route \`${setupReferencePath}\` or confirm the defaults before selecting or creating the first task.`,
+    'confirmed map lacks a valid human-confirmed `development_stage`, route\n`agenticloop/skills/setup-agenticloop/SKILL.md` or confirm the profile before\nselecting or creating the first task.',
+    `confirmed map lacks a valid human-confirmed \`development_stage\`, route \`${setupReferencePath}\` or confirm the profile before\nselecting or creating the first task.`,
     'setup routing'
   );
 
@@ -390,7 +390,7 @@ function buildCursorAgentBody(
 
   if (roleName === 'orchestrator') {
     lines.push(`The active Cursor session is the coordinator/orchestrator. When maintainer-owned work is needed, delegate through the Cursor subagent \`${maintainerAgent}\`. When engineer-owned work is needed, delegate through the Cursor subagent \`${engineerAgent}\` instead of doing that work inline.`);
-    lines.push('Agentic Loop is serial by default. For authorized multi-task units with 2+ ready task records, load parallel-delegation before choosing serial or parallel execution.');
+    lines.push('Agentic Loop is serial by default. For every authorized multi-task unit, complete a current Parallel Opportunity Scan after decomposition and include its durable result or not-currently-eligible rescan trigger in implementation delegation. Load parallel-delegation before choosing serial or parallel execution.');
     lines.push('Start parallel role work only when the parallel-delegation skill plan, lease, backend ownership, and join condition requirements are satisfied; otherwise record the concrete serial reason.');
     lines.push('Use real Cursor subagent delegation where the current surface supports it.');
     lines.push(`If delegation is unavailable after a capability check, record a bounded fallback reason and continue according to \`${roleDelegationReferencePath}\`.`);

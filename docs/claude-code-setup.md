@@ -25,7 +25,8 @@ activation, not a hook and not a managed `CLAUDE.md` override.
 - Plugin Mode A stop: run `/agenticloop:stop`
 
 Both commands read `.agenticloop/project.md` first, route or confirm setup when
-`setup_status` is `unconfirmed`, and then enter the normal Agentic Loop flow.
+`setup_status` is `unconfirmed` or `development_stage` is not human-confirmed,
+and then enter the normal Agentic Loop flow.
 Stop instead deactivates the current conversation before setup or task selection,
 checkpoints unfinished work when needed, and does not perform closeout, commits,
 pushes, merges, or worktree cleanup. Resume with the matching normal activation
@@ -34,12 +35,14 @@ command.
 ## Delegation Topology
 
 Claude Code may expose multiple subagents, but Agentic Loop is serial by
-default. For an authorized multi-task unit with 2 or more ready task records, the
-orchestrator performs a Parallel Opportunity Scan before defaulting to serial;
-bounded eligible batches may use up to 3 implementation lanes, and choosing
-serial after eligible candidates exist requires a recorded concrete reason. The
+default. Every authorized multi-task unit receives a current Parallel Opportunity
+Scan after decomposition; fewer than two ready tasks still record a truthful
+not-currently-eligible result and rescan trigger. Bounded eligible implementation
+batches use at most the configured project maximum (default five), which is a
+ceiling rather than a total-agent budget. The
 orchestrator should not start parallel maintainer or engineer
-subagents unless it records the concurrency plan, collision criteria, lease, and
+subagents unless it records the concurrency plan, collision criteria, decision
+scope, shared-design resolution, lease, and
 join condition required by `agenticloop/AGENTIC_LOOP.md` and
 `agenticloop/skills/role-delegation/SKILL.md`. Long-running parallelism has
 stronger observability requirements than short bounded join-based batches.
