@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (Unreleased)
+## 0.2.0 - 2026-07-23
 
 ### Added
 - Phase 25 Set 2 project posture, parallel-scan, and review controls. Confirmed
@@ -272,3 +272,8 @@
 ### Removed
 - Unused config role fields: `responsibilities`, `canEditImplementationFiles`, `canEditDocs`.
 - Broken installed `AGENTIC_LOOP.md` link to `docs/workflow-examples.md`.
+
+## 0.1.0 - 2026-06-24
+
+### Added
+- Initial public release.

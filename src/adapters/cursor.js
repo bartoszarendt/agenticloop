@@ -599,7 +599,7 @@ function writeCursorPublicSkillSurface(
 
 function loadPackageVersion() {
   const pkg = JSON.parse(readFileSync(PACKAGE_JSON_PATH, 'utf-8'));
-  return typeof pkg.version === 'string' && pkg.version.trim() ? pkg.version.trim() : '0.1.0';
+  return typeof pkg.version === 'string' && pkg.version.trim() ? pkg.version.trim() : '0.0.0';
 }
 
 function buildCursorPluginManifest(version) {

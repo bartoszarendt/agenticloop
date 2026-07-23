@@ -1,7 +1,7 @@
 {
   "name": "agenticloop",
   "description": "Agentic Loop workflow toolkit: supervised orchestrator/maintainer/engineer roles plus markdown-first skills for planning, TDD, review, and closeout.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Bartosz Arendt"
   },

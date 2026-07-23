@@ -6,7 +6,7 @@ AI coding agents are useful, but they are unreliable at sustained software work.
 
 Agentic Loop adds that layer. It installs as a lightweight, removable overlay in an existing project and never rewrites your target-owned documents: your `README.md`, implementation plan, and architecture docs stay untouched. (The one clearly marked, removable exception is described in [Repository-rules activation guidance](#repository-rules-activation-guidance).) It gives agents the scaffolding they need to stay in scope, produce evidence, and respect review gates.
 
-![Version: 0.1.0](https://img.shields.io/badge/version-0.1.0-blue)
+![Version: 0.2.0](https://img.shields.io/badge/version-0.2.0-blue)
 ![Node.js >=20](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -509,7 +509,7 @@ updates. Canonical toolkit assets (agents, skills, backends) always live under
 
 ## Status
 
-Version 0.1.0. The methodology, files backend, Node CLI, validation, overlay management, and all five host adapters (OpenCode, Claude Code, Codex, Copilot, and Cursor) are supported and ready for use.
+Version 0.2.0. The methodology, files backend, Node CLI, validation, overlay management, and all five host adapters (OpenCode, Claude Code, Codex, Copilot, and Cursor) are supported and ready for use.
 
 Registry, marketplace, and centralized services are intentionally deferred -- see [docs/registry-horizon.md](docs/registry-horizon.md) for the reasoning and the evidence gates that would need to pass before revisiting.
 
