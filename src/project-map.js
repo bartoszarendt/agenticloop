@@ -157,7 +157,6 @@ export function loadProjectMap(repoRoot) {
   const [fm] = parseFrontmatter(content);
 
   const raw = normalizeRawFrontmatter(fm ?? {});
-  const verificationFacts = parseVerificationOperatingFacts(content).facts;
   const groupingProfile = raw.grouping_profile ?? PROJECT_MAP_DEFAULTS.grouping_profile;
   const groupingDefaults = GROUPING_PROFILE_DEFAULTS[groupingProfile] ?? {};
   const config = {
@@ -166,6 +165,9 @@ export function loadProjectMap(repoRoot) {
     ...raw,
     documents: mergeDocuments(raw.documents),
   };
+  const verificationFacts = parseVerificationOperatingFacts(content, {
+    taskIdRegex: config.task_id_regex,
+  }).facts;
 
   return { config, raw, content, verificationFacts };
 }
@@ -191,6 +193,7 @@ export function validateProjectMap(config, raw, repoRoot) {
   if (existsSync(projectMapPath)) {
     const verificationFacts = parseVerificationOperatingFacts(readFileSync(projectMapPath, 'utf-8'), {
       decisionExists: decisionId => localDecisionExists(repoRoot, decisionId),
+      taskIdRegex: config.task_id_regex,
     });
     errors.push(...verificationFacts.errors);
   }

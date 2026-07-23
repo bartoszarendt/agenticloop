@@ -28,6 +28,10 @@ const FACT = `## Verification Operating Facts
 - Revisit when: the suite layout, expected runtime, CI behavior, or host ceiling changes
 - Decision: none`;
 
+function factWithSource(source) {
+  return FACT.replace('- Source: T-017', `- Source: ${source}`);
+}
+
 function attempt({
   number = 1,
   command = '`npm test`',
@@ -93,6 +97,45 @@ describe('project verification operating facts', () => {
     assert.deepEqual(result.errors, []);
     assert.equal(result.facts[0].id, 'VF-full-suite');
     assert.equal(result.facts[0].strategy, 'background');
+  });
+
+  it('accepts every supported durable source form', () => {
+    const cases = [
+      ['P25-17', { taskIdRegex: '^P\\d+-\\d+$' }],
+      ['task:P25-17', { taskIdRegex: '^P\\d+-\\d+$' }],
+      ['event:550e8400-e29b-41d4-a716-446655440000', {}],
+      ['issue:#17', {}],
+      ['pr:17', {}],
+      ['github:issue:17', {}],
+      ['github:pr:17', {}],
+      ['commit:abcdef1', {}],
+      ['https://github.com/example/project/issues/17', {}],
+      ['docs/testing.md#fast-unit-tests', {}],
+    ];
+
+    for (const [source, options] of cases) {
+      const result = parseVerificationOperatingFacts(factWithSource(source), options);
+      assert.deepEqual(result.errors, [], `expected durable source to pass: ${source}`);
+    }
+  });
+
+  it('rejects empty source prefixes, prose, and task ids outside the configured pattern', () => {
+    const sources = [
+      'task:',
+      'event:',
+      'commit:',
+      'https://',
+      'fast unit selection timed out during verification',
+      'P25-17',
+    ];
+
+    for (const source of sources) {
+      const result = parseVerificationOperatingFacts(factWithSource(source));
+      assert.ok(
+        result.errors.some(error => error.includes("field 'Source'")),
+        `expected non-durable source to fail: ${source}`
+      );
+    }
   });
 
   it('rejects duplicate ids, invalid enums and invalid numeric fields', () => {

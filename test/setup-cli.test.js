@@ -371,7 +371,7 @@ describe('setup CLI', () => {
 
     const input = [
       'yes',
-      'stabilization',
+      '3',
       '',
       '',
       '',
@@ -387,6 +387,11 @@ describe('setup CLI', () => {
     assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
     assert.match(result.stdout, /Development stage proposal: selection required/);
     assert.match(result.stdout, /requires an explicit development-stage selection/);
+    assert.match(result.stdout, /1\. greenfield - establish a coherent foundation/);
+    assert.match(result.stdout, /2\. expansion - grow capability without fragmentation/);
+    assert.match(result.stdout, /3\. stabilization - converge and harden behavior/);
+    assert.match(result.stdout, /4\. maintenance - preserve compatibility and operational safety/);
+    assert.match(result.stdout, /Choice \(required\):/);
     const [fm] = parseFrontmatter(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'));
     assert.equal(fm.development_stage, 'stabilization');
   });
@@ -404,9 +409,11 @@ describe('setup CLI', () => {
     });
 
     const transition = run(['setup', '--target', d], {
-      input: ['yes', 'maintenance', '3', 'Compatibility commitments now govern changes.', 'After a planned major migration.', 'yes', '4'].join('\n'),
+      input: ['yes', '4', '3', 'Compatibility commitments now govern changes.', 'After a planned major migration.', 'yes', '4'].join('\n'),
     });
     assert.equal(transition.status, 0, `stdout:\n${transition.stdout}\nstderr:\n${transition.stderr}`);
+    assert.match(transition.stdout, /Select development stage:/);
+    assert.match(transition.stdout, /Choice \(default: expansion; Enter to keep\):/);
     let [fm] = parseFrontmatter(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'));
     assert.equal(fm.development_stage, 'maintenance');
     assert.equal(fm.max_parallel_implementation_lanes, '3');

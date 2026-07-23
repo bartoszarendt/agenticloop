@@ -94,6 +94,12 @@ Allowed `Last outcome` values are `passed`, `failed`, `timed_out`, and
 Facts are current state; task attempts remain evidence. Only policy-level
 conclusions use [[decision-capture]].
 
+Use a concrete durable `Source` value, not descriptive prose. Accepted shapes
+are the configured task id (for example `P25-17`), `task:<TASK-ID>`,
+`event:<uuid>`, `issue:#42`, `pr:42`, `github:issue:42`, `github:pr:42`,
+`commit:<sha>`, an HTTP(S) URL, or a Markdown path with an optional anchor such
+as `docs/testing.md#fast-unit-tests`.
+
 ### Append-only task attempt history
 
 New task records use this exact empty state:

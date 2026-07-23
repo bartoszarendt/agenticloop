@@ -33,6 +33,12 @@ const ADAPTER_MODE_CHOICES = [
   { index: 3, label: 'All supported hosts', value: 'all', action: 'all' },
   { index: 4, label: 'Skip adapter setup', value: null, action: 'skip' },
 ];
+const DEVELOPMENT_STAGE_DESCRIPTIONS = {
+  greenfield: 'establish a coherent foundation',
+  expansion: 'grow capability without fragmentation',
+  stabilization: 'converge and harden behavior',
+  maintenance: 'preserve compatibility and operational safety',
+};
 
 function formatAdapterModeChoices(detectedHosts) {
   const lines = [];
@@ -105,23 +111,41 @@ function isPositiveInteger(value) {
   return Number.isInteger(value) && value > 0;
 }
 
+function formatDevelopmentStageChoices() {
+  return DEVELOPMENT_STAGES.map((stage, index) =>
+    `    ${index + 1}. ${stage} - ${DEVELOPMENT_STAGE_DESCRIPTIONS[stage]}`
+  ).join('\n');
+}
+
+function resolveDevelopmentStageChoice(answer) {
+  if (isValidStage(answer)) return answer;
+  if (!/^\d+$/.test(answer)) return null;
+  return DEVELOPMENT_STAGES[Number(answer) - 1] ?? null;
+}
+
 async function promptValidStage(prompts, write, currentValue) {
   let rejectedInput = false;
   while (true) {
-    const current = isValidStage(currentValue) ? currentValue : 'selection required';
-    const answer = (await prompts.ask(`  Development stage (${current}): `)).trim();
+    const hasDefault = isValidStage(currentValue);
+    const promptLabel = hasDefault
+      ? `  Choice (default: ${currentValue}; Enter to keep): `
+      : '  Choice (required): ';
+    const answer = (await prompts.ask(
+      `  Select development stage:\n${formatDevelopmentStageChoices()}\n${promptLabel}`
+    )).trim();
     if (!answer) {
-      if (!rejectedInput && isValidStage(currentValue)) {
+      if (!rejectedInput && hasDefault) {
         return { value: currentValue, cancelled: false };
       }
-      write('  Development-stage selection cancelled; enter one exact allowed value to continue.');
+      write('  Development-stage selection cancelled; enter a choice number or exact stage name to continue.');
       return { value: currentValue, cancelled: true };
     }
-    if (isValidStage(answer)) {
-      return { value: answer, cancelled: false };
+    const selectedStage = resolveDevelopmentStageChoice(answer);
+    if (selectedStage) {
+      return { value: selectedStage, cancelled: false };
     }
     rejectedInput = true;
-    write(`  Invalid development stage. Choose one of: ${DEVELOPMENT_STAGES.join(', ')}.`);
+    write(`  Invalid development stage. Enter 1-${DEVELOPMENT_STAGES.length} or one of: ${DEVELOPMENT_STAGES.join(', ')}.`);
   }
 }
 

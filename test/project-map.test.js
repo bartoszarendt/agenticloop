@@ -92,6 +92,37 @@ describe('validateProjectMap', () => {
     assert.deepEqual(validation.errors, []);
   });
 
+  it('uses the configured task id pattern for verification fact sources', () => {
+    const dir = makeProjectMap([
+      'task_id_pattern: "P<phase>-<number>"',
+      'task_id_regex: "^P\\d+-\\d+$"',
+    ]);
+    const projectPath = join(dir, '.agenticloop', 'project.md');
+    writeFileSync(projectPath, readFileSync(projectPath, 'utf-8') + `
+
+## Verification Operating Facts
+
+### VF-fast-unit-selection-timeout
+
+- Command: \`npm run test:fast\`
+- Last outcome: timed_out
+- Observed duration ms: 120000
+- Timeout ms: 120000
+- Host timeout ceiling ms: 120000
+- Strategy: focused
+- Updated: 2026-07-23
+- Source: P25-17
+- Revisit when: the fast-test selection or host timeout changes
+- Decision: none
+`);
+
+    const result = loadProjectMap(dir);
+    const validation = validateProjectMap(result.config, result.raw, dir);
+
+    assert.deepEqual(validation.errors, []);
+    assert.equal(result.verificationFacts[0].source, 'P25-17');
+  });
+
   it('accepts event_logging: enabled', () => {
     const dir = makeProjectMap([
       'event_logging: enabled',

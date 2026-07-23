@@ -113,9 +113,35 @@ export function decisionReferenceId(value) {
   return /^D-[A-Za-z0-9][A-Za-z0-9._-]*$/.test(normalized) ? normalized : null;
 }
 
-function isDurableSource(value) {
+function matchesTaskId(value, taskIdRegex) {
+  const pattern = typeof taskIdRegex === 'string' && taskIdRegex.trim()
+    ? taskIdRegex
+    : '^T-[A-Za-z0-9._-]+$';
+  try {
+    return new RegExp(pattern).test(value);
+  } catch {
+    return false;
+  }
+}
+
+function isHttpUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && Boolean(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isDurableSource(value, options = {}) {
   const normalized = String(value ?? '').trim();
-  return /^(?:T-[A-Za-z0-9._-]+|task:|event:|issue:#?\d+|pr:#?\d+|github:(?:issue|pr):\d+|commit:|https?:\/\/|\.?\/?[A-Za-z0-9_./-]+\.md(?:#\S+)?)$/i.test(normalized);
+  if (matchesTaskId(normalized, options.taskIdRegex)) return true;
+
+  const taskMatch = normalized.match(/^task:(.+)$/i);
+  if (taskMatch) return matchesTaskId(taskMatch[1], options.taskIdRegex);
+
+  return /^(?:event:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|issue:#?\d+|pr:#?\d+|github:(?:issue|pr):\d+|commit:[0-9a-f]{7,64}|\.?\/?[A-Za-z0-9_./-]+\.md(?:#\S+)?)$/i.test(normalized) ||
+    isHttpUrl(normalized);
 }
 
 function isFollowUpReference(value) {
@@ -130,7 +156,7 @@ function isBlockerReference(value) {
  * Parse and validate the current project-map verification projection.
  *
  * @param {string} content
- * @param {{ decisionExists?: (id: string) => boolean }} [options]
+ * @param {{ decisionExists?: (id: string) => boolean, taskIdRegex?: string }} [options]
  */
 export function parseVerificationOperatingFacts(content, options = {}) {
   const errors = [];
@@ -197,8 +223,11 @@ export function parseVerificationOperatingFacts(content, options = {}) {
     const updated = requiredField(fields, 'Updated', label, errors);
     if (updated) requireDate(updated, 'Updated', label, errors);
     const source = requiredField(fields, 'Source', label, errors);
-    if (source && !isDurableSource(source)) {
-      errors.push(`${label} field 'Source' must identify task evidence, an event, issue/PR, or another durable source`);
+    if (source && !isDurableSource(source, options)) {
+      errors.push(
+        `${label} field 'Source' must be a configured task id, task:<id>, event:<uuid>, ` +
+        'issue/PR, commit:<sha>, HTTP(S) URL, or durable Markdown reference'
+      );
     }
     const revisitWhen = requiredField(fields, 'Revisit when', label, errors);
     const decision = requiredField(fields, 'Decision', label, errors);
