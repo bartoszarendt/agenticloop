@@ -189,15 +189,17 @@ describe('lifecycle CLI', () => {
     const configPath = join(d, 'agenticloop.json');
     const config = JSON.parse(readFileSync(configPath, 'utf-8'));
     config.adapters.codex.roleSettings.engineer.model = 'custom-engineer';
+    config.adapters.codex.roleSettings.engineer.reasoningEffort = 'minimal';
     writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
 
     assertOk(run(['update', '--target', d]));
 
     const updated = JSON.parse(readFileSync(configPath, 'utf-8'));
     assert.equal(updated.adapters.codex.roleSettings.engineer.model, 'custom-engineer');
+    assert.equal(updated.adapters.codex.roleSettings.engineer.reasoningEffort, 'minimal');
     const toml = readFileSync(join(d, '.codex', 'agents', 'engineer.toml'), 'utf-8');
     assert.ok(toml.includes('model = "custom-engineer"'));
-    assert.ok(toml.includes('model_reasoning_effort = "xhigh"'));
+    assert.ok(toml.includes('model_reasoning_effort = "minimal"'));
   });
 
   it('update does not infer Codex from a stale generated skills directory alone', () => {
