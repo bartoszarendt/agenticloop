@@ -22,6 +22,7 @@ export const MEMORY_SCAFFOLD_RELATIVE_PATH = 'agenticloop/memory/scaffold';
 export const PROJECT_SCAFFOLD_RELATIVE_PATH = 'agenticloop/memory/scaffold/project.md';
 export const DECISION_RECORD_TEMPLATE_RELATIVE_PATH = 'agenticloop/memory/decision-record.md';
 export const TASK_RECORD_TEMPLATE_RELATIVE_PATH = 'agenticloop/memory/task-record.md';
+export const AUDIT_RECORD_TEMPLATE_RELATIVE_PATH = 'agenticloop/memory/audit-record.md';
 export const WORK_UNIT_SUMMARY_TEMPLATE_RELATIVE_PATH = 'agenticloop/memory/work-unit-summary.md';
 export const IMPROVEMENT_PROPOSAL_TEMPLATE_RELATIVE_PATH = 'agenticloop/memory/improvement-proposal.md';
 
@@ -64,6 +65,11 @@ export const V2_TEMPLATES_SOURCE_DIRECTORY = 'agenticloop/templates';
 export const PROJECT_MAP_RELATIVE_PATH = '.agenticloop/project.md';
 export const TASKS_DIRECTORY_RELATIVE_PATH = '.agenticloop/tasks';
 export const DECISIONS_DIRECTORY_RELATIVE_PATH = '.agenticloop/decisions';
+// Work-unit audit certificates. A separate, backend-neutral, target-owned store
+// that holds certification state and append-only Auditor report history. It is
+// not a task-record projection and does not reintroduce the removed summaries
+// store: per-task completion summaries stay inline in the task record.
+export const AUDITS_DIRECTORY_RELATIVE_PATH = '.agenticloop/audits';
 export const LOGS_DIRECTORY_RELATIVE_PATH = '.agenticloop/logs';
 export const SCRATCH_DIRECTORY_RELATIVE_PATH = '.agenticloop/tmp';
 export const LEGACY_SCRATCH_DIRECTORY_RELATIVE_PATH = 'tmp';
@@ -123,6 +129,7 @@ export const TARGET_STATE_RELATIVE_PATHS = Object.freeze([
   PROJECT_MAP_RELATIVE_PATH,
   TASKS_DIRECTORY_RELATIVE_PATH,
   DECISIONS_DIRECTORY_RELATIVE_PATH,
+  AUDITS_DIRECTORY_RELATIVE_PATH,
   LOGS_DIRECTORY_RELATIVE_PATH,
   SCRATCH_DIRECTORY_RELATIVE_PATH,
 ]);
@@ -229,6 +236,69 @@ export const WORK_UNIT_SUMMARY_STATUSES = Object.freeze([
 // Legacy aliases for migration and compatibility tests
 export const IMPLEMENTATION_SUMMARY_SECTION_HEADINGS = WORK_UNIT_SUMMARY_SECTION_HEADINGS;
 export const CLOSEOUT_SUMMARY_SECTION_HEADINGS = WORK_UNIT_SUMMARY_SECTION_HEADINGS;
+
+// ---------------------------------------------------------------------------
+// Work-unit audit certificates (.agenticloop/audits/)
+// ---------------------------------------------------------------------------
+
+export const AUDIT_RECORD_ID_PATTERN = /^AUD-\d{3,}$/;
+
+export const AUDIT_REQUIRED_SECTION_HEADINGS = Object.freeze([
+  '## Work Unit Goal',
+  '## Completion Oracle',
+  '## Covered Tasks',
+  '## Frozen Baseline',
+  '## Evidence Available',
+  '## Accepted Decisions',
+  '## Known Limitations',
+  '## Audit History',
+  '## Consolidated Findings',
+  '## Remediation Tasks',
+  '## Final Certification',
+  '## Comments',
+]);
+
+// The lifecycle state of the certificate itself. Distinct from the Auditor's
+// verdict: `blocked` is a workflow state the budget rule sets, never a verdict
+// the Auditor produced.
+export const AUDIT_STATES = Object.freeze([
+  'active',
+  'awaiting_human',
+  'certified',
+  'blocked',
+]);
+
+// Actual Auditor verdicts. Nothing else may be written to `latest_verdict`.
+export const AUDIT_VERDICTS = Object.freeze([
+  'certified',
+  'certified_with_accepted_limitations',
+  'needs_remediation',
+  'needs_human_decision',
+]);
+
+export const CERTIFYING_AUDIT_VERDICTS = Object.freeze([
+  'certified',
+  'certified_with_accepted_limitations',
+]);
+
+export const AUDIT_FINDING_SEVERITIES = Object.freeze(['critical', 'high', 'medium', 'low']);
+
+// Reuses the delegation vocabulary minus the same-session fallback. An Auditor
+// that never left the calling session is not an independent audit.
+export const AUDIT_INVOCATION_MODES = Object.freeze([
+  'host_subagent',
+  'explicit_agent_invocation',
+]);
+
+export const AUDIT_BLOCKED_REASON_BUDGET_EXHAUSTED = 'audit_budget_exhausted';
+
+// Deliberately higher than the default-3 attempt and review budgets: this bounds
+// an expensive work-unit assurance loop while still allowing the initial audit
+// plus several remediation/re-audit cycles before mandatory human intervention.
+export const DEFAULT_AUDIT_BUDGET = 5;
+
+export const WORK_UNIT_AUDIT_MODES = Object.freeze(['enabled', 'disabled']);
+export const DEFAULT_WORK_UNIT_AUDIT_MODE = 'enabled';
 
 export const TRACE_SUMMARY_BULLET_LABELS = Object.freeze([
   'Task Record',

@@ -11,12 +11,19 @@ const ADAPTER_ROLE_DEFAULTS = Object.freeze({
       reasoningEffort: 'xhigh',
     }),
     maintainer: Object.freeze({
-      model: 'gpt-5.6-sol',
-      reasoningEffort: 'high',
+      model: 'gpt-5.6-terra',
+      reasoningEffort: 'xhigh',
     }),
     engineer: Object.freeze({
       model: 'gpt-5.6-terra',
-      reasoningEffort: 'xhigh',
+      reasoningEffort: 'high',
+    }),
+    // Auditor gets its own explicit slot. The Maintainer model is never copied
+    // in implicitly; a target that wants a different auditor model overrides it
+    // through `configure models --role auditor`.
+    auditor: Object.freeze({
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'high',
     }),
   }),
 });

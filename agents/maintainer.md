@@ -69,6 +69,15 @@ acting.
   corrections without a dated `## Revision Log` or `## Comments` entry.
 - Request revisions when scope, quality, or evidence is insufficient. If the first full Lens 2/Lens 3 assessment occurs only at or beyond the task's review budget, mention that timing in review or closeout observations as a calibration signal; do not make it a new gate.
 - Triage known limitations as accepted, follow-up, or blocker.
+- Give every blocking finding in an Auditor report exactly one disposition:
+  ordinary remediation task, change request, human decision, rejected with
+  counter-evidence, previously accepted limitation, or non-blocking follow-up.
+  Counter-evidence does not close a finding on its own; it stays unresolved until
+  a fresh Auditor accepts the disposition or a human resolves the authority
+  conflict. Remediation tasks are ordinary task records with their own attempt
+  and review budgets that reference the audit ID and finding IDs. Do not
+  implement remediation, edit the audit record's verdict, or accept a limitation
+  the human has not accepted. See [[work-unit-audit]].
 - Run closeout when the configured grouping says closeout is enabled, or when a human-identified task set finishes. After acceptance and integration, run `npx agenticloop worktree cleanup --dry-run` to preview which `.agenticloop/worktrees/*` lanes are safe to remove, then `npx agenticloop worktree cleanup --yes` to remove them. Cleanup is destructive filesystem cleanup and requires the dry-run/yes confirmation pattern. Keep open PRs, locked worktrees, worktrees with blocking dirty source or shared `.agenticloop` state, external or detached worktrees, and lanes with active task state. Task-specific lane-local `.agenticloop` state is flat only (`logs`, `tasks`, `summaries` (legacy; preserved for migration only -- current projects do not create a summaries directory), and `decisions` files directly under `.agenticloop/<dir>/`); it is preserved before removal and does not by itself block cleanup. Nested or shared `.agenticloop` files are not lane-local and dirty shared state blocks cleanup. Git worktree removal may be forced internally only after preservation succeeds. For `.jsonl` lane-local files, preservation is safe when the root file already contains every lane line (a root superset). If lane-local preservation conflicts with existing root state, use `npx agenticloop worktree resolve-state <task-id|path> --strategy <prefer-root|prefer-worktree|union-jsonl> --yes` (default `--dry-run`) to resolve before cleanup: `prefer-root` copies the root file into the lane, `prefer-worktree` copies the lane file into the root, and `union-jsonl` computes a root-first max-count multiset union and writes the result to both files. resolve-state never removes worktrees or branches. Shared `.agenticloop` files are not preserved. Project-root bare coordinator repos are supported. Branch deletion is not part of v1 cleanup.
 - Honor any delegation lease from the orchestrator, including observable-step
   checkpoint cadence, no-progress budget, and stop condition.
@@ -129,6 +138,8 @@ acting.
 - [[change-request-gate]] for locked decision changes.
 - [[ponytail]] when the user explicitly asks for YAGNI, lazy mode, or minimal planning/review discipline; when selecting a non-`none` task-record `minimalism` level during task creation; or when the active task record sets `minimalism: lite|full|ultra`.
 - [[task-closeout]] for closeout.
+- [[work-unit-audit]] when dispositioning an Auditor report or checking the
+  work-unit certification gate before closeout.
 - [[github-attribution]] when using the GitHub backend.
 
 ## Backend Use

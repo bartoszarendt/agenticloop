@@ -12,6 +12,7 @@ import {
   hasConfirmedDevelopmentStage,
   loadProjectMap,
   PROJECT_MAP_DEFAULTS,
+  resolveWorkUnitAudit,
 } from './project-map.js';
 import {
   INSTALLED_TOOLKIT_ROOT_DIRECTORY,
@@ -101,6 +102,8 @@ export function detectSetupState(target, options = {}) {
   let developmentStage = null;
   let maxParallelImplementationLanes = null;
   let developmentStageConfirmed = false;
+  // Absent project map still resolves to the default: work-unit audit is on.
+  let workUnitAudit = resolveWorkUnitAudit(null);
 
   if (projectMapExists) {
     const loaded = loadProjectMap(target);
@@ -114,6 +117,7 @@ export function detectSetupState(target, options = {}) {
       maxParallelImplementationLanes = projectMap.max_parallel_implementation_lanes ??
         PROJECT_MAP_DEFAULTS.max_parallel_implementation_lanes;
       developmentStageConfirmed = hasConfirmedDevelopmentStage(projectMap);
+      workUnitAudit = resolveWorkUnitAudit(projectMap);
     } else {
       setupStatus = 'unconfirmed';
     }
@@ -202,6 +206,7 @@ export function detectSetupState(target, options = {}) {
     groupingProfile,
     developmentStage,
     developmentStageConfirmed,
+    workUnitAudit,
     maxParallelImplementationLanes,
     stateDirectoryExists,
     tasksDirectoryExists,
@@ -224,6 +229,22 @@ export function detectSetupState(target, options = {}) {
       }
       if ((state.hasArtifacts || state.required) && !state.modelsComplete) {
         validationIssues.push(`Adapter ${host} is missing model settings for: ${state.missingModelRoles.join(', ')}`);
+      }
+      // Work-unit audit is enabled by default and gates closeout. An enabled
+      // project with no Auditor model is a blocking setup condition; the
+      // Maintainer model is never silently reused for it.
+      if (
+        workUnitAudit === 'enabled' &&
+        (state.hasArtifacts || state.required) &&
+        state.missingModelRoles.includes('auditor')
+      ) {
+        validationIssues.push(
+          `work_unit_audit is enabled but adapter ${host} has no auditor model. ` +
+          `Set adapters.${host}.roleSettings.auditor.model (for example ` +
+          `"agenticloop configure models --adapter ${host} --role auditor --model <id>"), ` +
+          'or record an explicit human opt-out with work_unit_audit: disabled. ' +
+          'Work-unit closeout stays blocked until one of those is done.'
+        );
       }
     }
     if (alConfigError) {
@@ -309,6 +330,9 @@ export function formatSetupChecklist(state) {
   }
   if (state.groupingProfile) {
     lines.push(`  ${check(true)} Grouping: ${state.groupingProfile}`);
+  }
+  if (state.workUnitAudit) {
+    lines.push(`  ${check(true)} Work-unit audit: ${state.workUnitAudit}`);
   }
 
   const adapterEntries = Object.entries(state.adapters);

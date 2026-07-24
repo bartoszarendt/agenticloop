@@ -46,9 +46,12 @@ metadata; it may become stale and is never treated as a complete current
 source of truth.
 
 Fresh Codex setup writes an opinionated target-owned profile: `gpt-5.6-luna`
-with `xhigh` for orchestrator, `gpt-5.6-sol` with `high` for maintainer, and
-`gpt-5.6-terra` with `xhigh` for engineer. These are setup defaults, not
-canonical role contracts. Existing explicit fields remain untouched; apply the
+with `xhigh` for orchestrator, `gpt-5.6-terra` with `xhigh` for maintainer,
+`gpt-5.6-terra` with `high` for engineer, and `gpt-5.6-sol` with `high` for
+auditor. These are setup defaults, not canonical role contracts. Auditor always
+gets its own explicit slot; the maintainer model is never silently copied into
+it, because the audit exists to be independent of the authority that accepted the
+work. Existing explicit fields remain untouched; apply the
 same missing-only profile deliberately with:
 
 ```text
@@ -315,7 +318,7 @@ Codex MVP support is repo-local and skill-first.
   the normal Codex skill picker stays clean.
 - The main Codex session stays the coordinator/orchestrator. Role work is routed
   through the generated custom agents under `.codex/agents/`, especially
-  `maintainer` and `engineer`.
+  `maintainer`, `engineer`, and `auditor`.
 - Optional plugin distribution is separate from repo-local use. Set
   `adapters.codex.plugin.enabled: true` only when you intentionally want
   generated `plugins/agenticloop/` packaging plus
@@ -342,7 +345,9 @@ Claude Code has two distinct install paths:
 
 Mode B defaults maintainer and engineer subagents to
 `permissionMode: acceptEdits` so edit auto-accept is scoped to Agentic Loop
-worker subagents rather than the whole repository. It also writes the built-in
+worker subagents rather than the whole repository. The auditor subagent defaults
+to `permissionMode: plan`, Claude Code's supported non-editing mode, so its
+read-only audit posture is enforced mechanically. It also writes the built-in
 `agenticloop` permissions profile to `.claude/settings.local.json` by default.
 That profile is intentionally broad enough for normal Agentic Loop work,
 including common `git`, `gh`, `npm`, `npx`, `pytest`, `ruff`, and `alembic`
@@ -402,8 +407,9 @@ Copilot support is repo-local.
   orchestrator role.
 - Generated Copilot custom agents live under `.github/agents/*.agent.md` and are
   rendered from canonical `agenticloop/agents/*.md` plus Copilot-specific delegation wiring.
-  The orchestrator is the user-selectable entry agent; maintainer and engineer
-  are generated as subagent-only workers.
+  The orchestrator is the user-selectable entry agent; maintainer, engineer, and
+  auditor are generated as subagent-only workers. The auditor is generated
+  without the `edit` tool.
 - Generated Copilot skills live under `.github/skills/agenticloop/` as one public
   `SKILL.md` plus internal `reference.md` procedure copies and backend
   references.
@@ -448,9 +454,10 @@ Cursor support is repo-local.
 - Generated Cursor subagents live under `.cursor/agents/*.md` and are rendered
   from canonical `agenticloop/agents/*.md` plus Cursor-specific delegation and
   boundary wiring.
-- The active Cursor session stays the coordinator/orchestrator. Maintainer and
-  engineer role work is delegated through the generated Cursor subagents where
-  supported.
+- The active Cursor session stays the coordinator/orchestrator. Maintainer,
+  engineer, and auditor role work is delegated through the generated Cursor
+  subagents where supported. The auditor subagent is generated with
+  `readonly: true`.
 - The Cursor MVP does not generate `.cursor/rules/` or session hooks. Activation
   stays explicit.
 

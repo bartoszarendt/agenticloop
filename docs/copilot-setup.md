@@ -33,7 +33,7 @@ This writes or refreshes:
 
 | Path | Purpose |
 |---|---|
-| `.github/agents/<role>.agent.md` | Generated Copilot custom agents for `orchestrator`, `maintainer`, and `engineer`. |
+| `.github/agents/<role>.agent.md` | Generated Copilot custom agents for `orchestrator`, `maintainer`, `engineer`, and `auditor`. |
 | `.github/skills/agenticloop/SKILL.md` | One public Agentic Loop skill for explicit Copilot CLI `/agenticloop` activation. |
 | `.github/skills/agenticloop/references/skills/<name>/reference.md` | Internal Agentic Loop procedure references copied from canonical skills without exposing extra public skills. |
 | `.github/skills/agenticloop/references/backends/*.md` | Copied backend projection references. |
@@ -85,7 +85,7 @@ Each generated custom agent includes:
 - `name`
 - `description`
 - `tools`
-- orchestrator `agents: [maintainer, engineer]` allow-list
+- orchestrator `agents: [maintainer, engineer, auditor]` allow-list
 - `model` when configured
 - orchestrator `user-invocable: true`
 - orchestrator `disable-model-invocation: true`
@@ -96,8 +96,11 @@ The invocation split is intentional:
 
 - the orchestrator stays manually selectable and is protected from being used as
   a subagent by other agents
-- maintainer and engineer stay hidden from the normal picker but remain callable
-  as worker subagents for orchestrator routing
+- maintainer, engineer, and auditor stay hidden from the normal picker but remain
+  callable as worker subagents for orchestrator routing
+- the auditor is generated with `tools: [execute, read, search]`; the `edit` tool
+  is deliberately withheld so its read-only audit posture is enforced by the tool
+  grant, not by prompt text alone
 
 The agent body adds Copilot-aware methodology wiring:
 
@@ -161,7 +164,8 @@ Copilot model identifiers are read from:
       "roleSettings": {
         "orchestrator": { "model": "<copilot-orchestrator-model>" },
         "maintainer": { "model": "<copilot-maintainer-model>" },
-        "engineer": { "model": "<copilot-engineer-model>" }
+        "engineer": { "model": "<copilot-engineer-model>" },
+        "auditor": { "model": "<copilot-auditor-model>" }
       }
     }
   }

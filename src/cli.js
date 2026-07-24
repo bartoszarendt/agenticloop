@@ -17,6 +17,14 @@
  *   agenticloop task lint [<task-id>] [--json] [--target <dir>]
  *   agenticloop task new <title> [--id <id>] [--target <dir>]
  *   agenticloop task status <id> <status> [--note <text>] [--block-category <category>] [--target <dir>]
+ *   agenticloop audit new --work-unit <id> --covered-tasks <ids> --artifact <ref> --goal <text> --completion-oracle <text> --evidence <text> [--budget <n>] [--target <dir>]
+ *   agenticloop audit baseline <audit-id|work-unit> [--artifact <ref>] [--covered-tasks <ids>] --evidence <text> [--target <dir>]
+ *   agenticloop audit report <audit-id|work-unit> --verdict <v> --invocation-mode <m> --invocation-ref <id> ...
+ *   agenticloop audit status [<audit-id|work-unit>] [--json] [--target <dir>]
+ *   agenticloop audit gate <audit-id|work-unit> [--json] [--target <dir>]
+ *   agenticloop audit lint [<audit-id|work-unit>] [--json] [--target <dir>]
+ *   agenticloop audit override <audit-id|work-unit> --budget <n> --authority <ref> [--target <dir>]
+ *   agenticloop audit resolve <audit-id|work-unit> --authority <ref> --note <text> [--target <dir>]
  *   agenticloop worktree add <task-id> <branch> [--from <ref>] [--target <dir>]
  *   agenticloop worktree guard [--fix] [--all|<path>] [--target <dir>]
  *   agenticloop worktree list [--target <dir>] [--json]
@@ -52,9 +60,11 @@ import {
 import { validateSharedAgenticLoopPluginCompatibility } from './adapter-plugin-compatibility.js';
 import { generateAdapterArtifacts } from './adapter-generation.js';
 import { deepMerge, loadAgenticLoopConfig } from './json.js';
+import { DEFAULT_AUDIT_BUDGET } from './layout.js';
 import { loadProjectMap } from './project-map.js';
 import { resolveTaskBackend } from './task-backend.js';
 import { cmdTask } from './task-cli.js';
+import { cmdAudit } from './audit-cli.js';
 import {
   configureModels,
   parseModelMutations,
@@ -316,6 +326,7 @@ Commands:
                         review audit together and report one merge-readiness verdict.
   doctor                Show setup checklist, adapter state, and next commands.
   task                  Manage files-backed task records (list, lint, new, status).
+  audit                 Manage work-unit audit certificates (new, baseline, report, status, gate, lint, override, resolve).
   worktree              Manage guarded Agentic Loop Git worktrees (add, guard, list, remove, cleanup, resolve-state, prune).
   event-logging         Write events (bare event type), validate, audit, or report optional durable workflow event logs.
   event                 Compatibility alias for event-logging.
@@ -440,7 +451,7 @@ Options (event-logging <event_type>):
   --output <file>       Event log path override (default: <target>/${TASK_EVENT_LOG_PATH_DISPLAY};
                          --task <id> is required unless --output <file> is supplied).
   --task <id>           Task id associated with the event. Required for default output.
-  --role <role>         Role: orchestrator, maintainer, engineer, human, unknown.
+  --role <role>         Role: orchestrator, maintainer, engineer, auditor, human, unknown.
   --summary <text>      Required short event summary.
   --outcome <value>     Outcome: success, failure, blocked, needs_context, accepted, needs_revision, unknown.
   --backend <name>      Backend: files, github, unknown.
@@ -486,10 +497,59 @@ Options (task status):
   --block-category <c>  Required when setting status to blocked.
   --json                Emit machine-readable JSON.
 
+Options (audit new):
+  --target <dir>        Target directory (default: current directory).
+  --work-unit <id>      Canonical work-unit identity (phase:4, milestone:M2, epic:x, custom:x, work-unit:x). Required.
+  --covered-tasks <ids> Comma-separated exact covered task ids. Required.
+  --artifact <ref>      Exact frozen candidate artifact (e.g. commit:<sha>). Required.
+  --budget <n>          Audit budget (default: ${DEFAULT_AUDIT_BUDGET}; separate from attempt/review budgets).
+  --goal <text>         Concrete work-unit goal statement. Required.
+  --completion-oracle <text>  Observable completion oracle. Required.
+  --evidence <text>     Integrated evidence bound to the frozen candidate. Required.
+  --json                Emit machine-readable JSON.
+
+Options (audit baseline):
+  --target <dir>        Target directory (default: current directory).
+  --artifact <ref>      New exact candidate artifact after remediation was integrated.
+  --covered-tasks <ids> New exact covered task ids. Stale certification is cleared; history is preserved.
+  --evidence <text>     Refreshed integrated evidence bound to the candidate. Required.
+  --json                Emit machine-readable JSON.
+
+Options (audit report):
+  --target <dir>        Target directory (default: current directory).
+  --verdict <v>         certified, certified_with_accepted_limitations, needs_remediation, needs_human_decision.
+  --invocation-mode <m> host_subagent or explicit_agent_invocation. A same-session fallback is rejected.
+  --invocation-ref <id> Unique reference for this Auditor invocation. Reuse is rejected.
+  --artifact <ref>      Audited artifact; must equal the frozen candidate.
+  --assessment <text>   One consolidated assessment across all six perspectives.
+  --evidence <text>     Bounded evidence actually checked.
+  --finding-json <json> JSON array of findings (id, severity, blocking, claim, evidenceRefs, consequence, requiredOutcome, verificationRequired).
+  --json                Emit machine-readable JSON.
+
+Options (audit status | audit gate | audit lint):
+  --target <dir>        Target directory (default: current directory).
+  --json                Emit machine-readable JSON.
+
+\`audit status\` is diagnostic. \`audit gate\` is the fail-closed closeout check and,
+for the files backend, also verifies every covered task is accepted or closed.
+
+Options (audit override):
+  --target <dir>        Target directory (default: current directory).
+  --budget <n>          New audit budget; must increase the current value.
+  --authority <ref>     Recorded authority as "human: <identity>". Required.
+  --note <text>         Optional note appended under ## Comments.
+  --json                Emit machine-readable JSON.
+
+Options (audit resolve):
+  --target <dir>        Target directory (default: current directory).
+  --authority <ref>     Recorded authority as "human: <identity>". Required.
+  --note <text>         Human decision and direction for the next audit. Required.
+  --json                Emit machine-readable JSON.
+
 Options (configure models):
   --target <dir>        Directory containing agenticloop.json (default: current).
   --adapter <host>      Host adapter to configure (opencode, codex, claude-code, copilot, cursor).
-  --role <role>         Logical role to configure (orchestrator, maintainer, engineer).
+  --role <role>         Logical role to configure (orchestrator, maintainer, engineer, auditor).
   --model <id>          Host-specific model identifier or alias.
   --reasoning-effort <value>  Reasoning effort for hosts that support it (opencode, codex).
   --profile recommended   Fill missing fields from the Codex recommended profile without replacing explicit settings.
@@ -1963,6 +2023,8 @@ export async function dispatch(argv, io = createIo()) {
   switch (command) {
     case 'task':
       return await cmdTask(rest, io);
+    case 'audit':
+      return await cmdAudit(rest, io);
     case 'event-logging':
       return await cmdEvent(rest, 'event-logging', io);
     case 'event':

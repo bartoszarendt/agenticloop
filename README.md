@@ -46,25 +46,31 @@ It probably does not make sense if you only use agents for one-shot questions or
 
 ## The team
 
-Agentic Loop organizes agent work into a disciplined engineering team with three roles, three boundaries:
+Agentic Loop organizes agent work into a disciplined engineering team with four roles, four boundaries:
 
 | Role | What it does | What it never does |
 |---|---|---|
 | **Orchestrator** | Plans routing, delegates work, coordinates serial and parallel lanes, tracks progress. | Edit implementation files, act as final reviewer, or accept tasks. |
 | **Engineer** | Implements the smallest useful slice, test-first when applicable, and publishes fresh verification evidence. | Expand scope or accept its own work. |
 | **Maintainer** | Creates and right-sizes task records, reviews through task compliance, engineering quality, and necessity/coherence lenses, accepts or requests revisions, owns decisions and closeout. | Accept work without fresh final-state evidence. |
+| **Auditor** | Independently certifies the finished work unit as a whole -- outcome, completeness, integration, quality, verification, risk -- against the exact integrated baseline. | Implement, accept tasks, expand scope, or accept a limitation or risk for you. |
 
-No role grades its own exam. When ready tasks are independent, the orchestrator can run up to the configured implementation-lane maximum (default five) in parallel, each in its own guarded repo-internal `git worktree`, after a current Parallel Opportunity Scan. The limit is a ceiling, not a total-agent budget or an eligibility grant. In practice it feels like having a well-organized development team at your fingertips: a coordinator, parallel implementers, and a demanding reviewer -- each with its own model budget (see [Cost-quality routing by role](#cost-quality-routing-by-role)).
+No role grades its own exam. Task review proves each task was done correctly;
+the auditor answers the question no task review asks -- does the combined result
+actually work, and is it proven? Findings route back through ordinary maintainer
+and engineer remediation, and a fresh auditor re-audits the new baseline. When ready tasks are independent, the orchestrator can run up to the configured implementation-lane maximum (default five) in parallel, each in its own guarded repo-internal `git worktree`, after a current Parallel Opportunity Scan. The limit is a ceiling, not a total-agent budget or an eligibility grant. In practice it feels like having a well-organized development team at your fingertips: a coordinator, parallel implementers, and a demanding reviewer -- each with its own model budget (see [Cost-quality routing by role](#cost-quality-routing-by-role)).
 
 ## What it gives your agent
 
 | Capability | What it does |
 |---|---|
 | **Task records** | Define scope, out-of-scope boundaries, acceptance criteria, required checks, expected files, implementation notes, and review state. |
-| **Role boundaries** | Split work across orchestrator, maintainer, and engineer roles with explicit edit and acceptance boundaries per role. |
+| **Role boundaries** | Split work across orchestrator, maintainer, engineer, and auditor roles with explicit edit and acceptance boundaries per role. |
+| **Work-unit audit** | Certify a finished work unit against its exact integrated baseline before closeout, with findings routed through ordinary remediation. On by default; an explicit `work_unit_audit: disabled` is the human opt-out. |
 | **Parallel worktree lanes** | Run independent engineer lanes concurrently in guarded repo-internal `git worktree`s, with guard checks, lane-state preservation, and safe bulk cleanup after acceptance. |
 | **Canonical skills** | Provide focused procedures for task creation, TDD, debugging, verification evidence, review, blocked states, decision capture, attribution, and closeout. |
 | **Decision records** | Preserve durable project decisions under `.agenticloop/decisions/` so future agent sessions do not rediscover or contradict them. |
+| **Audit certificates** | Record work-unit certification state and append-only audit history under `.agenticloop/audits/`, bound to an exact artifact and covered-task set. |
 | **Files-first backend** | Store task records as local Markdown files under `.agenticloop/tasks/` by default. No GitHub setup required. |
 | **GitHub backend** | Optionally project task records to GitHub issues and implementation artifacts to pull requests. |
 | **Cost-quality routing** | Configure different model and reasoning settings per role, so cheap coordinator work does not consume the same model budget as high-judgment review. |
@@ -288,7 +294,10 @@ Adapter-local role settings live under `adapters.<host>.roleSettings.<role>` in 
 
 Fresh Codex setup uses an opinionated cost/quality profile in target-owned
 `agenticloop.json`: orchestrator `gpt-5.6-luna` with `xhigh`, maintainer
-`gpt-5.6-sol` with `high`, and engineer `gpt-5.6-terra` with `xhigh`.
+`gpt-5.6-terra` with `xhigh`, engineer `gpt-5.6-terra` with `high`, and auditor
+`gpt-5.6-sol` with `high`. Auditor has its own slot: the maintainer model is
+never silently reused for it, because the audit exists to be independent of the
+authority that accepted the work.
 Explicit target settings always win. Existing installations can fill only missing
 Codex fields with `npx agenticloop configure models --adapter codex --profile recommended`.
 
@@ -312,6 +321,10 @@ Example shape:
         "engineer": {
           "model": "<strong-coding-model>",
           "reasoningEffort": "medium"
+        },
+        "auditor": {
+          "model": "<best-assurance-and-reasoning-model>",
+          "reasoningEffort": "high"
         }
       }
     }
@@ -468,7 +481,7 @@ This source repository authors the canonical toolkit assets at the root:
 ```text
 .                             package root (npm package: agenticloop)
   AGENTIC_LOOP.md             core methodology
-  agents/                     orchestrator, maintainer, engineer role definitions
+  agents/                     orchestrator, maintainer, engineer, auditor role definitions
   backends/                   files and GitHub backend projection docs
   skills/                     canonical workflow skills
   commands/                   host command templates

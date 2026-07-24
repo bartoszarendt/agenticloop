@@ -10,7 +10,11 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseFrontmatter } from './frontmatter.js';
 import { getDefaultDocumentSelections, getDocumentRoleNames } from './document-roles.js';
-import { PROJECT_MAP_RELATIVE_PATH } from './layout.js';
+import {
+  DEFAULT_WORK_UNIT_AUDIT_MODE,
+  PROJECT_MAP_RELATIVE_PATH,
+  WORK_UNIT_AUDIT_MODES,
+} from './layout.js';
 import { parseVerificationOperatingFacts } from './verification-learning.js';
 
 export const PROJECT_MAP_PATH = PROJECT_MAP_RELATIVE_PATH;
@@ -21,6 +25,9 @@ export const PROJECT_MAP_DEFAULTS = {
   task_backend: 'files',
   event_logging: 'disabled',
   event_logging_command: '',
+  // Work-unit audit is on by default, including when the key is absent, so an
+  // existing project map does not need a destructive rewrite to be gated.
+  work_unit_audit: DEFAULT_WORK_UNIT_AUDIT_MODE,
   task_id_pattern: 'T-<number>',
   task_id_regex: '^T-\\d{3,}$',
   task_file_template: '.agenticloop/tasks/{taskId}.md',
@@ -64,6 +71,7 @@ const LEGACY_FRONTMATTER_KEYS = [
 ];
 
 const VALID_EVENT_LOGGING_VALUES = new Set(['disabled', 'enabled']);
+const VALID_WORK_UNIT_AUDIT_VALUES = new Set(WORK_UNIT_AUDIT_MODES);
 const VALID_SETUP_STATUSES = new Set(['unconfirmed', 'confirmed']);
 const VALID_DEVELOPMENT_STAGES = new Set(DEVELOPMENT_STAGES);
 const YYYY_MM_DD_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -88,6 +96,10 @@ function normalizeRawFrontmatter(raw) {
 
   if (typeof normalized.event_logging === 'string') {
     normalized.event_logging = normalized.event_logging.trim();
+  }
+
+  if (typeof normalized.work_unit_audit === 'string') {
+    normalized.work_unit_audit = normalized.work_unit_audit.trim();
   }
 
   if (typeof normalized.event_logging_command === 'string') {
@@ -134,6 +146,22 @@ function mergeDocuments(rawDocuments = {}) {
 
 function getTrimmedString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * Resolve the effective work-unit audit mode.
+ *
+ * Absent, empty, or unrecognized values resolve to the default `enabled`; only
+ * an explicit `disabled` opts a project out of the closeout certification gate.
+ * Opting out never marks anything certified.
+ *
+ * @param {object|null} config  Merged config from loadProjectMap().config
+ * @returns {'enabled'|'disabled'}
+ */
+export function resolveWorkUnitAudit(config) {
+  return getTrimmedString(config?.work_unit_audit) === 'disabled'
+    ? 'disabled'
+    : DEFAULT_WORK_UNIT_AUDIT_MODE;
 }
 
 export function hasConfirmedDevelopmentStage(config) {
@@ -273,6 +301,15 @@ export function validateProjectMap(config, raw, repoRoot) {
 
   if (raw.event_logging_command !== undefined && typeof raw.event_logging_command !== 'string') {
     errors.push('project.md: event_logging_command must be a string when provided');
+  }
+
+  // Omission resolves to 'enabled' through PROJECT_MAP_DEFAULTS, so only an
+  // explicit out-of-enum value is an error. 'disabled' stays a deliberate
+  // human-controlled opt-out and never implies certification.
+  if (!VALID_WORK_UNIT_AUDIT_VALUES.has(config.work_unit_audit)) {
+    errors.push(
+      `project.md: work_unit_audit must be ${[...VALID_WORK_UNIT_AUDIT_VALUES].map(v => `'${v}'`).join(' or ')}, got: ${JSON.stringify(config.work_unit_audit)}`
+    );
   }
 
   // Planning-only convention consumed by role instructions; it does not route

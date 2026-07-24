@@ -26,6 +26,7 @@ const IN_PROCESS_COMMANDS = new Set([
   '-h',
   'help',
   'task',
+  'audit',
   'event',
   'event-logging',
 ]);

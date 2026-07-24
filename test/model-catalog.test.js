@@ -66,16 +66,26 @@ describe('getCatalogEntries', () => {
     assert.ok(opencode.every(entry => entry.id.startsWith('openai/')));
   });
 
-  it('offers GPT-5.6 Sol for maintainers and engineers, but not orchestrators', () => {
+  it('offers GPT-5.6 Sol for maintainers, engineers, and auditors, but not orchestrators', () => {
     for (const host of ['codex', 'opencode']) {
       const sol = getCatalogEntries(host).find(entry => entry.id.endsWith('gpt-5.6-sol'));
-      assert.deepEqual(sol.roleSuitability, ['maintainer', 'engineer']);
+      assert.deepEqual(sol.roleSuitability, ['maintainer', 'engineer', 'auditor']);
     }
 
     assert.ok(getCatalogEntries('codex', 'engineer').some(entry => entry.id === 'gpt-5.6-sol'));
     assert.ok(getCatalogEntries('opencode', 'engineer').some(entry => entry.id === 'openai/gpt-5.6-sol'));
+    assert.ok(getCatalogEntries('codex', 'auditor').some(entry => entry.id === 'gpt-5.6-sol'));
     assert.ok(!getCatalogEntries('codex', 'orchestrator').some(entry => entry.id === 'gpt-5.6-sol'));
     assert.ok(!getCatalogEntries('opencode', 'orchestrator').some(entry => entry.id === 'openai/gpt-5.6-sol'));
+  });
+
+  it('offers at least one auditor-suitable catalog model on every supported host', () => {
+    for (const host of ['opencode', 'codex', 'claude-code', 'copilot', 'cursor']) {
+      assert.ok(
+        getCatalogEntries(host, 'auditor').length > 0,
+        `expected an auditor-suitable catalog entry for ${host}`
+      );
+    }
   });
 
   it('marks native Claude Code catalog entries as not supporting reasoning effort', () => {

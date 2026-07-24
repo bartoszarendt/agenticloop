@@ -38,6 +38,8 @@ Apply this skill when the orchestrator:
 - hands off implementation or revision work to engineer,
 - routes an implementation artifact back to maintainer for review,
 - routes a revision to engineer based on review feedback,
+- hands off work-unit certification to auditor once the covered tasks are
+  accepted and integrated,
 - runs closeout or records a human checkpoint decision.
 
 ## Delegation Rules
@@ -58,9 +60,17 @@ Apply this skill when the orchestrator:
 | Apply one bounded Maintainer Review Fixup during an active eligible review | maintainer |
 | Review implementation artifacts | maintainer |
 | Accept or request revision | maintainer |
+| Certify the completed work unit | auditor |
+| Disposition audit findings into remediation tasks | maintainer |
 | Closeout and retrospective | maintainer |
 
 The orchestrator does not create task records, implement, review, or accept.
+
+Work-unit certification is auditor-owned and is a fresh, separate invocation
+every time; see [[work-unit-audit]]. The auditor never implements, never accepts
+a task, and never accepts a limitation or risk. A non-certifying report routes
+back through the ordinary maintainer/engineer remediation flow, not back to the
+auditor.
 
 Scoped implementation and ordinary revision remain engineer-owned. The single
 exception is a bounded Maintainer Review Fixup: during an active eligible review
@@ -84,8 +94,13 @@ create one oversized record; task sets still decompose.
 ## Host Delegation Mechanism
 
 Real delegation starts a separate role, task, named-agent, or subagent execution
-for maintainer or engineer. Describing that role's actions in prose is not
-delegation.
+for maintainer, engineer, or auditor. Describing that role's actions in prose is
+not delegation.
+
+Auditor has no fallback. `single_agent_fallback` never satisfies a work-unit
+audit: a same-session continuation re-reads its own conclusions and is not an
+independent audit. If no real delegation mechanism is available, record the
+blocked condition instead of auditing inline.
 
 ## Delegation Capability Check
 
@@ -199,8 +214,8 @@ undirected fourth revision.
 When invoking a role, orchestrator prompts must include:
 
 ```text
-Role:              maintainer | engineer
-Task ID:           <task-id from project task convention, or "pending decomposition" before task records exist>
+Role:              maintainer | engineer | auditor
+Task ID:           <task-id from project task convention, or "pending decomposition" before task records exist; use the audit id for an auditor invocation>
 Backend:           <task_backend from .agenticloop/project.md; default is 'files'>
 Delegation mode:   host_subagent | explicit_agent_invocation | single_agent_fallback
 Fallback cause:    mechanism_absent | invocation_failed   (required only for single_agent_fallback)

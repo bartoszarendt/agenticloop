@@ -174,6 +174,19 @@ describe('init - .agenticloop/project.md handling', () => {
     assert.ok(content.includes('event_logging: disabled'), 'project.md should disable event logging by default');
   });
 
+  it('project.md scaffolds work_unit_audit: enabled explicitly', async () => {
+    const d = makeEmptyTarget();
+    await init({ target: d });
+    const content = readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8');
+    assert.ok(content.includes('work_unit_audit: enabled'), 'new scaffolding should write work_unit_audit: enabled');
+  });
+
+  it('creates the target-owned .agenticloop/audits store', async () => {
+    const d = makeEmptyTarget();
+    await init({ target: d });
+    assert.ok(existsSync(join(d, '.agenticloop', 'audits')), 'init should scaffold the audits directory');
+  });
+
   it('project.md starts with setup_status: unconfirmed', async () => {
     const d = makeEmptyTarget();
     await init({ target: d });
@@ -655,12 +668,14 @@ describe('init - adapter generation creates JSON', () => {
     assert.deepEqual(Object.keys(cfg.adapters ?? {}), ['codex']);
     assert.deepEqual(cfg.adapters.codex.roleSettings, {
       orchestrator: { model: 'gpt-5.6-luna', reasoningEffort: 'xhigh' },
-      maintainer: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
-      engineer: { model: 'gpt-5.6-terra', reasoningEffort: 'xhigh' },
+      maintainer: { model: 'gpt-5.6-terra', reasoningEffort: 'xhigh' },
+      engineer: { model: 'gpt-5.6-terra', reasoningEffort: 'high' },
+      auditor: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
     });
     assert.ok(existsSync(join(d, '.codex', 'agents', 'orchestrator.toml')), 'Codex orchestrator TOML should exist');
     assert.ok(existsSync(join(d, '.codex', 'agents', 'maintainer.toml')), 'Codex maintainer TOML should exist');
     assert.ok(existsSync(join(d, '.codex', 'agents', 'engineer.toml')), 'Codex engineer TOML should exist');
+    assert.ok(existsSync(join(d, '.codex', 'agents', 'auditor.toml')), 'Codex auditor TOML should exist');
     assert.ok(existsSync(join(d, '.agents', 'skills', 'agenticloop', 'SKILL.md')), 'Codex public skill should exist');
     assert.ok(existsSync(join(d, '.agents', 'skills', 'agenticloop', 'agents', 'openai.yaml')), 'Codex openai metadata should exist');
     assert.ok(!existsSync(join(d, '.agents', 'skills', 'agenticloop-start', 'SKILL.md')), 'Legacy Codex start skill should not exist');
@@ -668,8 +683,9 @@ describe('init - adapter generation creates JSON', () => {
 
     for (const [role, model, effort] of [
       ['orchestrator', 'gpt-5.6-luna', 'xhigh'],
-      ['maintainer', 'gpt-5.6-sol', 'high'],
-      ['engineer', 'gpt-5.6-terra', 'xhigh'],
+      ['maintainer', 'gpt-5.6-terra', 'xhigh'],
+      ['engineer', 'gpt-5.6-terra', 'high'],
+      ['auditor', 'gpt-5.6-sol', 'high'],
     ]) {
       const toml = readFileSync(join(d, '.codex', 'agents', `${role}.toml`), 'utf-8');
       assert.ok(toml.includes(`model = "${model}"`));
@@ -698,8 +714,9 @@ describe('init - adapter generation creates JSON', () => {
     const cfg = loadJsonFile(join(d, 'agenticloop.json'));
     assert.deepEqual(cfg.adapters.codex.roleSettings, {
       orchestrator: { model: 'custom-orchestrator', reasoningEffort: 'xhigh' },
-      maintainer: { model: 'gpt-5.6-sol', reasoningEffort: 'minimal' },
-      engineer: { model: 'gpt-5.6-terra', reasoningEffort: 'xhigh' },
+      maintainer: { model: 'gpt-5.6-terra', reasoningEffort: 'minimal' },
+      engineer: { model: 'gpt-5.6-terra', reasoningEffort: 'high' },
+      auditor: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
     });
     const orchestratorToml = readFileSync(join(d, '.codex', 'agents', 'orchestrator.toml'), 'utf-8');
     assert.ok(orchestratorToml.includes('model = "custom-orchestrator"'));

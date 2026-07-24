@@ -80,8 +80,9 @@ Fresh Codex setup writes this opinionated target-owned cost/quality profile:
 | Role | Model | Reasoning effort |
 |---|---|---|
 | orchestrator | `gpt-5.6-luna` | `xhigh` |
-| maintainer | `gpt-5.6-sol` | `high` |
-| engineer | `gpt-5.6-terra` | `xhigh` |
+| maintainer | `gpt-5.6-terra` | `xhigh` |
+| engineer | `gpt-5.6-terra` | `high` |
+| auditor | `gpt-5.6-sol` | `high` |
 
 Explicit `agenticloop.json` values override these defaults. To adopt only
 missing fields in an existing Codex installation, run:
@@ -397,9 +398,70 @@ Roles live in `agenticloop/agents/`. They define who does what:
 - `orchestrator` coordinates the loop
 - `maintainer` owns task records, review, acceptance, and closeout
 - `engineer` implements one scoped task record at a time
+- `auditor` certifies a finished work unit against its exact integrated baseline
 
 Host adapters bind their native agent, mode, command, or prompt mechanism to
 these role files.
+
+Auditor has its own model slot at `adapters.<host>.roleSettings.auditor`. The
+maintainer model is never silently reused for it, because the audit exists to be
+independent of the authority that accepted the work.
+
+## Work-Unit Audit
+
+Work-unit audit is enabled by default, including when `.agenticloop/project.md`
+omits the key:
+
+```yaml
+work_unit_audit: enabled
+```
+
+With it enabled, work-unit closeout cannot publish
+`AGENT_CLOSEOUT_STATUS: complete` without a current audit certificate for the
+exact work unit. Certificates live under `.agenticloop/audits/<AUD-ID>.md` and
+are target-owned certification state, not task records.
+
+Typical cycle:
+
+```text
+npx agenticloop audit new --work-unit phase:4 \
+  --covered-tasks T-041,T-042 --artifact commit:abc123 \
+  --goal "<outcome and source>" \
+  --completion-oracle "<observable completion>" \
+  --evidence "<integrated evidence for commit:abc123>"
+npx agenticloop audit report AUD-001 --verdict needs_remediation \
+  --invocation-mode host_subagent --invocation-ref <unique-ref> \
+  --assessment "<one paragraph>" --evidence "<checks run>" \
+  --finding-json '<json array>'
+# remediation runs as ordinary tasks, then:
+npx agenticloop audit baseline AUD-001 --artifact commit:def456 \
+  --covered-tasks T-041,T-042,T-055 \
+  --evidence "<integrated evidence for commit:def456>"
+npx agenticloop audit report AUD-001 --verdict certified \
+  --invocation-mode explicit_agent_invocation --invocation-ref <new-ref> ...
+npx agenticloop audit gate AUD-001
+```
+
+`audit status` remains available for diagnostics. `audit gate` is the
+fail-closed closeout check. A `needs_human_decision` verdict requires a separate
+recorded resolution before another Auditor report:
+
+```text
+npx agenticloop audit resolve AUD-001 \
+  --authority "human: <identity>" --note "<decision and direction>"
+```
+
+`audit_budget` defaults to 5 and is separate from the default-3 `attempt_budget`
+and `review_budget`. After five non-certifying reports the record blocks for
+human direction; a sixth requires
+`npx agenticloop audit override AUD-001 --budget <n> --authority "human: <identity>"`.
+
+To opt out, a human sets `work_unit_audit: disabled` in
+`.agenticloop/project.md`. That bypasses the gate, preserves any audit history,
+and never claims the work unit is certified. Re-enabling restores the gate and
+again requires a current certificate.
+
+The full procedure lives in `agenticloop/skills/work-unit-audit/SKILL.md`.
 
 ## How Skills Work
 
@@ -417,6 +479,7 @@ matches the current task:
 - review: `review-and-accept`
 - blocked state: `blocked-state`
 - process changes: `change-request-gate`
+- work-unit certification: `work-unit-audit`
 - closeout: `task-closeout`
 - initial project setup: `setup-agenticloop`
 

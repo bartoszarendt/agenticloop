@@ -49,6 +49,7 @@ import { loadAgenticLoopConfig, loadJsonFile } from './json.js';
 import {
   generateOpencodeAgentRecords,
   OPENCODE_COMMAND_RELATIVE_PATH,
+  OPENCODE_DELEGATION_TARGET_ROLES,
   OPENCODE_ROLE_NAMES,
   normalizeSkillsSourceDir,
   resolveOpencodeAgentPath,
@@ -119,6 +120,7 @@ import {
   normalizeCodexReasoningEffort,
 } from './codex-models.js';
 import { parseIndependentReviewRequired, validateReviewProvenance } from './review-provenance.js';
+import { validateAuditRecords } from './audit-record.js';
 import {
   crossCheckMaintainerFixup,
   detectFixupEpisodes,
@@ -1037,6 +1039,7 @@ export function validateConfig(repoRoot, options = {}) {
       projectVerificationFacts: [],
       commandRunner,
     });
+    validateWorkUnitAuditRecords(repoRoot, PROJECT_MAP_DEFAULTS, errors, warnings);
     return { errors, warnings };
   }
 
@@ -1099,7 +1102,25 @@ export function validateConfig(repoRoot, options = {}) {
     commandRunner,
   });
 
+  validateWorkUnitAuditRecords(
+    repoRoot,
+    projectMapResult?.config ?? PROJECT_MAP_DEFAULTS,
+    errors,
+    warnings
+  );
+
   return { errors, warnings };
+}
+
+// Audit certificates get their own validator so no audit-specific carve-out
+// leaks into the ordinary task-record contract. A certificate is not a task: it
+// has no implementation artifact, no review status, and no acceptance gate.
+function validateWorkUnitAuditRecords(repoRoot, projectMapConfig, errors, warnings) {
+  const result = validateAuditRecords(repoRoot, {
+    taskIdRegex: projectMapConfig?.task_id_regex,
+  });
+  errors.push(...result.errors);
+  warnings.push(...result.warnings);
 }
 
 // Tokens that appear when a scratch path loses its separators. A Windows path
@@ -1763,11 +1784,21 @@ function validateOpencodeAgent(roleName, expectedAgent, config, repoRoot, errors
     if (frontmatterString(taskPermission['*']) !== 'deny') {
       errors.push(`${displayPath}: orchestrator permission.task must deny '*' by default`);
     }
-    if (frontmatterString(taskPermission.maintainer) !== 'allow') {
-      errors.push(`${displayPath}: orchestrator permission.task must allow 'maintainer'`);
+    for (const target of OPENCODE_DELEGATION_TARGET_ROLES) {
+      if (frontmatterString(taskPermission[target]) !== 'allow') {
+        errors.push(`${displayPath}: orchestrator permission.task must allow '${target}'`);
+      }
     }
-    if (frontmatterString(taskPermission.engineer) !== 'allow') {
-      errors.push(`${displayPath}: orchestrator permission.task must allow 'engineer'`);
+  }
+
+  // Auditor is read-only with respect to implementation; OpenCode can enforce
+  // that mechanically, so the generated agent must carry the deny.
+  if (roleName === 'auditor') {
+    const permission = frontmatter.permission;
+    if (!permission || typeof permission !== 'object') {
+      errors.push(`${displayPath}: auditor frontmatter is missing permission`);
+    } else if (frontmatterString(permission.edit) !== 'deny') {
+      errors.push(`${displayPath}: auditor must set permission.edit to deny`);
     }
   }
 
@@ -2548,9 +2579,13 @@ function validateCopilotAgent(config, repoRoot, roleName, agentName, mdPath, err
   const agents = readYamlListField(frontmatterText, 'agents');
   const userInvocable = frontmatterString(frontmatter['user-invocable']);
   const disableModelInvocation = frontmatterString(frontmatter['disable-model-invocation']);
+  // Auditor keeps read/search/execute but never `edit`: Copilot enforces the
+  // read-only audit posture through the tool grant, not prompt text alone.
   const expectedTools = roleName === 'orchestrator'
     ? ['agent', 'execute', 'read', 'search']
-    : ['execute', 'read', 'search', 'edit'];
+    : roleName === 'auditor'
+      ? ['execute', 'read', 'search']
+      : ['execute', 'read', 'search', 'edit'];
 
   if (name !== agentName) {
     errors.push(`${mdPath.replace(/\\/g, '/')}: frontmatter name must be '${agentName}'`);
@@ -2600,6 +2635,7 @@ function validateCopilotAgent(config, repoRoot, roleName, agentName, mdPath, err
     const expectedAgents = [
       agentNames.maintainer ?? 'maintainer',
       agentNames.engineer ?? 'engineer',
+      agentNames.auditor ?? 'auditor',
     ];
     if (JSON.stringify(agents) !== JSON.stringify(expectedAgents)) {
       errors.push(
@@ -2642,6 +2678,21 @@ function validateCopilotAgent(config, repoRoot, roleName, agentName, mdPath, err
     requiredSnippets.push('otherwise operate as a standalone engineer');
     requiredSnippets.push('requires no task ID or task record');
     requiredSnippets.push('Do not perform final maintainer acceptance');
+  } else if (roleName === 'auditor') {
+    if (agents !== null) {
+      errors.push(`${mdPath.replace(/\\/g, '/')}: worker agents must not declare an agents allow-list`);
+    }
+    if (userInvocable !== 'false') {
+      errors.push(`${mdPath.replace(/\\/g, '/')}: auditor must set user-invocable: false so it stays callable as a worker agent without appearing in the picker`);
+    }
+    if (disableModelInvocation !== 'false') {
+      errors.push(`${mdPath.replace(/\\/g, '/')}: auditor must set disable-model-invocation: false so the orchestrator can invoke it as a subagent`);
+    }
+    if (tools.includes('edit')) {
+      errors.push(`${mdPath.replace(/\\/g, '/')}: auditor must not be granted the 'edit' tool`);
+    }
+    requiredSnippets.push('read-only with respect to implementation');
+    requiredSnippets.push('Do not implement remediation');
   }
 
   for (const snippet of requiredSnippets) {
@@ -2830,8 +2881,11 @@ function validateCursorAgent(config, repoRoot, roleName, agentName, mdPath, erro
   if (model !== expectedModel) {
     errors.push(`${mdPath.replace(/\\/g, '/')}: model must match adapters.cursor.roleSettings.${roleName}.model or default to 'inherit'`);
   }
-  if (readonly !== (roleName === 'orchestrator' ? 'true' : 'false')) {
-    errors.push(`${mdPath.replace(/\\/g, '/')}: readonly must be ${roleName === 'orchestrator' ? 'true' : 'false'} for the ${roleName} role`);
+  // Orchestrator coordinates and auditor certifies; neither edits implementation
+  // files, so both take Cursor's strongest supported non-editing posture.
+  const expectedReadonly = roleName === 'orchestrator' || roleName === 'auditor' ? 'true' : 'false';
+  if (readonly !== expectedReadonly) {
+    errors.push(`${mdPath.replace(/\\/g, '/')}: readonly must be ${expectedReadonly} for the ${roleName} role`);
   }
 
   if (frontmatterString(frontmatter.reasoningEffort) || frontmatterString(frontmatter.variant)) {

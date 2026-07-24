@@ -28,6 +28,10 @@ const TEST_TARGET_CONFIG = {
           model: 'test/opencode-engineer',
           reasoningEffort: 'high',
         },
+        auditor: {
+          model: 'test/opencode-auditor',
+          reasoningEffort: 'high',
+        },
       },
     },
     codex: {
@@ -44,6 +48,10 @@ const TEST_TARGET_CONFIG = {
           model: 'gpt-5.4',
           reasoningEffort: 'xhigh',
         },
+        auditor: {
+          model: 'gpt-5.5',
+          reasoningEffort: 'xhigh',
+        },
       },
     },
     'claude-code': {
@@ -56,6 +64,9 @@ const TEST_TARGET_CONFIG = {
         },
         engineer: {
           model: 'test/claude-engineer',
+        },
+        auditor: {
+          model: 'test/claude-auditor',
         },
       },
     },

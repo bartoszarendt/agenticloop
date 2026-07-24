@@ -52,12 +52,18 @@ const TOLERANCE = 0.05;
 // flow, bounded Structural Risk Sweep, artifact-bound reuse rules, and required
 // durable review-body examples. The verification-history separation also updates
 // the packaged role and backend references.
+// Baselines were deliberately raised for the fourth canonical role. Auditor adds
+// one packaged agent definition per host (agentDefinitions) and the
+// work-unit-audit skill adds one packaged procedure per host that packages a
+// reference library. Both are new capability, not duplication: the audit
+// certificate contract lives only in the skill, and the role file carries no
+// copied canonical block.
 const ADAPTERS = [
-  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 9066, agentDefinitions: 8379, activationSurface: 661 } },
-  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 51432, agentDefinitions: 8850, activationSurface: 951, referenceLibrary: 41605 } },
-  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 41491, agentDefinitions: 7953, activationSurface: 1466, referenceLibrary: 32004 } },
-  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 49467, agentDefinitions: 8567, activationSurface: 936, referenceLibrary: 39922 } },
-  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 49272, agentDefinitions: 8564, activationSurface: 760, referenceLibrary: 39922 } },
+  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 10321, agentDefinitions: 9634, activationSurface: 687 } },
+  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 54919, agentDefinitions: 10157, activationSurface: 977, referenceLibrary: 43785 } },
+  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 44638, agentDefinitions: 8989, activationSurface: 1568, referenceLibrary: 34081 } },
+  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 52870, agentDefinitions: 9820, activationSurface: 978, referenceLibrary: 42072 } },
+  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 52664, agentDefinitions: 9806, activationSurface: 786, referenceLibrary: 42072 } },
 ];
 
 let tmpDir;

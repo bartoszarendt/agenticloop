@@ -289,4 +289,31 @@ describe('contract ownership', () => {
       }
     }
   });
+
+  it('the work-unit-audit skill owns the audit budget and closeout gate; roles reference it', () => {
+    // Distinctive budget wording lives only in the canonical skill; role files
+    // and methodology point at it rather than copying it.
+    const owners = ownersOf(body => body.includes('audit_budget` defaults to `5`'));
+    assert.deepEqual(owners, ['skills/work-unit-audit/SKILL.md'], owners.join(', '));
+
+    assert.match(read('agents/auditor.md'), /\[\[work-unit-audit\]\]/);
+    assert.match(read('agents/orchestrator.md'), /\[\[work-unit-audit\]\]/);
+    assert.match(read('agents/maintainer.md'), /\[\[work-unit-audit\]\]/);
+    assert.match(read('skills/task-closeout/SKILL.md'), /\[\[work-unit-audit\]\]/);
+  });
+
+  it('keeps auditor-role rationale in methodology and operational constraints in the role', () => {
+    const auditor = read('agents/auditor.md');
+    assert.doesNotMatch(auditor, /Why Auditor Is A Separate Role/);
+    assert.match(auditor, /non-substitutable/);
+    assert.match(auditor, /new invocation|fresh invocation/i);
+    assert.match(auditor, /read-only/i);
+
+    // The methodology owns both the fourth role and the architectural reason
+    // it cannot be collapsed into a Maintainer mode.
+    const methodology = read('AGENTIC_LOOP.md');
+    assert.match(methodology, /Agentic Loop uses four logical roles/);
+    assert.match(methodology, /agenticloop\/agents\/auditor\.md/);
+    assert.match(methodology, /Auditor is a separate role rather than a maintainer mode/);
+  });
 });

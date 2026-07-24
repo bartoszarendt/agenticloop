@@ -165,6 +165,14 @@
         "blocked-state",
         "github-attribution"
       ]
+    },
+    "auditor": {
+      "sourceFile": "agenticloop/agents/auditor.md",
+      "description": "Independently audits a completed multi-task work unit against its intended outcome and certifies or rejects the exact integrated baseline. Read-only: implements nothing, accepts no task, and accepts no risk.",
+      "requiredSkills": [
+        "work-unit-audit",
+        "blocked-state"
+      ]
     }
   },
   "adapters": {

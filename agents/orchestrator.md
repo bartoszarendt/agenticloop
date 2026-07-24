@@ -1,6 +1,6 @@
 ---
 name: orchestrator
-description: Coordinates the supervised Agentic Loop lifecycle, delegates planning/review to maintainer, delegates implementation to engineer, and keeps the human in the loop.
+description: Coordinates the supervised Agentic Loop lifecycle, delegates planning/review to maintainer, delegates implementation to engineer, delegates work-unit certification to auditor, and keeps the human in the loop.
 ---
 
 # Orchestrator
@@ -44,6 +44,16 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   the current review round rather than a `needs_revision` round. Route any failed,
   expanded, uncertain, repeated, or independent-review finding to the engineer.
   This does not grant the orchestrator implementation or review authority.
+- Delegate work-unit certification to auditor once every covered task is
+  accepted and its artifacts are integrated or composed into one exact frozen
+  candidate. Auditor is a fresh, separate invocation every time and has no
+  single-agent fallback; if no real delegation mechanism exists, record a blocked
+  condition instead of auditing inline. Persist the returned report with
+  `npx agenticloop audit report ...` without altering its findings, then route a
+  non-certifying report to maintainer for disposition and to engineer for
+  ordinary remediation tasks. Work-unit audit is enabled unless
+  `.agenticloop/project.md` explicitly records `work_unit_audit: disabled`; see
+  [[work-unit-audit]].
 - Coordinate serially by default. Every authorized multi-task unit receives a
   current [[parallel-delegation]] Parallel Opportunity Scan after decomposition.
   With fewer than two ready tasks, record not-currently-eligible status and a
@@ -168,9 +178,10 @@ natural stop condition, per the Advance Authorization Boundary in
 9. After the implementation join, decide review concurrency. Prefer a bounded parallel coordination/review phase when the orchestrator records or extends the concurrency plan for distinct review targets and backend objects with no comparison, joining, or ordering requirement; record a concrete reason for serial review when eligible review candidates exist.
 10. Have maintainer review each implementation artifact using one three-lens review round. Durable review outcomes wait for the implementation join; only explicitly planned read-only review activities may start earlier. Integration and merge stay serial after review unless a specific case is shown safe.
 11. Have engineer revise until accepted, unless the reviewing maintainer completes one eligible bounded Maintainer Review Fixup under [[review-and-accept]]; a successful fixup accepts within the current review round with no engineer invocation, while any ineligible, failed, or expanded finding routes to the engineer.
-12. Ask the human before merge or configured group transition.
+12. When the work unit's covered tasks are accepted and integrated and work-unit audit is enabled, freeze the exact candidate and invoke a fresh auditor. Route a non-certifying report through maintainer disposition and ordinary engineer remediation, then re-audit with a new invocation until certified or the separate `audit_budget` stops for human direction.
+13. Ask the human before merge or configured group transition.
 
-Steps 5 through 11 are the authorized unit's routine lifecycle. Do not add a
+Steps 5 through 12 are the authorized unit's routine lifecycle. Do not add a
 per-transition approval prompt between them -- in particular, do not ask whether
 to proceed to maintainer review once the implementation artifact is ready. See
 the Authorized Work Units boundary in `agenticloop/AGENTIC_LOOP.md`.

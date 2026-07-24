@@ -82,6 +82,10 @@ const VALID_CLAUDE_CODE_PERMISSION_SCOPES = new Set(['project', 'local']);
 const DEFAULT_CLAUDE_CODE_PERMISSION_MODE_BY_ROLE = {
   maintainer: 'acceptEdits',
   engineer: 'acceptEdits',
+  // Auditor is read-only with respect to implementation. `plan` is Claude Code's
+  // supported non-editing mode, so the read-only posture is enforced mechanically
+  // rather than by prompt text alone.
+  auditor: 'plan',
 };
 
 const DEFAULT_CLAUDE_CODE_PERMISSIONS = {
@@ -485,11 +489,12 @@ function rewriteClaudeSkillReferences(text, skillReferenceMap) {
   return rewritten;
 }
 
-function buildClaudeCoordinationLines(maintainerAgent, engineerAgent) {
+function buildClaudeCoordinationLines(maintainerAgent, engineerAgent, auditorAgent) {
   return [
     'Coordination in Claude Code:',
     `- Route task authoring, review, acceptance, and closeout through the Claude Code subagent \`${maintainerAgent}\`.`,
     `- Route scoped implementation and revision work through the Claude Code subagent \`${engineerAgent}\`.`,
+    `- Route work-unit certification through the Claude Code subagent \`${auditorAgent}\` once every covered task is accepted and integrated into one exact frozen candidate. Every re-audit is a fresh invocation; there is no same-session audit.`,
     '- Agentic Loop is serial by default. For every authorized multi-task unit, complete a current Parallel Opportunity Scan after decomposition and include its durable result or not-currently-eligible rescan trigger in implementation delegation. Load parallel-delegation before choosing serial or parallel execution.',
     '- Start parallel role work only when the parallel-delegation skill plan, lease, backend ownership, and join condition requirements are satisfied; otherwise record the concrete serial reason.',
     '- Long-running or parallel role work must include a lease; parallel-specific liveness details live in parallel-delegation.',
@@ -509,6 +514,7 @@ function buildClaudeInternalReferenceIndexLines(skillReferenceMap) {
 function renderClaudePublicSkill(skillReferenceMap, agentNames) {
   const maintainerAgent = agentNames.maintainer ?? 'maintainer';
   const engineerAgent = agentNames.engineer ?? 'engineer';
+  const auditorAgent = agentNames.auditor ?? 'auditor';
   const source = readFileSync(CLAUDE_CODE_START_COMMAND, 'utf-8');
   const [frontmatter, rawBody] = parseFrontmatter(source);
 
@@ -534,7 +540,7 @@ function renderClaudePublicSkill(skillReferenceMap, agentNames) {
   lines.push('');
   lines.push(body);
   lines.push('');
-  lines.push(...buildClaudeCoordinationLines(maintainerAgent, engineerAgent));
+  lines.push(...buildClaudeCoordinationLines(maintainerAgent, engineerAgent, auditorAgent));
   lines.push('');
   lines.push(...buildClaudeInternalReferenceIndexLines(skillReferenceMap));
   lines.push('');

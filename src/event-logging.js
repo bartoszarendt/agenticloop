@@ -43,7 +43,7 @@ export const VALID_EVENT_TYPES = new Set([
 ]);
 
 export const VALID_EVENT_BACKENDS = new Set(['files', 'github', 'unknown']);
-export const VALID_EVENT_ROLES = new Set(['orchestrator', 'maintainer', 'engineer', 'human', 'unknown']);
+export const VALID_EVENT_ROLES = new Set(['orchestrator', 'maintainer', 'engineer', 'auditor', 'human', 'unknown']);
 export const VALID_EVENT_OUTCOMES = new Set([
   'success',
   'failure',
@@ -770,8 +770,12 @@ export function validateEvent(event, options = {}) {
 }
 
 // Producer-side delegation roles a `role.invoked` event may target. The
-// orchestrator delegates only to maintainer or engineer.
-const DELEGATION_TARGET_ROLES = new Set(['maintainer', 'engineer']);
+// orchestrator delegates to maintainer, engineer, or auditor.
+//
+// Audit verdicts are NOT mirrored into `review.result`: the audit record is the
+// single source of truth for certification outcomes, and overloading the task
+// review event would create a second, divergent one.
+const DELEGATION_TARGET_ROLES = new Set(['maintainer', 'engineer', 'auditor']);
 
 function isBoolean(value) {
   return value === true || value === false;

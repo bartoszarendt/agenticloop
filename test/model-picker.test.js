@@ -34,6 +34,14 @@ describe('buildModelChoices', () => {
     assert.ok(text.includes('Cancel'));
   });
 
+  it('offers catalog choices plus a custom path for the auditor role', () => {
+    for (const host of ['opencode', 'codex', 'claude-code', 'copilot', 'cursor']) {
+      const { choices } = buildModelChoices(host, 'auditor');
+      assert.ok(choices.some(c => c.action === 'catalog'), `${host} should offer auditor catalog choices`);
+      assert.ok(choices.some(c => c.action === 'custom'), `${host} should keep the custom-model path for auditor`);
+    }
+  });
+
   it('includes keep-current when current model is set', () => {
     const { choices } = buildModelChoices('opencode', 'orchestrator', 'existing/model');
     const keepChoice = choices.find(c => c.action === 'keep');

@@ -213,8 +213,9 @@ describe('setup CLI', () => {
     const cfg = loadJsonFile(join(d, 'agenticloop.json'));
     assert.deepEqual(cfg.adapters.codex.roleSettings, {
       orchestrator: { model: 'gpt-5.6-luna', reasoningEffort: 'xhigh' },
-      maintainer: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
-      engineer: { model: 'gpt-5.6-terra', reasoningEffort: 'xhigh' },
+      maintainer: { model: 'gpt-5.6-terra', reasoningEffort: 'xhigh' },
+      engineer: { model: 'gpt-5.6-terra', reasoningEffort: 'high' },
+      auditor: { model: 'gpt-5.6-sol', reasoningEffort: 'high' },
     });
   });
 

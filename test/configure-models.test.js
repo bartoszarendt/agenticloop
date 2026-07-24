@@ -127,6 +127,24 @@ describe('configureModels', () => {
     assert.equal(cfg.adapters?.opencode?.roleSettings?.engineer?.model, 'openrouter/xiaomi/mimo');
   });
 
+  it('configures a non-interactive --role auditor model and preserves other roles', () => {
+    const d = makeTarget();
+    // Seed an explicit orchestrator model to prove it is preserved.
+    configureModels(d, { adapter: 'opencode', mutations: [{ role: 'orchestrator', model: 'keep/me' }] });
+
+    const result = configureModels(d, {
+      adapter: 'opencode',
+      mutations: parseModelMutations(['--role', 'auditor', '--model', 'openrouter/best-auditor', '--reasoning-effort', 'high']),
+    });
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.updated.includes('adapters.opencode.roleSettings.auditor.model'));
+
+    const cfg = loadJsonFile(join(d, 'agenticloop.json'));
+    assert.equal(cfg.adapters.opencode.roleSettings.auditor.model, 'openrouter/best-auditor');
+    assert.equal(cfg.adapters.opencode.roleSettings.auditor.reasoningEffort, 'high');
+    assert.equal(cfg.adapters.opencode.roleSettings.orchestrator.model, 'keep/me');
+  });
+
   it('errors when adapter is missing', () => {
     const d = makeTarget();
     const result = configureModels(d, { mutations: [{ role: 'orchestrator', model: 'x' }] });
@@ -244,11 +262,11 @@ describe('configureModels', () => {
     const cfg = loadJsonFile(join(d, 'agenticloop.json'));
     assert.equal(cfg.adapters.codex.roleSettings.orchestrator.model, 'custom-orchestrator');
     assert.equal(cfg.adapters.codex.roleSettings.orchestrator.reasoningEffort, 'xhigh');
-    assert.equal(cfg.adapters.codex.roleSettings.maintainer.model, 'gpt-5.6-sol');
+    assert.equal(cfg.adapters.codex.roleSettings.maintainer.model, 'gpt-5.6-terra');
     assert.equal(cfg.adapters.codex.roleSettings.maintainer.reasoningEffort, 'minimal');
     assert.deepEqual(cfg.adapters.codex.roleSettings.engineer, {
       model: 'gpt-5.6-terra',
-      reasoningEffort: 'xhigh',
+      reasoningEffort: 'high',
     });
   });
 
@@ -607,7 +625,7 @@ describe('adapterDiscoverySummary', () => {
     const { adapters, nextSteps } = adapterDiscoverySummary(d);
     const opencode = adapters.find(a => a.host === 'opencode');
     assert.ok(opencode, 'opencode adapter should be reported');
-    assert.deepEqual(opencode.missingModelRoles.sort(), ['engineer', 'maintainer', 'orchestrator']);
+    assert.deepEqual(opencode.missingModelRoles.sort(), ['auditor', 'engineer', 'maintainer', 'orchestrator']);
     assert.ok(
       nextSteps.some(s => s.includes('configure models') || s.includes('missing model')),
       'should suggest model configuration'
@@ -708,6 +726,7 @@ describe('adapterDiscoverySummary', () => {
             orchestrator: { model: 'm1' },
             maintainer: { model: 'm2' },
             engineer: { model: 'm3' },
+            auditor: { model: 'm4' },
           },
           enabled: true,
         },

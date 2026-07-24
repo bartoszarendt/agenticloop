@@ -26,7 +26,7 @@ This writes or refreshes:
 
 | Path | Purpose |
 |---|---|
-| `.codex/agents/<role>.toml` | Generated Codex custom agents for `orchestrator`, `maintainer`, and `engineer`. |
+| `.codex/agents/<role>.toml` | Generated Codex custom agents for `orchestrator`, `maintainer`, `engineer`, and `auditor`. |
 | `.agents/skills/agenticloop/SKILL.md` | One public repo-local Codex activation skill. |
 | `.agents/skills/agenticloop/agents/openai.yaml` | Codex UI metadata so `/skills` shows `Agentic Loop`. |
 | `.agents/skills/agenticloop/references/skills/<name>/reference.md` | Internal Agentic Loop procedure references copied from canonical skills without exposing extra discoverable Codex skills. |
@@ -74,7 +74,7 @@ contract, but the Codex adapter adds host-specific guidance:
 3. read `agenticloop/AGENTIC_LOOP.md` and canonical role contracts under `agenticloop/agents/`
 4. create or refine the durable task record before implementation
 5. keep the main Codex session as the coordinator/orchestrator
-6. spawn the generated Codex custom agents for maintainer and engineer role work
+6. spawn the generated Codex custom agents for maintainer, engineer, and auditor role work
 7. use plain-message-only delegation prompts for Codex custom-agent spawn
 8. avoid direct coordinator edits to implementation files unless the human
    explicitly asks
@@ -120,7 +120,7 @@ Each generated TOML includes:
 The generated orchestrator instructions explicitly require this Codex-specific
 delegation behavior:
 
-- spawn `maintainer` and `engineer` custom agents using one plain-message prompt
+- spawn `maintainer`, `engineer`, and `auditor` custom agents using one plain-message prompt
   payload only
 - do not mix a plain message payload and structured items in one spawn request
 - if the first spawn attempt fails with a schema error about message/items,
@@ -238,8 +238,9 @@ configuration:
     "codex": {
       "roleSettings": {
         "orchestrator": { "model": "gpt-5.6-luna", "reasoningEffort": "xhigh" },
-        "maintainer":   { "model": "gpt-5.6-sol", "reasoningEffort": "high" },
-        "engineer":     { "model": "gpt-5.6-terra", "reasoningEffort": "xhigh" }
+        "maintainer":   { "model": "gpt-5.6-terra", "reasoningEffort": "xhigh" },
+        "engineer":     { "model": "gpt-5.6-terra", "reasoningEffort": "high" },
+        "auditor":      { "model": "gpt-5.6-sol", "reasoningEffort": "high" }
       }
     }
   }

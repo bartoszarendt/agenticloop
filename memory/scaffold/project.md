@@ -4,6 +4,7 @@ max_parallel_implementation_lanes: 5
 task_backend: files
 event_logging: disabled
 event_logging_command: ""
+work_unit_audit: enabled
 task_id_pattern: "T-<number>"
 task_id_regex: "^T-\d{3,}$"
 task_file_template: ".agenticloop/tasks/{taskId}.md"
@@ -268,6 +269,29 @@ Event logging is optional and disabled by default.
 Default event logs are task-scoped JSONL files under `.agenticloop/logs/`, such as
 `.agenticloop/logs/T-001.jsonl`. Default event writes require `--task <TASK-ID>`.
 Use `--output <file>` only for tests or an explicit local exception.
+
+## Work-Unit Audit
+
+`work_unit_audit` controls whether a completed work unit needs a current Auditor
+certificate before closeout can publish `AGENT_CLOSEOUT_STATUS: complete`.
+
+- `enabled` is the default, including when the key is absent. Existing project
+  maps that omit it are audit-gated without a rewrite.
+- `disabled` is a deliberate human-controlled opt-out. It bypasses the
+  certification gate; it does not certify anything and does not make an existing
+  audit report current. Re-enabling restores the gate and again requires a
+  current certificate.
+
+Audit certificates live under `.agenticloop/audits/<AUD-ID>.md`. They are
+target-owned certification state, not task records and not task summaries.
+
+When work-unit audit is enabled, configure an Auditor model in `agenticloop.json`
+under `adapters.<host>.roleSettings.auditor`. The Maintainer model is never
+silently copied into the Auditor slot.
+
+The audit lifecycle, the six audit perspectives, verdicts, and the separate
+`audit_budget` (default 5) are owned by
+`agenticloop/skills/work-unit-audit/SKILL.md`.
 
 ## Optional GitHub Projection
 

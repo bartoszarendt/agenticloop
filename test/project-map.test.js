@@ -9,6 +9,7 @@ import {
   loadProjectMap,
   validateProjectMap,
   isValidTaskId,
+  resolveWorkUnitAudit,
 } from '../src/project-map.js';
 import { validateConfig } from '../src/validate-config.js';
 import { getDocumentRoleRegistry } from '../src/document-roles.js';
@@ -51,6 +52,9 @@ describe('loadProjectMap', () => {
     assert.equal(result.config.task_backend, 'files');
     assert.equal(result.config.event_logging, 'disabled');
     assert.equal(result.config.event_logging_command, '');
+    // Work-unit audit resolves to enabled by default, including when omitted.
+    assert.equal(result.config.work_unit_audit, 'enabled');
+    assert.equal(resolveWorkUnitAudit(result.config), 'enabled');
     assert.equal(result.config.development_stage, 'unconfirmed');
     assert.equal(result.config.max_parallel_implementation_lanes, 5);
     assert.equal(result.config.task_id_pattern, 'T-<number>');
@@ -132,6 +136,34 @@ describe('validateProjectMap', () => {
     const validation = validateProjectMap(result.config, result.raw, dir);
 
     assert.deepEqual(validation.errors, []);
+  });
+
+  it('resolves work_unit_audit to enabled when the key is omitted', () => {
+    const dir = makeProjectMap([]);
+    const result = loadProjectMap(dir);
+    assert.equal(resolveWorkUnitAudit(result.config), 'enabled');
+    assert.deepEqual(validateProjectMap(result.config, result.raw, dir).errors, []);
+  });
+
+  it('preserves an explicit work_unit_audit: disabled opt-out', () => {
+    const dir = makeProjectMap(['work_unit_audit: disabled']);
+    const result = loadProjectMap(dir);
+    assert.equal(result.config.work_unit_audit, 'disabled');
+    assert.equal(resolveWorkUnitAudit(result.config), 'disabled');
+    assert.deepEqual(validateProjectMap(result.config, result.raw, dir).errors, []);
+  });
+
+  it('accepts an explicit work_unit_audit: enabled value', () => {
+    const dir = makeProjectMap(['work_unit_audit: enabled']);
+    const result = loadProjectMap(dir);
+    assert.deepEqual(validateProjectMap(result.config, result.raw, dir).errors, []);
+  });
+
+  it('rejects an out-of-enum work_unit_audit value', () => {
+    const dir = makeProjectMap(['work_unit_audit: maybe']);
+    const result = loadProjectMap(dir);
+    const validation = validateProjectMap(result.config, result.raw, dir);
+    assert.ok(validation.errors.some(error => error.includes("work_unit_audit must be 'enabled' or 'disabled'")));
   });
 
   it('accepts engineer_context_window_tokens as a positive integer', () => {

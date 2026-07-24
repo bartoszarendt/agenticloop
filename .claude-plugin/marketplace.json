@@ -8,7 +8,7 @@
     {
       "name": "agenticloop",
       "source": "./",
-      "description": "Agentic Loop workflow toolkit (orchestrator/maintainer/engineer roles plus skills)",
+      "description": "Agentic Loop workflow toolkit (orchestrator/maintainer/engineer/auditor roles plus skills)",
       "version": "0.2.0"
     }
   ]

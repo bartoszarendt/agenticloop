@@ -1,6 +1,6 @@
 ---
 name: task-closeout
-description: Use when every task in a configured group is accepted and integrated or closed according to the configured backend, when a human-identified work unit finishes in a flat project, or when cleaning up an accepted worktree after integration. Defines what closeout inspects, when it runs, the durable status marker it posts, and the human approval gate for grouped projects. Closeout is a verify-and-mark gate; it does not write a separate summary file.
+description: Use when every task in a configured group is accepted and integrated or closed according to the configured backend, when a human-identified work unit finishes in a flat project, or when cleaning up an accepted worktree after integration. Defines what closeout inspects, when it runs, the durable status marker it posts, the work-unit certification gate, and the human approval gate for grouped projects. Closeout is a verify-and-mark gate; it does not write a separate summary file.
 metadata:
   area: task-closeout
   side_effects: writes-backend
@@ -123,6 +123,33 @@ If a PR was merged without closing the issue, close the issue with a comment
 linking the merged PR and record the missing closing-keyword process gap in the
 closeout marker note. If the issue cannot be corrected, use `AGENT_CLOSEOUT_STATUS:
 follow_up_required`.
+
+### Work-unit certification gate
+
+Work-unit audit is enabled by default. Unless `.agenticloop/project.md` explicitly
+records `work_unit_audit: disabled`, closeout cannot publish
+`AGENT_CLOSEOUT_STATUS: complete` without a current audit certificate for the
+exact work unit. Enforce it with:
+
+```text
+npx agenticloop audit gate <work-unit-or-audit-id>
+```
+
+Complete requires exactly one current audit record whose `audit_state` is
+`certified`, whose `latest_verdict` is `certified` or
+`certified_with_accepted_limitations`, whose `certified_artifact` and
+`certified_covered_tasks` still match the candidate baseline, whose last
+completed run is bound to that same artifact, task set, and verdict, with no
+unresolved blocking finding and typed human or existing accepted-decision
+authority for every accepted limitation. The entire record must validate. A
+stale, invalid, missing, awaiting-human, blocked, or non-certifying audit keeps
+the marker at
+`follow_up_required`. The full gate, budget, and remediation routing are owned by
+[[work-unit-audit]].
+
+When `work_unit_audit: disabled` is explicitly recorded, bypass this gate,
+preserve any existing audit history, do not claim the work unit is certified, and
+state the opt-out visibly in the closeout note.
 
 ## Closeout marker
 

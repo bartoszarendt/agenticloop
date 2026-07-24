@@ -22,12 +22,15 @@ import {
   buildRoleRecord,
 } from './shared.js';
 
-export const OPENCODE_ROLE_NAMES = Object.freeze(['orchestrator', 'maintainer', 'engineer']);
+export const OPENCODE_ROLE_NAMES = Object.freeze(['orchestrator', 'maintainer', 'engineer', 'auditor']);
 export const OPENCODE_AGENT_RELATIVE_PATHS = Object.freeze({
   orchestrator: '.opencode/agents/orchestrator.md',
   maintainer: '.opencode/agents/maintainer.md',
   engineer: '.opencode/agents/engineer.md',
+  auditor: '.opencode/agents/auditor.md',
 });
+// Orchestrator delegation targets. Everything else stays denied.
+export const OPENCODE_DELEGATION_TARGET_ROLES = Object.freeze(['maintainer', 'engineer', 'auditor']);
 export const OPENCODE_COMMAND_RELATIVE_PATH = '.opencode/commands/agenticloop.md';
 
 const OPENCODE_START_COMMAND = bundledToolkitPath('agenticloop/commands/start.md');
@@ -60,7 +63,12 @@ function buildPrompt(roleName, roleSourceFile, requiredSkills, roleBody, skillsS
   if (roleName === 'orchestrator') {
     prompt += ' Agentic Loop is serial by default. For every authorized multi-task unit, complete a current Parallel Opportunity Scan after decomposition and include its durable result or not-currently-eligible rescan trigger in implementation delegation. Load parallel-delegation before choosing serial or parallel execution.';
     prompt += ' Start parallel role work only when the parallel-delegation skill plan, lease, backend ownership, and join condition requirements are satisfied; otherwise record the concrete serial reason.';
-    prompt += ' In OpenCode, use the Task tool or explicit @maintainer / @engineer invocation when available; inline fallback is allowed only after the delegation capability check in role-delegation.';
+    prompt += ' In OpenCode, use the Task tool or explicit @maintainer / @engineer / @auditor invocation when available; inline fallback is allowed only after the delegation capability check in role-delegation.';
+    prompt += ' Route work-unit certification to the auditor once every covered task is accepted and its artifacts are integrated into one exact frozen candidate. Auditor has no inline fallback: a same-session audit is not an audit.';
+  } else if (roleName === 'auditor') {
+    prompt += ' You are read-only with respect to implementation, tests, configuration, product documentation, commits, branches, pull requests, task acceptance, product decisions, and risk acceptance.';
+    prompt += ' Inspect the repository, the exact frozen candidate, task records, decisions, and evidence, and run only safe bounded non-publishing verification. Do not implement remediation, accept or reopen tasks, expand scope, change accepted decisions, or accept a limitation or risk for the human.';
+    prompt += ' Return one consolidated report to the orchestrator; the orchestrator or the `agenticloop audit` CLI persists it. Do not edit the audit record yourself.';
   } else {
     prompt += ' Honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, wrong branch/worktree, or no-progress budget requires it.';
   }
@@ -160,8 +168,16 @@ export function renderOpencodeAgentMarkdown(agentRecord, roleName) {
     lines.push('  edit: deny');
     lines.push('  task:');
     lines.push('    "*": deny');
-    lines.push('    maintainer: allow');
-    lines.push('    engineer: allow');
+    for (const target of OPENCODE_DELEGATION_TARGET_ROLES) {
+      lines.push(`    ${target}: allow`);
+    }
+  }
+
+  // Auditor's read-only posture is enforced mechanically where the host supports
+  // it, not by prompt text alone.
+  if (roleName === 'auditor') {
+    lines.push('permission:');
+    lines.push('  edit: deny');
   }
 
   lines.push('---');

@@ -64,6 +64,7 @@ surface again.
 | Agent role | A host-neutral role definition in `agenticloop/agents/<role>.md`. |
 | Skill | A focused procedure in `agenticloop/skills/<name>/SKILL.md`. |
 | Decision record | A tracked Markdown record for a durable project decision that constrains future work. |
+| Audit record | A tracked Markdown certificate for one work unit under `.agenticloop/audits/`. Holds the exact certified baseline and append-only Auditor report history. Separate from task records and decision records. |
 | Task record | The durable record for one unit of work. Stored as a local Markdown file by default; GitHub issues are an optional projection. |
 | Task backend | The configured storage projection for task records. Backend docs live in `agenticloop/backends/`. |
 | Event log | An optional local JSONL log of explicit workflow-gate events written through the Node CLI when a project enables event logging. |
@@ -111,6 +112,28 @@ target projects do not need toolkit-root `docs/` files at runtime.
   reviews implementation artifacts, triages follow-ups, and owns closeout.
 - **Engineer**: the scoped implementation role that changes files, runs checks,
   and publishes evidence.
+- **Auditor**: the read-only assurance role that evaluates a completed work unit
+  as a whole and certifies or rejects the exact integrated baseline. It has its
+  own model slot, runs as a fresh invocation every time, implements nothing,
+  accepts no task, and accepts no limitation or risk.
+- **Work unit**: the certification boundary for an audit. In grouped projects it
+  reuses the configured grouping (`phase:4`, `milestone:M2`, `epic:payments`,
+  `custom:<id>`); flat projects name it explicitly as `work-unit:<name>` with an
+  explicit covered-task list.
+- **Audit record**: the durable work-unit certificate under
+  `.agenticloop/audits/<AUD-ID>.md`. It holds the covered-task boundary, the
+  candidate and certified artifacts, the latest Auditor verdict, and append-only
+  report history. It is not a task record and not a task summary.
+- **Candidate artifact**: the exact frozen integrated artifact submitted for
+  audit. **Certified artifact** is the artifact an effective certification
+  covers; certification is current only while the two are equal and the
+  covered-task sets match.
+- **Audit verdict**: one of `certified`, `certified_with_accepted_limitations`,
+  `needs_remediation`, or `needs_human_decision`. The last of these moves the
+  record to `audit_state: awaiting_human` until a separate human resolution is
+  recorded. Budget exhaustion is a workflow stop, never a manufactured verdict.
+- **Audit budget**: the separate default-5 bound on completed substantive Auditor
+  reports for one work unit, independent of `attempt_budget` and `review_budget`.
 - **Required checks**: exact commands or manual checks that must be run before a
   task can be accepted.
 - **Verification operating fact**: a current, maintainer-owned execution fact in
@@ -192,7 +215,7 @@ before constructing any path.
 | Path | Leading dot | Owner | Read/write | Holds |
 | --- | --- | --- | --- | --- |
 | `agenticloop/` | no | toolkit | read-only | `AGENTIC_LOOP.md`, `agents/`, `skills/`, `backends/`, `commands/`, `memory/`, `config.json` |
-| `.agenticloop/` | yes | target project | read/write | `project.md`, `tasks/`, `decisions/`, `improvements/` (created on first proposal), `logs/`, `tmp/` |
+| `.agenticloop/` | yes | target project | read/write | `project.md`, `tasks/`, `decisions/`, `audits/`, `improvements/` (created on first proposal), `logs/`, `tmp/` |
 
 The process doc is `agenticloop/AGENTIC_LOOP.md` (no dot) and the role files are
 `agenticloop/agents/<role>.md` (no dot). Project state such as
@@ -203,7 +226,7 @@ repository root and confirm which directory exists before guessing a sibling.
 
 ## Roles
 
-Agentic Loop uses three logical roles. A host may implement these as agents,
+Agentic Loop uses four logical roles. A host may implement these as agents,
 modes, prompts, commands, or explicit human instructions.
 
 The canonical role definitions live in `agenticloop/agents/`:
@@ -211,6 +234,19 @@ The canonical role definitions live in `agenticloop/agents/`:
 - `agenticloop/agents/orchestrator.md`
 - `agenticloop/agents/maintainer.md`
 - `agenticloop/agents/engineer.md`
+- `agenticloop/agents/auditor.md`
+
+| Role | Owns | Cannot |
+|---|---|---|
+| Orchestrator | Lifecycle coordination and delegation | Implement, review, accept |
+| Maintainer | Task records, review, acceptance, closeout | Implement outside one bounded review fixup |
+| Engineer | Scoped implementation and evidence | Accept its own work |
+| Auditor | Work-unit certification | Implement, accept tasks, expand scope, accept risk |
+
+Auditor is a separate role rather than a maintainer mode because it needs its own
+model slot, a fresh invocation identity, non-substitutability with the authority
+that accepted the work, and a distinct read-only boundary. See the Work-Unit
+Audit section below.
 
 Host adapters should bind to those role files rather than defining separate
 role contracts.
@@ -661,6 +697,106 @@ performs the action or records `blocked` category `no-progress`.
 After producing an artifact that satisfies the current evidence, do not re-decide
 or re-verify it unless new contradictory evidence appears. Take the next external
 action or return status.
+
+## Work-Unit Audit
+
+Task review proves each task was done correctly. Work-unit audit answers a
+question no task review asks: does the *combined* result achieve the work unit's
+intended outcome as a complete, coherent, sufficiently verified system?
+
+Work-unit audit is **enabled by default**, including when
+`.agenticloop/project.md` omits the key. Only an explicit human-controlled
+`work_unit_audit: disabled` bypasses the closeout certification gate, and opting
+out never certifies anything. The full procedure - preconditions, audit packet,
+six perspectives, findings, verdicts, remediation routing, re-audit, budget, and
+the closeout gate - is owned by [[work-unit-audit]].
+
+```text
+covered tasks accepted and integrated
+-> freeze the exact candidate artifact
+-> invoke a fresh Auditor
+-> Auditor returns one consolidated report
+-> certified?
+   yes -> closeout may complete
+   no  -> Maintainer dispositions each blocking finding
+          -> Engineer implements remediation tasks
+          -> Maintainer reviews and accepts them
+          -> remediation is integrated; baseline and evidence refresh
+          -> invoke a fresh Auditor
+```
+
+The Auditor evaluates six perspectives in one execution - outcome, completeness,
+integration and coherence, engineering quality, verification, and risk - and
+returns one report. These are perspectives inside one audit, not separate roles,
+models, events, votes, or budgets. Multi-model auditing, panels, voting, and
+synthesis are deliberately deferred.
+
+The Auditor is read-only with respect to implementation, tests, configuration,
+product documentation, commits, branches, pull requests, task acceptance, product
+decisions, and risk acceptance. It may inspect the repository, the frozen
+candidate, task records, decisions, and evidence, and run bounded non-publishing
+verification. Where a host supports path or operation restrictions, that posture
+is enforced mechanically as well as by prompt.
+
+The Auditor returns a structured report and never edits files. The orchestrator
+or `npx agenticloop audit report ...` persists it into the audit record without
+altering the substantive findings. Persistence validates the input and the
+fully rendered record before writing; malformed finding fields, stale baselines,
+or structurally invalid packets are rejected.
+
+A `needs_human_decision` report moves the record to
+`audit_state: awaiting_human`. Another Auditor report is inadmissible until a
+human records direction with:
+
+```text
+npx agenticloop audit resolve <AUD-ID> \
+  --authority "human: <identity>" --note "<decision and direction>"
+```
+
+Resolution does not certify the work unit; it permits the next fresh Auditor
+invocation. Closeout enforces the complete certificate with
+`npx agenticloop audit gate <work-unit-or-audit-id>`. `audit status` is
+diagnostic and does not replace that closeout gate.
+
+Existing Engineer-owned integration rehearsal remains the pre-integration
+composition proof. Audit runs after the exact candidate is integrated or frozen.
+
+Remediation uses ordinary Maintainer, Engineer, review, evidence, and
+change-request rules. Remediation tasks carry their own `attempt_budget` and
+`review_budget` and reference the audit ID and finding IDs.
+
+### Audit Budget
+
+`audit_budget` defaults to 5 and is deliberately separate from the default-3
+`attempt_budget` and `review_budget`. Five bounds an expensive work-unit
+assurance loop while still allowing the initial audit plus several
+remediation/re-audit cycles before mandatory human intervention.
+
+The budget counts completed substantive reports, derived from the audit record's
+append-only history. An invocation that failed without producing a report does
+not consume it; repeated equivalent invocation failures stay bounded by the
+Attempt Budget above. Remediation work does not consume it, and replacing the
+baseline or the audit record does not reset it.
+
+After five non-certifying reports the audit record moves to
+`audit_state: blocked` with reason `audit_budget_exhausted` while preserving the
+fifth Auditor's actual verdict. If that actual verdict is
+`needs_human_decision`, `audit_state: awaiting_human` takes precedence until the
+human direction is recorded; resolution then exposes the still-exhausted budget
+as the ordinary `audit_budget_exhausted` block. Budget exhaustion is a workflow
+stop, not a verdict: never manufacture `needs_human_decision` because the budget
+ran out. A sixth report requires every applicable human-decision resolution and
+a recorded human-approved budget override.
+
+### Supervised execution compatibility
+
+Work-unit audit does not depend on supervised execution being enabled or
+available. Where a supervisor exists, the Auditor is another observable and
+recoverable role session: a supervisor may recover or replace a failed Auditor
+session operationally, but it cannot issue or alter a verdict, a replacement that
+produced no report does not consume `audit_budget`, and supervisor,
+session-replacement, and wakeup budgets stay separate from it. Fresh-invocation
+and exact-baseline requirements are unchanged.
 
 ## Review Round Checkpoint
 
@@ -1478,6 +1614,24 @@ artifact: the durable record is the per-task inline summary (the `## Scope
 Completed` section in each task file, or the PR body for GitHub-backed work) plus
 the backend. Closeout confirms that record is complete and posts a status marker.
 
+When `work_unit_audit` resolves to `enabled` (the default, including when the key
+is absent), closeout cannot publish `AGENT_CLOSEOUT_STATUS: complete` without a
+current work-unit certificate: exactly one audit record for the exact work unit,
+`audit_state: certified`, a certifying `latest_verdict`, `certified_artifact`
+equal to `candidate_artifact`, `certified_covered_tasks` equal to
+`covered_tasks`, a last completed Auditor run whose artifact, covered-task set,
+and verdict match those certification fields, no unresolved blocking finding,
+a typed human or existing accepted-decision authority reference for every
+accepted limitation, and fresh final-state evidence for the exact candidate.
+The record must also pass structural validation. A missing, invalid, stale,
+awaiting-human, blocked, or non-certifying audit keeps the marker at
+`follow_up_required`. Publish one final marker for the work unit, not one per
+audit run. See the Work-Unit Audit section and [[work-unit-audit]].
+
+An explicit `work_unit_audit: disabled` bypasses that gate, preserves any
+existing audit history, does not claim the work unit is certified, and must be
+stated visibly in the closeout evidence.
+
 Closeout checks:
 
 - all relevant task records
@@ -1524,6 +1678,7 @@ important skills are:
 - `blocked-state`
 - `change-request-gate`
 - `decision-capture`
+- `work-unit-audit`
 - `task-closeout`
 - `github-attribution`
 

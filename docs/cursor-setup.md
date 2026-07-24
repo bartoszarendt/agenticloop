@@ -32,7 +32,7 @@ This writes or refreshes:
 
 | Path | Purpose |
 |---|---|
-| `.cursor/agents/<role>.md` | Generated Cursor subagents for `orchestrator`, `maintainer`, and `engineer`. |
+| `.cursor/agents/<role>.md` | Generated Cursor subagents for `orchestrator`, `maintainer`, `engineer`, and `auditor`. |
 | `.cursor/skills/agenticloop/SKILL.md` | One public Agentic Loop skill for explicit Cursor activation. |
 | `.cursor/skills/agenticloop/references/skills/<name>/reference.md` | Internal Agentic Loop procedure references copied from canonical skills without exposing extra public skills. |
 | `.cursor/skills/agenticloop/references/backends/*.md` | Copied backend projection references. |
@@ -82,8 +82,12 @@ Each generated subagent includes:
 - `name`
 - `description`
 - `model` (`inherit` by default, or the configured model)
-- `readonly: true` for `orchestrator`
+- `readonly: true` for `orchestrator` and `auditor`
 - `readonly: false` for `maintainer` and `engineer`
+
+`readonly: true` is Cursor's strongest supported non-editing posture, so the
+auditor's read-only audit boundary is enforced by Cursor rather than by prompt
+text alone.
 
 The agent body adds Cursor-aware methodology wiring:
 
@@ -147,7 +151,8 @@ Cursor model identifiers are read from:
       "roleSettings": {
         "orchestrator": { "model": "<cursor-orchestrator-model>" },
         "maintainer": { "model": "<cursor-maintainer-model>" },
-        "engineer": { "model": "<cursor-engineer-model>" }
+        "engineer": { "model": "<cursor-engineer-model>" },
+        "auditor": { "model": "<cursor-auditor-model>" }
       }
     }
   }

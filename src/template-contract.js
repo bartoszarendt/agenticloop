@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { parseFrontmatter } from './frontmatter.js';
 import { hasMarkdownHeading, markdownLines, markdownSection, parseAtxHeading } from './markdown.js';
 import {
+  AUDIT_RECORD_TEMPLATE_RELATIVE_PATH,
+  AUDIT_REQUIRED_SECTION_HEADINGS,
   BACKENDS_SOURCE_DIRECTORY,
   DECISION_RECORD_TEMPLATE_RELATIVE_PATH,
   IMPROVEMENT_PROPOSAL_RISK_LEVELS,
@@ -34,6 +36,7 @@ export const REQUIRED_TEMPLATE_RELATIVE_PATHS = Object.freeze([
   WORK_UNIT_SUMMARY_TEMPLATE_RELATIVE_PATH,
   DECISION_RECORD_TEMPLATE_RELATIVE_PATH,
   IMPROVEMENT_PROPOSAL_TEMPLATE_RELATIVE_PATH,
+  AUDIT_RECORD_TEMPLATE_RELATIVE_PATH,
 ]);
 
 function renderHeadingBlock(headings) {
@@ -180,6 +183,49 @@ function validateImprovementProposalFrontmatter(content, relPath) {
   return errors;
 }
 
+// The audit template documents the certificate shape. Model, reasoning effort,
+// provider, and a mutable round counter are rejected here as well as in the
+// record validator so the documented shape cannot drift into carrying them.
+const FORBIDDEN_AUDIT_TEMPLATE_KEYS = Object.freeze([
+  'model',
+  'reasoning_effort',
+  'reasoningEffort',
+  'provider',
+  'audit_round',
+  'completed_audits',
+]);
+
+const REQUIRED_AUDIT_TEMPLATE_KEYS = Object.freeze([
+  'audit_id',
+  'work_unit',
+  'audit_state',
+  'covered_tasks',
+  'candidate_artifact',
+  'certified_artifact',
+  'certified_covered_tasks',
+  'latest_verdict',
+  'audit_budget',
+]);
+
+function validateAuditRecordTemplateFrontmatter(content, relPath) {
+  const [frontmatter] = parseFrontmatter(content);
+  if (frontmatter === null) {
+    return [`${relPath} missing YAML frontmatter`];
+  }
+  const errors = [];
+  for (const key of REQUIRED_AUDIT_TEMPLATE_KEYS) {
+    if (!Object.hasOwn(frontmatter, key)) {
+      errors.push(`${relPath} missing required frontmatter field '${key}'`);
+    }
+  }
+  for (const key of FORBIDDEN_AUDIT_TEMPLATE_KEYS) {
+    if (Object.hasOwn(frontmatter, key)) {
+      errors.push(`${relPath} must not contain '${key}' frontmatter field`);
+    }
+  }
+  return errors;
+}
+
 export function renderTaskRecordRequiredSectionBlock() {
   return renderHeadingBlock(TASK_REQUIRED_SECTION_HEADINGS);
 }
@@ -247,6 +293,21 @@ export function validateCanonicalTemplates(repoRoot, assetLayout = resolveToolki
     const text = readFileSync(improvementProposalTemplatePath, 'utf-8');
     errors.push(...validateImprovementProposalFrontmatter(text, improvementProposalTemplateLabel));
     errors.push(...validateOrderedHeadings(text, IMPROVEMENT_PROPOSAL_SECTION_HEADINGS, improvementProposalTemplateLabel));
+  }
+
+  const auditTemplatePath = resolveToolkitAssetPath(
+    repoRoot,
+    AUDIT_RECORD_TEMPLATE_RELATIVE_PATH,
+    assetLayout
+  );
+  const auditTemplateLabel = describeToolkitAssetPath(
+    AUDIT_RECORD_TEMPLATE_RELATIVE_PATH,
+    assetLayout
+  );
+  if (existsSync(auditTemplatePath)) {
+    const text = readFileSync(auditTemplatePath, 'utf-8');
+    errors.push(...validateAuditRecordTemplateFrontmatter(text, auditTemplateLabel));
+    errors.push(...validateOrderedHeadings(text, AUDIT_REQUIRED_SECTION_HEADINGS, auditTemplateLabel));
   }
 
   for (const relPath of TEMPLATE_CONSUMER_RELATIVE_PATHS) {

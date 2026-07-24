@@ -348,6 +348,7 @@ function buildCopilotAgentBody(
 ) {
   const maintainerAgent = agentNames.maintainer ?? 'maintainer';
   const engineerAgent = agentNames.engineer ?? 'engineer';
+  const auditorAgent = agentNames.auditor ?? 'auditor';
   const roleDelegationReferencePath = skillReferencePath(
     skillReferenceMap,
     'role-delegation',
@@ -368,6 +369,7 @@ function buildCopilotAgentBody(
 
   if (roleName === 'orchestrator') {
     lines.push(`When maintainer-owned work is needed, delegate through the Copilot custom agent \`${maintainerAgent}\`. When engineer-owned work is needed, delegate through the Copilot custom agent \`${engineerAgent}\` instead of doing that work inline.`);
+    lines.push(`When the covered tasks of a work unit are accepted and integrated into one exact frozen candidate, delegate work-unit certification through the Copilot custom agent \`${auditorAgent}\`. Every re-audit is a fresh delegation; a same-session audit does not satisfy work-unit auditing.`);
     lines.push('Agentic Loop is serial by default. For every authorized multi-task unit, complete a current Parallel Opportunity Scan after decomposition and include its durable result or not-currently-eligible rescan trigger in implementation delegation. Load parallel-delegation before choosing serial or parallel execution.');
     lines.push('Start parallel role work only when the parallel-delegation skill plan, lease, backend ownership, and join condition requirements are satisfied; otherwise record the concrete serial reason.');
     lines.push('Use real Copilot custom-agent, subagent, or handoff delegation where the current surface supports it.');
@@ -382,6 +384,10 @@ function buildCopilotAgentBody(
   } else if (roleName === 'engineer') {
     lines.push(...STANDALONE_ENGINEER_PREAMBLE_LINES);
     lines.push('In Agentic Loop mode, honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, wrong branch/worktree, collision, or no-progress budget requires it. Stop and hand control back once implementation evidence is ready for maintainer review.');
+  } else if (roleName === 'auditor') {
+    lines.push('You are read-only with respect to implementation, tests, configuration, product documentation, commits, branches, pull requests, task acceptance, product decisions, and risk acceptance. The `edit` tool is withheld from this agent; do not attempt to work around it.');
+    lines.push('Inspect the repository, the exact frozen candidate, task records, decisions, and evidence, and run only safe bounded non-publishing verification. Do not implement remediation, accept or reopen tasks, expand scope, change accepted decisions, or accept a limitation or risk for the human.');
+    lines.push('Return one consolidated report to the orchestrator. Persistence into the audit record is mechanical and belongs to the orchestrator or the `agenticloop audit` CLI.');
   }
 
   lines.push('');
@@ -403,6 +409,12 @@ function agentToolsForRole(roleName) {
   if (roleName === 'orchestrator') {
     return ['agent', 'execute', 'read', 'search'];
   }
+  // Auditor keeps read/search/execute so it can inspect evidence and run bounded
+  // non-publishing checks, but `edit` is withheld: the read-only posture is
+  // enforced by the tool grant, not only by prompt text.
+  if (roleName === 'auditor') {
+    return ['execute', 'read', 'search'];
+  }
   return ['execute', 'read', 'search', 'edit'];
 }
 
@@ -411,6 +423,7 @@ function subagentAllowListForRole(roleName, agentNames) {
   return [
     agentNames.maintainer ?? 'maintainer',
     agentNames.engineer ?? 'engineer',
+    agentNames.auditor ?? 'auditor',
   ];
 }
 

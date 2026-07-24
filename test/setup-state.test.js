@@ -179,6 +179,66 @@ describe('detectSetupState', () => {
     assert.ok(state.validationIssues.some(i => i.includes('missing model settings')));
   });
 
+  it('reports work_unit_audit and flags a missing auditor model as a blocking setup condition', () => {
+    const d = makeTarget({ includeConfig: false });
+    writeProjectMap(d, {
+      setup_status: 'confirmed',
+      setup_confirmed_at: '2026-07-24',
+      setup_confirmed_by: 'human',
+      development_stage: 'expansion',
+      work_unit_audit: 'enabled',
+    });
+    writeFileSync(join(d, 'agenticloop.json'), JSON.stringify({
+      extends: './agenticloop/config.json',
+      adapters: {
+        opencode: {
+          enabled: true,
+          roleSettings: {
+            orchestrator: { model: 'm1' },
+            maintainer: { model: 'm2' },
+            engineer: { model: 'm3' },
+            // auditor deliberately unset
+          },
+        },
+      },
+    }, null, 2) + '\n');
+
+    const state = detectSetupState(d, { includeValidation: true });
+    assert.equal(state.workUnitAudit, 'enabled');
+    assert.ok(
+      state.validationIssues.some(i => i.includes('work_unit_audit is enabled but adapter opencode has no auditor model')),
+      state.validationIssues.join('\n')
+    );
+  });
+
+  it('does not flag a missing auditor model when work-unit audit is explicitly disabled', () => {
+    const d = makeTarget({ includeConfig: false });
+    writeProjectMap(d, {
+      setup_status: 'confirmed',
+      setup_confirmed_at: '2026-07-24',
+      setup_confirmed_by: 'human',
+      development_stage: 'expansion',
+      work_unit_audit: 'disabled',
+    });
+    writeFileSync(join(d, 'agenticloop.json'), JSON.stringify({
+      extends: './agenticloop/config.json',
+      adapters: {
+        opencode: {
+          enabled: true,
+          roleSettings: {
+            orchestrator: { model: 'm1' },
+            maintainer: { model: 'm2' },
+            engineer: { model: 'm3' },
+          },
+        },
+      },
+    }, null, 2) + '\n');
+
+    const state = detectSetupState(d, { includeValidation: true });
+    assert.equal(state.workUnitAudit, 'disabled');
+    assert.ok(!state.validationIssues.some(i => i.includes('has no auditor model')));
+  });
+
   it('does not report inherited base adapters as configured', () => {
     const d = makeTarget({ includeConfig: false });
     // Target config only has opencode, but base config has all adapters

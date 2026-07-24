@@ -297,6 +297,22 @@
         "The integrated check must bind to the exact combined candidate tree, not to either lane head."
       ],
       "nearMissTarget": "role-delegation"
+    },
+    "work-unit-audit": {
+      "shouldTrigger": [
+        "Certify the completed work unit with a fresh auditor invocation and one consolidated audit report before closeout.",
+        "The auditor returned needs_remediation; disposition each blocking audit finding and plan a re-audit of the audited artifact.",
+        "Record the auditor verdict, audited artifact, and covered tasks in the durable audit certificate.",
+        "Check the separate audit budget before invoking the auditor again for this work unit."
+      ],
+      "shouldNotTrigger": [
+        "Rename the helper function in the utility module.",
+        "Update the installation instructions in the project README."
+      ],
+      "nearMiss": [
+        "Closeout cannot complete because the work-unit audit certificate went stale after remediation changed the audited artifact."
+      ],
+      "nearMissTarget": "task-closeout"
     }
   }
 }

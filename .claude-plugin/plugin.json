@@ -1,6 +1,6 @@
 {
   "name": "agenticloop",
-  "description": "Agentic Loop workflow toolkit: supervised orchestrator/maintainer/engineer roles plus markdown-first skills for planning, TDD, review, and closeout.",
+  "description": "Agentic Loop workflow toolkit: supervised orchestrator/maintainer/engineer/auditor roles plus markdown-first skills for planning, TDD, review, work-unit audit, and closeout.",
   "version": "0.2.0",
   "author": {
     "name": "Bartosz Arendt"
@@ -19,7 +19,8 @@
   "agents": [
     "./agents/orchestrator.md",
     "./agents/maintainer.md",
-    "./agents/engineer.md"
+    "./agents/engineer.md",
+    "./agents/auditor.md"
   ],
   "commands": [
     "./commands/start.md",

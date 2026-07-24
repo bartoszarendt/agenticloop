@@ -174,7 +174,8 @@ the generated `.claude/agents/*.md` frontmatter.
       "roleSettings": {
         "orchestrator": { "model": "<claude-orchestrator-model>" },
         "maintainer":   { "model": "<claude-maintainer-model>" },
-        "engineer":     { "model": "<claude-engineer-model>" }
+        "engineer":     { "model": "<claude-engineer-model>" },
+        "auditor":      { "model": "<claude-auditor-model>" }
       }
     }
   }
@@ -194,6 +195,12 @@ Do not add Claude Code model fields to canonical `agenticloop/agents/*.md`.
 Mode B generated `maintainer` and `engineer` subagents use
 `permissionMode: "acceptEdits"` by default. That scopes edit auto-accept to
 Agentic Loop worker subagents, not every Claude Code session in the repo.
+
+The generated `auditor` subagent uses `permissionMode: "plan"` by default.
+`plan` is Claude Code's supported non-editing mode, so the auditor's read-only
+posture is enforced mechanically rather than by prompt text alone. The auditor
+still reads the repository, task records, decisions, and evidence, and returns a
+structured report the orchestrator persists with `npx agenticloop audit report`.
 
 The orchestrator or main session is not granted `acceptEdits` by default. Keep
 that main session as the coordinator and delegate writes or Bash-heavy work to
