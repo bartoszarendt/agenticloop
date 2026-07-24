@@ -3,13 +3,13 @@
 ## Agentic Loop is the subject here, not the process
 
 This repository *authors* the Agentic Loop methodology. `AGENTIC_LOOP.md`,
-`agents/`, `skills/`, and `backends/` are the product being maintained — they
+`agents/`, `skills/`, and `backends/` are the product being maintained – they
 are **artifacts to edit**, not a workflow to adopt for work in this repo.
 
 Do not read `AGENTIC_LOOP.md` and then take on its roles, task-record
 contract, worktree/parallel-lane rules, or event logging on your own
-initiative. Ordinary work here — editing docs, fixing skills/backends,
-answering questions, one-off changes — follows the rest of this AGENTS.md
+initiative. Ordinary work here – editing docs, fixing skills/backends,
+answering questions, one-off changes – follows the rest of this AGENTS.md
 directly, as normal manual repository work.
 
 Only operate *as* Agentic Loop (adopt roles, create task records, spin up
@@ -56,6 +56,19 @@ Agentic Loop contains reusable process assets only:
 - validation and setup helpers.
 
 Do not add downstream product code, application stacks, database migrations, seed data, generated caches, runtime artifacts, or raw agent transcripts.
+
+## Development Stage
+
+Stage: **expansion**. Grow Agentic Loop's capability through shared core
+mechanisms rather than parallel ones: extend or correct the canonical role
+source (`agents/`), skill source (`skills/`), adapter paths (`src/adapters/`),
+and methodology (`AGENTIC_LOOP.md`) instead of adding a second implementation
+beside them.
+
+- Rationale: active capability growth without a frozen compatibility policy.
+- Revisit when: a stable compatibility/support policy is adopted, or the
+  role/skill/adapter surface is treated as feature-complete and work shifts to
+  stabilization or maintenance.
 
 ## Core Rules
 
@@ -108,8 +121,8 @@ runs the full Node test suite, which covers skill validation, strict JSON config
 
 In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the repo root), reach for it BEFORE grep/find or reading files when you need to understand or locate code:
 
-- **MCP tool** (when available): `codegraph_explore` answers most code questions in one call — the relevant symbols' verbatim source plus the call paths between them, including dynamic-dispatch hops grep can't follow. Name a file or symbol in the query to read its current line-numbered source. If it's listed but deferred, load it by name via tool search.
+- **MCP tool** (when available): `codegraph_explore` answers most code questions in one call – the relevant symbols' verbatim source plus the call paths between them, including dynamic-dispatch hops grep can't follow. Name a file or symbol in the query to read its current line-numbered source. If it's listed but deferred, load it by name via tool search.
 - **Shell** (always works): `codegraph explore "<symbol names or question>"` prints the same output.
 
-If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.
+If there is no `.codegraph/` directory, skip CodeGraph entirely – indexing is the user's decision.
 <!-- CODEGRAPH_END -->
