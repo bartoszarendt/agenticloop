@@ -1,6 +1,6 @@
 ---
 name: blocked-state
-description: Use when an agent or the loop hits a wall it cannot clear on its own -- provider outage, rate limit, missing credentials, an impossible or contradictory task, review deadlock, merge conflict, no implementation artifact produced, or an exhausted attempt budget / self-loop with no progress -- and must record a durable, resumable pause. Defines needs_context, blocked markers, task-file status updates, block categories, and how the task resumes.
+description: Use when an agent or the loop hits a wall it cannot clear on its own – provider outage, rate limit, missing credentials, an impossible or contradictory task, review deadlock, merge conflict, no implementation artifact produced, or an exhausted attempt budget / self-loop with no progress – and must record a durable, resumable pause. Defines needs_context, blocked markers, task-file status updates, block categories, and how the task resumes.
 metadata:
   area: failure-handling
   side_effects: writes-backend

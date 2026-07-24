@@ -196,12 +196,12 @@ their normal authorization rules are satisfied.
 The `adapters.<host>.status` field in `agenticloop/config.json` records adapter
 availability.
 
-- `supported` — implemented, documented, and available for generation.
-- `placeholder` — reserved name with no generator yet. Avoid referencing it in
+- `supported` -- implemented, documented, and available for generation.
+- `placeholder` -- reserved name with no generator yet. Avoid referencing it in
   target-owned config until the generator exists.
 
-All five implemented adapters — OpenCode, Codex, Claude Code, Copilot, and
-Cursor — are supported. Tests, validation commands, and packaging checks remain
+All five implemented adapters – OpenCode, Codex, Claude Code, Copilot, and
+Cursor – are supported. Tests, validation commands, and packaging checks remain
 development and release quality checks.
 
 ## Loop-Guard Capabilities
@@ -525,8 +525,8 @@ Collision rule:
 ## Project State and Activation Boundaries
 
 Generated role bodies embed the canonical role contracts, so they carry the
-standing recognition behavior for durable project state -- including the Project
-Operating Facts responsibilities -- without any adapter-specific template edits.
+standing recognition behavior for durable project state – including the Project
+Operating Facts responsibilities – without any adapter-specific template edits.
 
 Activated Agentic Loop roles read the live `.agenticloop/project.md` (its
 `## Verification Operating Facts` and `## Project Operating Facts` profiles

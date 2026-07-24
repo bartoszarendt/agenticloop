@@ -1,6 +1,6 @@
 ---
 name: frontend-design-quality
-description: Use when implementing or revising any frontend UI -- landing pages, marketing sites, portfolios, app screens, dashboards, or components -- and when choosing layout, typography, color, spacing, motion, or styling. Enforces a design-read first, real design systems, anti-slop discipline, accessibility, and a pre-flight visual audit so the interface does not look templated or AI-generated.
+description: Use when implementing or revising any frontend UI – landing pages, marketing sites, portfolios, app screens, dashboards, or components – and when choosing layout, typography, color, spacing, motion, or styling. Enforces a design-read first, real design systems, anti-slop discipline, accessibility, and a pre-flight visual audit so the interface does not look templated or AI-generated.
 metadata:
   area: frontend-design-quality
   side_effects: writes-files
@@ -34,7 +34,7 @@ your taste), existing brand assets, and quiet constraints (accessibility-critica
 regulated, trust-first) that override aesthetic preference.
 
 If the read genuinely diverges, ask **one** clarifying question. If you can infer confidently, state
-the read and proceed -- do not stall.
+the read and proceed – do not stall.
 
 ## 2. Three dials
 
@@ -54,7 +54,7 @@ If the brief reads as an established system, install and use the **official** pa
 recreating its CSS or importing tokens then overriding them: Fluent, Material 3, Carbon, Polaris,
 Atlaskit, Primer, GOV.UK Frontend, USWDS, Radix Themes, shadcn/ui, or Tailwind utilities for modern
 SaaS. **One system per project.** When the brief is an aesthetic (glassmorphism, bento, brutalism,
-editorial, dark tech) there is no official package -- build it honestly with native CSS plus a
+editorial, dark tech) there is no official package – build it honestly with native CSS plus a
 maintained library, and label borrowed inspiration as such in comments.
 
 Before importing any third-party library, check the project manifest and output the install command
@@ -86,7 +86,7 @@ Reach past the machine defaults deliberately:
   as a real product screenshot; label it as a concept/mock when real assets do not exist. Never
   hand-roll decorative SVG icons.
 - **Full interactive states**: loading (skeletons, not spinners), empty, error, and tactile
-  `:active` feedback -- not just the happy path.
+  `:active` feedback – not just the happy path.
 - **Copy self-audit**: re-read every visible string; cut AI-cute phrasing and fake-precise numbers.
 
 For dashboards, data tables, charts, forms, navigation, and mobile/native surfaces, also use the

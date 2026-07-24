@@ -29,7 +29,7 @@ import {
 import { loadProjectMap } from '../project-map.js';
 
 export const AGENTIC_LOOP_OPERATION_DESCRIPTION =
-  'Use only when the user explicitly asks to activate Agentic Loop: create or refine the durable task record, route maintainer and engineer roles, verify evidence, and close out according to the project backend.';
+  'Use only when the user explicitly asks to activate Agentic Loop: create or refine the durable task record, route maintainer, engineer, and auditor roles, verify evidence, certify the finished work unit, and close out according to the project backend.';
 
 // Dual-mode engineer preamble prepended by host adapters that customize the
 // engineer developer instructions (Codex, Copilot, Cursor). Kept compact for

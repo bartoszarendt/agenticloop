@@ -62,9 +62,9 @@ Do not create a decision record for:
 - raw chat transcripts,
 - temporary debugging observations,
 - one-off local experiments that do not constrain later work,
-- a current, non-binding project operating fact -- record it in
+- a current, non-binding project operating fact – record it in
   `## Project Operating Facts` in `.agenticloop/project.md` instead,
-- a compact pointer to a runbook -- that is a Project Operating Fact, not a
+- a compact pointer to a runbook – that is a Project Operating Fact, not a
   decision.
 
 ## Project operating facts

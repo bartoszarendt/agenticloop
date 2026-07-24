@@ -148,7 +148,7 @@ in `agenticloop/AGENTIC_LOOP.md`.
 Example (illustrative only; delete when recording real facts):
 
 ```markdown
-- `PF-local-postgres-tests` — Local PostgreSQL tests use the Compose `test`
+- `PF-local-postgres-tests` -- Local PostgreSQL tests use the Compose `test`
   profile and port 5436. Source: `docs/testing.md#local-postgres-tests`.
   Revisit when: the test service, port, or test runner changes.
 ```

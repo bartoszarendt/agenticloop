@@ -136,7 +136,7 @@ repository-rules document (`AGENTS.md`, `CLAUDE.md`, or `GEMINI.md`). Only the
 region between `<!-- AGENTICLOOP_START -->` and `<!-- AGENTICLOOP_END -->` is
 owned; everything else in that file stays target-owned and is preserved
 byte-for-byte. Installing or discovering Agentic Loop does not activate the
-methodology -- the block only records that boundary. Existing installations are
+methodology – the block only records that boundary. Existing installations are
 never silently enrolled by `update`, a modified owned block is preserved and
 reported rather than overwritten, and an unowned manual marker block is never
 adopted automatically. Opt out with `--no-agents-guidance`, or manage the block

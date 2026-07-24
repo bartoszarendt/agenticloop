@@ -1,6 +1,6 @@
 ---
 name: debugging-before-fixes
-description: Use the moment a required check, test, build, or runtime behavior fails or surprises -- before proposing or applying any fix, including on every needs_revision iteration that involves a defect. Defines feedback-loop-first debugging, root-cause phases, calibrated hypotheses, tagged debug instrumentation, confirmed root-cause reporting, and the stop rule after 3 failed fix attempts.
+description: Use the moment a required check, test, build, or runtime behavior fails or surprises – before proposing or applying any fix, including on every needs_revision iteration that involves a defect. Defines feedback-loop-first debugging, root-cause phases, calibrated hypotheses, tagged debug instrumentation, confirmed root-cause reporting, and the stop rule after 3 failed fix attempts.
 metadata:
   area: engineering-discipline
   side_effects: writes-tmp

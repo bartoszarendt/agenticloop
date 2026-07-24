@@ -891,12 +891,12 @@ describe('fixup eligibility verdict line is documented', () => {
   const skill = readFileSync(join(REPO_ROOT, 'skills', 'review-and-accept', 'SKILL.md'), 'utf-8');
 
   it('review-and-accept documents the ineligible/applied verdict line and reasons', () => {
-    assert.match(skill, /Maintainer Review Fixup: ineligible — Lens 1 not clean/);
-    assert.match(skill, /Maintainer Review Fixup: ineligible — requires changed tests/);
-    assert.match(skill, /Maintainer Review Fixup: ineligible — independent review required/);
-    assert.match(skill, /Maintainer Review Fixup: ineligible — outside allowed paths/);
-    assert.match(skill, /Maintainer Review Fixup: ineligible — earlier fixup episode already exists/);
-    assert.match(skill, /Maintainer Review Fixup: applied — <short concrete finding>/);
+    assert.match(skill, /Maintainer Review Fixup: ineligible -- Lens 1 not clean/);
+    assert.match(skill, /Maintainer Review Fixup: ineligible -- requires changed tests/);
+    assert.match(skill, /Maintainer Review Fixup: ineligible -- independent review required/);
+    assert.match(skill, /Maintainer Review Fixup: ineligible -- outside allowed paths/);
+    assert.match(skill, /Maintainer Review Fixup: ineligible -- earlier fixup episode already exists/);
+    assert.match(skill, /Maintainer Review Fixup: applied -- <short concrete finding>/);
   });
 
   it('review-and-accept documents the standardized durable subsection shape', () => {

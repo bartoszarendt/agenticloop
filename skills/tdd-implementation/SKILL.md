@@ -1,6 +1,6 @@
 ---
 name: tdd-implementation
-description: Use when implementing any code change for a task -- new behavior, a bugfix, or a revision after review -- before writing the production code. Defines the failing-test-first cycle, public-seam testing, vertical slices, scaffold and infra handling, and counters to common excuses for tests-after-code.
+description: Use when implementing any code change for a task – new behavior, a bugfix, or a revision after review – before writing the production code. Defines the failing-test-first cycle, public-seam testing, vertical slices, scaffold and infra handling, and counters to common excuses for tests-after-code.
 metadata:
   area: engineering-discipline
   side_effects: writes-files

@@ -4,8 +4,8 @@ Agentic Loop is a supervised implementation workflow for AI coding agents. It
 turns a vague request into a durable task record, a scoped implementation,
 evidence, review, and closeout.
 
-The methodology is host-neutral. All five implemented host adapters — OpenCode,
-Codex, Claude Code, GitHub Copilot, and Cursor — are supported. The workflow
+The methodology is host-neutral. All five implemented host adapters – OpenCode,
+Codex, Claude Code, GitHub Copilot, and Cursor – are supported. The workflow
 should read naturally in any agent that can follow Markdown instructions and
 load skills.
 
@@ -14,9 +14,9 @@ load skills.
 Full Agentic Loop operation requires explicit activation. Discovering the
 installed toolkit or reading this document does not activate the methodology.
 
-Activate the full loop — adopt the roles, create or continue a durable task
+Activate the full loop – adopt the roles, create or continue a durable task
 record, run backend operations, worktrees, event logging, review, and closeout
-— only when at least one of these is true:
+– only when at least one of these is true:
 
 - The user explicitly asks to use Agentic Loop.
 - The user invokes the host's Agentic Loop activation command, prompt, or skill.
@@ -209,7 +209,7 @@ target projects do not need toolkit-root `docs/` files at runtime.
 ## Directory Layout
 
 An installed target repo has **two sibling directories that differ only by a
-leading dot**. Conflating them is the most common path mistake — read the dot
+leading dot**. Conflating them is the most common path mistake – read the dot
 before constructing any path.
 
 | Path | Leading dot | Owner | Read/write | Holds |
@@ -221,7 +221,7 @@ The process doc is `agenticloop/AGENTIC_LOOP.md` (no dot) and the role files are
 `agenticloop/agents/<role>.md` (no dot). Project state such as
 `.agenticloop/project.md` and `.agenticloop/tasks/` is under the dotted
 directory. Reading `.agenticloop/project.md` does not mean the process doc or
-agents live beside it — those are under `agenticloop/`. When in doubt, list the
+agents live beside it – those are under `agenticloop/`. When in doubt, list the
 repository root and confirm which directory exists before guessing a sibling.
 
 ## Roles
@@ -438,14 +438,14 @@ resumes from the first missing or invalid task.
 
 When a human authorizes a work unit to run, continue, or finish, Agentic Loop
 performs the routine lifecycle steps that unit needs under the configured
-backend -- selecting included tasks, creating or updating task records,
+backend – selecting included tasks, creating or updating task records,
 delegating roles, implementing, recording evidence, updating implementation
 artifacts, reviewing, revising, accepting, closing tasks, and running configured
-closeout -- without a per-step approval prompt. These steps are routine inside
+closeout – without a per-step approval prompt. These steps are routine inside
 an authorized unit; only the hard checkpoints below interrupt them.
 
 The loop continues until the unit reaches acceptance (plus configured closeout)
-or hits a hard checkpoint. It stops short only when blocked -- see Attempt
+or hits a hard checkpoint. It stops short only when blocked – see Attempt
 Budget and [[blocked-state]].
 
 ### Serial Default And Parallel Exceptions
@@ -521,7 +521,7 @@ lane declares cross-lane findings or explicitly returns `Cross-lane findings:
 none`. A finding names a fact or invariant, its evidence, the affected lanes (or
 `none`), and a requested response (`apply` or `revalidate`). The orchestrator
 routes a relevant finding to each affected lane, and the recipient must record
-one disposition -- `applied`, `already satisfied`, `rejected` with evidence, or
+one disposition – `applied`, `already satisfied`, `rejected` with evidence, or
 `deferred` with a reason. A batch join is incomplete while any routed finding
 lacks a disposition. A deferred finding remains join-blocking until
 maintainer/orchestrator triage records that it cannot invalidate current scope,
@@ -534,7 +534,7 @@ concurrency plan or coordination output; there is no shared findings ledger.
 one exact lane head after its final relevant edit), `integrated` (against the
 composed candidate tree at join), or `post-merge` (against the actual merged
 tree). Evidence identity is the exact artifact tree or immutable revision plus
-the exact command plus relevant dependency/toolchain/environment state -- the
+the exact command plus relevant dependency/toolchain/environment state – the
 same command on different branch heads is different evidence. A verified
 baseline may be referenced across lanes only under strict artifact and
 environment identity and only to establish baseline state; it never satisfies a
@@ -576,7 +576,7 @@ removals; no worktrees are deleted. It keeps open pull requests, locked worktree
 with blocking dirty source or shared `.agenticloop` state, external or detached
 worktrees, and lanes with active task state. Task-specific lane-local
 `.agenticloop` state is flat only (`logs`, `tasks`, `summaries` (legacy;
-preserved for migration only -- current projects do not create a summaries
+preserved for migration only – current projects do not create a summaries
 directory), and `decisions` files directly under `.agenticloop/<dir>/`); it is
 preserved before removal and does not by itself block cleanup. Nested or shared `.agenticloop` files are not
 lane-local and dirty shared state blocks cleanup. Git worktree removal may be
@@ -628,7 +628,7 @@ before planning or reviewing parallel lanes or joins.
 
 Stop for human direction before:
 
-- leaving the authorized work unit -- including starting any task, group, or
+- leaving the authorized work unit – including starting any task, group, or
   phase outside it,
 - merge, release, irreversible external publication, or destructive cleanup
   (including deleting branches),
@@ -646,9 +646,9 @@ If the authorization source cannot be named, treat it as absent.
 
 Absent that authorization, treat the request as answer-and-stop: do only the
 work needed to respond, report the result with evidence, state any uncertainty,
-and stop. Requests that ask for information or a limited action -- checking
+and stop. Requests that ask for information or a limited action – checking
 status, listing artifacts, inspecting history, explaining behavior, diagnosing a
-failure, comparing options, or answering a question -- carry their own natural
+failure, comparing options, or answering a question – carry their own natural
 stop condition and do not by themselves authorize any action above.
 
 Discovering a possible next action is not authorization to take it. Report it as
@@ -668,8 +668,8 @@ Repeating an action that makes no progress is the most common loop failure.
 Bound it with a shared attempt budget.
 
 The default budget is 3, or the task record's `attempt_budget` when it sets one.
-An attempt counts against the budget when it is equivalent to a previous one --
-the same command, check, fix, delegation, or report against the same target --
+An attempt counts against the budget when it is equivalent to a previous one –
+the same command, check, fix, delegation, or report against the same target –
 and yields no new evidence or change in task state. A restated intended next
 action that is not performed also counts as an attempt: deliberation that never
 becomes an action is the same loop as a repeated action that never changes
@@ -690,7 +690,7 @@ and a sustained-and-disputed review item in [[review-and-accept]]. Some guards
 are deliberately tighter than the default: the empty-result command rule above,
 the recorded-setup-gap rule, and the "maintainer is needed" stop in the
 orchestrator do not get repeated attempts at all. The self-loop guard is also
-tighter -- if a role states the same intended next action twice without
+tighter – if a role states the same intended next action twice without
 performing it, it stops deliberating on the second restatement and either
 performs the action or records `blocked` category `no-progress`.
 
@@ -804,16 +804,16 @@ The attempt budget counts equivalent attempts and resets on new evidence, so a
 task that fails review repeatedly with a different finding each round never
 trips it. Bound that churn separately.
 
-After 3 `needs_revision` rounds on one task -- or after the task record's
-`review_budget` when it sets one -- the orchestrator pauses before routing the
+After 3 `needs_revision` rounds on one task – or after the task record's
+`review_budget` when it sets one – the orchestrator pauses before routing the
 next revision and classifies the churn cause:
 
-- implementation defect -- the code is genuinely not done;
-- evidence drift -- the code is fine but the durable summary cites a stale head;
-- task-contract ambiguity -- acceptance criteria are underspecified;
-- scope pollution -- unrelated changes entered the artifact;
-- reviewer/engineer disagreement -- a sustained-and-disputed item;
-- external blocker -- a dependency outside the task.
+- implementation defect – the code is genuinely not done;
+- evidence drift – the code is fine but the durable summary cites a stale head;
+- task-contract ambiguity – acceptance criteria are underspecified;
+- scope pollution – unrelated changes entered the artifact;
+- reviewer/engineer disagreement – a sustained-and-disputed item;
+- external blocker – a dependency outside the task.
 
 The orchestrator records the classification, then either routes a single
 targeted revision plan that names the specific cause, or records
@@ -954,7 +954,7 @@ may coexist.
 Keep detailed runbooks in normal project documentation; a fact may link to one
 instead of duplicating it. Promote a fact to a decision record when it
 constrains future implementation, architecture, security, quality, release
-behavior, or accepted project conventions -- see [[decision-capture]]. A project
+behavior, or accepted project conventions – see [[decision-capture]]. A project
 fact may cite a decision, but a fact is not approval.
 
 ### Ownership and updates
@@ -1013,9 +1013,9 @@ Event logging is optional. Agents must not attempt CLI event logging unless
 When event logging is enabled, zero events for a completed or reviewed task is
 non-conformant.
 
-The operational procedure -- resolving the command (including the one-time
+The operational procedure – resolving the command (including the one-time
 CLI-help fallback check), the disabled and non-blocking rules, the
-concise-summary and small-`data` rules, and command safety -- is owned by the
+concise-summary and small-`data` rules, and command safety – is owned by the
 [[event-logging]] skill. This section owns why event logging exists, the event
 taxonomy, and which lifecycle gates emit which events. Events default to
 `.agenticloop/logs/<TASK-ID>.jsonl` via `--task <TASK-ID>`.
@@ -1141,7 +1141,7 @@ check outcomes, delegation/fallback counts, delegation/review provenance-quality
 gaps (incomplete or inconsistent `role.invoked`, self-invocation, non-orchestrator
 emitters, `review.result` missing `review_mode` or emitted by a non-maintainer,
 and maintainer review rounds with neither correlated delegation evidence nor a
-continuation reason -- each review round is
+continuation reason – each review round is
 matched per-review against a preceding unconsumed maintainer invocation for that
 step, never estimated by aggregate subtraction), `maintainer_fixup: true` event
 counts (reported as event counts, with more than one per task flagged as a
@@ -1160,8 +1160,8 @@ candidates rather than warnings. The review-round dimension is
 derived from existing `review.result` events, so it works on historical logs;
 the knob dimensions read the optional `task.created`/`task.closed` telemetry
 fields when present. `npx agenticloop validate` also validates every default
-`.agenticloop/logs/*.jsonl` file when present, and -- when
-`event_logging: enabled` is recorded -- cross-checks each files-backed task
+`.agenticloop/logs/*.jsonl` file when present, and – when
+`event_logging: enabled` is recorded – cross-checks each files-backed task
 record's durable `## Maintainer Review Fixup` subsection against that task's
 `maintainer_fixup: true` review events, reporting historical mismatches and
 multiple-episode anomalies as warnings. Only an event with the matching task id,

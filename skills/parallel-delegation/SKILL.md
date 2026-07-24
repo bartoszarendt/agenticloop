@@ -37,27 +37,27 @@ backend collision state, or a cross-lane finding changes.
 
 For each ready task, the scan must cover:
 
-- **Dependency edges** -- which other tasks must finish first.
-- **Expected files or owned paths** -- the task's scope map (`Expected Files or
+- **Dependency edges** – which other tasks must finish first.
+- **Expected files or owned paths** – the task's scope map (`Expected Files or
   Areas` plus `allowed_paths`).
-- **Test and validation surfaces** -- writable tests, fixtures, snapshots,
+- **Test and validation surfaces** – writable tests, fixtures, snapshots,
   generated expectations, and shared validation helpers.
-- **Backend objects owned** -- task file(s), GitHub issue/PR, or other backend
+- **Backend objects owned** – task file(s), GitHub issue/PR, or other backend
   records the lane mutates.
-- **Shared/generated files** -- bundlers, codegen output, fixtures, snapshots.
-- **Lockfiles** -- dependency manifests and lockfiles.
-- **Schemas/APIs** -- shared schema or API ordering dependencies.
-- **External state** -- databases, services, deployment targets, shared fixtures.
-- **Labels/comments/event logs/group state** -- shared coordination surfaces.
-- **Shared assumptions and invariants** -- facts about behavior, formats,
+- **Shared/generated files** – bundlers, codegen output, fixtures, snapshots.
+- **Lockfiles** – dependency manifests and lockfiles.
+- **Schemas/APIs** – shared schema or API ordering dependencies.
+- **External state** – databases, services, deployment targets, shared fixtures.
+- **Labels/comments/event logs/group state** – shared coordination surfaces.
+- **Shared assumptions and invariants** – facts about behavior, formats,
   contracts, or verification interpretation that sibling tasks rely on.
-- **Discoveries that could affect other tasks** -- likely findings whose
+- **Discoveries that could affect other tasks** – likely findings whose
   appearance in one lane would invalidate another lane's assumptions, plan,
   implementation, or verification interpretation.
-- **Knowledge coupling** -- the maintainer-recorded classification
+- **Knowledge coupling** – the maintainer-recorded classification
   `independent | coupled | unknown` from `## Parallel Safety`; see Knowledge
   Eligibility below.
-- **Host parallel capability** -- whether the host can stream, cancel, or
+- **Host parallel capability** – whether the host can stream, cancel, or
   surface subagent status, or enforce bounded leases, and whether it can inject
   a message into a running lane.
 
@@ -123,15 +123,15 @@ Mutation independence is necessary but not sufficient. The maintainer also
 classifies knowledge coupling per task in `## Parallel Safety` as
 `independent`, `coupled`, or `unknown`:
 
-- **independent** -- no likely discovery in one lane can invalidate another
+- **independent** – no likely discovery in one lane can invalidate another
   lane's assumptions, plan, implementation, or verification interpretation.
   Parallel writes may proceed when every mutation and host-safety rule also
   passes.
-- **coupled** -- the tasks share assumptions, invariants, contracts, or
+- **coupled** – the tasks share assumptions, invariants, contracts, or
   verification interpretations that a discovery in one lane could change.
   Parallel implementation writes are not allowed as-planned. Use the two-wave
   pattern below.
-- **unknown** -- the maintainer cannot yet tell. Use the existing
+- **unknown** – the maintainer cannot yet tell. Use the existing
   one-bounded-discovery-pass rule from the scan, then classify as independent
   or coupled. If uncertainty remains after that pass, run serially and record
   what stayed unknown.
@@ -144,14 +144,14 @@ behavioral assumption are still coupled.
 
 When the classification is `coupled`:
 
-1. **Wave 1 -- bounded parallel read-only diagnosis.** Run the affected lanes
+1. **Wave 1 – bounded parallel read-only diagnosis.** Run the affected lanes
    as read-only diagnosis lanes with fixed artifacts, leases, and explicit
    cross-lane finding declarations. No lane writes implementation files.
 2. **Reconciliation at the join.** The orchestrator collects the diagnosis
    findings, routes relevant ones, obtains dispositions, and the maintainer
    reconciles them into resolved assumptions, an amended task record, or a
    re-scoped plan before any implementation write begins.
-3. **Wave 2 -- implementation.** Implement serially, or run a newly justified
+3. **Wave 2 – implementation.** Implement serially, or run a newly justified
    parallel implementation plan whose knowledge classification is now
    `independent` with a recorded reason. The wave-2 plan must restate the
    resolved assumptions each lane now relies on.
@@ -185,14 +185,14 @@ Cross-lane findings: none
 
 Otherwise the lane returns one or more structured findings:
 
-- **Finding id** -- stable within the batch (for example `B1-F2`).
-- **Fact or invariant** -- the discovered fact, stated as a claim another lane
+- **Finding id** – stable within the batch (for example `B1-F2`).
+- **Fact or invariant** – the discovered fact, stated as a claim another lane
   could apply or revalidate against.
-- **Evidence reference** -- the durable pointer backing the claim (task-file
+- **Evidence reference** – the durable pointer backing the claim (task-file
   section, PR, commit, check output location).
-- **Affected lane ids, or `none`** -- lanes whose assumptions, plan,
+- **Affected lane ids, or `none`** – lanes whose assumptions, plan,
   implementation, or verification interpretation the finding could change.
-- **Requested response** -- `apply` (adopt the fact and continue) or
+- **Requested response** – `apply` (adopt the fact and continue) or
   `revalidate` (recheck assumptions, plan, or evidence against the fact).
 
 Orchestrator routing duties:
@@ -329,7 +329,7 @@ role must return status or a blocker instead of continuing.
 
 ## Backend-Specific Parallel Write Rules
 
-**GitHub backend (`task_backend: github`) -- implementation lanes.** Each
+**GitHub backend (`task_backend: github`) – implementation lanes.** Each
 parallel implementation lane requires:
 
 - its own `git worktree` at a repo-internal path (see Worktree placement),
@@ -344,11 +344,11 @@ parallel implementation lane requires:
 - a join condition before durable review outcome, acceptance, merge, or closeout,
 - a merge barrier (see below).
 
-**GitHub backend -- coordination/review lanes.** Parallel maintainer or
+**GitHub backend – coordination/review lanes.** Parallel maintainer or
 orchestrator lanes that mutate GitHub backend state (issues, PRs, labels,
 review comments, status markers, closeout markers, event logs) may run only
-when each lane owns distinct backend objects -- for example, distinct issues or
-distinct PR review targets -- and the concurrency plan proves that no shared
+when each lane owns distinct backend objects – for example, distinct issues or
+distinct PR review targets – and the concurrency plan proves that no shared
 labels, comments, status markers, closeout state, event logs, or group state
 collide. If lanes must touch the same issue, PR, or label set, run them
 serially.
@@ -373,7 +373,7 @@ write lane requires:
 - a lease,
 - a join condition.
 
-**Files backend -- coordination/review lanes.** Parallel files-backed
+**Files backend – coordination/review lanes.** Parallel files-backed
 coordination/review lanes that mutate task files, workflow files, event logs,
 status markers, closeout summaries, scratch outputs, or other local state are
 files-backed write lanes. They require the worktree, branch, owned task file or
@@ -419,17 +419,17 @@ Every check in a parallel concurrency plan is classified by the tree it runs
 against. A lane green result is evidence about one exact lane head only; it is
 not evidence about the batch.
 
-- **baseline** -- runs once against the verified shared base tree. Establishes
+- **baseline** – runs once against the verified shared base tree. Establishes
   pre-existing failures and starting state. May be referenced by all lanes only
   under the strict reuse conditions below.
-- **lane-final** -- runs against one exact lane head or tree. Must be fresh
+- **lane-final** – runs against one exact lane head or tree. Must be fresh
   after that lane's final relevant edit, per [[verification-evidence]]. Cannot
   be reused as final proof for another lane.
-- **integrated** -- runs against the composed candidate tree at join. Required
+- **integrated** – runs against the composed candidate tree at join. Required
   when knowledge coupling, adjacent behavior, shared invariants, or
   ordering/composition risk exists; optional for demonstrably disjoint lanes
   only with a recorded reason in the concurrency plan.
-- **post-merge** -- runs against the actual merged tree when it differs from
+- **post-merge** – runs against the actual merged tree when it differs from
   the rehearsed candidate. Conflict resolution, ordering, or content
   differences between the rehearsed candidate and the real merge invalidate the
   earlier integrated evidence.
@@ -469,7 +469,7 @@ adjacent behavior, shared invariants, or ordering/composition risk makes
 lane-final evidence insufficient. The trigger scales with risk: a demonstrably
 disjoint batch may omit the rehearsal with a recorded reason; a coupled batch
 with composition risk may not. Not every parallel batch needs an expensive
-full-suite rehearsal -- a small coupled batch may rehearse with only the
+full-suite rehearsal – a small coupled batch may rehearse with only the
 affected shared suite.
 
 Definition and rules:
@@ -510,7 +510,7 @@ result as a failed or blocked lane at join instead of treating the batch as
 verified.
 
 Backend-neutral: the rehearsal procedure above is identical across backends.
-Backend projections only change where the durable records live -- see
+Backend projections only change where the durable records live – see
 `agenticloop/backends/files.md` and `agenticloop/backends/github.md` for the
 concise backend-specific statements. The full procedure is not restated there.
 
@@ -545,6 +545,6 @@ parallelism by themselves:
   a no-progress budget, and a join condition. A host that cannot stream live
   status does not, on its own, forbid a short bounded join-based batch.
 
-If host limitations make even bounded join-based parallelism unverifiable -- the
-orchestrator cannot confirm lane artifacts at join -- run serial and record the
+If host limitations make even bounded join-based parallelism unverifiable – the
+orchestrator cannot confirm lane artifacts at join – run serial and record the
 host limitation as the concrete reason.

@@ -1,5 +1,5 @@
 ---
-description: "Operate in Agentic Loop mode: create or refine the durable task record, route maintainer and engineer roles, verify evidence, and close out according to the project backend."
+description: "Operate in Agentic Loop mode: create or refine the durable task record, route maintainer, engineer, and auditor roles, verify evidence, certify the finished work unit, and close out according to the project backend."
 argument-hint: "[task-id or task description]"
 disable-model-invocation: true
 ---
@@ -15,7 +15,7 @@ Path convention: toolkit source (`AGENTIC_LOOP.md`, `agents/`, `skills/`,
 `backends/`) lives under `agenticloop/` (no leading dot). Target project state
 (`project.md`, `tasks/`, `decisions/`, `improvements/`) lives under `.agenticloop/` (leading
 dot). `.agenticloop/agents`, `.agenticloop/skills`, and
-`.agenticloop/backends` are invalid paths -- canonical assets are always
+`.agenticloop/backends` are invalid paths – canonical assets are always
 under `agenticloop/` without the dot.
 
 Read `.agenticloop/project.md` first. If `setup_status` is `unconfirmed` or a

@@ -152,8 +152,8 @@ work-unit auditing, so record a blocked condition instead.
 2. It checks whether OpenCode exposes a real delegation path for that role.
    If the Task tool or explicit agent invocation is available, inline fallback
    is not allowed.
-3. It uses OpenCode's actual delegation mechanism -- Task-tool subagent
-   invocation or explicit `@maintainer` / `@engineer` invocation -- to create a
+3. It uses OpenCode's actual delegation mechanism – Task-tool subagent
+   invocation or explicit `@maintainer` / `@engineer` invocation – to create a
    visible subagent session.
 4. The subagent session runs under the named agent's model, mode, and prompt.
 5. The orchestrator waits for the subagent output before routing the next step.

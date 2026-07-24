@@ -14,7 +14,7 @@ acting.
 Path convention: toolkit assets (`AGENTIC_LOOP.md`, `agents/`, `skills/`,
 `backends/`) live under `agenticloop/` (no leading dot); target project state
 (`project.md`, `tasks/`, `decisions/`, `improvements/`) lives under `.agenticloop/` (leading
-dot). These two directories differ only by the dot — do not assume the process
+dot). These two directories differ only by the dot – do not assume the process
 doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 `agenticloop/AGENTIC_LOOP.md`.
 
@@ -174,7 +174,7 @@ natural stop condition, per the Advance Authorization Boundary in
 5. If the work item is a phase, group, milestone, epic, task set, or otherwise multi-deliverable item, have maintainer decompose it into right-sized task records before implementation.
 6. Have maintainer create or refine the task record or task records.
 7. After maintainer creates or refines multiple task records for a multi-task unit, load [[parallel-delegation]], run the current Parallel Opportunity Scan, and record the durable result, including source proposals considered, independent rationale, and rescan trigger.
-8. Have engineer implement the task records -- serially, or as a bounded parallel batch when the scan produced an eligible plan. Every multi-task implementation delegation includes `Parallel scan: completed - <durable reference>` or `Parallel scan: not currently eligible - <reason and rescan trigger>`. Open a pull request per lane when `task_backend: github` is set. Use parallel lanes only when [[parallel-delegation]] allows it.
+8. Have engineer implement the task records – serially, or as a bounded parallel batch when the scan produced an eligible plan. Every multi-task implementation delegation includes `Parallel scan: completed - <durable reference>` or `Parallel scan: not currently eligible - <reason and rescan trigger>`. Open a pull request per lane when `task_backend: github` is set. Use parallel lanes only when [[parallel-delegation]] allows it.
 9. After the implementation join, decide review concurrency. Prefer a bounded parallel coordination/review phase when the orchestrator records or extends the concurrency plan for distinct review targets and backend objects with no comparison, joining, or ordering requirement; record a concrete reason for serial review when eligible review candidates exist.
 10. Have maintainer review each implementation artifact using one three-lens review round. Durable review outcomes wait for the implementation join; only explicitly planned read-only review activities may start earlier. Integration and merge stay serial after review unless a specific case is shown safe.
 11. Have engineer revise until accepted, unless the reviewing maintainer completes one eligible bounded Maintainer Review Fixup under [[review-and-accept]]; a successful fixup accepts within the current review round with no engineer invocation, while any ineligible, failed, or expanded finding routes to the engineer.
@@ -182,7 +182,7 @@ natural stop condition, per the Advance Authorization Boundary in
 13. Ask the human before merge or configured group transition.
 
 Steps 5 through 12 are the authorized unit's routine lifecycle. Do not add a
-per-transition approval prompt between them -- in particular, do not ask whether
+per-transition approval prompt between them – in particular, do not ask whether
 to proceed to maintainer review once the implementation artifact is ready. See
 the Authorized Work Units boundary in `agenticloop/AGENTIC_LOOP.md`.
 

@@ -1,7 +1,7 @@
 # Worktree Lanes and State Preservation
 
 Agentic Loop isolates file-mutating work in guarded repo-internal `git worktree`
-lanes -- one lane per task, each with its own branch. The CLI owns the lane
+lanes – one lane per task, each with its own branch. The CLI owns the lane
 lifecycle:
 
 ```text
@@ -28,7 +28,7 @@ Before removing a lane, cleanup preserves task-specific lane-local
 `.agenticloop` state into the root checkout.
 
 Lane-local state that cleanup can preserve is flat only (`logs`, `tasks`,
-`summaries` (legacy; preserved for migration only -- current projects do not
+`summaries` (legacy; preserved for migration only – current projects do not
 create a summaries directory), and `decisions` files directly under
 `.agenticloop/<dir>/`). Nested or shared `.agenticloop` files are treated as
 blocking dirty state.

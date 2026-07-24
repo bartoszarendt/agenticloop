@@ -25,7 +25,7 @@ The recurring pattern observed across multiple tasks.
 - <task-id>: specific observation (cite check failures / review rounds / event-log entries).
 
 ## Inferred mechanism
-Why the agent erred — the agent-side cause, separate from what happened.
+Why the agent erred – the agent-side cause, separate from what happened.
 
 ## Proposed change
 The exact, minimal change to the single target surface. Prefer replacing

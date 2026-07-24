@@ -1,6 +1,6 @@
 ---
 name: verification-evidence
-description: Use before claiming any work state -- done, fixed, passing, green, complete, mergeable -- and whenever a required or cited check times out, is unexpectedly expensive, or needs a retry. Defines the identify-run-read-verify gate, timeout evidence and retry records, and the baseline/lane-final/integrated/post-merge verification topology with evidence-identity and reuse rules.
+description: Use before claiming any work state – done, fixed, passing, green, complete, mergeable – and whenever a required or cited check times out, is unexpectedly expensive, or needs a retry. Defines the identify-run-read-verify gate, timeout evidence and retry records, and the baseline/lane-final/integrated/post-merge verification topology with evidence-identity and reuse rules.
 metadata:
   area: engineering-discipline
   side_effects: writes-backend
@@ -345,14 +345,14 @@ sync.
 In parallel or multi-artifact work, every planned check is classified by the
 tree it runs against:
 
-- **baseline** -- once against the verified shared base tree; establishes
+- **baseline** – once against the verified shared base tree; establishes
   pre-existing failures and starting state.
-- **lane-final** -- against one exact lane head or tree, fresh after that
+- **lane-final** – against one exact lane head or tree, fresh after that
   lane's final relevant edit. It proves that lane only.
-- **integrated** -- against the composed candidate tree at join; required when
+- **integrated** – against the composed candidate tree at join; required when
   knowledge coupling, adjacent behavior, shared invariants, or
   ordering/composition risk exists.
-- **post-merge** -- against the actual merged tree when it differs from the
+- **post-merge** – against the actual merged tree when it differs from the
   rehearsed candidate.
 
 Evidence identity is not command plus branch name. A check result binds to the

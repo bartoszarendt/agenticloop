@@ -21,7 +21,7 @@ Delegation is state-changing under the Advance Authorization Boundary in
 authorization to advance is present and the source can be named.
 
 Authorization attaches to a work unit, not each step. Routine lifecycle steps
-inside it -- implementation, review, and revision delegations -- are covered
+inside it – implementation, review, and revision delegations – are covered
 without per-transition approval.
 
 Do not delegate merely because a bounded request reveals a next step. Status
@@ -79,7 +79,7 @@ correction under [[review-and-accept]] and accept the result. A successful fixup
 requires no engineer invocation and is not a `needs_revision` round; an
 unsuccessful, ineligible, expanded, or independent-review finding returns to the
 normal engineer handoff. No extra single-agent role-assumption ceremony is
-needed beyond the maintainer's existing execution -- the delegation-mode of the
+needed beyond the maintainer's existing execution – the delegation-mode of the
 role invocation and the final `review_mode` are distinct, so a maintainer invoked
 via `host_subagent` still records `single_agent_fallback` when it accepts its own
 fixup.

@@ -13,7 +13,7 @@ metadata:
 
 Loop retrospectives turn observed friction into durable process improvements. The output is never private memory; every retained lesson becomes reviewed text in the repo or a task record a later agent can discover.
 
-This skill is **parked and optional**. It is not part of [[task-closeout]] and does not gate it. Run it only when a human explicitly asks for a retrospective, and only when there is enough recorded signal to work from. Its primary inputs are the local event logs and blocked/needs_context events — not task completion summaries, which are written for a different purpose. Until event logging matures into routine use, this skill will usually have nothing durable to act on; that is expected.
+This skill is **parked and optional**. It is not part of [[task-closeout]] and does not gate it. Run it only when a human explicitly asks for a retrospective, and only when there is enough recorded signal to work from. Its primary inputs are the local event logs and blocked/needs_context events – not task completion summaries, which are written for a different purpose. Until event logging matures into routine use, this skill will usually have nothing durable to act on; that is expected.
 
 ## Workflow
 

@@ -398,10 +398,10 @@ These may be updated in place to reflect the latest truth:
 These sections grow over the life of the task and must not be rewritten or
 truncated:
 
-- `## Comments` -- dated notes on status changes, context, and decisions.
-- `## Revision Log` -- dated entries recording corrections to previously
+- `## Comments` – dated notes on status changes, context, and decisions.
+- `## Revision Log` – dated entries recording corrections to previously
   published claims, evidence, artifact references, or check results.
-- `## Verification Attempts` -- per-`RC-N` attempt, prediction, and triage
+- `## Verification Attempts` – per-`RC-N` attempt, prediction, and triage
   history. Append entries only; do not rewrite a prior record.
 - Blocker sections added while the task is blocked.
 - Maintainer review sections appended per review round.

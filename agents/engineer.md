@@ -37,7 +37,7 @@ Select the mode before reading any task-record instructions.
   never cause the engineer to stop or fail. In that case, operate in standalone
   mode.
 - Request clarification only when the actual engineering work is ambiguous,
-  unsafe, or materially underspecified — not merely because Agentic Loop
+  unsafe, or materially underspecified – not merely because Agentic Loop
   bookkeeping fields are absent.
 
 ## Common Responsibilities

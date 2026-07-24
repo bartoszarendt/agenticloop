@@ -145,10 +145,10 @@ the selected source documents, linked decisions, and the active backend
 projection. Agents do not expand that normative set on their own.
 
 They may still discover how code fits together while implementing. Task-scoped
-discovery -- available repository indexing or language-aware symbol/reference
+discovery – available repository indexing or language-aware symbol/reference
 and caller/callee lookup, exact identifier or known-path search, focused test
 discovery, relevant version-control history, and directly connected schemas,
-generated consumers, callers, or tests -- is permitted by default,
+generated consumers, callers, or tests – is permitted by default,
 bounded to one discovery pass and at most six previously unnamed paths or symbol
 bodies. A caller or test found this way can be inspected and, when needed to
 satisfy the task, changed with a recorded deviation. Broad repository dumps and
@@ -170,7 +170,7 @@ to one durable destination instead of one catch-all store. A generic example:
   runbook rather than duplicating it:
 
   ```markdown
-  - `PF-local-postgres-tests` — Local PostgreSQL tests use the Compose `test`
+  - `PF-local-postgres-tests` -- Local PostgreSQL tests use the Compose `test`
     profile and port 5436. Source: `docs/testing.md#local-postgres-tests`.
     Revisit when: the test service, port, or test runner changes.
   ```
@@ -233,7 +233,7 @@ this context.
 
 Ordinary tasks can be accepted through an honestly recorded
 `single_agent_fallback`. Set `independent_review_required: true` on the task
-record before implementation for higher-assurance work -- security or
+record before implementation for higher-assurance work – security or
 authorization boundaries; secrets, credentials, or permissions; destructive or
 irreversible data operations; production or release controls; or public API and
 schema migrations. When that flag is set, acceptance cannot rest on same-session

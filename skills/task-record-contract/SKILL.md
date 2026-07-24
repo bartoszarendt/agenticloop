@@ -242,7 +242,7 @@ output.
 
 `## Implementation Notes` records constraints, sequencing, or migration notes.
 For nontrivial or churn-prone work, the maintainer may also include an optional
-numbered, file-level stepped plan (`N. <action> — file: <path>`). The engineer
+numbered, file-level stepped plan (`N. <action> -- file: <path>`). The engineer
 reads it as a strong prior, verifies assumptions, and records divergence under
 `## Deviations From Plan` rather than following stale steps.
 
@@ -305,9 +305,9 @@ Fields:
 - **Discoveries that could affect other tasks**: likely findings that would
   invalidate a sibling lane's assumptions, plan, implementation, or
   verification interpretation.
-- **Parallel eligibility**: `eligible`, `blocked`, or `unknown` -- the
+- **Parallel eligibility**: `eligible`, `blocked`, or `unknown` – the
   mutation-collision verdict.
-- **Knowledge coupling**: `independent`, `coupled`, or `unknown` -- the
+- **Knowledge coupling**: `independent`, `coupled`, or `unknown` – the
   knowledge verdict. `coupled` work uses the two-wave pattern in
   [[parallel-delegation]]. Parallel writes require `eligible` plus
   `independent`; separate worktrees never convert coupled or unknown tasks

@@ -26,7 +26,7 @@ inspect existing logs without writing.
 ## What events contain
 
 Event logs are local JSONL files under `.agenticloop/logs/`. They should
-contain short workflow-gate summaries only -- never raw prompts, raw assistant
+contain short workflow-gate summaries only – never raw prompts, raw assistant
 messages, token streams, terminal dumps, secrets, or host telemetry.
 
 ## Relationship to completion summaries

@@ -62,7 +62,7 @@ Codex now exposes one clean public skill surface instead of a long list of
 - Public skill directory: `.agents/skills/agenticloop/`
 - Public skill name: `agenticloop`
 - Display name in Codex UI: `Agentic Loop`
-- Default prompt in Codex UI: `Operate in Agentic Loop mode: create or refine the durable task record, route maintainer and engineer roles, verify evidence, and close out according to the project backend.`
+- Default prompt in Codex UI: `Operate in Agentic Loop mode: create or refine the durable task record, route maintainer, engineer, and auditor roles, verify evidence, certify the finished work unit, and close out according to the project backend.`
 
 The public skill is still rendered from the canonical `agenticloop/commands/start.md`
 contract, but the Codex adapter adds host-specific guidance:

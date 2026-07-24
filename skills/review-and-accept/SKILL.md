@@ -34,10 +34,10 @@ required whenever a review outcome is recorded. `reviewed_artifact` is required
 for files-backed work and must exactly equal `implementation_artifact`; GitHub
 uses the full current PR head in `AGENT_REVIEW_ARTIFACT`. Valid modes are:
 
-- `host_subagent` — a separate host subagent performed the review;
-- `explicit_agent_invocation` — a separately invoked review agent;
-- `single_agent_fallback` — same-session review by the acting agent;
-- `independent_human` — a human review or confirmation with an explicit reference.
+- `host_subagent` – a separate host subagent performed the review;
+- `explicit_agent_invocation` – a separately invoked review agent;
+- `single_agent_fallback` – same-session review by the acting agent;
+- `independent_human` – a human review or confirmation with an explicit reference.
 
 When implementation changes, clear or replace mutable current review fields.
 Historical review sections remain append-only. A stale outcome never accepts.
@@ -52,22 +52,22 @@ Every `needs_revision` outcome includes exactly one concise verdict line stating
 why a Maintainer Review Fixup was not applied, and every applied fixup states it:
 
 ```text
-Maintainer Review Fixup: ineligible — Lens 1 not clean
+Maintainer Review Fixup: ineligible -- Lens 1 not clean
 ```
 
 Use a more specific reason when one applies, for example:
 
 ```text
-Maintainer Review Fixup: ineligible — requires changed tests
-Maintainer Review Fixup: ineligible — independent review required
-Maintainer Review Fixup: ineligible — outside allowed paths
-Maintainer Review Fixup: ineligible — earlier fixup episode already exists
+Maintainer Review Fixup: ineligible -- requires changed tests
+Maintainer Review Fixup: ineligible -- independent review required
+Maintainer Review Fixup: ineligible -- outside allowed paths
+Maintainer Review Fixup: ineligible -- earlier fixup episode already exists
 ```
 
 When an eligible fixup is applied, record:
 
 ```text
-Maintainer Review Fixup: applied — <short concrete finding>
+Maintainer Review Fixup: applied -- <short concrete finding>
 ```
 
 The verdict line is explanatory and does not replace the durable
@@ -287,7 +287,7 @@ Check:
 - The diff matches the task scope from [[task-record-contract]].
 - Changed files match `Expected Files or Areas`, or deviations are justified.
 - The claimed file action matches the actual git state:
-  - task said "add" but `git status` shows file was already tracked -- this is an update,
+  - task said "add" but `git status` shows file was already tracked – this is an update,
     not an addition, and must be triaged before acceptance,
   - task said "create" but file was deleted or renamed,
   - "only file changed" claim ignores untracked overlay or runtime files that also changed.
@@ -308,7 +308,7 @@ the review's `Evidence Checked`, but it does not satisfy missing or incomplete e
 in the backend's canonical implementation-summary location. The one narrow exception is a
 `## Maintainer Review Fixup` (below): after the maintainer applies its own eligible fixup it may
 refresh the final-state evidence for the artifact it just changed. That exception never lets a
-reviewer repair evidence that was already missing or incomplete at the engineer handoff -- a
+reviewer repair evidence that was already missing or incomplete at the engineer handoff – a
 finding of missing summary, evidence, linkage, or acceptance work is not fixup-eligible and stays
 `needs_revision`.
 
@@ -639,7 +639,7 @@ and one coherent edit packet.
    artifact, correction, affected files, and planned verification. Follow the backend projection
    for its mutable surface: update the same GitHub PR comment, or append result fields without
    rewriting the files-backed plan.
-6. Apply the correction to the existing implementation artifact -- the current task branch and
+6. Apply the correction to the existing implementation artifact – the current task branch and
    pull request for GitHub, or the current local branch/commit/range/patch for files. Never commit
    to a default or integration branch, and never create a no-PR or no-review exception through this
    feature.
@@ -717,10 +717,10 @@ current artifact: the current PR head for GitHub, or the final
 `reviewed_artifact`/`implementation_artifact` for files. A current episode binds
 the current review: the accepted marker must review that same resulting artifact
 with `single_agent_fallback`, and the commits in the base-to-resulting fixup
-range must carry the `Task:`/`Agent: maintainer` trailers -- an unrelated commit
+range must carry the `Task:`/`Agent: maintainer` trailers – an unrelated commit
 elsewhere in the PR does not satisfy attribution, and missing or malformed
-GitHub commit data fails closed. A *historical* episode -- one whose resulting
-artifact was superseded by a later engineer revision -- still counts toward the
+GitHub commit data fails closed. A *historical* episode – one whose resulting
+artifact was superseded by a later engineer revision – still counts toward the
 one-episode limit but does not force the current review mode; a later genuinely
 delegated re-review of the new head may record `host_subagent`.
 
@@ -826,7 +826,7 @@ If a review item is wrong or conflicts with the task record, the engineer lists 
 
 The next review must explicitly sustain or withdraw each disputed item. If sustained-and-disputed review rounds exhaust the attempt budget (default 3, or the task record's `attempt_budget`; see Attempt Budget in `agenticloop/AGENTIC_LOOP.md`), use [[blocked-state]] so a human can decide.
 
-Distinct from a single sustained-and-disputed item: once `needs_revision` rounds on one task reach the task record's `review_budget` (default 3) -- regardless of whether the findings repeat -- the orchestrator runs the Review Round Checkpoint in `agenticloop/AGENTIC_LOOP.md` before routing any further revision.
+Distinct from a single sustained-and-disputed item: once `needs_revision` rounds on one task reach the task record's `review_budget` (default 3) – regardless of whether the findings repeat – the orchestrator runs the Review Round Checkpoint in `agenticloop/AGENTIC_LOOP.md` before routing any further revision.
 
 ## Mandatory triage before accepting
 
