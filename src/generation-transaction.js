@@ -386,7 +386,70 @@ function isUnderRoot(relPath, root) {
   return relPath === root || relPath.startsWith(`${root}/`);
 }
 
+const FORBIDDEN_GENERATION_ROOTS = ['.github/workflows'];
+
+function targetRelativePath(targetRoot, outputRoot, relPath) {
+  return relative(
+    resolve(targetRoot),
+    resolveManagedPath(targetRoot, outputRoot, norm(relPath))
+  ).replaceAll('\\', '/') || '.';
+}
+
+function forbiddenGenerationRoot(relPath) {
+  return FORBIDDEN_GENERATION_ROOTS.find(root => isUnderRoot(relPath, root)) ?? null;
+}
+
+function validateGenerationMutationBoundaries(targetRoot, plan, extraWrites) {
+  const errors = [];
+  const outputRoot = plan.outputRoot ?? '.';
+
+  for (const action of plan.actions) {
+    if (!action?.relPath) continue;
+    let targetRelPath;
+    try {
+      targetRelPath = targetRelativePath(targetRoot, outputRoot, action.relPath);
+    } catch (error) {
+      errors.push(error.message);
+      continue;
+    }
+
+    let forbidden = forbiddenGenerationRoot(targetRelPath);
+    if (!forbidden && action.type === 'clear-owned-directory') {
+      forbidden = FORBIDDEN_GENERATION_ROOTS.find(root => isUnderRoot(root, targetRelPath)) ?? null;
+    }
+    if (forbidden) {
+      errors.push(
+        `Refusing generation mutation '${targetRelPath}'; ${forbidden}/ is always user-owned.`
+      );
+    }
+  }
+
+  for (const extra of extraWrites) {
+    let targetRelPath;
+    try {
+      targetRelPath = targetRelativePath(targetRoot, '.', extra.relPath);
+    } catch (error) {
+      errors.push(error.message);
+      continue;
+    }
+    const forbidden = forbiddenGenerationRoot(targetRelPath);
+    if (forbidden) {
+      errors.push(
+        `Refusing generation mutation '${targetRelPath}'; ${forbidden}/ is always user-owned.`
+      );
+    }
+  }
+
+  return errors;
+}
+
 export function executeGenerationPlan(targetRoot, plan, options = {}) {
+  const extraWrites = options.extraWrites ?? [];
+  const boundaryErrors = validateGenerationMutationBoundaries(targetRoot, plan, extraWrites);
+  if (boundaryErrors.length > 0) {
+    return { ok: false, errors: boundaryErrors, writtenFiles: [], adapters: plan.adapters };
+  }
+
   const preflight = preflightPlan(targetRoot, plan, Boolean(options.forceGenerated));
   if (!preflight.allClear) return { ok: false, errors: preflight.blocked.map(item => `BLOCKED ${item.relPath}: ${item.message}`), writtenFiles: [], adapters: plan.adapters };
   const previous = loadManifest(targetRoot);
@@ -396,7 +459,6 @@ export function executeGenerationPlan(targetRoot, plan, options = {}) {
   const merges = plan.actions.filter(action => action.type === 'json-merge');
   const ignores = plan.actions.filter(action => action.type === 'gitignore-append');
   const { clearRoots, stale } = staleFileEntries(current, outputRoot, plan.actions);
-  const extraWrites = options.extraWrites ?? [];
   for (const extra of extraWrites) resolveManagedPath(targetRoot, '.', norm(extra.relPath));
 
   // Group merges by destination so multiple mutations to the same file are

@@ -198,6 +198,37 @@ describe('resolveRoleModel', () => {
     assert.equal(model, '');
     assert.equal(variant, 'auto');
   });
+
+  it('uses an explicit default marker instead of falling back to legacy role reasoning', () => {
+    const cfg = minimalConfig({
+      roles: {
+        orchestrator: {
+          sourceFile: 'agenticloop/agents/orchestrator.md',
+          model: 'roles/model',
+          reasoningEffort: 'high',
+        },
+      },
+    });
+    const adapterCfg = {
+      roleSettings: {
+        orchestrator: {
+          model: 'adapters/model',
+          reasoningEffortDefault: true,
+        },
+      },
+    };
+
+    const { model, variant, source } = resolveRoleModel(
+      cfg,
+      'opencode',
+      'orchestrator',
+      adapterCfg
+    );
+
+    assert.equal(model, 'adapters/model');
+    assert.equal(variant, 'auto');
+    assert.equal(source, 'adapters.opencode.roleSettings.orchestrator');
+  });
 });
 
 describe('buildRoleRecord', () => {

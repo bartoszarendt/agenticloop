@@ -425,13 +425,11 @@ export function detectBackendEvidence(target, existingConfig = null) {
     githubEvidence = true;
   }
 
-  // If durable GitHub evidence is strong, propose github but don't force it
-  if (githubEvidence && !hasLocalTasks) {
-    return {
-      backend: 'github',
-      confidence: 'medium',
-      evidence: evidence.length > 0 ? evidence : ['GitHub evidence detected'],
-    };
+  // GitHub remote, CI workflows, and issue templates are informational
+  // evidence only. They never select the GitHub task backend on their own;
+  // the GitHub backend requires an explicit human selection during setup.
+  if (githubEvidence) {
+    evidence.push('GitHub hosting evidence is informational only; the files backend remains the default until a human explicitly selects GitHub');
   }
 
   return {

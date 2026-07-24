@@ -757,6 +757,50 @@ describe('Role model validation', () => {
     assert.ok(errors.some(e => e.includes("reasoningEffort")));
   });
 
+  it('accepts a boolean explicit-default reasoning marker', () => {
+    const alConfig = JSON.stringify({
+      extends: './agenticloop/config.json',
+      adapters: {
+        opencode: {
+          roleSettings: {
+            engineer: {
+              model: 'engineer/model',
+              reasoningEffortDefault: true,
+            },
+          },
+        },
+      },
+    }, null, 2);
+    const d = makeTarget('reasoning-effort-default', { 'agenticloop.json': alConfig });
+    const { errors } = validateConfig(d);
+    assert.ok(
+      !errors.some(error => error.includes('reasoningEffortDefault')),
+      `expected boolean marker to be valid, got: ${JSON.stringify(errors)}`
+    );
+  });
+
+  it('rejects a non-boolean explicit-default reasoning marker', () => {
+    const alConfig = JSON.stringify({
+      extends: './agenticloop/config.json',
+      adapters: {
+        opencode: {
+          roleSettings: {
+            engineer: {
+              model: 'engineer/model',
+              reasoningEffortDefault: 'true',
+            },
+          },
+        },
+      },
+    }, null, 2);
+    const d = makeTarget('bad-reasoning-effort-default', { 'agenticloop.json': alConfig });
+    const { errors } = validateConfig(d);
+    assert.ok(
+      errors.some(error => error.includes('reasoningEffortDefault must be a boolean')),
+      `expected marker type error, got: ${JSON.stringify(errors)}`
+    );
+  });
+
   it('errors when Codex reasoningEffort uses unsupported explicit values', () => {
     for (const effort of ['auto', 'max']) {
       const alConfig = JSON.stringify({

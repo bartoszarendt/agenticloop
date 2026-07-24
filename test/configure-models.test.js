@@ -317,6 +317,107 @@ describe('configureModels', () => {
 });
 
 // ---------------------------------------------------------------------------
+// configureModels clearReasoningEffort (explicit default/unset)
+// ---------------------------------------------------------------------------
+
+describe('configureModels clearReasoningEffort', () => {
+  function makeCleanOpencodeTarget(roleSettings = {}) {
+    const d = makeTarget();
+    writeFileSync(join(d, 'agenticloop.json'), JSON.stringify({
+      extends: './agenticloop/config.json',
+      adapters: { opencode: { roleSettings } },
+    }, null, 2) + '\n');
+    return d;
+  }
+
+  it('writes no reasoning field when default is chosen with no existing value', () => {
+    const d = makeCleanOpencodeTarget();
+    const result = configureModels(d, {
+      adapter: 'opencode',
+      mutations: [{ role: 'engineer', model: 'configured/model', clearReasoningEffort: true }],
+    });
+
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.updated.includes('adapters.opencode.roleSettings.engineer.model'));
+    assert.ok(result.updated.includes('adapters.opencode.roleSettings.engineer.reasoningEffort (default)'));
+    const cfg = loadJsonFile(join(d, 'agenticloop.json'));
+    assert.equal(Object.hasOwn(cfg.adapters.opencode.roleSettings.engineer, 'reasoningEffort'), false);
+    assert.equal(Object.hasOwn(cfg.adapters.opencode.roleSettings.engineer, 'variant'), false);
+    assert.equal(cfg.adapters.opencode.roleSettings.engineer.reasoningEffortDefault, true);
+  });
+
+  it('deletes an existing reasoningEffort when default is chosen', () => {
+    const d = makeCleanOpencodeTarget({
+      engineer: { model: 'configured/model', reasoningEffort: 'high' },
+    });
+
+    const result = configureModels(d, {
+      adapter: 'opencode',
+      mutations: [{ role: 'engineer', clearReasoningEffort: true }],
+    });
+
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.updated.includes('adapters.opencode.roleSettings.engineer.reasoningEffort (default)'));
+    const cfg = loadJsonFile(join(d, 'agenticloop.json'));
+    assert.equal(Object.hasOwn(cfg.adapters.opencode.roleSettings.engineer, 'reasoningEffort'), false);
+    assert.equal(cfg.adapters.opencode.roleSettings.engineer.reasoningEffortDefault, true);
+    assert.equal(cfg.adapters.opencode.roleSettings.engineer.model, 'configured/model');
+  });
+
+  it('deletes a legacy variant field when default is chosen', () => {
+    const d = makeCleanOpencodeTarget({
+      engineer: { model: 'configured/model', variant: 'high' },
+    });
+
+    const result = configureModels(d, {
+      adapter: 'opencode',
+      mutations: [{ role: 'engineer', clearReasoningEffort: true }],
+    });
+
+    assert.deepEqual(result.errors, []);
+    assert.ok(result.updated.includes('adapters.opencode.roleSettings.engineer.reasoningEffort (default)'));
+    const after = loadJsonFile(join(d, 'agenticloop.json'));
+    assert.equal(Object.hasOwn(after.adapters.opencode.roleSettings.engineer, 'variant'), false);
+    assert.equal(after.adapters.opencode.roleSettings.engineer.reasoningEffortDefault, true);
+  });
+
+  it('does not write a fake default string into the config', () => {
+    const d = makeCleanOpencodeTarget({
+      orchestrator: { reasoningEffortDefault: true },
+      maintainer: { reasoningEffortDefault: true },
+    });
+    const result = configureModels(d, {
+      adapter: 'opencode',
+      mutations: [{ role: 'engineer', model: 'configured/model', clearReasoningEffort: true }],
+    });
+
+    assert.deepEqual(result.errors, []);
+    const roleSettings = loadJsonFile(join(d, 'agenticloop.json')).adapters.opencode.roleSettings.engineer;
+    for (const value of Object.values(roleSettings)) {
+      assert.ok(!['default', 'auto', 'none'].includes(value));
+    }
+  });
+
+  it('keeps xhigh and max as explicit OpenCode reasoning efforts', () => {
+    const d = makeCleanOpencodeTarget();
+    const result = configureModels(d, {
+      adapter: 'opencode',
+      mutations: [
+        { role: 'orchestrator', model: 'm/a', reasoningEffort: 'xhigh' },
+        { role: 'maintainer', model: 'm/b', reasoningEffort: 'max' },
+      ],
+    });
+
+    assert.deepEqual(result.errors, []);
+    const cfg = loadJsonFile(join(d, 'agenticloop.json'));
+    assert.equal(cfg.adapters.opencode.roleSettings.orchestrator.reasoningEffort, 'xhigh');
+    assert.equal(cfg.adapters.opencode.roleSettings.maintainer.reasoningEffort, 'max');
+    assert.equal(cfg.adapters.opencode.roleSettings.orchestrator.reasoningEffortDefault, undefined);
+    assert.equal(cfg.adapters.opencode.roleSettings.maintainer.reasoningEffortDefault, undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // validateHost
 // ---------------------------------------------------------------------------
 

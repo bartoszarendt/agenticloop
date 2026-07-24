@@ -28,6 +28,43 @@ function writeManifest(root, entries) {
 }
 
 describe('generation transaction ownership regressions', () => {
+  it('rejects writes whose resolved output root is under .github/workflows', () => {
+    const root = target();
+    const result = executeGenerationPlan(root, plan([
+      {
+        type: 'write-file',
+        adapter: 'opencode',
+        relPath: '.opencode/agents/engineer.md',
+        content: 'generated',
+      },
+    ], ['opencode'], '.github/workflows'));
+
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(error => error.includes('.github/workflows')));
+    assert.equal(existsSync(join(root, '.github', 'workflows')), false);
+  });
+
+  it('rejects transaction extra writes under .github/workflows', () => {
+    const root = target();
+    const result = executeGenerationPlan(root, plan([]), {
+      extraWrites: [{ relPath: '.github/workflows/ci.yml', content: 'name: forbidden\n' }],
+    });
+
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(error => error.includes('.github/workflows')));
+    assert.equal(existsSync(join(root, '.github', 'workflows', 'ci.yml')), false);
+  });
+
+  it('rejects clear-owned-directory actions that could include .github/workflows', () => {
+    const root = target();
+    const result = executeGenerationPlan(root, plan([
+      { type: 'clear-owned-directory', adapter: 'copilot', relPath: '.github' },
+    ], ['copilot']));
+
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(error => error.includes('.github/workflows')));
+  });
+
   it('rejects hostile manifest paths before removal can reach outside the target', () => {
     const root = target();
     const outside = join(base, 'outside.json');

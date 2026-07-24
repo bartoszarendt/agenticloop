@@ -222,19 +222,24 @@ export function buildReasoningEffortChoices(host, currentEffort = null) {
   const values = getReasoningEffortChoices(host);
   if (values.length === 0) return { choices: [], text: '' };
 
-  const choices = [];
+  const choices = [
+    {
+      index: 0,
+      label: 'Default - omit reasoningEffort/variant',
+      value: null,
+      action: 'default',
+    },
+  ];
   let idx = 1;
-
-  if (currentEffort) {
-    choices.push({ index: 0, label: `Keep current (${currentEffort})`, value: currentEffort, action: 'keep' });
-  }
 
   for (const value of values) {
     choices.push({ index: idx, label: value, value, action: 'select' });
     idx++;
   }
 
-  choices.push({ index: idx, label: 'Skip', value: null, action: 'skip' });
+  if (currentEffort) {
+    choices.push({ index: idx, label: `Keep current (${currentEffort})`, value: currentEffort, action: 'keep' });
+  }
 
   const lines = [];
   for (const choice of choices) {
@@ -321,7 +326,12 @@ export async function promptModelSettingsInteractive(
     const currentEffort = currentSettings[role]?.reasoningEffort ?? null;
 
     if (applyToRemaining !== null) {
-      mutations.push({ role, model: applyToRemaining.model, ...(applyToRemaining.reasoningEffort ? { reasoningEffort: applyToRemaining.reasoningEffort } : {}) });
+      mutations.push({
+        role,
+        model: applyToRemaining.model,
+        ...(applyToRemaining.reasoningEffort ? { reasoningEffort: applyToRemaining.reasoningEffort } : {}),
+        ...(applyToRemaining.clearReasoningEffort ? { clearReasoningEffort: true } : {}),
+      });
       continue;
     }
 
@@ -346,7 +356,9 @@ export async function promptModelSettingsInteractive(
     } else if (selected.action === 'skip') {
       continue;
     } else if (selected.action === 'keep') {
-      continue;
+      // Keep the model, but continue to the reasoning picker so reasoning can
+      // be changed or explicitly reset without re-entering the same model.
+      mutations.push({ role });
     } else if (selected.action === 'custom') {
       const customModel = (await prompts.ask('  Custom model ID: ')).trim();
       if (!customModel) continue;
@@ -366,16 +378,30 @@ export async function promptModelSettingsInteractive(
 
         if (effortSelected && effortSelected.action === 'select') {
           lastMutation.reasoningEffort = effortSelected.value;
+        } else if (effortSelected && effortSelected.action === 'default') {
+          lastMutation.clearReasoningEffort = true;
         } else if (effortSelected && effortSelected.action === 'keep') {
           // keep current, no mutation needed
         }
       }
     }
 
+    const hasMutation = lastMutation.model !== undefined
+      || lastMutation.reasoningEffort !== undefined
+      || lastMutation.clearReasoningEffort === true;
+    if (!hasMutation) {
+      mutations.pop();
+      continue;
+    }
+
     if (i < roles.length - 1 && mutations.length > 0) {
       const applyAnswer = (await prompts.ask('  Apply same model to remaining roles? (y/N): ')).trim().toLowerCase();
       if (applyAnswer === 'y' || applyAnswer === 'yes') {
-        applyToRemaining = { model: lastMutation.model, reasoningEffort: lastMutation.reasoningEffort };
+        applyToRemaining = {
+          model: lastMutation.model,
+          reasoningEffort: lastMutation.reasoningEffort,
+          clearReasoningEffort: lastMutation.clearReasoningEffort === true,
+        };
       }
     }
   }
@@ -389,7 +415,7 @@ export async function promptModelSettingsInteractive(
  * @param {string} targetDir  Directory containing agenticloop.json.
  * @param {object} options
  * @param {string} options.adapter  Host adapter name (opencode, codex, claude-code, copilot, cursor).
- * @param {Array<{role: string, model?: string, reasoningEffort?: string}>} [options.mutations]
+ * @param {Array<{role: string, model?: string, reasoningEffort?: string, clearReasoningEffort?: boolean}>} [options.mutations]
  * @param {'recommended'} [options.profile] Named profile to apply without replacing explicit fields.
  * @param {boolean} [options.warnJsoncComments] Deprecated no-op retained for compatibility.
  * @returns {{ errors: string[], warnings: string[], updated: string[], preserved: string[] }}
@@ -439,7 +465,7 @@ export function configureModels(targetDir, options) {
     }
   } else {
     for (const mutation of options.mutations ?? []) {
-      const { role, model, reasoningEffort } = mutation;
+      const { role, model, reasoningEffort, clearReasoningEffort } = mutation;
       if (!role) {
         warnings.push('Skipping model setting with no role');
         continue;
@@ -452,11 +478,34 @@ export function configureModels(targetDir, options) {
         config.adapters[host].roleSettings[role].model = model;
         updated.push(`adapters.${host}.roleSettings.${role}.model`);
       }
+      if (clearReasoningEffort === true) {
+        // Explicit unset: remove the target-owned reasoning fields so
+        // generated artifacts omit the reasoning variant again. This is a
+        // deliberate deletion, not an overloaded undefined.
+        const roleSettings = config.adapters[host].roleSettings[role];
+        let removed = false;
+        if (Object.hasOwn(roleSettings, 'reasoningEffort')) {
+          delete roleSettings.reasoningEffort;
+          removed = true;
+        }
+        if (Object.hasOwn(roleSettings, 'variant')) {
+          delete roleSettings.variant;
+          removed = true;
+        }
+        const alreadyDefault = roleSettings.reasoningEffortDefault === true;
+        roleSettings.reasoningEffortDefault = true;
+        if (removed || !alreadyDefault) {
+          updated.push(`adapters.${host}.roleSettings.${role}.reasoningEffort (default)`);
+        } else {
+          preserved.push(`adapters.${host}.roleSettings.${role}.reasoningEffort (already default)`);
+        }
+      }
       if (reasoningEffort !== undefined) {
         if (!supportsReasoningEffort(host)) {
           warnings.push(`Skipping reasoningEffort for ${host}; this adapter uses only model settings.`);
           continue;
         }
+        delete config.adapters[host].roleSettings[role].reasoningEffortDefault;
         config.adapters[host].roleSettings[role].reasoningEffort = reasoningEffort;
         updated.push(`adapters.${host}.roleSettings.${role}.reasoningEffort`);
       }

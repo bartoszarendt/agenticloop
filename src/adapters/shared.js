@@ -137,14 +137,22 @@ export function resolveRoleModel(alConfig, host, roleName, adapterCfg) {
   const model = adapterSettings.model
     ?? roleCfg.model
     ?? '';
-  const variant = adapterSettings.reasoningEffort
-    ?? adapterSettings.variant
-    ?? roleCfg.reasoningEffort
-    ?? roleCfg.variant
-    ?? 'auto';
+  const reasoningUsesDefault = adapterSettings.reasoningEffortDefault === true;
+  const variant = reasoningUsesDefault
+    ? 'auto'
+    : adapterSettings.reasoningEffort
+      ?? adapterSettings.variant
+      ?? roleCfg.reasoningEffort
+      ?? roleCfg.variant
+      ?? 'auto';
 
   let source;
-  if (adapterSettings.model || adapterSettings.reasoningEffort || adapterSettings.variant) {
+  if (
+    adapterSettings.model ||
+    adapterSettings.reasoningEffort ||
+    adapterSettings.variant ||
+    reasoningUsesDefault
+  ) {
     source = `adapters.${host}.roleSettings.${roleName}`;
   } else if (roleCfg.model || roleCfg.reasoningEffort || roleCfg.variant) {
     source = `roles.${roleName}`;

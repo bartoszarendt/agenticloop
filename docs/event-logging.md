@@ -5,7 +5,14 @@ summary generation. Event logging is **disabled by default**.
 
 ## Enabling
 
-Enable it in `.agenticloop/project.md`:
+Interactive setup offers a numbered disabled/enabled choice. For automated
+setup on an already confirmed project, use:
+
+```text
+npx agenticloop setup --adapter <host> --yes --event-logging enabled
+```
+
+You can also enable it directly in `.agenticloop/project.md`:
 
 ```yaml
 event_logging: enabled

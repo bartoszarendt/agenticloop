@@ -3065,6 +3065,14 @@ function validateRoleModelResolution(config, errors, warnings = []) {
           `adapters.codex.roleSettings.${roleName}.model uses legacy 'codex-cli/' prefix; generated Codex TOML will emit '${normalizeCodexModel(settings.model)}'. Update the setting to the bare Codex model id.`
         );
       }
+      if (
+        settings?.reasoningEffortDefault !== undefined &&
+        typeof settings.reasoningEffortDefault !== 'boolean'
+      ) {
+        errors.push(
+          `adapters.${host}.roleSettings.${roleName}.reasoningEffortDefault must be a boolean`
+        );
+      }
       const effort = settings?.reasoningEffort ?? settings?.variant;
       if (effort !== undefined && typeof effort !== 'string') {
         errors.push(

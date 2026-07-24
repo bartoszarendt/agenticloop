@@ -79,6 +79,7 @@ import { setup } from './setup.js';
 import { removeAgenticLoop } from './remove.js';
 import { applyGuidance, checkGuidance, removeGuidance } from './guidance.js';
 import { preserveExistingAdapterModelSettings } from './adapter-model-preservation.js';
+import { reconcileTargetAdapterConfig } from './setup-generate.js';
 import {
   appendEventLog,
   auditTaskEventLog,
@@ -351,6 +352,10 @@ Options (setup):
   --target <dir>        Target directory (default: current directory).
   --adapter <host>      Preselect adapter: opencode, codex, claude-code, copilot, cursor, all.
   --yes                 Non-interactive mode: skip interactive prompts (requires --adapter).
+  --event-logging <mode>
+                        Event logging mode: enabled or disabled. Interactive setup
+                        prompts when omitted; non-interactive setup preserves the
+                        existing value (a missing setting defaults to disabled).
 
 Options (github-preflight):
   --pr <number>         Pull request number to check. Required.
@@ -796,8 +801,7 @@ async function cmdUpdate(args) {
     return;
   }
 
-  // Detect adapters and load config before refreshing toolkit assets (Defect 13).
-  // This ensures adapter preflight failures don't leave partially updated targets.
+  // Detect adapters before refreshing toolkit assets (Defect 13).
   const adapters = requestedAdapters.length > 0
     ? requestedAdapters
     : detectGeneratedAdapterTargets(target);
@@ -817,24 +821,55 @@ async function cmdUpdate(args) {
     console.log('  --adapter all selected: generating every implemented adapter artifact.');
   }
 
-  // Load config and run adapter preflight before modifying any files.
-  const alConfig = loadAlConfigOrExit(target);
-  if (!alConfig) return;
-
-  const preflightErrors = validateAdapterListGenerationPreflight(adapters, alConfig);
-  if (preflightErrors.length > 0) {
-    for (const error of preflightErrors) console.error(error);
+  // Preserve settings recoverable from existing generated artifacts before
+  // any refresh or regeneration touches them.
+  const preservation = preserveExistingAdapterModelSettings(target, adapters);
+  for (const w of preservation.warnings) console.warn(`  WARN: ${w}`);
+  if (preservation.errors.length > 0) {
+    for (const e of preservation.errors) console.error(`  ERROR: ${e}`);
     process.exitCode = 1;
     return;
   }
+  for (const u of preservation.updated) console.log(`  preserved: ${u}`);
 
-  // Now safe to refresh toolkit assets and regenerate.
+  // Refresh canonical toolkit assets, then reload the effective configuration
+  // so preflight and generation never use a pre-refresh config object.
   const { errors: initErrors } = await init({
     target,
     refreshAssets: true,
   });
 
   if (initErrors.length > 0) {
+    process.exitCode = 1;
+    return;
+  }
+
+  let alConfig = loadAlConfigOrExit(target);
+  if (!alConfig) return;
+
+  // Reconcile the selected adapter configuration against the refreshed
+  // canonical roles (for example, adding a missing auditor role slot) without
+  // disturbing existing target-owned settings.
+  const reconcileHosts = adapters.includes('all')
+    ? ['opencode', 'codex', 'claude-code', 'copilot', 'cursor']
+    : adapters;
+  const reconciliation = reconcileTargetAdapterConfig(target, reconcileHosts);
+  if (reconciliation.error) {
+    console.error(`  ERROR: ${reconciliation.error}`);
+    process.exitCode = 1;
+    return;
+  }
+  for (const p of reconciliation.added) console.log(`  reconciled: ${p}`);
+
+  if (reconciliation.wrote) {
+    alConfig = loadAlConfigOrExit(target);
+    if (!alConfig) return;
+  }
+
+  // Run adapter preflight against the refreshed, reconciled configuration.
+  const preflightErrors = validateAdapterListGenerationPreflight(adapters, alConfig);
+  if (preflightErrors.length > 0) {
+    for (const error of preflightErrors) console.error(error);
     process.exitCode = 1;
     return;
   }
@@ -1666,11 +1701,26 @@ async function cmdConfigureModels(args) {
 
 async function cmdSetup(args) {
   const { opts } = parseArgs(args);
-  warnUnknownOptions(opts, ['target', 'adapter', 'yes', 'nonInteractive', 'agentsGuidance', 'noAgentsGuidance'], 'setup');
+  warnUnknownOptions(opts, [
+    'target',
+    'adapter',
+    'yes',
+    'nonInteractive',
+    'eventLogging',
+    'agentsGuidance',
+    'noAgentsGuidance',
+  ], 'setup');
   const target = opts.target ? resolve(opts.target) : process.cwd();
   const adapter = Array.isArray(opts.adapter) ? opts.adapter[0] : opts.adapter;
   const nonInteractive = Boolean(opts.yes) || Boolean(opts.nonInteractive);
+  const eventLogging = opts.eventLogging;
   const agentsGuidance = !opts.noAgentsGuidance && opts.agentsGuidance !== false;
+
+  if (eventLogging !== undefined && eventLogging !== 'enabled' && eventLogging !== 'disabled') {
+    console.error(`Invalid --event-logging value '${eventLogging}'. Use enabled or disabled.`);
+    process.exitCode = 1;
+    return;
+  }
 
   if (adapter) {
     const validAdapters = new Set(['opencode', 'codex', 'claude-code', 'copilot', 'cursor', 'all']);
@@ -1685,6 +1735,7 @@ async function cmdSetup(args) {
     target,
     adapter,
     nonInteractive,
+    eventLogging,
     agentsGuidance,
   });
 

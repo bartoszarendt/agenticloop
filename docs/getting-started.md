@@ -5,7 +5,9 @@ without installing a runtime: give your agent the repository rules, the
 methodology, and the relevant skills.
 
 The default task backend is files. No GitHub account, repository, or labels are
-required for normal operation.
+required for normal operation. GitHub coordination is an explicit opt-in: an
+existing GitHub remote, CI workflows, or issue templates never opt a project
+into the GitHub task backend on their own.
 
 ## Quick Start
 
@@ -52,8 +54,9 @@ npx agenticloop setup
 ```
 
 Setup detects your project state, confirms the project map, lets you choose
-a host adapter, configure role models, and generates artifacts in one pass.
-It is resumable and safe to rerun.
+whether to enable local event logging, select a host adapter, configure role
+models, and generate artifacts in one pass. It is resumable and safe to
+rerun.
 
 To check onboarding progress without changing files:
 
@@ -286,6 +289,43 @@ target; review, coordination, and integration lanes use their own rules.
 `backend_confirmed_at`, `backend_confirmed_by`, and `backend_evidence_summary`
 are optional frontmatter notes for the bounded backend-evidence review.
 
+Setup asks for the task backend with a numbered choice:
+
+```text
+Task backend:
+  1. Files - local task records (default)
+  2. GitHub - issues, labels, comments, and PR coordination
+Choice [1]:
+```
+
+Blank input keeps the files default for a new installation, and the same
+selector is offered during the interactive profile update for confirmed
+projects, where blank input keeps the existing backend. GitHub hosting
+evidence (a GitHub remote, existing CI workflows, issue templates) is shown
+as informational evidence only and never selects the GitHub backend by itself;
+GitHub task coordination always requires the explicit `2` selection.
+
+Event logging is local, optional, and disabled by default
+(`event_logging: disabled`). It is independent of the task backend: enabling
+local event logging does not select the GitHub backend, and choosing the
+GitHub backend does not enable event logging.
+
+Interactive setup asks with a numbered choice:
+
+```text
+Event logging:
+  1. Disabled - do not record workflow events (default)
+  2. Enabled - write local task-scoped JSONL logs under .agenticloop/logs/
+Choice [1]:
+```
+
+Blank input selects disabled for a new installation and retains the current
+setting when setup is rerun. Automated setup can pass
+`--event-logging enabled` or `--event-logging disabled`; when the option is
+omitted in non-interactive mode, setup retains the current setting. This choice
+does not create a log file immediately and does not change
+`event_logging_command`.
+
 `engineer_context_window_tokens` is optional. Set it only when the engineer
 model's active context window is known and task sizing should use that value
 instead of the generic examples in Agentic Loop.
@@ -366,8 +406,9 @@ older targets and should be removed when `.agenticloop/project.md` exists.
 4. If source document names are non-standard, the setup flow detects and proposes
    overrides; you can also edit `.agenticloop/project.md` directly.
 5. If the repo has durable GitHub evidence (remote, workflows, issue templates),
-   setup proposes `task_backend: github`. Review before confirming, or record an
-   explicit files-backend exception.
+   setup shows it as informational evidence only; the files backend stays the
+   default. Select GitHub explicitly in the numbered backend prompt if the
+   project wants GitHub coordination.
 6. If using GitHub, set `task_backend: github` in `.agenticloop/project.md` and run `npx agenticloop bootstrap-labels`.
 7. Run `npx agenticloop validate` to verify the setup.
 8. Start the host agent. For OpenCode, run

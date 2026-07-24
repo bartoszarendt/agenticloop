@@ -123,6 +123,83 @@ function resolveDevelopmentStageChoice(answer) {
   return DEVELOPMENT_STAGES[Number(answer) - 1] ?? null;
 }
 
+const TASK_BACKEND_CHOICES = [
+  { index: 1, label: 'Files - local task records (default)', value: 'files' },
+  { index: 2, label: 'GitHub - issues, labels, comments, and PR coordination', value: 'github' },
+];
+const EVENT_LOGGING_CHOICES = [
+  { index: 1, label: 'Disabled - do not record workflow events (default)', value: 'disabled' },
+  { index: 2, label: 'Enabled - write local task-scoped JSONL logs under .agenticloop/logs/', value: 'enabled' },
+];
+
+function isValidBackend(value) {
+  return value === 'files' || value === 'github';
+}
+
+function formatTaskBackendChoices() {
+  return TASK_BACKEND_CHOICES.map(choice => `    ${choice.index}. ${choice.label}`).join('\n');
+}
+
+function resolveTaskBackendChoice(answer) {
+  const normalized = answer.trim().toLowerCase();
+  if (normalized === '1' || normalized === 'files') return 'files';
+  if (normalized === '2' || normalized === 'github') return 'github';
+  return null;
+}
+
+async function promptTaskBackend(prompts, write, currentValue) {
+  const hasCurrent = isValidBackend(currentValue);
+  const defaultChoice = hasCurrent
+    ? TASK_BACKEND_CHOICES.find(choice => choice.value === currentValue).index
+    : 1;
+  while (true) {
+    const answer = (await prompts.ask(
+      `  Task backend:\n${formatTaskBackendChoices()}\n  Choice [${defaultChoice}]: `
+    )).trim();
+    if (!answer) {
+      return { value: hasCurrent ? currentValue : 'files', cancelled: false };
+    }
+    const selected = resolveTaskBackendChoice(answer);
+    if (selected) {
+      return { value: selected, cancelled: false };
+    }
+    write(`  Invalid task backend '${answer}'. Enter 1 (files) or 2 (github).`);
+  }
+}
+
+function isValidEventLogging(value) {
+  return value === 'disabled' || value === 'enabled';
+}
+
+function formatEventLoggingChoices() {
+  return EVENT_LOGGING_CHOICES.map(choice => `    ${choice.index}. ${choice.label}`).join('\n');
+}
+
+function resolveEventLoggingChoice(answer) {
+  const normalized = answer.trim().toLowerCase();
+  if (normalized === '1' || normalized === 'disabled') return 'disabled';
+  if (normalized === '2' || normalized === 'enabled') return 'enabled';
+  return null;
+}
+
+async function promptEventLogging(prompts, write, currentValue) {
+  const hasCurrent = isValidEventLogging(currentValue);
+  const defaultChoice = hasCurrent
+    ? EVENT_LOGGING_CHOICES.find(choice => choice.value === currentValue).index
+    : 1;
+  while (true) {
+    const answer = (await prompts.ask(
+      `  Event logging:\n${formatEventLoggingChoices()}\n  Choice [${defaultChoice}]: `
+    )).trim();
+    if (!answer) {
+      return hasCurrent ? currentValue : 'disabled';
+    }
+    const selected = resolveEventLoggingChoice(answer);
+    if (selected) return selected;
+    write(`  Invalid event logging choice '${answer}'. Enter 1 (disabled) or 2 (enabled).`);
+  }
+}
+
 async function promptValidStage(prompts, write, currentValue) {
   let rejectedInput = false;
   while (true) {
@@ -165,12 +242,12 @@ async function promptPositiveInteger(prompts, write, label, currentValue) {
   }
 }
 
-function writeProjectMapUpdate(target, values, write) {
+function writeProjectMapUpdate(target, values, write, description = 'human-confirmed profile values') {
   const projectMapPath = join(target, PROJECT_MAP_RELATIVE_PATH);
   if (!existsSync(projectMapPath)) return false;
   const existing = readFileSync(projectMapPath, 'utf-8');
   writeFileSync(projectMapPath, mergeProjectMapFrontmatter(existing, values), 'utf-8');
-  write('\nUpdated .agenticloop/project.md with human-confirmed profile values.');
+  write(`\nUpdated .agenticloop/project.md with ${description}.`);
   return true;
 }
 
@@ -192,6 +269,7 @@ function mergeProjectMapFrontmatter(existingContent, newValues) {
  * @param {string} options.target  Target directory.
  * @param {string} [options.adapter]  Preselected adapter host.
  * @param {boolean} [options.nonInteractive=false]  Fail if interaction needed.
+ * @param {'disabled'|'enabled'} [options.eventLogging]  Explicit event-logging choice.
  * @param {NodeJS.ReadableStream} [options.input]
  * @param {NodeJS.WritableStream} [options.output]
  * @returns {Promise<{errors: string[], warnings: string[]}>}
@@ -201,6 +279,7 @@ export async function setup(options) {
     target,
     adapter: preselectedAdapter,
     nonInteractive = false,
+    eventLogging: preselectedEventLogging,
     agentsGuidance = true,
     input = process.stdin,
     output = process.stdout,
@@ -209,6 +288,12 @@ export async function setup(options) {
   const errors = [];
   const warnings = [];
   const write = (msg) => output.write(msg + '\n');
+  if (preselectedEventLogging !== undefined && !isValidEventLogging(preselectedEventLogging)) {
+    errors.push(
+      `Invalid --event-logging value '${preselectedEventLogging}'. Use enabled or disabled.`
+    );
+    return { errors, warnings };
+  }
   // Capture this before setup scaffolds anything. A repeat setup must not turn
   // an installed target that opted out into a guidance-enrolled target.
   const installationExisted = hasCurrentLayout(target) ||
@@ -349,10 +434,8 @@ export async function setup(options) {
         if (revisitAnswer) confirmValues.development_stage_revisit_when = revisitAnswer;
 
         if (!stageMigration) {
-          const backendAnswer = (await prompts.ask(`  Task backend (${detection.backend.backend}): `)).trim();
-          if (backendAnswer && (backendAnswer === 'files' || backendAnswer === 'github')) {
-            confirmValues.task_backend = backendAnswer;
-          }
+          const backendResult = await promptTaskBackend(prompts, write, confirmValues.task_backend);
+          confirmValues.task_backend = backendResult.value;
 
           const groupingAnswer = (await prompts.ask(`  Grouping profile (${detection.grouping.groupingProfile}): `)).trim();
           if (groupingAnswer && ['flat', 'phase', 'milestone', 'epic', 'custom'].includes(groupingAnswer)) {
@@ -409,6 +492,13 @@ export async function setup(options) {
           updateValues.development_stage = stageResult.value;
           updateValues.max_parallel_implementation_lanes = lanesResult.value;
 
+          const backendResult = await promptTaskBackend(
+            prompts,
+            write,
+            detection.existingConfig.task_backend ?? 'files'
+          );
+          updateValues.task_backend = backendResult.value;
+
           const currentRationale = detection.existingRaw?.development_stage_rationale ?? '';
           const rationaleAnswer = (await prompts.ask(`  Development stage rationale (${currentRationale || 'optional'}): `)).trim();
           if (rationaleAnswer) updateValues.development_stage_rationale = rationaleAnswer;
@@ -432,7 +522,33 @@ export async function setup(options) {
       return { errors, warnings };
     }
 
-    // Step 5: Adapter selection
+    // Step 5: Event logging is a separate local operational choice. It is
+    // never inferred from the task backend, repository host, or existing logs.
+    const currentEventLogging = isValidEventLogging(detection.existingConfig?.event_logging)
+      ? detection.existingConfig.event_logging
+      : PROJECT_MAP_DEFAULTS.event_logging;
+    const selectedEventLogging = preselectedEventLogging ?? (
+      nonInteractive
+        ? currentEventLogging
+        : await promptEventLogging(prompts, write, currentEventLogging)
+    );
+    const rawEventLogging = detection.existingRaw?.event_logging;
+
+    if (selectedEventLogging !== rawEventLogging) {
+      if (!writeProjectMapUpdate(
+        target,
+        { event_logging: selectedEventLogging },
+        write,
+        `event_logging: ${selectedEventLogging}`
+      )) {
+        errors.push('.agenticloop/project.md not found. Run agenticloop init first.');
+        return { errors, warnings };
+      }
+    } else if (!nonInteractive) {
+      write(`  Event logging remains ${selectedEventLogging}.`);
+    }
+
+    // Step 6: Adapter selection
     let selectedAdapter = preselectedAdapter ?? null;
 
     if (!selectedAdapter && !nonInteractive) {
@@ -468,22 +584,22 @@ export async function setup(options) {
       }
     }
 
-    // Step 6: Ensure agenticloop.json exists for adapter setup (no artifacts yet)
+    // Step 7: Ensure agenticloop.json exists for adapter setup (no artifacts yet).
+    // An existing agenticloop.json is reconciled non-destructively against the
+    // current canonical roles (for example, adding a missing auditor slot).
     if (selectedAdapter) {
       const agenticloopJsonPath = join(target, 'agenticloop.json');
       if (!existsSync(agenticloopJsonPath)) {
         write(`\nCreating agenticloop.json for adapter: ${selectedAdapter}`);
       }
-      if (!existsSync(agenticloopJsonPath) || selectedAdapter === 'codex' || selectedAdapter === 'all') {
-        const { ensureAdapterConfig } = await import('./setup-generate.js');
-        const cfgError = ensureAdapterConfig(target, selectedAdapter);
-        if (cfgError) {
-          errors.push(cfgError);
-          return { errors, warnings };
-        }
+      const { ensureAdapterConfig } = await import('./setup-generate.js');
+      const cfgError = ensureAdapterConfig(target, selectedAdapter);
+      if (cfgError) {
+        errors.push(cfgError);
+        return { errors, warnings };
       }
 
-      // Step 7: Model configuration
+      // Step 8: Model configuration
       const alConfig = loadAlConfig(target);
       if (alConfig) {
         const roles = Object.keys(alConfig.roles ?? {});
@@ -532,7 +648,7 @@ export async function setup(options) {
           for (const u of cfgResult.updated) write(`  updated: ${u}`);
         }
 
-        // Step 8: Generate adapter artifacts
+        // Step 9: Generate adapter artifacts
         if (errors.length === 0) {
           write('\nGenerating adapter artifacts...');
           const { generateAdapters } = await import('./setup-generate.js');
@@ -546,7 +662,7 @@ export async function setup(options) {
       }
     }
 
-    // Step 8b: New installations receive guidance by default. Repeated setup
+    // Step 9b: New installations receive guidance by default. Repeated setup
     // only refreshes a block that is already manifest-owned.
     if (agentsGuidance) {
       const configResult = loadGuidanceConfig(target);
@@ -576,7 +692,7 @@ export async function setup(options) {
       }
     }
 
-    // Step 9: Final status
+    // Step 10: Final status
     const finalState = detectSetupState(target, { includeValidation: true });
     write('\n' + formatSetupChecklist(finalState));
 

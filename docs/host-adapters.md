@@ -244,7 +244,10 @@ with a different concrete model on each host. OpenCode and Codex also support
 `model` and `permissionMode` there; Copilot and Cursor currently support
 `model` only.
 Codex supports `minimal`, `low`, `medium`, `high`, and `xhigh` for
-`reasoningEffort`.
+`reasoningEffort`. OpenCode supports `low`, `medium`, `high`, `xhigh`, and
+`max` (provider/model-dependent; `minimal` is not offered), plus a `Default`
+choice that omits or removes the setting so generated agent Markdown omits
+`variant`.
 
 Adapter-local role settings are the supported configuration surface. The
 shared resolver still tolerates older configs that put model fields under

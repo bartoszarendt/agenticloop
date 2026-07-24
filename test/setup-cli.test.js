@@ -12,7 +12,15 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  existsSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -119,6 +127,7 @@ describe('setup CLI', () => {
 
     const input = [
       'yes',     // confirm project setup
+      '',        // keep event logging disabled
       '4',       // skip adapter setup
     ].join('\n');
 
@@ -139,7 +148,7 @@ describe('setup CLI', () => {
     writeFileSync(join(d, 'README.md'), '# README\n');
     writeFileSync(join(d, 'IMPLEMENTATION_PLAN.md'), '# Plan\n');
 
-    const input = ['yes', '4'].join('\n');
+    const input = ['yes', '', '4'].join('\n');
     const result = run(['setup', '--target', d], { input });
 
     assert.ok(result.stdout.includes('Setup checklist'));
@@ -153,6 +162,7 @@ describe('setup CLI', () => {
 
     const input = [
       'yes',     // confirm project setup
+      '',        // keep event logging disabled
       '1',       // files-only mode
       'yes',     // run validation now
     ].join('\n');
@@ -175,7 +185,7 @@ describe('setup CLI', () => {
       grouping_profile: 'flat',
     });
 
-    const input = ['4'].join('\n');
+    const input = ['no', '', '4'].join('\n');
     const result = run(['setup', '--target', d], { input });
     assert.equal(result.status, 0, `stderr: ${result.stderr}`);
     assert.ok(result.stdout.includes('already confirmed'));
@@ -189,6 +199,7 @@ describe('setup CLI', () => {
 
     const input = [
       'yes',     // confirm project setup
+      '',        // keep event logging disabled
       '',        // skip model config (blank)
       '',
       '',
@@ -206,7 +217,7 @@ describe('setup CLI', () => {
     writeFileSync(join(d, 'IMPLEMENTATION_PLAN.md'), '# Plan\n');
 
     const result = run(['setup', '--target', d, '--adapter', 'codex'], {
-      input: ['yes', '', '', ''].join('\n'),
+      input: ['yes', '', '', '', ''].join('\n'),
     });
 
     assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
@@ -309,6 +320,7 @@ describe('setup CLI', () => {
       '',
       '',
       'yes',
+      '',
       '4',
     ].join('\n');
     const result = run(['setup', '--target', d], { input });
@@ -355,7 +367,7 @@ describe('setup CLI', () => {
       body,
     ].join('\n'));
 
-    const result = run(['setup', '--target', d], { input: ['yes', '4'].join('\n') });
+    const result = run(['setup', '--target', d], { input: ['yes', '', '4'].join('\n') });
 
     assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
     const content = readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8');
@@ -381,6 +393,7 @@ describe('setup CLI', () => {
       '',
       '',
       'yes',
+      '',
       '4',
     ].join('\n');
     const result = run(['setup', '--target', d], { input });
@@ -410,7 +423,7 @@ describe('setup CLI', () => {
     });
 
     const transition = run(['setup', '--target', d], {
-      input: ['yes', '4', '3', 'Compatibility commitments now govern changes.', 'After a planned major migration.', 'yes', '4'].join('\n'),
+      input: ['yes', '4', '3', '', 'Compatibility commitments now govern changes.', 'After a planned major migration.', 'yes', '', '4'].join('\n'),
     });
     assert.equal(transition.status, 0, `stdout:\n${transition.stdout}\nstderr:\n${transition.stderr}`);
     assert.match(transition.stdout, /Select development stage:/);
@@ -438,7 +451,7 @@ describe('setup CLI', () => {
     });
 
     const result = run(['setup', '--target', d], {
-      input: ['yes', 'maintenance', '', '', '', 'no', '4'].join('\n'),
+      input: ['yes', 'maintenance', '', '', '', '', 'no', '', '4'].join('\n'),
     });
 
     assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
@@ -506,6 +519,344 @@ describe('setup CLI', () => {
     assert.notEqual(result.status, 0);
     assert.match(result.stdout + result.stderr, /human-confirmed development stage/);
     assert.ok(!existsSync(join(d, '.opencode')));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setup task backend selection
+// ---------------------------------------------------------------------------
+
+describe('setup task backend selection', () => {
+  function makeDocTarget() {
+    const d = makeEmptyTarget();
+    writeFileSync(join(d, 'AGENTS.md'), '# AGENTS\n');
+    writeFileSync(join(d, 'README.md'), '# README\n');
+    writeFileSync(join(d, 'IMPLEMENTATION_PLAN.md'), '# Plan\n');
+    return d;
+  }
+
+  function makeConfirmedTarget(taskBackend) {
+    const d = makeTarget();
+    writeProjectMap(d, {
+      setup_status: 'confirmed',
+      setup_confirmed_at: '2026-06-22',
+      setup_confirmed_by: 'human',
+      development_stage: 'expansion',
+      max_parallel_implementation_lanes: 5,
+      task_backend: taskBackend,
+      event_logging: 'disabled',
+      grouping_profile: 'flat',
+    });
+    return d;
+  }
+
+  function readBackend(d) {
+    const [fm] = parseFrontmatter(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'));
+    return fm?.task_backend;
+  }
+
+  it('defaults to files on a GitHub-hosted target with CI workflows', () => {
+    const d = makeDocTarget();
+    mkdirSync(join(d, '.github', 'workflows'), { recursive: true });
+    writeFileSync(join(d, '.github', 'workflows', 'ci.yml'), 'name: CI\n');
+
+    const result = run(['setup', '--target', d], { input: ['yes', '', '4'].join('\n') });
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.equal(readBackend(d), 'files');
+  });
+
+  it('explicit choice 2 selects the github backend', () => {
+    const d = makeDocTarget();
+
+    const input = [
+      'edit',
+      '',      // keep detected stage
+      '',      // keep default lanes
+      '',      // no rationale
+      '',      // no revisit trigger
+      '2',     // Task backend: GitHub
+      '',      // keep grouping
+      '',      // keep task ID pattern
+      '',      // keep task ID regex
+      'yes',   // apply edited values
+      '',      // keep event logging disabled
+      '4',     // skip adapter setup
+    ].join('\n');
+    const result = run(['setup', '--target', d], { input });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.match(result.stdout, /Task backend:\n\s+1\. Files - local task records \(default\)\n\s+2\. GitHub - issues, labels, comments, and PR coordination\n\s+Choice \[1\]:/);
+    assert.equal(readBackend(d), 'github');
+  });
+
+  it('blank input selects files for a new installation', () => {
+    const d = makeDocTarget();
+
+    const input = [
+      'edit',
+      '', '', '', '',
+      '',      // Task backend: blank selects the default (files)
+      '', '', '',
+      'yes',
+      '',
+      '4',
+    ].join('\n');
+    const result = run(['setup', '--target', d], { input });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.equal(readBackend(d), 'files');
+  });
+
+  it('invalid backend input reprompts instead of silently retaining a value', () => {
+    const d = makeDocTarget();
+
+    const input = [
+      'edit',
+      '', '', '', '',
+      'banana', // invalid: must produce a useful message and reprompt
+      '2',
+      '', '', '',
+      'yes',
+      '',
+      '4',
+    ].join('\n');
+    const result = run(['setup', '--target', d], { input });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.match(result.stdout, /Invalid task backend 'banana'\. Enter 1 \(files\) or 2 \(github\)\./);
+    assert.equal(readBackend(d), 'github');
+  });
+
+  it('a confirmed project retains its backend when the profile update is declined', () => {
+    const d = makeConfirmedTarget('github');
+
+    const result = run(['setup', '--target', d], {
+      input: ['yes', '', '', '', '', '', 'no', '', '4'].join('\n'),
+    });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.match(result.stdout, /Profile update cancelled; continuing setup without profile changes/);
+    assert.equal(readBackend(d), 'github');
+  });
+
+  it('a confirmed project keeps its backend with a blank backend answer', () => {
+    const d = makeConfirmedTarget('github');
+
+    const result = run(['setup', '--target', d], {
+      input: ['yes', '', '', '', '', '', 'yes', '', '4'].join('\n'),
+    });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.equal(readBackend(d), 'github');
+  });
+
+  it('a confirmed project can explicitly switch between files and github', () => {
+    const d = makeConfirmedTarget('files');
+
+    const toGithub = run(['setup', '--target', d], {
+      input: ['yes', '', '', '2', '', '', 'yes', '', '4'].join('\n'),
+    });
+    assert.equal(toGithub.status, 0, `stdout:\n${toGithub.stdout}\nstderr:\n${toGithub.stderr}`);
+    assert.equal(readBackend(d), 'github');
+
+    const toFiles = run(['setup', '--target', d], {
+      input: ['yes', '', '', '1', '', '', 'yes', '', '4'].join('\n'),
+    });
+    assert.equal(toFiles.status, 0, `stdout:\n${toFiles.stdout}\nstderr:\n${toFiles.stderr}`);
+    assert.equal(readBackend(d), 'files');
+  });
+
+  it('keeps event_logging disabled and independent from the github backend', () => {
+    const d = makeConfirmedTarget('files');
+
+    const result = run(['setup', '--target', d], {
+      input: ['yes', '', '', '2', '', '', 'yes', '', '4'].join('\n'),
+    });
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    const [fm] = parseFrontmatter(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'));
+    assert.equal(fm.task_backend, 'github');
+    assert.equal(fm.event_logging, 'disabled');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setup event logging selection
+// ---------------------------------------------------------------------------
+
+describe('setup event logging selection', () => {
+  function makeDocTarget() {
+    const d = makeEmptyTarget();
+    writeFileSync(join(d, 'AGENTS.md'), '# AGENTS\n');
+    writeFileSync(join(d, 'README.md'), '# README\n');
+    writeFileSync(join(d, 'IMPLEMENTATION_PLAN.md'), '# Plan\n');
+    return d;
+  }
+
+  function makeConfirmedTarget(eventLogging, eventLoggingCommand = '') {
+    const d = makeTarget();
+    writeProjectMap(d, {
+      setup_status: 'confirmed',
+      setup_confirmed_at: '2026-06-22',
+      setup_confirmed_by: 'human',
+      development_stage: 'expansion',
+      max_parallel_implementation_lanes: 5,
+      task_backend: 'files',
+      event_logging: eventLogging,
+      event_logging_command: eventLoggingCommand,
+      grouping_profile: 'flat',
+    });
+    return d;
+  }
+
+  function readProjectMap(d) {
+    const [fm] = parseFrontmatter(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'));
+    return fm;
+  }
+
+  it('shows the numbered selector and keeps logging disabled on blank input for a fresh setup', () => {
+    const d = makeDocTarget();
+
+    const result = run(['setup', '--target', d], {
+      input: ['yes', '', '4'].join('\n'),
+    });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.match(
+      result.stdout,
+      /Event logging:\n\s+1\. Disabled - do not record workflow events \(default\)\n\s+2\. Enabled - write local task-scoped JSONL logs under \.agenticloop\/logs\/\n\s+Choice \[1\]:/
+    );
+    assert.equal(readProjectMap(d).event_logging, 'disabled');
+    assert.deepEqual(readdirSync(join(d, '.agenticloop', 'logs')), []);
+  });
+
+  it('enables logging explicitly without creating a log file or changing the task backend', () => {
+    const d = makeDocTarget();
+
+    const result = run(['setup', '--target', d], {
+      input: ['yes', '2', '4'].join('\n'),
+    });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    const fm = readProjectMap(d);
+    assert.equal(fm.event_logging, 'enabled');
+    assert.equal(fm.task_backend, 'files');
+    assert.deepEqual(readdirSync(join(d, '.agenticloop', 'logs')), []);
+  });
+
+  it('reprompts after invalid input and accepts the enabled alias', () => {
+    const d = makeDocTarget();
+
+    const result = run(['setup', '--target', d], {
+      input: ['yes', 'sometimes', 'enabled', '4'].join('\n'),
+    });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.match(
+      result.stdout,
+      /Invalid event logging choice 'sometimes'\. Enter 1 \(disabled\) or 2 \(enabled\)\./
+    );
+    assert.equal(readProjectMap(d).event_logging, 'enabled');
+  });
+
+  it('can retain or disable logging after declining the broader profile update', () => {
+    const d = makeConfirmedTarget('enabled', 'node tools/event-logger.js');
+
+    const retained = run(['setup', '--target', d], {
+      input: ['no', '', '4'].join('\n'),
+    });
+    assert.equal(retained.status, 0, `stdout:\n${retained.stdout}\nstderr:\n${retained.stderr}`);
+    assert.match(retained.stdout, /Choice \[2\]:/);
+    assert.equal(readProjectMap(d).event_logging, 'enabled');
+
+    const disabled = run(['setup', '--target', d], {
+      input: ['no', '1', '4'].join('\n'),
+    });
+    assert.equal(disabled.status, 0, `stdout:\n${disabled.stdout}\nstderr:\n${disabled.stderr}`);
+    const fm = readProjectMap(d);
+    assert.equal(fm.event_logging, 'disabled');
+    assert.equal(fm.event_logging_command, 'node tools/event-logger.js');
+  });
+
+  it('supports explicit non-interactive selection and preserves the setting when omitted', () => {
+    const d = makeConfirmedTarget('enabled', 'node tools/event-logger.js');
+
+    const retained = run(['setup', '--target', d, '--adapter', 'opencode', '--yes']);
+    assert.equal(retained.status, 0, `stdout:\n${retained.stdout}\nstderr:\n${retained.stderr}`);
+    assert.equal(readProjectMap(d).event_logging, 'enabled');
+
+    const disabled = run([
+      'setup',
+      '--target',
+      d,
+      '--adapter',
+      'opencode',
+      '--yes',
+      '--event-logging',
+      'disabled',
+    ]);
+    assert.equal(disabled.status, 0, `stdout:\n${disabled.stdout}\nstderr:\n${disabled.stderr}`);
+    const fm = readProjectMap(d);
+    assert.equal(fm.event_logging, 'disabled');
+    assert.equal(fm.event_logging_command, 'node tools/event-logger.js');
+  });
+
+  it('rejects an invalid non-interactive value before scaffolding', () => {
+    const d = makeEmptyTarget();
+
+    const result = run([
+      'setup',
+      '--target',
+      d,
+      '--adapter',
+      'opencode',
+      '--yes',
+      '--event-logging',
+      'sometimes',
+    ]);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Invalid --event-logging value 'sometimes'/);
+    assert.equal(existsSync(join(d, '.agenticloop')), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setup never touches downstream .github/workflows
+// ---------------------------------------------------------------------------
+
+describe('setup never touches downstream .github/workflows', () => {
+  function makeDocTarget() {
+    const d = makeEmptyTarget();
+    writeFileSync(join(d, 'AGENTS.md'), '# AGENTS\n');
+    writeFileSync(join(d, 'README.md'), '# README\n');
+    writeFileSync(join(d, 'IMPLEMENTATION_PLAN.md'), '# Plan\n');
+    return d;
+  }
+
+  it('leaves existing user workflows byte-for-byte unchanged on opencode setup', () => {
+    const d = makeDocTarget();
+    mkdirSync(join(d, '.github', 'workflows'), { recursive: true });
+    const workflowPath = join(d, '.github', 'workflows', 'ci.yml');
+    const bytes = 'name: user-ci\non: [push]\n';
+    writeFileSync(workflowPath, bytes, 'utf-8');
+
+    const result = run(['setup', '--target', d, '--adapter', 'opencode'], {
+      input: ['yes', '', '', '', '', ''].join('\n'),
+    });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.equal(readFileSync(workflowPath, 'utf-8'), bytes);
+  });
+
+  it('does not create .github/workflows when absent on opencode setup', () => {
+    const d = makeDocTarget();
+
+    const result = run(['setup', '--target', d, '--adapter', 'opencode'], {
+      input: ['yes', '', '', '', '', ''].join('\n'),
+    });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.equal(existsSync(join(d, '.github', 'workflows')), false);
   });
 });
 

@@ -394,7 +394,8 @@ One canonical Markdown source generates host-native shims for OpenCode, Claude C
 
 ```text
 npx agenticloop init [--adapter <host>]              Scaffold overlay (files-only without --adapter)
-npx agenticloop setup [--adapter <host>]             Guided onboarding: confirm setup, pick adapter, configure models
+npx agenticloop setup [--adapter <host>] [--event-logging <enabled|disabled>]
+                                                       Guided onboarding: confirm setup, choose local event logging, pick adapter, configure models
 npx agenticloop doctor                               Show setup checklist and adapter state; writes nothing
 npx agenticloop update [--adapter <host>]            Refresh toolkit assets and existing adapter output
 npx agenticloop upgrade                              Compatibility alias for update
@@ -430,7 +431,7 @@ npx agenticloop remove --yes --include-state         Also remove target-owned `.
 
 Worktree `remove` and `cleanup` preserve task-specific lane-local `.agenticloop` state before removal. See [docs/worktrees.md](docs/worktrees.md) for what counts as lane-local state, when preservation conflicts block cleanup, and the `resolve-state` strategies.
 
-Event logging is **disabled by default** and stores only compact workflow-gate summaries, never raw transcripts. Enable it with `event_logging: enabled` in `.agenticloop/project.md`; see [docs/event-logging.md](docs/event-logging.md) for the event commands and audit workflow. Per-task completion summaries are always written inline into the task record's `## Scope Completed` section; there is no separate summaries directory.
+Event logging is **disabled by default** and stores only compact workflow-gate summaries, never raw transcripts. Enable it through the numbered choice in interactive setup, with `agenticloop setup --event-logging enabled`, or with `event_logging: enabled` in `.agenticloop/project.md`; see [docs/event-logging.md](docs/event-logging.md) for the event commands and audit workflow. Per-task completion summaries are always written inline into the task record's `## Scope Completed` section; there is no separate summaries directory.
 
 Normal downstream use does not require Python, PowerShell, Bash scripts, API keys, or framework setup for the toolkit itself.
 

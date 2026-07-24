@@ -140,7 +140,9 @@ function buildOpencodeAgentRecord(alConfig, repoRoot, roleName) {
     promptBody,
     mode: roleName === 'orchestrator' ? 'primary' : 'subagent',
     model,
-    variant,
+    // 'auto' is the shared unset fallback, not an explicit OpenCode variant;
+    // only a configured reasoning effort renders frontmatter `variant`.
+    variant: variant === 'auto' ? undefined : variant,
     prompt: buildPrompt(roleName, sourceFile, requiredSkills, promptBody, skillsSourceDir),
   };
 }

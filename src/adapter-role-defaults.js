@@ -77,3 +77,76 @@ export function ensureAdapterRoleSettings(config, host) {
 
   return { added, kept };
 }
+
+/**
+ * Reconcile a target-owned adapter configuration against the current
+ * canonical role set. Non-destructive and idempotent:
+ *
+ *   - validates that the target config is a JSON object;
+ *   - ensures each selected adapter block exists;
+ *   - ensures adapters.<host>.roleSettings exists;
+ *   - ensures an explicit target-owned role slot exists for every current
+ *     canonical role (added as {} so no canonical role definition is
+ *     duplicated into target-owned config);
+ *   - preserves every existing user setting and unknown target-owned field.
+ *
+ * @param {object} config  Parsed target-owned agenticloop.json (mutated).
+ * @param {string[]} hosts  Selected adapter hosts to reconcile.
+ * @param {string[]} canonicalRoles  Current canonical role names.
+ * @returns {{added: string[], preserved: string[]}}
+ */
+export function reconcileAdapterRoleSettings(config, hosts, canonicalRoles) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error('agenticloop.json must contain a JSON object');
+  }
+
+  const added = [];
+  const preserved = [];
+
+  if (config.adapters === undefined) {
+    config.adapters = {};
+    added.push('adapters');
+  } else if (
+    typeof config.adapters !== 'object' ||
+    config.adapters === null ||
+    Array.isArray(config.adapters)
+  ) {
+    throw new Error('agenticloop.json: adapters must be an object');
+  } else {
+    preserved.push('adapters');
+  }
+
+  for (const host of hosts) {
+    if (config.adapters[host] === undefined) {
+      config.adapters[host] = {};
+      added.push(`adapters.${host}`);
+    } else if (typeof config.adapters[host] !== 'object' || config.adapters[host] === null || Array.isArray(config.adapters[host])) {
+      throw new Error(`agenticloop.json: adapters.${host} must be an object`);
+    } else {
+      preserved.push(`adapters.${host}`);
+    }
+
+    if (config.adapters[host].roleSettings === undefined) {
+      config.adapters[host].roleSettings = {};
+      added.push(`adapters.${host}.roleSettings`);
+    } else if (typeof config.adapters[host].roleSettings !== 'object' || config.adapters[host].roleSettings === null || Array.isArray(config.adapters[host].roleSettings)) {
+      throw new Error(`agenticloop.json: adapters.${host}.roleSettings must be an object`);
+    } else {
+      preserved.push(`adapters.${host}.roleSettings`);
+    }
+
+    for (const role of canonicalRoles) {
+      const path = `adapters.${host}.roleSettings.${role}`;
+      if (config.adapters[host].roleSettings[role] === undefined) {
+        config.adapters[host].roleSettings[role] = {};
+        added.push(path);
+      } else if (typeof config.adapters[host].roleSettings[role] !== 'object' || config.adapters[host].roleSettings[role] === null || Array.isArray(config.adapters[host].roleSettings[role])) {
+        throw new Error(`agenticloop.json: ${path} must be an object`);
+      } else {
+        preserved.push(path);
+      }
+    }
+  }
+
+  return { added, preserved };
+}

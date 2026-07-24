@@ -68,6 +68,30 @@ model IDs when available. If OpenCode is not installed, not connected, or return
 no parseable models, setup falls back to the bundled starter catalog and custom
 model entry.
 
+The reasoning-effort picker offers exactly these choices:
+
+```text
+0. Default - omit reasoningEffort/variant
+1. low
+2. medium
+3. high
+4. xhigh
+5. max
+```
+
+`Default` is a real unset action: for a new role setting it leaves
+`reasoningEffort` absent, and for an existing role setting it removes the
+target-owned `reasoningEffort` field so regenerated agent Markdown omits the
+frontmatter `variant`. When a role already has a value, a separate
+`Keep current` choice stays distinct from `Default`. `xhigh` and `max` are
+provider/model-dependent OpenCode variants and are not available for every
+model. Agentic Loop's OpenCode picker does not offer `minimal`.
+
+The target config records a separate boolean `reasoningEffortDefault: true`
+marker when Default is chosen. The marker is not rendered as an OpenCode
+variant; it prevents a stale generated agent from restoring a value that was
+deliberately removed. Selecting an explicit effort removes the marker.
+
 `agenticloop doctor` detects stale generated artifacts: if the model in a
 generated `.opencode/agents/*.md` file disagrees with
 `adapters.opencode.roleSettings` in `agenticloop.json`, the doctor output

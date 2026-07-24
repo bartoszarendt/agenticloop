@@ -104,7 +104,9 @@ export function generateAdapterArtifacts(options) {
     adapters: adaptersWithPlans,
   };
 
-  // Execute transactionally.
+  // Execute transactionally. The transaction boundary validates fully resolved
+  // action, stale-cleanup, and extra-write destinations so .github/workflows/
+  // remains user-owned even when a custom output directory is requested.
   const result = executeGenerationPlan(target, plan, { forceGenerated, extraWrites });
 
   return {

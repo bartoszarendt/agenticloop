@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { seedTargetLayout } from './helpers/layout-fixture.js';
 import {
@@ -235,14 +236,33 @@ describe('detectBackendEvidence', () => {
       'should detect issue templates');
   });
 
-  it('proposes github backend when GitHub evidence is strong and no local tasks', () => {
+  it('keeps files as the default backend when GitHub evidence is present and no local tasks', () => {
     const d = mkdtempSync(join(tmpDir, 'gh-'));
     mkdirSync(join(d, '.github', 'workflows'), { recursive: true });
     writeFileSync(join(d, '.github', 'workflows', 'ci.yml'), 'name: CI\n');
 
     const result = detectBackendEvidence(d);
-    assert.equal(result.backend, 'github');
+    assert.equal(result.backend, 'files');
     assert.equal(result.confidence, 'medium');
+    assert.ok(result.evidence.some(e => e.includes('.github/workflows')),
+      'GitHub workflow evidence should remain visible as informational evidence');
+    assert.ok(result.evidence.some(e => e.includes('informational only')),
+      'GitHub evidence must be marked informational so it cannot silently select the github backend');
+  });
+
+  it('keeps files as the default with a GitHub remote plus CI workflows', () => {
+    const d = mkdtempSync(join(tmpDir, 'gh-remote-'));
+    execSync('git init', { cwd: d, stdio: 'ignore' });
+    execSync('git remote add origin https://github.com/example/project.git', { cwd: d, stdio: 'ignore' });
+    mkdirSync(join(d, '.github', 'workflows'), { recursive: true });
+    writeFileSync(join(d, '.github', 'workflows', 'ci.yml'), 'name: CI\n');
+    mkdirSync(join(d, '.github', 'ISSUE_TEMPLATE'), { recursive: true });
+
+    const result = detectBackendEvidence(d);
+    assert.equal(result.backend, 'files',
+      'a GitHub remote and CI workflows must not silently select the github backend');
+    assert.ok(result.evidence.some(e => e.includes('github.com')),
+      'the GitHub remote should remain visible as informational evidence');
   });
 
   it('prefers files when local tasks exist even with GitHub evidence', () => {

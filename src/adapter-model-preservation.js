@@ -281,6 +281,7 @@ export function preserveExistingAdapterModelSettings(target, adapters, options =
         updated.push(`adapters.${host}.roleSettings.${roleName}.model`);
       }
       if (
+        targetRoleSettings.reasoningEffortDefault !== true &&
         usefulReasoningSetting(roleSettings.reasoningEffort) &&
         shouldFill(effectiveConfiguredReasoningSetting(targetRoleSettings))
       ) {

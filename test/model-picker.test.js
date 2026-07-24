@@ -99,14 +99,42 @@ describe('buildReasoningEffortChoices', () => {
     assert.ok(choices.length > 0);
     assert.ok(choices.some(c => c.value === 'high'));
     assert.ok(choices.some(c => c.value === 'xhigh'));
-    assert.ok(choices.some(c => c.action === 'skip'));
+    assert.ok(choices.some(c => c.value === 'minimal'));
     assert.ok(text.includes('high'));
   });
 
-  it('returns opencode effort choices', () => {
+  it('codex does not offer max', () => {
+    const { choices } = buildReasoningEffortChoices('codex');
+    assert.ok(!choices.some(c => c.value === 'max'));
+  });
+
+  it('returns the exact opencode effort choices in order', () => {
     const { choices } = buildReasoningEffortChoices('opencode');
-    assert.ok(choices.length > 0);
-    assert.ok(choices.some(c => c.value === 'high'));
+    assert.deepEqual(
+      choices.map(c => [c.index, c.action, c.value]),
+      [
+        [0, 'default', null],
+        [1, 'select', 'low'],
+        [2, 'select', 'medium'],
+        [3, 'select', 'high'],
+        [4, 'select', 'xhigh'],
+        [5, 'select', 'max'],
+      ]
+    );
+  });
+
+  it('opencode labels the default choice as omitting reasoningEffort/variant', () => {
+    const { choices, text } = buildReasoningEffortChoices('opencode');
+    const defaultChoice = choices.find(c => c.action === 'default');
+    assert.equal(defaultChoice.index, 0);
+    assert.match(defaultChoice.label, /Default - omit reasoningEffort\/variant/);
+    assert.match(text, /0\. Default - omit reasoningEffort\/variant/);
+  });
+
+  it('opencode does not offer minimal', () => {
+    const { choices, text } = buildReasoningEffortChoices('opencode');
+    assert.ok(!choices.some(c => c.value === 'minimal'));
+    assert.ok(!text.includes('minimal'));
   });
 
   it('returns empty for claude-code', () => {
@@ -120,10 +148,14 @@ describe('buildReasoningEffortChoices', () => {
     assert.equal(choices.length, 0);
   });
 
-  it('includes keep-current when current effort is set', () => {
-    const { choices } = buildReasoningEffortChoices('codex', 'high');
+  it('keeps keep-current distinct from default when current effort is set', () => {
+    const { choices } = buildReasoningEffortChoices('opencode', 'high');
+    const defaultChoice = choices.find(c => c.action === 'default');
     const keepChoice = choices.find(c => c.action === 'keep');
+    assert.ok(defaultChoice);
     assert.ok(keepChoice);
+    assert.notEqual(defaultChoice.index, keepChoice.index);
+    assert.equal(keepChoice.value, 'high');
     assert.ok(keepChoice.label.includes('high'));
   });
 });
@@ -256,6 +288,7 @@ describe('promptModelSettingsInteractive', () => {
 
     const lines = [
       String(keepChoice.index),    // keep current for orchestrator
+      '',                          // keep current reasoning/default
       String(skipIndex('maintainer')), // skip maintainer
       String(skipIndex('engineer')),   // skip engineer
     ];
@@ -268,6 +301,34 @@ describe('promptModelSettingsInteractive', () => {
     assert.equal(cancelled, false);
     // keep-current should not create a mutation
     assert.ok(!mutations.some(m => m.role === 'orchestrator'));
+  });
+
+  it('can keep the current model while resetting reasoning to default', async () => {
+    const currentSettings = {
+      engineer: { model: 'existing/model', reasoningEffort: 'high' },
+    };
+    const keepModel = buildModelChoices(
+      'opencode',
+      'engineer',
+      currentSettings.engineer.model
+    ).choices.find(choice => choice.action === 'keep');
+    const { prompts } = makePipedPrompts([
+      String(keepModel.index),
+      '0',
+    ]);
+
+    const { mutations, cancelled } = await promptModelSettingsInteractive(
+      ['engineer'],
+      'opencode',
+      prompts,
+      currentSettings
+    );
+    prompts.close();
+
+    assert.equal(cancelled, false);
+    assert.deepEqual(mutations, [
+      { role: 'engineer', clearReasoningEffort: true },
+    ]);
   });
 
   it('can discover OpenCode models during interactive prompting', async () => {
@@ -354,5 +415,79 @@ describe('promptModelSettingsInteractive', () => {
       { role: 'orchestrator', model: 'o3' },
     ]);
     assert.ok(getOutput().includes('Discovered 1 codex model(s)'));
+  });
+
+  it('choosing default produces an explicit clearReasoningEffort mutation', async () => {
+    const { choices } = buildModelChoices('opencode', 'engineer');
+    const catalogChoice = choices.find(c => c.action === 'catalog');
+
+    const { prompts } = makePipedPrompts([
+      String(catalogChoice.index),  // select a catalog model for engineer
+      '0',                          // reasoning effort: Default (unset)
+    ]);
+    const { mutations, cancelled } = await promptModelSettingsInteractive(
+      ['engineer'],
+      'opencode',
+      prompts,
+      { engineer: { model: 'old/model', reasoningEffort: 'high' } }
+    );
+    prompts.close();
+
+    assert.equal(cancelled, false);
+    assert.equal(mutations.length, 1);
+    assert.equal(mutations[0].role, 'engineer');
+    assert.equal(mutations[0].clearReasoningEffort, true);
+    assert.equal(mutations[0].reasoningEffort, undefined);
+  });
+
+  it('choosing an explicit opencode xhigh or max sets reasoningEffort', async () => {
+    for (const [input, expected] of [['4', 'xhigh'], ['5', 'max']]) {
+      const { choices } = buildModelChoices('opencode', 'engineer');
+      const catalogChoice = choices.find(c => c.action === 'catalog');
+
+      const { prompts } = makePipedPrompts([
+        String(catalogChoice.index),
+        input,
+      ]);
+      const { mutations, cancelled } = await promptModelSettingsInteractive(
+        ['engineer'],
+        'opencode',
+        prompts,
+        {}
+      );
+      prompts.close();
+
+      assert.equal(cancelled, false);
+      assert.equal(mutations[0].reasoningEffort, expected);
+      assert.equal(mutations[0].clearReasoningEffort, undefined);
+    }
+  });
+
+  it('apply-to-remaining propagates the default/unset choice', async () => {
+    const { choices } = buildModelChoices('opencode', 'orchestrator');
+    const catalogChoice = choices.find(c => c.action === 'catalog');
+
+    const { prompts } = makePipedPrompts([
+      String(catalogChoice.index),  // orchestrator model
+      '0',                          // orchestrator reasoning: Default (unset)
+      'y',                          // apply same to remaining roles
+    ]);
+    const { mutations, cancelled } = await promptModelSettingsInteractive(
+      ['orchestrator', 'maintainer', 'engineer'],
+      'opencode',
+      prompts,
+      {
+        maintainer: { model: 'old/maintainer', reasoningEffort: 'high' },
+        engineer: { model: 'old/engineer', reasoningEffort: 'max' },
+      }
+    );
+    prompts.close();
+
+    assert.equal(cancelled, false);
+    assert.equal(mutations.length, 3);
+    for (const mutation of mutations) {
+      assert.equal(mutation.clearReasoningEffort, true);
+      assert.equal(mutation.reasoningEffort, undefined);
+    }
   });
 });

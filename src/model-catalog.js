@@ -455,7 +455,9 @@ export function checkCatalogFreshness() {
 export function getReasoningEffortChoices(host) {
   if (host === 'claude-code' || host === 'copilot' || host === 'cursor') return [];
   if (host === 'codex') return [...CODEX_SUPPORTED_REASONING_EFFORTS];
-  return ['low', 'medium', 'high'];
+  // OpenCode variants are provider/model-dependent; xhigh and max exist only
+  // for some providers. OpenCode does not offer minimal.
+  return ['low', 'medium', 'high', 'xhigh', 'max'];
 }
 
 /**
