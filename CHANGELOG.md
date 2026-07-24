@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.3.0 - 2026-07-24
+
+### Added
+- Work-unit audit and certification. A fourth canonical workflow role, Auditor,
+  evaluates completed multi-task work units as a whole from six perspectives
+  (outcome, completeness, integration, engineering quality, verification, risk)
+  and produces one consolidated findings-and-recommendations report.
+  Non-certifying findings route through normal Maintainer/Engineer remediation;
+  re-audit uses a fresh Auditor invocation bound to the exact renewed artifact.
+  An independent `audit_budget` (default 5) bounds the loop; after five completed
+  non-certifying reports the work unit blocks for human direction.
+- Audit records live in `.agenticloop/audits/` with append-only report history,
+  stable `AUD-NNN` identities, exact-artifact binding, and dedicated validation
+  (`src/audit-record.js`). Certification is current only when the certified
+  artifact and covered task set match the candidate exactly.
+- `work_unit_audit` project setting defaults to `enabled` (including when
+  omitted); only an explicit human-controlled `disabled` value bypasses the
+  closeout certification gate. Configured closeout cannot publish
+  `AGENT_CLOSEOUT_STATUS: complete` without current certification.
+- `agenticloop audit` CLI with `create`, `status`, `report`, and `certify`
+  subcommands. Auditor model and reasoning effort use the existing adapter
+  `roleSettings.auditor` configuration.
+- All five host adapters (OpenCode, Claude Code, Codex, Copilot, Cursor) and
+  their generated surfaces include full Auditor role support.
+- New tests: audit-record validation, audit CLI, adapter lifecycle, end-to-end
+  audit scenarios, and event-logging compatibility.
+
+### Changed
+- Refreshed the project positioning and normalized prose typography across the
+  public and canonical Markdown documentation.
+
 ## 0.2.0 - 2026-07-23
 
 ### Added
@@ -23,8 +54,8 @@
   real role delegation was unavailable or a concrete attempt failed (and requires
   a structured `fallback_cause` of `mechanism_absent` or `invocation_failed` plus a
   reason), while a `review_mode: single_agent_fallback` means the review happened
-  in the acting session and is not independent. A new review round -- for example
-  "re-review round 2" -- is never a fallback cause; orchestrator-routed re-review
+  in the acting session and is not independent. A new review round – for example
+  "re-review round 2" – is never a fallback cause; orchestrator-routed re-review
   rounds re-run delegation routing and use real host delegation when available. A
   human who directly continues an already-active maintainer session emits no new
   `role.invoked`, records a `continuation_reason` on the review telemetry, uses
@@ -40,8 +71,8 @@
   delegation but never substitutes for the explicit mode.
 - Strict producer validation for newly written events. `role.invoked` writes now
   require a top-level `orchestrator` role, a `maintainer`/`engineer` `target_role`,
-  a canonical `delegation_mode`, a boolean `fallback`, and -- for
-  `single_agent_fallback` -- `fallback: true`, a structured `fallback_cause`, and a
+  a canonical `delegation_mode`, a boolean `fallback`, and – for
+  `single_agent_fallback` – `fallback: true`, a structured `fallback_cause`, and a
   non-empty `reason`; non-fallback modes must record `fallback: false` and no
   fallback cause; maintainer self-invocation is rejected. `review.result` writes
   now require a valid `review_mode` and a `review_round`, validate an optional
@@ -58,7 +89,7 @@
   historical gaps; fallback mode without a structured cause; mode/fallback
   mismatch; non-orchestrator emitter; self-invocation), `review.result` missing
   `review_mode`, and review rounds without backing. Review-round backing is
-  computed per review through ordered correlation -- each `review.result` must be
+  computed per review through ordered correlation – each `review.result` must be
   preceded by an unconsumed maintainer `role.invoked` for that review step (with
   `review_round` matching when both carry it) or carry a `continuation_reason`;
   aggregate subtraction is no longer used, so an unrelated or earlier-round
@@ -108,7 +139,7 @@
   `review_mode: single_agent_fallback` (truthful because the maintainer authored
   part of the exact accepted artifact) with disclosure through a durable
   `## Maintainer Review Fixup` review subsection and `Task:`/`Agent: maintainer`
-  commit trailers -- no new review mode, marker, frontmatter field, or task-record
+  commit trailers – no new review mode, marker, frontmatter field, or task-record
   knob. Merge, integration, issue closure, closeout, and cleanup gates are
   unchanged. `skills/review-and-accept/SKILL.md` owns the procedure; the
   methodology, roles, delegation, and backend docs reference or project it.
@@ -132,7 +163,7 @@
   state tracking, tool routing, and stop-condition enforcement, without naming or
   ranking specific models.
 - Activation boundary and standalone engineer: `AGENTIC_LOOP.md` now states that
-  installing, discovering, or reading the methodology does not activate it — full
+  installing, discovering, or reading the methodology does not activate it – full
   operation requires explicit activation. The canonical `engineer` role is
   restructured into two modes (standalone and Agentic Loop); the main agent may
   invoke the generated engineer as an ordinary bounded subagent with no task ID,
@@ -263,9 +294,7 @@
   recognized and their contents are filtered from live marker parsing.
 - Fence indentation now accepts only zero to three literal ASCII spaces; tabs and
   Unicode whitespace cannot be misclassified as opening or closing delimiters.
-- Duplicated "Required downstream tooling..." bullet in `.dev/PLAN.md`.
 - Active Phases now lists partial/deferred/approved-only work; Completed only lists finished work.
-- `PLAN-PHASE-07.md` no longer calls Claude plugin packaging "experimental".
 - `docs/codex-setup.md` smoke protocol is now explicitly optional/advisory.
 - Remaining "live delegation tests still pending" moved to Active Phases.
 

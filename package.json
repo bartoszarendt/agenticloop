@@ -1,7 +1,7 @@
 {
   "name": "agenticloop",
-  "version": "0.2.0",
-  "description": "Practical loop engineering for AI coding agents: a Markdown-first workflow overlay with task records, role boundaries, verification evidence, and review gates",
+  "version": "0.3.0",
+  "description": "Loop engineering for AI coding agents – shaping the whole run, not one prompt: a Markdown-first overlay of task records, role boundaries, verification evidence, and review gates that holds across multi-hour work",
   "type": "module",
   "license": "MIT",
   "engines": {
