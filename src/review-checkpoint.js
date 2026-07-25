@@ -294,7 +294,15 @@ export function evaluateReviewCheckpoint({
 
   const laterOutcome = outcomes.find(event => event.sourceOrder > latestCheckpoint.sourceOrder);
   if (laterOutcome) {
-    errors.push('checkpoint has been consumed by a subsequent review outcome; a new checkpoint is required');
+    const ambiguousGitHubOrder =
+      Number.isFinite(latestCheckpoint.sourceTimestamp) &&
+      latestCheckpoint.sourceTimestamp === laterOutcome.sourceTimestamp &&
+      latestCheckpoint.sourceKind &&
+      laterOutcome.sourceKind &&
+      latestCheckpoint.sourceKind !== laterOutcome.sourceKind;
+    errors.push(ambiguousGitHubOrder
+      ? 'checkpoint and review outcome share an ambiguous GitHub timestamp across carrier types; the checkpoint is treated as consumed and a fresh checkpoint is required'
+      : 'checkpoint has been consumed by a subsequent review outcome; a new checkpoint is required');
   }
   return { authorized: errors.length === 0, errors, warnings };
 }

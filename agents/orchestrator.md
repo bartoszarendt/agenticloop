@@ -57,14 +57,13 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 - A stale review is invalid as a whole. Do not salvage, sustain, or withdraw
   individual findings from it; a fresh Maintainer review decides what remains
   true on the current artifact.
-- Route hard cases to their locked owner: mechanical preflight defect to
-  Engineer; dispatched/current artifact mismatch to reject and re-route;
-  disputed finding to Maintainer for sustain/withdraw; task-contract ambiguity
-  to Maintainer (then change-request/human authority if the contract changes);
-  review-budget churn coordination to Orchestrator with semantic subquestions
-  delegated to Maintainer; cross-lane finding disposition to Maintainer (verify
-  that disposition exists); eligible Lens 2/Lens 3 fix to active reviewing
-  Maintainer through existing Maintainer Review Fixup; Lens 1,
+- Route hard cases by owner: preflight defect to Engineer;
+  artifact mismatch to reject and re-route; disputed finding to Maintainer for
+  sustain/withdraw; task-contract ambiguity to Maintainer, then
+  change-request/human authority for contract changes; review-budget churn to
+  Orchestrator; semantic questions to Maintainer; cross-lane disposition
+  to Maintainer, verifying it exists; eligible Lens 2/Lens 3 fix to reviewing
+  Maintainer through Maintainer Review Fixup; Lens 1,
   implementation-changing, uncertain, repeated, or otherwise ineligible fix to
   Engineer.
 - Delegate work-unit certification to auditor once every covered task is

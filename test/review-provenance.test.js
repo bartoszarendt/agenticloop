@@ -267,6 +267,50 @@ function filesTaskRecord({ status = 'agent-ready', implementationArtifact = 'com
   ].join('\n');
 }
 
+function filesReviewHistory({
+  artifact = 'commit:abc123',
+  rounds = 3,
+  checkpoint = false,
+  consumedArtifact = '',
+} = {}) {
+  const entries = ['## Review History', ''];
+  for (let round = 1; round <= rounds; round++) {
+    entries.push(
+      `### Review ${round}`,
+      `- Status: needs_revision`,
+      '- Mode: host_subagent',
+      `- Artifact: ${artifact}`,
+      '- Findings: F-1',
+      '- Maintainer: maintainer',
+      ''
+    );
+  }
+  if (checkpoint) {
+    entries.push(
+      '### Review Round Checkpoint',
+      '- Direction: targeted_revision',
+      '- Cause: implementation_defect',
+      `- Review count: ${rounds}`,
+      `- Artifact: ${artifact}`,
+      '- Target: repair F-1',
+      '- Orchestrator: orchestrator',
+      ''
+    );
+  }
+  if (consumedArtifact) {
+    entries.push(
+      `### Review ${rounds + 1}`,
+      '- Status: needs_revision',
+      '- Mode: host_subagent',
+      `- Artifact: ${consumedArtifact}`,
+      '- Findings: F-1',
+      '- Maintainer: maintainer',
+      ''
+    );
+  }
+  return entries.join('\n');
+}
+
 describe('validateFilesTaskRecord review provenance', () => {
   it('flags accepted records that use single_agent_fallback when independent review is required', () => {
     const content = filesTaskRecord({
@@ -293,33 +337,35 @@ describe('validateFilesTaskRecord review provenance', () => {
   });
 
   it('enforces files review history budget and a complete resolution matrix', () => {
-    const history = [
-      '## Review History',
-      '',
-      '### Review 1',
-      '- Status: needs_revision',
-      '- Mode: host_subagent',
-      '- Artifact: commit:abc123',
-      '- Findings: F-1',
-      '- Maintainer: maintainer',
-      '',
-      '### Review 2',
-      '- Status: needs_revision',
-      '- Mode: host_subagent',
-      '- Artifact: commit:abc123',
-      '- Findings: F-1',
-      '- Maintainer: maintainer',
-      '',
-      '### Review 3',
-      '- Status: needs_revision',
-      '- Mode: host_subagent',
-      '- Artifact: commit:abc123',
-      '- Findings: F-1',
-      '- Maintainer: maintainer',
-    ].join('\n');
+    const history = filesReviewHistory();
     const content = `${filesTaskRecord({ status: 'in-progress', implementationArtifact: 'commit:def456' })}\n\n${history}`;
     const errors = validateFilesTaskRecord(content, 'T-001.md', { activeTaskBackend: 'files' });
     assert.ok(errors.some(error => /checkpoint.*required|budget.*exhausted/i.test(error)), errors.join('\n'));
+  });
+
+  it('requires the resolution matrix after a checkpoint-authorized artifact change', () => {
+    const content = [
+      filesTaskRecord({ status: 'in-progress', implementationArtifact: 'commit:def456' }),
+      filesReviewHistory({ checkpoint: true }),
+    ].join('\n\n');
+    const errors = validateFilesTaskRecord(content, 'T-001.md', { activeTaskBackend: 'files' });
+    assert.ok(errors.some(error => /resolution matrix/i.test(error)), errors.join('\n'));
+    assert.ok(!errors.some(error => /checkpoint.*required|budget.*exhausted/i.test(error)), errors.join('\n'));
+  });
+
+  it('does not require a resolution matrix before the authorized revision starts', () => {
+    const content = [
+      filesTaskRecord({
+        status: 'needs_revision',
+        implementationArtifact: 'commit:abc123',
+        reviewedArtifact: 'commit:abc123',
+        reviewStatus: 'needs_revision',
+        reviewMode: 'host_subagent',
+      }),
+      filesReviewHistory({ checkpoint: true }),
+    ].join('\n\n');
+    const errors = validateFilesTaskRecord(content, 'T-001.md', { activeTaskBackend: 'files' });
+    assert.ok(!errors.some(error => /resolution matrix/i.test(error)), errors.join('\n'));
   });
 });
 
@@ -383,6 +429,28 @@ function seedInProgressTask(target, { artifact = 'commit:abc123', reviewedArtifa
     '- npm test passed.',
   ];
   writeFileSync(join(tasksDir, 'T-001.md'), fm.join('\n') + body.join('\n') + '\n', 'utf-8');
+}
+
+function seedNeedsRevisionTask(target, {
+  artifact = 'commit:abc123',
+  checkpoint = false,
+  consumedArtifact = '',
+} = {}) {
+  const tasksDir = join(target, '.agenticloop', 'tasks');
+  mkdirSync(tasksDir, { recursive: true });
+  const currentArtifact = consumedArtifact || artifact;
+  const content = [
+    filesTaskRecord({
+      status: 'needs_revision',
+      implementationArtifact: currentArtifact,
+      reviewedArtifact: currentArtifact,
+      reviewStatus: 'needs_revision',
+      reviewMode: 'host_subagent',
+      extra: ['review_budget: 3'],
+    }),
+    filesReviewHistory({ artifact, checkpoint, consumedArtifact }),
+  ].join('\n\n');
+  writeFileSync(join(tasksDir, 'T-001.md'), `${content}\n`, 'utf-8');
 }
 
 describe('task status acceptance gate: review provenance', () => {
@@ -459,6 +527,36 @@ describe('task status acceptance gate: review provenance', () => {
     const rows = JSON.parse(res.stdout);
     assert.equal(rows[0].review_mode, 'host_subagent');
     assert.equal(rows[0].reviewed_artifact, 'commit:abc123');
+  });
+});
+
+describe('task status revision checkpoint gate', () => {
+  it('rejects an over-budget revision without a checkpoint', () => {
+    const target = initTarget('cli-revision-no-checkpoint');
+    seedNeedsRevisionTask(target);
+    const result = run(['task', 'status', 'T-001', 'in-progress', '--target', target]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /checkpoint.*required|budget.*exhausted/i);
+  });
+
+  it('authorizes the next revision with a fresh checkpoint', () => {
+    const target = initTarget('cli-revision-checkpoint');
+    seedNeedsRevisionTask(target, { checkpoint: true });
+    const result = run(['task', 'status', 'T-001', 'in-progress', '--target', target]);
+    assert.equal(result.status, 0, result.stderr);
+    const content = readFileSync(join(target, '.agenticloop', 'tasks', 'T-001.md'), 'utf-8');
+    assert.match(content, /^status: in-progress$/m);
+  });
+
+  it('rejects replay after the checkpoint was consumed by another review outcome', () => {
+    const target = initTarget('cli-revision-replay');
+    seedNeedsRevisionTask(target, {
+      checkpoint: true,
+      consumedArtifact: 'commit:def456',
+    });
+    const result = run(['task', 'status', 'T-001', 'in-progress', '--target', target]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /consumed|new checkpoint|required/i);
   });
 });
 

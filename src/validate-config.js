@@ -719,7 +719,17 @@ export function validateFilesReviewControls(content, filename, {
     event.type === 'outcome' && event.status === 'needs_revision' && Array.isArray(event.findingIds)
   );
   const findingIds = priorOutcome?.findingIds ?? [];
-  if (findingIds.length > 0) {
+  const laterReviewOutcome = priorOutcome
+    ? history.events.some(event =>
+      event.type === 'outcome' && event.sourceOrder > priorOutcome.sourceOrder
+    )
+    : false;
+  const revisedArtifact = priorOutcome &&
+    String(implementationArtifact ?? '').trim().toLowerCase() !==
+    String(priorOutcome.artifact ?? '').trim().toLowerCase();
+  // A resolution matrix proves a completed revision at re-review. Do not
+  // require one merely to authorize the Engineer to begin that revision.
+  if (findingIds.length > 0 && !authorizingRevision && (revisedArtifact || laterReviewOutcome)) {
     const matrix = parseResolutionMatrix(content);
     errors.push(...matrix.errors.map(error => `Task record '${filename}' ${error}`));
     if (!matrix.found) {

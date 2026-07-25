@@ -102,16 +102,55 @@ function trustedLoopAuthor(author, expected) {
 
 /** @param {any} prData */
 function githubSources(prData) {
-  return [
+  const sources = [
     ...(Array.isArray(prData?.comments) ? prData.comments : []).map((source, index) => ({ source, kind: 'comment', index })),
     ...(Array.isArray(prData?.reviews) ? prData.reviews : []).map((source, index) => ({ source, kind: 'review', index })),
-  ].sort((left, right) => {
+  ].map((entry, sequence) => ({ ...entry, sequence }));
+  return sources.sort((left, right) => {
     const leftTime = Date.parse(left.source?.created_at ?? left.source?.submitted_at ?? '');
     const rightTime = Date.parse(right.source?.created_at ?? right.source?.submitted_at ?? '');
     if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) return leftTime - rightTime;
     if (Number.isFinite(leftTime) !== Number.isFinite(rightTime)) return Number.isFinite(leftTime) ? -1 : 1;
-    return left.index - right.index;
+    return left.sequence - right.sequence;
   });
+}
+
+/** @param {any} source */
+function githubSourceTimestamp(source) {
+  const timestamp = Date.parse(source?.created_at ?? source?.submitted_at ?? '');
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+/**
+ * GitHub's REST comment and review endpoints expose only second-resolution
+ * timestamps and do not provide one shared sequence. At an equal cross-endpoint
+ * timestamp, place the checkpoint before the outcome so ambiguity fails closed:
+ * the outcome consumes that checkpoint and a later, unambiguous checkpoint can
+ * still authorize the revision.
+ *
+ * @param {Array<object>} events
+ */
+function orderGitHubHistoryEvents(events) {
+  return [...events]
+    .sort((left, right) => {
+      const leftTime = left.sourceTimestamp;
+      const rightTime = right.sourceTimestamp;
+      if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+        return leftTime - rightTime;
+      }
+      if (Number.isFinite(leftTime) !== Number.isFinite(rightTime)) {
+        return Number.isFinite(leftTime) ? -1 : 1;
+      }
+      if (Number.isFinite(leftTime) && leftTime === rightTime &&
+          left.sourceKind !== right.sourceKind && left.type !== right.type) {
+        return left.type === 'checkpoint' ? -1 : 1;
+      }
+      return left.discoveryOrder - right.discoveryOrder;
+    })
+    .map((event, sourceOrder) => {
+      const { discoveryOrder, ...ordered } = event;
+      return { ...ordered, sourceOrder };
+    });
 }
 
 /**
@@ -129,16 +168,27 @@ export function collectGitHubReviewHistory(prData, expectedAccount) {
     const trusted = trustedLoopAuthor(author, expectedAccount);
     const reference = durableSourceReference(source, sourceOrder + 1);
     const marker = parseReviewMarker(body, source, { requireFindingIds: true });
+    const checkpoint = parseReviewCheckpoint(body, { carrier: 'github' });
+    if (trusted && marker && checkpoint.found) {
+      errors.push(`${entry.kind} ${reference}: one carrier cannot contain both a review outcome and a checkpoint`);
+      continue;
+    }
     if (marker && trusted) {
       if (!reference) errors.push(`trusted ${entry.kind} review marker has no durable source reference`);
       else if (finalLiveRole(body) !== 'maintainer') {
         errors.push(`${entry.kind} ${reference}: review marker must end with the maintainer attribution trailer`);
       }
       else if (marker.errors.length) errors.push(...marker.errors.map(error => `${entry.kind} ${reference}: ${error}`));
-      else events.push({ ...marker, sourceOrder, sourceReference: reference, author });
+      else events.push({
+        ...marker,
+        sourceReference: reference,
+        sourceTimestamp: githubSourceTimestamp(source),
+        sourceKind: entry.kind,
+        discoveryOrder: sourceOrder,
+        author,
+      });
     }
 
-    const checkpoint = parseReviewCheckpoint(body, { carrier: 'github' });
     if (checkpoint.found && trusted) {
       const checkpointRole = finalLiveRole(body);
       if (checkpoint.errors.length) {
@@ -150,11 +200,19 @@ export function collectGitHubReviewHistory(prData, expectedAccount) {
       } else if (String(checkpoint.checkpoint.orchestratorAttribution).toLowerCase() !== String(author?.login ?? '').toLowerCase()) {
         errors.push(`${entry.kind} ${reference}: checkpoint Orchestrator attribution does not match its authenticated author`);
       } else {
-        events.push({ ...checkpoint.checkpoint, sourceOrder, sourceReference: reference, author, trusted: true });
+        events.push({
+          ...checkpoint.checkpoint,
+          sourceReference: reference,
+          sourceTimestamp: githubSourceTimestamp(source),
+          sourceKind: entry.kind,
+          discoveryOrder: sourceOrder,
+          author,
+          trusted: true,
+        });
       }
     }
   }
-  return { events, errors };
+  return { events: orderGitHubHistoryEvents(events), errors };
 }
 
 function labelledFields(body) {

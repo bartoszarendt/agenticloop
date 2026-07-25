@@ -1041,6 +1041,103 @@ describe('runPreflight (injected gh runner)', () => {
     assert.equal(result.checkpointValidation?.authorized, true);
   });
 
+  it('fails closed when a checkpoint and outcome share a cross-endpoint timestamp', () => {
+    const artifactB = 'b'.repeat(40);
+    const prData = {
+      number: 42,
+      headRefOid: artifactB,
+      body: prBody({ head: artifactB, entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) +
+        `\n\n## Revision Resolution\n\n- [F-1] resolved: repaired the evidence on ${artifactB}`,
+      closingIssuesReferences: [{ number: 7 }],
+      statusCheckRollup: [],
+    };
+    const issueData = {
+      number: 7,
+      body: `---\nreview_budget: 1\n---\n\n${issueBody(['\`npm test\`'])}`,
+    };
+    const timestamp = '2026-07-25T10:00:00Z';
+    const outcome = { ...needsRevisionComment(), id: 301, created_at: timestamp };
+    const checkpoint = {
+      ...checkpointComment({ reviewCount: 1 }),
+      id: 302,
+      created_at: timestamp,
+    };
+
+    for (const carriers of [
+      { comments: [checkpoint], reviews: [outcome] },
+      { comments: [outcome], reviews: [checkpoint] },
+    ]) {
+      const result = runPreflight({
+        pr: 42,
+        commandRunner: productionHistoryRunner(prData, issueData, carriers),
+      });
+      assert.equal(result.ok, false, result.errors.join('\n'));
+      assert.ok(
+        result.errors.some(error => /ambiguous GitHub timestamp|treated as consumed/i.test(error)),
+        result.errors.join('\n')
+      );
+    }
+  });
+
+  it('allows a fresh checkpoint after an ambiguous same-timestamp checkpoint was consumed', () => {
+    const artifactB = 'b'.repeat(40);
+    const prData = {
+      number: 42,
+      headRefOid: artifactB,
+      body: prBody({ head: artifactB, entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) +
+        `\n\n## Revision Resolution\n\n- [F-1] resolved: repaired the evidence on ${artifactB}`,
+      closingIssuesReferences: [{ number: 7 }],
+      statusCheckRollup: [],
+    };
+    const issueData = {
+      number: 7,
+      body: `---\nreview_budget: 1\n---\n\n${issueBody(['\`npm test\`'])}`,
+    };
+    const outcome = { ...needsRevisionComment(), id: 311, created_at: '2026-07-25T10:00:00Z' };
+    const ambiguousCheckpoint = {
+      ...checkpointComment({ reviewCount: 1 }),
+      id: 312,
+      created_at: '2026-07-25T10:00:00Z',
+    };
+    const freshCheckpoint = {
+      ...checkpointComment({ reviewCount: 1 }),
+      id: 313,
+      created_at: '2026-07-25T10:01:00Z',
+    };
+    const result = runPreflight({
+      pr: 42,
+      commandRunner: productionHistoryRunner(prData, issueData, {
+        comments: [ambiguousCheckpoint, freshCheckpoint],
+        reviews: [outcome],
+      }),
+    });
+    assert.equal(result.ok, true, result.errors.join('\n'));
+    assert.equal(result.checkpointValidation?.authorized, true);
+  });
+
+  it('rejects a trusted carrier that combines an outcome and checkpoint', () => {
+    const prData = {
+      number: 42,
+      headRefOid: 'b'.repeat(40),
+      body: prBody({ head: 'b'.repeat(40), entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+      closingIssuesReferences: [{ number: 7 }],
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['`npm test`']) };
+    const outcome = needsRevisionComment();
+    const checkpoint = checkpointComment({ reviewCount: 1 });
+    const combined = {
+      ...outcome,
+      body: `${outcome.body}\n\n${checkpoint.body}`,
+    };
+    const result = runPreflight({
+      pr: 42,
+      commandRunner: productionHistoryRunner(prData, issueData, { comments: [combined] }),
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(error => /cannot contain both/i.test(error)), result.errors.join('\n'));
+  });
+
   it('does not accept an untrusted or malformed latest checkpoint carrier', () => {
     const artifactB = 'b'.repeat(40);
     const prData = {

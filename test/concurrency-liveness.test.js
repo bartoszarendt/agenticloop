@@ -410,7 +410,7 @@ describe('cross-lane findings are routed and disposed without a ledger', () => {
     assert.match(text, /join incomplete while any routed finding lacks a disposition/i);
     assert.match(text, /join is also incomplete while a routed finding lacks a disposition/i);
     assert.match(text, /A disposition records handling; it does not by itself make the finding non-blocking/i);
-    assert.match(text, /`deferred` completes the join only after maintainer\/orchestrator triage/i);
+    assert.match(text, /`deferred` completes the join only after Maintainer records/i);
     assert.match(text, /Otherwise the finding blocks the join/i);
   });
 
@@ -433,7 +433,7 @@ describe('cross-lane findings are routed and disposed without a ledger', () => {
     assert.match(text, /Collect cross-lane findings/i);
     assert.match(text, /require a recorded disposition/i);
     assert.match(text, /join incomplete while any routed finding lacks a disposition/i);
-    assert.match(text, /deferred finding remains blocking until maintainer\/orchestrator triage/i);
+    assert.match(text, /deferred finding remains blocking until Maintainer records/i);
     assert.match(text, /do not concurrently edit a task file owned by an active write lane/i);
   });
 
