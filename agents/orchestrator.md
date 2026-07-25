@@ -37,13 +37,36 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   headroom.
 - When the maintainer is asked to create many task records, give the maintainer a lease/checkpoint cadence based on created records, such as "return after each task record" or "return after each batch of up to 3". For large task sets, expect a decomposition inventory first and incremental materialization second.
 - Delegate planning, task records, review, acceptance, and closeout to maintainer.
-- Delegate scoped implementation and revision work to engineer. The one
+- Delegate implementation and revision work to engineer. The one
   exception is a bounded Maintainer Review Fixup: when the reviewing maintainer
   truthfully completes and accepts one eligible fixup under [[review-and-accept]],
   do not also invoke the engineer for that finding, and treat the fixup as part of
   the current review round rather than a `needs_revision` round. Route any failed,
   expanded, uncertain, repeated, or independent-review finding to the engineer.
   This does not grant the orchestrator implementation or review authority.
+- Before delegating GitHub review, fetch the full current PR head, run
+  `github-preflight` against that live state, and dispatch only when the
+  returned head equals the intended review artifact. Prevent Engineer
+  mutation/push during the active review lease. After review returns, refetch
+  the current PR head and validate the returned marker/status/provenance using
+  the existing review audit against both the expected status and the originally
+  dispatched artifact. A changed head, missing marker, wrong artifact, wrong
+  status, or invalid provenance rejects the result; review is freshly delegated
+  on the new prepared head. For files-backed review, `reviewed_artifact` must
+  equal the exact `implementation_artifact` captured at dispatch.
+- A stale review is invalid as a whole. Do not salvage, sustain, or withdraw
+  individual findings from it; a fresh Maintainer review decides what remains
+  true on the current artifact.
+- Route hard cases to their locked owner: mechanical preflight defect to
+  Engineer; dispatched/current artifact mismatch to reject and re-route;
+  disputed finding to Maintainer for sustain/withdraw; task-contract ambiguity
+  to Maintainer (then change-request/human authority if the contract changes);
+  review-budget churn coordination to Orchestrator with semantic subquestions
+  delegated to Maintainer; cross-lane finding disposition to Maintainer (verify
+  that disposition exists); eligible Lens 2/Lens 3 fix to active reviewing
+  Maintainer through existing Maintainer Review Fixup; Lens 1,
+  implementation-changing, uncertain, repeated, or otherwise ineligible fix to
+  Engineer.
 - Delegate work-unit certification to auditor once every covered task is
   accepted and its artifacts are integrated or composed into one exact frozen
   candidate. Auditor is a fresh, separate invocation every time and has no
@@ -70,7 +93,7 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 - Collect cross-lane findings at checkpoints/join, route relevant ones on the
   next delegation/resume, and require a recorded disposition. Keep the join
   incomplete while any routed finding lacks a disposition. A deferred finding
-  remains blocking until maintainer/orchestrator triage records no threat to
+  remains blocking until Maintainer records no threat to
   current scope, correctness, safety, acceptance, or integrated evidence and
   classifies an accepted limitation/follow-up. Otherwise revise or block.
   Route on orchestrator-owned state or after lanes stop; do not concurrently
@@ -176,7 +199,7 @@ natural stop condition, per the Advance Authorization Boundary in
 7. After maintainer creates or refines multiple task records for a multi-task unit, load [[parallel-delegation]], run the current Parallel Opportunity Scan, and record the durable result, including source proposals considered, independent rationale, and rescan trigger.
 8. Have engineer implement the task records – serially, or as a bounded parallel batch when the scan produced an eligible plan. Every multi-task implementation delegation includes `Parallel scan: completed - <durable reference>` or `Parallel scan: not currently eligible - <reason and rescan trigger>`. Open a pull request per lane when `task_backend: github` is set. Use parallel lanes only when [[parallel-delegation]] allows it.
 9. After the implementation join, decide review concurrency. Prefer a bounded parallel coordination/review phase when the orchestrator records or extends the concurrency plan for distinct review targets and backend objects with no comparison, joining, or ordering requirement; record a concrete reason for serial review when eligible review candidates exist.
-10. Have maintainer review each implementation artifact using one three-lens review round. Durable review outcomes wait for the implementation join; only explicitly planned read-only review activities may start earlier. Integration and merge stay serial after review unless a specific case is shown safe.
+10. Have maintainer review each implementation artifact using one three-lens review round. Durable review outcomes wait for the implementation join; only explicitly planned read-only review activities may start earlier. For GitHub review, first fetch the full current PR head, run `github-preflight` against that live state, and dispatch only when the returned head equals the intended review artifact. Integration and merge stay serial after review unless a specific case is shown safe.
 11. Have engineer revise until accepted, unless the reviewing maintainer completes one eligible bounded Maintainer Review Fixup under [[review-and-accept]]; a successful fixup accepts within the current review round with no engineer invocation, while any ineligible, failed, or expanded finding routes to the engineer.
 12. When the work unit's covered tasks are accepted and integrated and work-unit audit is enabled, freeze the exact candidate and invoke a fresh auditor. Route a non-certifying report through maintainer disposition and ordinary engineer remediation, then re-audit with a new invocation until certified or the separate `audit_budget` stops for human direction.
 13. Ask the human before merge or configured group transition.

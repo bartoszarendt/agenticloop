@@ -524,7 +524,7 @@ routes a relevant finding to each affected lane, and the recipient must record
 one disposition – `applied`, `already satisfied`, `rejected` with evidence, or
 `deferred` with a reason. A batch join is incomplete while any routed finding
 lacks a disposition. A deferred finding remains join-blocking until
-maintainer/orchestrator triage records that it cannot invalidate current scope,
+Maintainer disposition records that it cannot invalidate current scope,
 correctness, safety, acceptance, or integrated evidence and classifies it as an
 accepted limitation or follow-up. Findings live in lane status returns and the
 concurrency plan or coordination output; there is no shared findings ledger.
@@ -804,9 +804,9 @@ The attempt budget counts equivalent attempts and resets on new evidence, so a
 task that fails review repeatedly with a different finding each round never
 trips it. Bound that churn separately.
 
-After 3 `needs_revision` rounds on one task – or after the task record's
-`review_budget` when it sets one – the orchestrator pauses before routing the
-next revision and classifies the churn cause:
+After 3 valid `needs_revision` rounds on one task – or after the task record's
+positive-integer `review_budget` when it sets one – the orchestrator pauses
+before routing the next revision and asks Maintainer to classify the churn cause:
 
 - implementation defect – the code is genuinely not done;
 - evidence drift – the code is fine but the durable summary cites a stale head;
@@ -815,11 +815,53 @@ next revision and classifies the churn cause:
 - reviewer/engineer disagreement – a sustained-and-disputed item;
 - external blocker – a dependency outside the task.
 
-The orchestrator records the classification, then either routes a single
+Orchestrator records Maintainer's disposition as a durable checkpoint bound to
+the current review count and latest reviewed artifact, then either routes a single
 targeted revision plan that names the specific cause, or records
 `needs_context` or `blocked` using [[blocked-state]] when a contract change or
 human decision is required. A fourth undirected "try again" revision is not
 allowed.
+
+### Durable checkpoint record
+
+The checkpoint uses one of three directions:
+
+- `targeted_revision` – authorizes exactly one next revision with a named cause;
+- `needs_context` – a contract or context change is required before proceeding;
+- `blocked` – a human or external decision is required.
+
+For GitHub, append the checkpoint to the PR conversation:
+
+```text
+<!-- AGENTIC_LOOP_REVIEW_ROUND_CHECKPOINT -->
+
+## Review Round Checkpoint
+
+- Direction: targeted_revision | needs_context | blocked
+- Cause: implementation_defect | evidence_drift | task_contract_ambiguity | scope_pollution | reviewer_engineer_disagreement | external_blocker
+- Review count: <current needs_revision count>
+- Artifact: <full 40-character SHA>
+- Target: <specific finding>                 # targeted_revision
+- Reference: <durable judgment reference>    # needs_context or blocked
+- Orchestrator: <authenticated orchestrator login>
+
+[[agent: orchestrator]]
+```
+
+For files-backed, append the same semantic fields under
+`## Review History` / `### Review Round Checkpoint`, without the GitHub HTML
+marker. Its `Artifact` is the canonical `implementation_artifact` reference
+(for example `commit:abc123`) and its `Orchestrator` field is required.
+
+A `targeted_revision` checkpoint binds review artifact A and authorizes exactly
+one following Engineer revision B; A must not equal B. If B receives any later
+review outcome, the old checkpoint is consumed. Another `needs_revision` requires
+a new checkpoint bound to B and the new cumulative count.
+The budget is never reset and an old checkpoint cannot be replayed. Reject
+missing, stale, malformed, or reused checkpoint authorization.
+
+`github-preflight` is the fail-closed backstop before any over-budget PR returns
+to review. Files task validation/status provides the equivalent backstop.
 
 ## Task Record Contract
 
@@ -1528,10 +1570,11 @@ Final acceptance requires current, non-stale provenance. Tasks requiring
 independent review cannot be accepted through same-session fallback. See
 [[review-and-accept]] and [[task-record-contract]].
 
-The Review Round Checkpoint is unchanged. If the first full Lens 2 and Lens 3
-assessment occurs only after the review budget has been reached or exceeded, the
-maintainer should mention that timing in review or closeout observations as a
-calibration signal. It is not an additional gate or required schema field.
+If the first full Lens 2 and Lens 3 assessment occurs only after the review
+budget has been reached or exceeded, Maintainer should mention that timing in
+review or closeout observations as a calibration signal. The Review Round
+Checkpoint remains the required authorization gate for another implementation
+revision at that boundary.
 
 ## Blocked and Needs Context
 

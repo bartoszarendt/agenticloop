@@ -141,7 +141,7 @@ describe('contract ownership', () => {
   it('orders GitHub fixup evidence, review, and readiness gates correctly', () => {
     const owner = read('skills/review-and-accept/SKILL.md');
     const start = owner.indexOf('\n## Maintainer Review Fixup\n');
-    const end = owner.indexOf('\n## Re-review handoff', start);
+    const end = owner.indexOf('\n## Review handoff', start);
     assert.ok(start >= 0 && end > start, 'expected canonical fixup section');
     const fixup = owner.slice(start, end);
 

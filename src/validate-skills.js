@@ -32,7 +32,7 @@ const MAX_WORDS = 5000;
 // Keep the general guardrail at 5000 and grant only that canonical owner a narrow
 // exception so other skills do not silently inherit extra headroom.
 const MAX_WORDS_BY_SKILL = new Map([
-  ['review-and-accept', 6500],
+  ['review-and-accept', 7000],
 ]);
 const WORD_RE = /[\p{L}\p{N}]+(?:['\u2019\u002d\u2013\u2014][\p{L}\p{N}]+)*/gu;
 

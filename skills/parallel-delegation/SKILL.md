@@ -211,8 +211,8 @@ Orchestrator routing duties:
 5. Keep the batch join incomplete while any routed finding lacks a disposition.
 
 A disposition records handling; it does not by itself make the finding
-non-blocking. `deferred` completes the join only after maintainer/orchestrator
-triage records that the finding does not invalidate current scope, correctness,
+non-blocking. `deferred` completes the join only after Maintainer records that
+the finding does not invalidate current scope, correctness,
 safety, acceptance, or integrated evidence and classifies it as an accepted
 limitation or follow-up. Otherwise the finding blocks the join and routes to
 revision or [[blocked-state]].
@@ -237,8 +237,9 @@ delivery the host cannot perform.
 - **Read-only lane**: inspects fixed artifacts and returns findings.
 - **Write lane**: mutates project or durable workflow state.
 - **Implementation lane**: engineer write lane for target project files.
-- **Coordination/review lane**: maintainer/orchestrator write lane for task,
-  review, backend, closeout, or event state.
+- **Coordination/review lane**: a single-owner Maintainer lane for semantic
+  task/review disposition, or an Orchestrator lane for routing and orchestration
+  state. Orchestrator verifies a Maintainer disposition; it does not decide one.
 
 Parallel delegation is allowed only after the orchestrator records a
 concurrency plan in the task record or coordination output. The plan must name:

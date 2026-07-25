@@ -1,11 +1,13 @@
 // @ts-check
 
+import { spawnSync } from 'node:child_process';
 import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
 import { resolveIssueNumber } from './github-preflight.js';
 import { parseFrontmatter } from './frontmatter.js';
+import { filterLiveLines } from './markdown.js';
+import { parseReviewMarker as parseSharedReviewMarker } from './review-history.js';
 import {
   REVIEW_MODES,
-  isValidReviewMode,
   satisfiesIndependentReview,
   parseIndependentReviewRequired,
 } from './review-provenance.js';
@@ -79,6 +81,76 @@ export function normalizeGitHubFixupArtifact(value) {
 /** @param {string} value */
 function isFullCommitSha(value) {
   return /^[0-9a-f]{40}$/.test(value);
+}
+
+/** @param {string} workspace */
+function defaultWorkspaceHeadRunner(workspace) {
+  return spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf-8' });
+}
+
+/**
+ * Verify an optional local review workspace before it is included in an
+ * artifact-bound review packet. GitHub remains the source of PR truth; this
+ * only ensures a supplied local checkout is at the dispatched revision.
+ *
+ * @param {{ workspace?: string, expectedArtifact?: string, commandRunner?: (workspace: string) => any }} [options]
+ */
+export function validateReviewWorkspace({ workspace, expectedArtifact, commandRunner = defaultWorkspaceHeadRunner } = {}) {
+  const resolvedWorkspace = String(workspace ?? '').trim();
+  if (!resolvedWorkspace) {
+    return { provided: false, workspace: null, head: null, error: null };
+  }
+
+  const expected = String(expectedArtifact ?? '').trim().toLowerCase();
+  if (!isFullCommitSha(expected)) {
+    return {
+      provided: true,
+      workspace: resolvedWorkspace,
+      head: null,
+      error: '--workspace requires --expect-artifact with a full 40-character commit SHA',
+    };
+  }
+
+  let result;
+  try {
+    result = commandRunner(resolvedWorkspace);
+  } catch (error) {
+    return {
+      provided: true,
+      workspace: resolvedWorkspace,
+      head: null,
+      error: `could not resolve workspace HEAD: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (result?.error || result?.status !== 0) {
+    const detail = String(result?.stderr ?? result?.error?.message ?? '').trim() || `exit ${result?.status ?? 'unknown'}`;
+    return {
+      provided: true,
+      workspace: resolvedWorkspace,
+      head: null,
+      error: `could not resolve workspace HEAD: ${detail}`,
+    };
+  }
+
+  const head = String(result?.stdout ?? '').trim().toLowerCase();
+  if (!isFullCommitSha(head)) {
+    return {
+      provided: true,
+      workspace: resolvedWorkspace,
+      head: head || null,
+      error: `workspace HEAD is not a full 40-character commit SHA: '${head || 'missing'}'`,
+    };
+  }
+  if (head !== expected) {
+    return {
+      provided: true,
+      workspace: resolvedWorkspace,
+      head,
+      error: `workspace HEAD '${head}' does not match expected artifact '${expected}'`,
+    };
+  }
+
+  return { provided: true, workspace: resolvedWorkspace, head, error: null };
 }
 
 /**
@@ -201,131 +273,9 @@ function markerValues(liveBody, name) {
     .map(match => match[1].trim());
 }
 
-/**
- * Filter out lines inside fenced code blocks, indented code blocks, and
- * blockquotes so that example/quoted markers are not treated as live state.
- *
- * Fenced block matching is Markdown-consistent: the opening and closing fence
- * must use the same character (backtick or tilde), the closing fence must be
- * at least as long as the opening fence, and only trailing whitespace is
- * allowed after a closing fence. A line indented four or more spaces is
- * indented code, not a fence.
- *
- * @param {string} body
- * @returns {string} The body with non-live regions blanked out
- */
-function filterLiveLines(body) {
-  const lines = body.split(/\r?\n/);
-  const result = [];
-  let inFence = false;
-  let fenceChar = '';
-  let fenceLen = 0;
-
-  for (const line of lines) {
-    // Markdown fences permit zero to three leading ASCII spaces. Do not use
-    // trimStart() here: it also removes tabs and Unicode whitespace, which can
-    // turn a non-fence line into a live opening or closing delimiter.
-    const leadingSpaces = line.match(/^ */)?.[0].length ?? 0;
-    const trimmed = line.slice(leadingSpaces);
-
-    // Tabs participate in Markdown indentation, but never in the fence's
-    // optional zero-to-three-space prefix. Expand only the leading ASCII
-    // space/tab run for the separate indented-code check.
-    let indentColumns = 0;
-    for (const char of line) {
-      if (char === ' ') indentColumns += 1;
-      else if (char === '\t') indentColumns += 4 - (indentColumns % 4);
-      else break;
-    }
-
-    // Fenced code block detection (backtick or tilde). A valid opening fence
-    // has 3+ delimiter characters and may carry an info string; backtick fences
-    // cannot contain backticks in their info string. Closing fences must match
-    // the delimiter character, be at least as long as the opening fence, and
-    // have no non-whitespace suffix.
-    const fenceMatch = trimmed.match(/^(`{3,}|~{3,})(.*)$/);
-    if (fenceMatch && leadingSpaces <= 3) {
-      const ch = fenceMatch[1][0];
-      const len = fenceMatch[1].length;
-      const rest = fenceMatch[2];
-      if (!inFence) {
-        // Opening fence: reject backtick info strings that contain backticks.
-        if (!(ch === '`' && rest.includes('`'))) {
-          inFence = true;
-          fenceChar = ch;
-          fenceLen = len;
-          result.push('');
-          continue;
-        }
-      } else if (ch === fenceChar && len >= fenceLen && /^[ \t]*$/.test(rest)) {
-        inFence = false;
-        fenceChar = '';
-        fenceLen = 0;
-        result.push('');
-        continue;
-      }
-    }
-
-    if (inFence) {
-      result.push('');
-      continue;
-    }
-
-    // Blockquote: lines starting with >
-    if (/^>/.test(trimmed)) {
-      result.push('');
-      continue;
-    }
-
-    // Indented code block: 4+ spaces on a non-empty line
-    if (indentColumns >= 4 && trimmed.length > 0) {
-      result.push('');
-      continue;
-    }
-
-    result.push(line);
-  }
-
-  return result.join('\n');
-}
-
-/** @param {any} source */
-function extractMarkerAuthor(source) {
-  if (!source || typeof source === 'string') return null;
-  const login = source?.author?.login ?? source?.user?.login ?? '';
-  const authorType = source?.author?.type ?? source?.user?.type ?? '';
-  if (!login) return null;
-  return { login: String(login), type: String(authorType) };
-}
-
-/**
- * @param {unknown} body
- * @param {any} [source]
- */
-export function parseReviewMarker(body, source = {}) {
-  const liveBody = filterLiveLines(String(body ?? ''));
-  const statuses = markerValues(liveBody, 'AGENT_REVIEW_STATUS');
-  const modes = markerValues(liveBody, 'AGENT_REVIEW_MODE');
-  const artifacts = markerValues(liveBody, 'AGENT_REVIEW_ARTIFACT');
-  const humanRefs = markerValues(liveBody, 'AGENT_HUMAN_REVIEW_REF');
-  if (statuses.length + modes.length + artifacts.length + humanRefs.length === 0) return null;
-  const errors = [];
-  for (const [name, values] of [['status', statuses], ['mode', modes], ['artifact', artifacts]]) {
-    if (values.length !== 1) errors.push(`review marker must contain exactly one ${name}`);
-  }
-  if (humanRefs.length > 1) errors.push('review marker must contain at most one human review reference');
-  const status = statuses[0] ?? '';
-  const mode = modes[0] ?? '';
-  const artifact = (artifacts[0] ?? '').toLowerCase();
-  if (status && !['accepted', 'needs_revision'].includes(status)) errors.push(`unsupported review status '${status}'`);
-  if (mode && !isValidReviewMode(mode)) errors.push(`unsupported review mode '${mode}'`);
-  if (artifact && !/^[0-9a-f]{40}$/.test(artifact)) errors.push('review artifact must be a full 40-character PR head SHA');
-  if (!/\[\[agent:\s*maintainer\]\]/i.test(liveBody)) {
-    errors.push('agent review marker is missing the maintainer attribution trailer');
-  }
-  const author = extractMarkerAuthor(source);
-  return { status, mode, artifact, humanReviewRef: humanRefs[0] ?? '', source, author, errors };
-}
+// Kept as a public re-export for existing review-audit consumers. Parsing now
+// lives in the shared durable-history module used by preflight and files tasks.
+export const parseReviewMarker = parseSharedReviewMarker;
 
 /** @param {any} prData */
 export function collectReviewMarkers(prData) {
@@ -585,6 +535,7 @@ const VALID_EXPECTED_STATUSES = new Set(['accepted', 'needs_revision']);
  * @param {Array<any>} [params.humanReviews]
  * @param {string} [params.expectedStatus]
  * @param {any} [params.expectedAccount]
+ * @param {string|null} [params.expectedArtifact] Full 40-char SHA of the dispatched artifact.
  */
 export function evaluateGitHubReviewAudit({
   prData,
@@ -593,6 +544,7 @@ export function evaluateGitHubReviewAudit({
   humanReviews = [],
   expectedStatus = 'accepted',
   expectedAccount = null,
+  expectedArtifact = null,
 }) {
   if (!VALID_EXPECTED_STATUSES.has(expectedStatus)) {
     return {
@@ -616,6 +568,18 @@ export function evaluateGitHubReviewAudit({
   if (!headRefOid) errors.push('PR head SHA is unavailable; cannot audit review provenance');
   if (requirement.error) errors.push(requirement.error);
   for (const marker of markers) errors.push(...marker.errors);
+
+  // Phase 29: expected artifact validation
+  let normalizedExpectedArtifact = null;
+  if (expectedArtifact !== null && expectedArtifact !== undefined && expectedArtifact !== '') {
+    normalizedExpectedArtifact = String(expectedArtifact).toLowerCase().trim();
+    if (!/^[0-9a-f]{40}$/.test(normalizedExpectedArtifact)) {
+      errors.push(`--expect-artifact must be a full 40-character SHA, got '${expectedArtifact}'`);
+      normalizedExpectedArtifact = null;
+    } else if (headRefOid && normalizedExpectedArtifact !== headRefOid) {
+      errors.push(`expected dispatched artifact '${normalizedExpectedArtifact.slice(0, 8)}...' does not match current PR head '${headRefOid.slice(0, 8)}...'`);
+    }
+  }
 
   // Phase 2: Verify marker author identity
   const expectedLogin = expectedAccount?.login ? String(expectedAccount.login).toLowerCase() : null;
@@ -709,7 +673,17 @@ export function evaluateGitHubReviewAudit({
   const provenanceValid = errors.length === 0;
   const acceptanceReady = provenanceValid && outcome?.status === 'accepted';
   const statusMatch = outcome?.status === expectedStatus;
-  const ok = provenanceValid && statusMatch;
+  let artifactMatch = true;
+
+  // Phase 29: validate that the review marker names the expected artifact
+  if (normalizedExpectedArtifact && outcome) {
+    if (outcome.artifact && outcome.artifact !== normalizedExpectedArtifact) {
+      errors.push(`review marker artifact '${outcome.artifact.slice(0, 8)}...' does not match expected dispatched artifact '${normalizedExpectedArtifact.slice(0, 8)}...'`);
+      artifactMatch = false;
+    }
+  }
+
+  const ok = provenanceValid && statusMatch && artifactMatch;
 
   if (provenanceValid && !statusMatch) {
     errors.push(`current review outcome is '${outcome?.status}'; expected '${expectedStatus}'`);
@@ -720,6 +694,7 @@ export function evaluateGitHubReviewAudit({
     provenanceValid,
     acceptanceReady,
     expectedStatus,
+    expectedArtifact: normalizedExpectedArtifact,
     errors,
     pr: prData?.number ?? null,
     issue: issueData?.number ?? null,
@@ -887,12 +862,18 @@ function resolveReviewAuditIssue(prData, explicitIssue) {
  *   issue?: string|number,
  *   repo?: string,
  *   expectedStatus?: string,
+ *   expectedArtifact?: string,
+ *   workspace?: string,
  *   commandRunner?: Function,
+ *   workspaceValidator?: Function,
  * }} [options]
  */
-export function runGitHubReviewAudit({ pr, issue, repo, expectedStatus, commandRunner = defaultGhCommandRunner } = {}) {
+export function runGitHubReviewAudit({ pr, issue, repo, expectedStatus, expectedArtifact, workspace, commandRunner = defaultGhCommandRunner, workspaceValidator = validateReviewWorkspace } = {}) {
   const prNumber = Number(pr);
   if (!Number.isInteger(prNumber) || prNumber <= 0) throw new GitHubReviewAuditError('--pr must be a positive integer');
+
+  const reviewWorkspace = workspaceValidator({ workspace, expectedArtifact });
+  if (reviewWorkspace.error) throw new GitHubReviewAuditError(reviewWorkspace.error);
 
   // Resolve the authenticated loop account
   /** @type {any} */
@@ -979,6 +960,6 @@ export function runGitHubReviewAudit({ pr, issue, repo, expectedStatus, commandR
     }
   }
 
-  const result = evaluateGitHubReviewAudit({ prData, issueData, taskPrData, humanReviews, expectedStatus, expectedAccount });
-  return { ...result, closingIssues };
+  const result = evaluateGitHubReviewAudit({ prData, issueData, taskPrData, humanReviews, expectedStatus, expectedAccount, expectedArtifact });
+  return { ...result, closingIssues, reviewWorkspace };
 }

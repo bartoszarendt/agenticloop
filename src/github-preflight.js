@@ -25,9 +25,26 @@
  */
 
 import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
-import { markdownSection, topLevelListItems } from './markdown.js';
+import { markdownSection, topLevelListItems, markdownLines } from './markdown.js';
 import { validateGitHubVerificationAttempts } from './verification-learning.js';
 import { createLocalVerificationContext } from './verification-context.js';
+import { parseFrontmatter } from './frontmatter.js';
+import {
+  parseScopePatterns,
+  parseDeviations,
+  validatePathsAgainstDeviations,
+} from './scope-matcher.js';
+import {
+  parseReviewCheckpoint,
+  evaluateReviewCheckpoint,
+  DEFAULT_REVIEW_BUDGET,
+  parseReviewBudgetValue,
+} from './review-checkpoint.js';
+import { collectGitHubReviewHistory } from './review-history.js';
+import {
+  parseResolutionMatrix,
+  validateResolutionMatrix,
+} from './resolution-matrix.js';
 
 export class PreflightError extends Error {
   constructor(message) {
@@ -45,6 +62,9 @@ const PR_FIELDS = [
   'files',
   'closingIssuesReferences',
   'statusCheckRollup',
+  'commits',
+  'comments',
+  'reviews',
 ].join(',');
 
 const ISSUE_FIELDS = ['number', 'body', 'title'].join(',');
@@ -56,6 +76,25 @@ const ISSUE_FIELDS = ['number', 'body', 'title'].join(',');
  */
 export function extractSectionBody(markdown, heading) {
   return markdownSection(String(markdown ?? ''), heading)?.body ?? null;
+}
+
+/**
+ * Read the review budget from the linked task's frontmatter. It is deliberately
+ * separate from review event parsing so malformed task metadata fails closed
+ * before it can loosen the revision limit.
+ */
+export function parseReviewBudget(taskBody) {
+  const raw = String(taskBody ?? '');
+  const [frontmatter] = parseFrontmatter(raw);
+  const occurrences = raw.match(/^review_budget\s*:/gm)?.length ?? 0;
+  if (occurrences > 1) return { budget: DEFAULT_REVIEW_BUDGET, error: 'task record has duplicate review_budget frontmatter fields' };
+  if (!frontmatter || !Object.hasOwn(frontmatter, 'review_budget')) {
+    return { budget: DEFAULT_REVIEW_BUDGET, error: null };
+  }
+  const parsed = parseReviewBudgetValue(frontmatter.review_budget);
+  return parsed.error
+    ? { ...parsed, error: `task ${parsed.error}` }
+    : parsed;
 }
 
 /**
@@ -230,17 +269,14 @@ function matchStatusChecks(requiredCheck, statusChecks) {
 }
 
 /**
- * Compare PR head SHA marker against the actual head, allowing short-SHA
- * prefixes (>= 7 chars) in either direction.
+ * Compare PR head SHA marker against the actual head. Phase 29 requires exact
+ * full 40-character SHA equality; short prefixes are rejected.
  */
 export function headMatches(claimed, actual) {
   if (!claimed || !actual) return false;
   const a = String(claimed).toLowerCase();
   const b = String(actual).toLowerCase();
-  if (a === b) return true;
-  if (a.length >= 7 && b.startsWith(a)) return true;
-  if (b.length >= 7 && a.startsWith(b)) return true;
-  return false;
+  return a.length === 40 && b.length === 40 && a === b;
 }
 
 /**
@@ -321,6 +357,339 @@ export function compareRequiredChecksToEvidence(requiredChecks, evidenceEntries,
 }
 
 /**
+ * Detect whether a section body is purely a placeholder. A section is a
+ * placeholder when its meaningful content is entirely placeholder tokens.
+ *
+ * Rejects:
+ * - empty sections
+ * - sections whose only non-whitespace content is "None", "TBD", "N/A", etc.
+ * - sections with only empty bullets
+ * - sections that consist entirely of a sentence whose main content claim is
+ *   a placeholder (e.g., "PR at TBD." replaces the artifact reference)
+ *
+ * Allows:
+ * - substantive text that mentions "none" incidentally (e.g., "No deviations
+ *   were needed; none of the files exceeded scope")
+ *
+ * @param {string} body
+ * @returns {boolean}
+ */
+function isPlaceholderSection(body) {
+  const trimmed = (body ?? '').trim();
+  if (!trimmed) return true;
+  // Single-token placeholders: "None", "None.", "TBD", "N/A", etc.
+  if (/^(?:none|tbd|n\/a|tba|todo)\.?$/i.test(trimmed)) return true;
+  // Empty bullet list: just dashes or asterisks with no content
+  const nonEmptyLines = trimmed.split('\n').filter(l => {
+    const t = l.trim();
+    return t && !/^[-*]\s*$/.test(t);
+  });
+  if (nonEmptyLines.length === 0) return true;
+  // Check for placeholder tokens used as substantive content claims.
+  // "TBD" used as an artifact reference (e.g., "PR at TBD.") is a placeholder.
+  // But "none of the files" in a substantive sentence is not.
+  const joined = nonEmptyLines.join(' ');
+  // Reject if TBD/N/A/TBA appears as a standalone word (not part of a larger word)
+  if (/\b(?:TBD|N\/A|TBA)\b/i.test(joined)) return true;
+  // Reject if "None" appears as the main content claim in a sentence that
+  // otherwise has no substantive content (e.g., "PR at None." or just "None")
+  // Allow "none" when it's part of a substantive sentence with other content
+  const noneAsContent = /\bNone\b/i.test(joined);
+  if (noneAsContent) {
+    // Count substantive words (excluding common filler)
+    const words = joined.split(/\s+/).filter(w =>
+      w.length > 2 && !/^(?:the|and|for|was|are|but|not|has|had|with|from|that|this|have|been|none|pr|at)$/i.test(w)
+    );
+    // If "None" appears and there are very few other substantive words, it's a placeholder
+    if (words.length <= 2) return true;
+  }
+  return false;
+}
+
+/**
+ * Detect an explicit current/head artifact claim in text. Returns the SHA if
+ * found, or null. Only matches SHAs that are explicitly presented as the
+ * current/head/implementation artifact, not incidental hex tokens.
+ *
+ * @param {string} text
+ * @returns {{ sha: string, isShort: boolean }|null}
+ */
+function extractCurrentArtifactClaim(text) {
+  const patterns = [
+    /(?:current\s+(?:pr\s+)?(?:head|artifact|implementation)|implementation\s+artifact)\s*[:=]\s*`?([0-9a-f]{7,40})`?/i,
+    /\b(?:at|commit|sha)\s+`?([0-9a-f]{7,40})`?\s*[.!)]?\s*$/im,
+    /\bPR\s+at\s+`?([0-9a-f]{7,40})`?\s*[.!)]?/i,
+    /\b(?:pr|pull\s+request)\s+(?:#?\d+\s+)?(?:at|commit)\s+`?([0-9a-f]{7,40})`?/i,
+  ];
+  for (const pattern of patterns) {
+    const match = (text ?? '').match(pattern);
+    if (match) {
+      const sha = match[1].toLowerCase();
+      return { sha, isShort: sha.length < 40 };
+    }
+  }
+  return null;
+}
+
+/**
+ * Validate the canonical completion-summary shape in the PR body.
+ * `Scope Completed`, `Artifacts`, and `Evidence` are substantive;
+ * `Deviations`, `Known Gaps`, and `Follow-Ups` may say `None`.
+ *
+ * @returns {{ errors: string[], warnings: string[] }}
+ */
+export function validateCompletionSummary(prBody, headRefOid) {
+  const errors = [];
+  const warnings = [];
+
+  const requiredSubstantive = ['## Scope Completed', '## Artifacts', '## Evidence'];
+  const requiredOrNone = ['## Deviations', '## Known Gaps', '## Follow-Ups'];
+
+  for (const heading of requiredSubstantive) {
+    const body = extractSectionBody(prBody, heading);
+    if (body === null) {
+      errors.push({ message: `PR body is missing the '${heading}' section`, category: 'summary_shape' });
+    } else if (isPlaceholderSection(body)) {
+      errors.push({ message: `PR body '${heading}' section is empty or contains only placeholder content`, category: 'summary_shape' });
+    } else if (heading === '## Artifacts' || heading === '## Evidence') {
+      // Also reject sections that contain empty bullets even alongside substantive content
+      if (/^\s*-\s*$/m.test(body)) {
+        errors.push({ message: `PR body '${heading}' section contains empty bullet items`, category: 'summary_shape' });
+      }
+    }
+  }
+
+  for (const heading of requiredOrNone) {
+    const body = extractSectionBody(prBody, heading);
+    if (body === null) {
+      errors.push({ message: `PR body is missing the '${heading}' section`, category: 'summary_shape' });
+    }
+    // Non-empty sections that are not placeholders are fine;
+    // sections that say "None" are explicitly allowed for these headings
+  }
+
+  // Validate explicit current-artifact claims against the head
+  if (headRefOid) {
+    const artifactsBody = extractSectionBody(prBody, '## Artifacts') ?? '';
+    const evidenceBody = extractSectionBody(prBody, '## Evidence') ?? '';
+
+    // Check for explicit current-head claims
+    for (const sectionBody of [artifactsBody, evidenceBody]) {
+      const claim = extractCurrentArtifactClaim(sectionBody);
+      if (claim) {
+        const headLower = headRefOid.toLowerCase();
+        if (claim.isShort) {
+          errors.push({
+            message: `explicit current-artifact claim uses a short SHA '${claim.sha}'; full 40-character SHA required`,
+            category: 'summary_shape',
+          });
+        } else if (claim.sha !== headLower) {
+          errors.push({
+            message: `explicit current-artifact claim '${claim.sha.slice(0, 8)}...' contradicts current PR head '${headLower.slice(0, 8)}...'`,
+            category: 'summary_shape',
+          });
+        }
+      }
+    }
+
+    // Scan for unlabeled bare 40-char SHAs that are not the head and not in
+    // labeled/range contexts. This is a narrower check than before: only bare
+    // SHAs in artifact-like positions are flagged, not filenames, checksums,
+    // issue identifiers, or incidental hex text.
+    const combined = artifactsBody + '\n' + evidenceBody;
+    const bareShaRe = /\b([0-9a-f]{40})\b/gi;
+    let match;
+    while ((match = bareShaRe.exec(combined)) !== null) {
+      const cited = match[1].toLowerCase();
+      if (cited === headRefOid.toLowerCase()) continue;
+
+      // Check surrounding context for labels that make this a legitimate reference
+      const before = combined.slice(Math.max(0, match.index - 40), match.index);
+      const after = combined.slice(match.index + 40, match.index + 80);
+      const context = before + after;
+
+      // Allow labeled references: base, head, range, parent, merge-base, from, to, prior, previous, commit
+      const isLabeled = /(?:base|head|range|parent|merge-base|from|to|prior|previous|commit|sha|artifact)[\s:=]*$/i.test(before) ||
+        /^[\s.]*\.\.[\s.]*/.test(after) || // range notation: sha..sha
+        /^\s*[–—-]/.test(after); // labeled: "sha - description"
+
+      if (isLabeled) continue;
+
+      // Allow SHAs in filename-like contexts (e.g., deadbeef in docs/deadbeef.md)
+      // If the SHA is part of a path or filename, skip
+      if (/[\\/]/.test(before.slice(-1)) || /[\\/]/.test(after.slice(0, 1))) continue;
+      if (/^[a-z0-9._-]*\.(?:md|txt|json|ya?ml|js|ts|py|sh)$/i.test(after)) continue;
+
+      // This is a bare unlabeled SHA - could be a stale current-artifact reference
+      // Only flag if it looks like it's claiming to be the current artifact
+      // Don't flag if it's clearly in a different context (like a diff range, issue number, etc.)
+      errors.push({
+        message: `unlabeled 40-character SHA '${cited.slice(0, 8)}...' in summary; label it as base, range, or other reference, or remove it`,
+        category: 'summary_shape',
+      });
+    }
+  }
+
+  return { errors, warnings };
+}
+
+/**
+ * Validate cooperative attribution when it can be mechanically established.
+ * When the PR body has a role trailer and the head commit has Task:/Agent:
+ * trailers, verify consistency. Does not reject human-authored commits.
+ *
+ * Uses live-line filtering to ignore fenced code, blockquotes, and indented code.
+ * Matches trailers only in the final trailer block of the commit message.
+ * The trailer block is the final contiguous block of "Key: Value" lines at the
+ * end of the commit message, separated from the body by a blank line. Standard
+ * trailers like Co-authored-by, Signed-off-by, and Reviewed-by are allowed
+ * alongside Task: and Agent: without breaking the block.
+ *
+ * @returns {{ errors: string[], warnings: string[], attributionEstablished: boolean }}
+ */
+export function validateAttribution(prBody, headCommitMessage, issueData) {
+  const errors = [];
+  const warnings = [];
+  let attributionEstablished = false;
+
+  const [frontmatter] = parseFrontmatter(String(issueData?.body ?? ''));
+  const canonicalTaskId = frontmatter?.task_id?.trim() ?? null;
+  const liveBodyLines = markdownLines(prBody ?? '').filter(line => line.live).map(line => line.raw);
+  const bodyRoles = liveBodyLines
+    .map(line => line.trim().match(/^\[\[agent:\s*([a-z_]+)\]\]$/i)?.[1].toLowerCase() ?? null)
+    .filter(Boolean);
+  const finalBodyLine = [...liveBodyLines].reverse().find(line => line.trim())?.trim() ?? '';
+  const finalBodyRole = finalBodyLine.match(/^\[\[agent:\s*([a-z_]+)\]\]$/i)?.[1].toLowerCase() ?? null;
+  if (!finalBodyRole) {
+    if (bodyRoles.length > 0) errors.push('body role trailer must be the final live nonblank line');
+    return { errors, warnings, attributionEstablished: false };
+  }
+  if (!['engineer', 'maintainer', 'orchestrator'].includes(finalBodyRole)) {
+    errors.push(`body role trailer references unknown role '${finalBodyRole}'`);
+    return { errors, warnings, attributionEstablished: false };
+  }
+  if (new Set(bodyRoles).size > 1) {
+    errors.push('body contains conflicting live role trailers');
+  }
+  const bodyRole = finalBodyRole;
+  const liveCommitLines = markdownLines(headCommitMessage ?? '').filter(line => line.live).map(line => line.raw);
+
+  // Extract the final contiguous trailer block from the commit message.
+  // A Git trailer block is the final consecutive "Key: Value" lines, separated
+  // from the commit body by a blank line. We recognize standard trailers
+  // (Task:, Agent:, Co-authored-by:, Signed-off-by:, Reviewed-by:, etc.)
+  // and allow them mixed in the block.
+  const KNOWN_TRAILER_KEYS = [
+    'task', 'agent', 'co-authored-by', 'signed-off-by', 'reviewed-by',
+    'acked-by', 'tested-by', 'reported-by', 'suggested-by', 'helped-by',
+    'inspired-by', 'cc', 'see-also', 'ref', 'related-to', 'fixes', 'closes',
+  ];
+
+  const trailerLines = [];
+  let cursor = liveCommitLines.length - 1;
+  while (cursor >= 0 && !liveCommitLines[cursor].trim()) cursor--;
+  for (; cursor >= 0; cursor--) {
+    const line = liveCommitLines[cursor].trim();
+    const trailerMatch = line.match(/^([A-Za-z][\w-]*)\s*:\s*(.+)$/);
+    if (!trailerMatch) break;
+    const key = trailerMatch[1].toLowerCase();
+    if (!(KNOWN_TRAILER_KEYS.includes(key) || /^[A-Z][\w-]*$/.test(trailerMatch[1]))) break;
+    trailerLines.unshift(line);
+  }
+
+  const trailerBlock = trailerLines.join('\n');
+
+  // Extract Task: and Agent: trailers from the trailer block
+  const taskMatches = [...trailerBlock.matchAll(/^Task:\s*(\S+)$/gmi)];
+  const agentMatches = [...trailerBlock.matchAll(/^Agent:\s*(\S+)$/gmi)];
+
+  if (taskMatches.length === 0) errors.push('head commit is missing required Task: trailer');
+  if (agentMatches.length === 0) errors.push('head commit is missing required Agent: trailer');
+
+  // Check for duplicate trailers
+  if (taskMatches.length > 1) {
+    errors.push(`head commit has duplicate Task: trailers`);
+  }
+  if (agentMatches.length > 1) {
+    errors.push(`head commit has duplicate Agent: trailers`);
+  }
+
+  attributionEstablished = true;
+
+  // Use canonical task_id if available, otherwise fall back to issue number
+  const expectedTaskId = canonicalTaskId ?? (issueData?.number ? `#${issueData.number}` : null);
+
+  if (taskMatches.length === 1 && expectedTaskId) {
+    const commitTask = taskMatches[0][1].trim();
+    if (commitTask !== expectedTaskId) {
+      errors.push(`head commit Task: '${commitTask}' does not match canonical task '${expectedTaskId}'`);
+    }
+  }
+
+  if (agentMatches.length === 1) {
+    const commitAgent = agentMatches[0][1].toLowerCase();
+    if (commitAgent !== bodyRole) {
+      errors.push(`head commit Agent: '${agentMatches[0][1]}' does not match body role trailer '${bodyRole}'`);
+    }
+  }
+
+  return { errors, warnings, attributionEstablished };
+}
+
+/**
+ * Categorize preflight failures for structured routing.
+ * Accepts both string errors and structured { message, category } errors.
+ * @param {Array<string|{ message: string, category?: string }>} errors
+ * @returns {{ category: string, errors: string[] }[]}
+ */
+export function categorizePreflightErrors(errors) {
+  const categories = {
+    head_identity: [],
+    summary_shape: [],
+    scope_deviations: [],
+    attribution: [],
+    evidence: [],
+    checks: [],
+    review_checkpoint: [],
+    revision_resolution: [],
+    review_provenance: [],
+    other: [],
+  };
+
+  for (const error of errors) {
+    const errorStr = typeof error === 'string' ? error : error.message;
+    const category = typeof error === 'object' && error.category ? error.category : null;
+
+    if (category && categories[category]) {
+      categories[category].push(errorStr);
+      continue;
+    }
+
+    // Fallback: substring matching for backward compatibility
+    const lower = errorStr.toLowerCase();
+    if (lower.includes('head') || lower.includes('headrefoid') || lower.includes('sha') || lower.includes('artifact')) {
+      categories.head_identity.push(errorStr);
+    } else if (lower.includes('scope completed') || lower.includes('artifacts') || lower.includes('summary')) {
+      categories.summary_shape.push(errorStr);
+    } else if (lower.includes('deviation') || lower.includes('unexpected file') || lower.includes('allowed_paths')) {
+      categories.scope_deviations.push(errorStr);
+    } else if (lower.includes('attribution') || lower.includes('trailer') || lower.includes('agent:')) {
+      categories.attribution.push(errorStr);
+    } else if (lower.includes('evidence') || lower.includes('verdict')) {
+      categories.evidence.push(errorStr);
+    } else if (lower.includes('required check') || lower.includes('status check')) {
+      categories.checks.push(errorStr);
+    } else {
+      categories.other.push(errorStr);
+    }
+  }
+
+  return Object.entries(categories)
+    .filter(([, errors]) => errors.length > 0)
+    .map(([category, errors]) => ({ category, errors }));
+}
+
+/**
  * Pure evaluation of preflight state from already-fetched GitHub data.
  *
  * @param {object} params
@@ -333,6 +702,11 @@ export function compareRequiredChecksToEvidence(requiredChecks, evidenceEntries,
  * @param {(id: string) => boolean} [params.decisionExists]
  * @param {(id: string) => boolean} [params.taskExists]
  * @param {{ login: string }} [params.expectedAccount]
+ * @param {{ events: Array<object>, errors: string[] }} [params.reviewHistory]
+ *   Ordered, trusted review history derived from durable GitHub carriers.
+ * @param {Array<{ status: string, artifact?: string }>} [params.reviewOutcomes]
+ *   Legacy pure-test input; production callers pass reviewHistory.
+ * @param {number} [params.reviewBudget] Override for review budget (default: 3).
  * @returns {object} structured result.
  */
 export function evaluatePreflight({
@@ -343,6 +717,10 @@ export function evaluatePreflight({
   decisionExists,
   taskExists,
   expectedAccount,
+  reviewHistory,
+  reviewOutcomes = [],
+  reviewBudget = DEFAULT_REVIEW_BUDGET,
+  reviewBudgetError = null,
 }) {
   const errors = [];
   const warnings = [];
@@ -352,6 +730,8 @@ export function evaluatePreflight({
 
   if (!headRefOid) {
     errors.push('PR head commit (headRefOid) is unavailable; cannot verify evidence freshness');
+  } else if (!/^[0-9a-f]{40}$/.test(headRefOid)) {
+    errors.push(`PR head commit '${headRefOid}' is not a full 40-character hexadecimal SHA`);
   }
 
   const requiredChecks = parseRequiredChecks(issueData?.body);
@@ -430,12 +810,144 @@ export function evaluatePreflight({
     }
   }
 
+  // Phase 29: path/deviation validation
+  const scopePatterns = parseScopePatterns(issueData?.body);
+  const prFiles = Array.isArray(prData?.files)
+    ? prData.files.map(f => typeof f === 'string' ? f : (f?.path ?? '')).filter(Boolean)
+    : [];
+  let pathValidation = null;
+  if (scopePatterns) {
+    if (scopePatterns.error) {
+      errors.push({ message: scopePatterns.error, category: 'scope_deviations' });
+    } else if (scopePatterns.patterns && prFiles.length > 0) {
+      const deviations = parseDeviations(prData?.body);
+      for (const err of deviations.errors) {
+        errors.push({ message: err, category: 'scope_deviations' });
+      }
+      pathValidation = validatePathsAgainstDeviations(prFiles, scopePatterns.patterns, deviations.entries);
+      for (const err of pathValidation.errors) {
+        errors.push({ message: err, category: 'scope_deviations' });
+      }
+    }
+  }
+
+  // Phase 29: completion-summary shape validation
+  const summaryValidation = validateCompletionSummary(prData?.body, headRefOid);
+  for (const err of summaryValidation.errors) {
+    if (typeof err === 'string') {
+      errors.push({ message: err, category: 'summary_shape' });
+    } else {
+      errors.push(err);
+    }
+  }
+  for (const warn of summaryValidation.warnings) {
+    warnings.push({ message: warn, category: 'summary_shape' });
+  }
+
+  // Phase 29: attribution validation (when mechanically establishable)
+  // Extract head commit message from PR commits data
+  const prCommits = Array.isArray(prData?.commits) ? prData.commits : [];
+  const headCommit = prCommits.find(c => String(c?.oid ?? '').toLowerCase() === headRefOid);
+  const headCommitMessage = headCommit
+    ? (typeof headCommit.message === 'string' && headCommit.message.trim()
+      ? headCommit.message
+      : [headCommit.messageHeadline, headCommit.messageBody]
+        .filter(part => typeof part === 'string' && part)
+        .join('\n'))
+    : null;
+  const attributionValidation = validateAttribution(
+    prData?.body,
+    headCommitMessage,
+    issueData
+  );
+  for (const err of attributionValidation.errors) {
+    errors.push({ message: err, category: 'attribution' });
+  }
+  for (const warn of attributionValidation.warnings) {
+    warnings.push({ message: warn, category: 'attribution' });
+  }
+
+  // Phase 29: Review Round Checkpoint enforcement. Production data is parsed
+  // from separately paginated PR comments/reviews; only the legacy pure helper
+  // path receives explicit reviewOutcomes.
+  let checkpointValidation = null;
+  const durableHistory = reviewHistory ?? collectGitHubReviewHistory(prData, expectedAccount);
+  const historyEvents = Array.isArray(durableHistory?.events) ? durableHistory.events : [];
+  for (const historyError of durableHistory?.errors ?? []) {
+    errors.push({ message: historyError, category: 'review_checkpoint' });
+  }
+  if (reviewBudgetError) {
+    errors.push({ message: reviewBudgetError, category: 'review_checkpoint' });
+  }
+  let legacyCheckpoint = null;
+  if (historyEvents.length === 0 && reviewOutcomes.length > 0) {
+    for (const source of Array.isArray(prData?.comments) ? prData.comments : []) {
+      const parsed = parseReviewCheckpoint(typeof source === 'string' ? source : source?.body, { carrier: 'github' });
+      if (parsed.found && parsed.errors.length === 0) legacyCheckpoint = parsed.checkpoint;
+      for (const parserError of parsed.errors) {
+        errors.push({ message: parserError, category: 'review_checkpoint' });
+      }
+    }
+  }
+  if (historyEvents.length > 0 || reviewOutcomes.length > 0) {
+    checkpointValidation = evaluateReviewCheckpoint({
+      reviewHistory: historyEvents.length > 0 ? historyEvents : undefined,
+      reviewOutcomes,
+      checkpoint: legacyCheckpoint,
+      budget: reviewBudget,
+      currentArtifact: headRefOid,
+    });
+    for (const err of checkpointValidation.errors) {
+      errors.push({ message: err, category: 'review_checkpoint' });
+    }
+    for (const warn of checkpointValidation.warnings) {
+      warnings.push({ message: warn, category: 'review_checkpoint' });
+    }
+  }
+
+  // Phase 29: every re-review resolves the stable finding IDs from the latest
+  // valid `needs_revision` carrier. Parser errors are part of the gate; a
+  // duplicate matrix row cannot become valid merely because map lookup wins.
+  let resolutionMatrixValidation = null;
+  const reviewEvents = historyEvents.length > 0 ? historyEvents : reviewOutcomes;
+  const priorOutcome = [...reviewEvents].reverse().find(outcome =>
+    outcome?.type !== 'checkpoint' && outcome?.status === 'needs_revision' && Array.isArray(outcome.findingIds)
+  );
+  const priorFindingIds = priorOutcome?.findingIds ?? [];
+  if (priorOutcome && priorFindingIds.length > 0) {
+    const matrixResult = parseResolutionMatrix(prData?.body);
+    for (const parserError of matrixResult.errors) {
+      errors.push({ message: parserError, category: 'revision_resolution' });
+    }
+    if (!matrixResult.found) {
+      errors.push({
+        message: `re-review requires a resolution matrix for ${priorFindingIds.length} prior finding(s)`,
+        category: 'revision_resolution',
+      });
+    } else {
+      resolutionMatrixValidation = validateResolutionMatrix({
+        requiredFindingIds: priorFindingIds,
+        entries: matrixResult.entries,
+        currentArtifact: headRefOid,
+      });
+      for (const err of resolutionMatrixValidation.errors) {
+        errors.push({ message: err, category: 'revision_resolution' });
+      }
+      for (const warn of resolutionMatrixValidation.warnings) {
+        warnings.push({ message: warn, category: 'revision_resolution' });
+      }
+    }
+  }
+
   const ok = errors.length === 0;
+
+  // Extract plain error strings for backward compatibility
+  const errorStrings = errors.map(e => typeof e === 'string' ? e : e.message);
 
   return {
     ok,
-    errors,
-    warnings,
+    errors: errorStrings,
+    warnings: warnings.map(w => typeof w === 'string' ? w : w.message),
     pr: prNumber,
     issue: issueNumber,
     headRefOid,
@@ -443,6 +955,13 @@ export function evaluatePreflight({
     evidenceMatches: comparison.matches,
     statusSubstitutions: comparison.statusSubstitutions,
     missing: comparison.missing,
+    failureCategories: ok ? [] : categorizePreflightErrors(errors),
+    pathValidation: pathValidation ? { unmatched: pathValidation.unmatched, missingDeviations: pathValidation.missingDeviations } : null,
+    summaryValidation: { errors: summaryValidation.errors.map(e => typeof e === 'string' ? e : e.message) },
+    attributionValidation: { established: attributionValidation.attributionEstablished, errors: attributionValidation.errors },
+    reviewHistory: { events: historyEvents.length, errors: durableHistory?.errors ?? [] },
+    checkpointValidation: checkpointValidation ? { authorized: checkpointValidation.authorized, errors: checkpointValidation.errors } : null,
+    resolutionMatrixValidation: resolutionMatrixValidation ? { valid: resolutionMatrixValidation.valid, errors: resolutionMatrixValidation.errors } : null,
   };
 }
 
@@ -469,7 +988,7 @@ function resolveRepoOwnerName(commandRunner, explicitRepo) {
   return String(result.nameWithOwner);
 }
 
-function fetchAllIssueComments(commandRunner, ownerName, issueNumber) {
+function fetchAllPaginated(commandRunner, ownerName, endpoint, label) {
   const parts = String(ownerName).split('/');
   if (parts.length !== 2 || !parts[0] || !parts[1]) {
     throw new PreflightError(`cannot resolve repository owner/name: '${ownerName}'`);
@@ -478,13 +997,25 @@ function fetchAllIssueComments(commandRunner, ownerName, issueNumber) {
     'api',
     '--paginate',
     '--slurp',
-    `repos/${parts[0]}/${parts[1]}/issues/${issueNumber}/comments?per_page=100`,
+    `repos/${parts[0]}/${parts[1]}/${endpoint}?per_page=100`,
   ]);
-  if (!Array.isArray(pages)) throw new PreflightError('GitHub issue-comment pagination returned incomplete data');
+  if (!Array.isArray(pages)) throw new PreflightError(`GitHub ${label} pagination returned incomplete data`);
   if (pages.some(page => !Array.isArray(page))) {
-    throw new PreflightError('GitHub issue-comment pagination returned a malformed page');
+    throw new PreflightError(`GitHub ${label} pagination returned a malformed page`);
   }
   return pages.flat();
+}
+
+function fetchAllIssueComments(commandRunner, ownerName, issueNumber) {
+  return fetchAllPaginated(commandRunner, ownerName, `issues/${issueNumber}/comments`, 'issue-comment');
+}
+
+function fetchAllPrConversationComments(commandRunner, ownerName, prNumber) {
+  return fetchAllPaginated(commandRunner, ownerName, `issues/${prNumber}/comments`, 'PR-conversation comment');
+}
+
+function fetchAllPrReviews(commandRunner, ownerName, prNumber) {
+  return fetchAllPaginated(commandRunner, ownerName, `pulls/${prNumber}/reviews`, 'PR review');
 }
 
 /**
@@ -561,9 +1092,16 @@ export function runPreflight({
   const issueData = runGhPreflightJson(commandRunner, issueArgs);
   const ownerName = resolveRepoOwnerName(commandRunner, repo);
   issueData.comments = fetchAllIssueComments(commandRunner, ownerName, issueNumber);
+  // PR conversation comments are not interchangeable with task-issue comments:
+  // the former are durable review/checkpoint carriers, the latter verification
+  // attempt history. Both endpoints are paginated independently.
+  prData.comments = fetchAllPrConversationComments(commandRunner, ownerName, prNumber);
+  prData.reviews = fetchAllPrReviews(commandRunner, ownerName, prNumber);
 
   const localContext = verificationContext ?? createLocalVerificationContext(target);
   const authenticatedAccount = expectedAccount ?? resolveAuthenticatedAccount(commandRunner);
+  const reviewHistory = collectGitHubReviewHistory(prData, authenticatedAccount);
+  const reviewBudget = parseReviewBudget(issueData.body);
 
   return evaluatePreflight({
     prData,
@@ -571,5 +1109,8 @@ export function runPreflight({
     verificationStatus,
     ...localContext,
     expectedAccount: authenticatedAccount,
+    reviewHistory,
+    reviewBudget: reviewBudget.budget,
+    reviewBudgetError: reviewBudget.error,
   });
 }

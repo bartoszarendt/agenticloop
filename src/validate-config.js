@@ -122,12 +122,21 @@ import {
 import { parseIndependentReviewRequired, validateReviewProvenance } from './review-provenance.js';
 import { validateAuditRecords } from './audit-record.js';
 import {
+  isSafeScopePattern as sharedIsSafeScopePattern,
+  globPatternToRegExp as sharedGlobPatternToRegExp,
+  fileMatchesScopePattern as sharedFileMatchesScopePattern,
+  isFileInScope as sharedIsFileInScope,
+} from './scope-matcher.js';
+import {
   crossCheckMaintainerFixup,
   detectFixupEpisodes,
   validateFilesFixup,
 } from './maintainer-fixup.js';
 import { loadEvents, resolveEventLogPath } from './event-logging.js';
 import { validateVerificationAttempts } from './verification-learning.js';
+import { parseFilesReviewHistory } from './review-history.js';
+import { evaluateReviewCheckpoint, parseReviewBudgetValue } from './review-checkpoint.js';
+import { parseResolutionMatrix, validateResolutionMatrix } from './resolution-matrix.js';
 
 const PLACEHOLDER_PATTERNS = [
   /\bTBD\b/i,
@@ -413,19 +422,10 @@ export function validateTaskRecord(content, filename) {
 
 // ---------------------------------------------------------------------------
 // Structured scope-map / changed-file validation
+// Uses the shared canonical scope-matcher module for pattern matching.
 // ---------------------------------------------------------------------------
 
 const SCOPE_MAP_FIELD_NAMES = ['allowed_paths', 'expected_files'];
-
-function isSafeScopePattern(pattern) {
-  if (typeof pattern !== 'string') return false;
-  const normalized = normalizePath(pattern);
-  if (!normalized) return false;
-  if (normalized.startsWith('/')) return false;
-  if (normalized.includes('..')) return false;
-  if (/^[A-Za-z]:\//.test(normalized)) return false;
-  return true;
-}
 
 function readStructuredScopePatterns(frontmatterText, filename, errors) {
   let fieldName = SCOPE_MAP_FIELD_NAMES[0];
@@ -447,7 +447,7 @@ function readStructuredScopePatterns(frontmatterText, filename, errors) {
 
   const patterns = [];
   for (const rawPattern of result.value) {
-    if (!isSafeScopePattern(rawPattern)) {
+    if (!sharedIsSafeScopePattern(rawPattern)) {
       errors.push(
         `Task record '${filename}' structured scope field '${fieldName}' contains unsafe or malformed pattern: ${JSON.stringify(rawPattern)}`
       );
@@ -457,38 +457,6 @@ function readStructuredScopePatterns(frontmatterText, filename, errors) {
   }
 
   return { fieldName, patterns };
-}
-
-function globPatternToRegExp(pattern) {
-  let regex = '';
-  for (let i = 0; i < pattern.length; i++) {
-    const c = pattern[i];
-    const next = pattern[i + 1];
-    if (c === '*' && next === '*') {
-      regex += '.*';
-      i++;
-    } else if (c === '*') {
-      regex += '[^/]*';
-    } else if (c === '?') {
-      regex += '[^/]';
-    } else if (/[.+^${}()|[\]\\]/.test(c)) {
-      regex += `\\${c}`;
-    } else {
-      regex += c;
-    }
-  }
-  return new RegExp(`^${regex}$`);
-}
-
-function fileMatchesScopePattern(file, pattern) {
-  if (pattern.endsWith('/')) {
-    return file.startsWith(pattern) || file === pattern.slice(0, -1);
-  }
-  return globPatternToRegExp(pattern).test(file);
-}
-
-function isFileInScope(file, patterns) {
-  return patterns.some(pattern => fileMatchesScopePattern(file, pattern));
 }
 
 function collectChangedFiles(repoRoot, commandRunner) {
@@ -536,7 +504,7 @@ function validateChangedFilesAgainstScope(repoRoot, commandRunner, filename, sco
     return;
   }
 
-  const outOfScope = files.filter(file => !isFileInScope(file, scope.patterns));
+  const outOfScope = files.filter(file => !sharedIsFileInScope(file, scope.patterns));
   if (outOfScope.length > 0) {
     const examples = uniqueExamples(outOfScope, 3).join(', ');
     warnings.push(
@@ -639,6 +607,11 @@ export function validateFilesTaskRecord(content, filename, options = {}) {
     })
   );
 
+  errors.push(...validateFilesReviewControls(content, filename, {
+    frontmatter,
+    implementationArtifact,
+  }));
+
   // Durable Maintainer Review Fixup subsection (when present). The final
   // '## Evidence' body is passed through so the fixup validator can require
   // evidence recorded against the resulting artifact; a '## Scope Completed'
@@ -710,6 +683,56 @@ export function validateFilesTaskRecord(content, filename, options = {}) {
     );
   }
 
+  return errors;
+}
+
+/**
+ * Validate the durable files review-history controls. This is exported so the
+ * status command can run the same controls when a `needs_revision` transition
+ * begins the next Engineer revision.
+ */
+export function validateFilesReviewControls(content, filename, {
+  frontmatter = parseFrontmatter(content)[0] ?? {},
+  implementationArtifact = frontmatterString(frontmatter?.implementation_artifact),
+  authorizingRevision = false,
+} = {}) {
+  const errors = [];
+  const budgetOccurrences = String(content ?? '').match(/^review_budget\s*:/gm)?.length ?? 0;
+  let budget = parseReviewBudgetValue(frontmatter?.review_budget);
+  if (!Object.hasOwn(frontmatter ?? {}, 'review_budget')) budget = { budget: 3, error: null };
+  if (budgetOccurrences > 1) budget = { budget: 3, error: 'review_budget appears more than once in frontmatter' };
+  if (budget.error) errors.push(`Task record '${filename}' ${budget.error}`);
+
+  const history = parseFilesReviewHistory(content);
+  errors.push(...history.errors.map(error => `Task record '${filename}' ${error}`));
+  if (history.events.length === 0) return errors;
+
+  const checkpoint = evaluateReviewCheckpoint({
+    reviewHistory: history.events,
+    budget: budget.budget,
+    currentArtifact: implementationArtifact,
+    requireRevision: authorizingRevision,
+  });
+  errors.push(...checkpoint.errors.map(error => `Task record '${filename}' ${error}`));
+
+  const priorOutcome = [...history.events].reverse().find(event =>
+    event.type === 'outcome' && event.status === 'needs_revision' && Array.isArray(event.findingIds)
+  );
+  const findingIds = priorOutcome?.findingIds ?? [];
+  if (findingIds.length > 0) {
+    const matrix = parseResolutionMatrix(content);
+    errors.push(...matrix.errors.map(error => `Task record '${filename}' ${error}`));
+    if (!matrix.found) {
+      errors.push(`Task record '${filename}' re-review requires a resolution matrix for ${findingIds.length} prior finding(s)`);
+    } else {
+      const result = validateResolutionMatrix({
+        requiredFindingIds: findingIds,
+        entries: matrix.entries,
+        currentArtifact: implementationArtifact,
+      });
+      errors.push(...result.errors.map(error => `Task record '${filename}' ${error}`));
+    }
+  }
   return errors;
 }
 

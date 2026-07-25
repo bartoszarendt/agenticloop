@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateGitHubReviewAudit, runGitHubReviewAudit, GitHubReviewAuditError, normalizeRestReview, taskRequiresIndependentReview } from '../src/github-review-audit.js';
+import { evaluateGitHubReviewAudit, runGitHubReviewAudit, GitHubReviewAuditError, normalizeRestReview, taskRequiresIndependentReview, validateReviewWorkspace } from '../src/github-review-audit.js';
 
 const HEAD = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0';
 const OLD_HEAD = 'b1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0';
@@ -1309,5 +1309,131 @@ describe('Independent-review requirement detection', () => {
     });
     assert.equal(result.ok, false);
     assert.match(result.errors.join('\n'), /malformed independent_review_required frontmatter value/);
+  });
+});
+
+describe('Expected artifact validation', () => {
+  it('passes when expected artifact matches current head and review artifact', () => {
+    const result = evaluateGitHubReviewAudit({
+      ...data(),
+      expectedArtifact: HEAD,
+    });
+    assert.equal(result.ok, true, result.errors.join('\n'));
+    assert.equal(result.expectedArtifact, HEAD);
+  });
+
+  it('fails when expected artifact does not match current head', () => {
+    const differentHead = 'c'.repeat(40);
+    const result = evaluateGitHubReviewAudit({
+      ...data(),
+      expectedArtifact: HEAD,
+      // Override prData to have a different head
+      prData: { ...data().prData, headRefOid: differentHead },
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(e => /dispatched artifact|expected.*artifact/i.test(e)),
+      `Expected artifact mismatch error, got: ${result.errors.join('; ')}`);
+  });
+
+  it('fails when expected artifact does not match review marker artifact', () => {
+    const differentHead = 'c'.repeat(40);
+    const result = evaluateGitHubReviewAudit({
+      ...data({ comments: [marker({ artifact: differentHead })] }),
+      prData: { ...data().prData, headRefOid: differentHead },
+      expectedArtifact: HEAD,
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(e => /dispatched artifact|expected.*artifact/i.test(e)),
+      `Expected artifact mismatch error, got: ${result.errors.join('; ')}`);
+  });
+
+  it('fails for short expected artifact', () => {
+    const result = evaluateGitHubReviewAudit({
+      ...data(),
+      expectedArtifact: 'a1b2c3d',
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(e => /40-character/i.test(e)),
+      `Expected SHA length error, got: ${result.errors.join('; ')}`);
+  });
+
+  it('passes without expected artifact (backward compatibility)', () => {
+    const result = evaluateGitHubReviewAudit({
+      ...data(),
+    });
+    assert.equal(result.ok, true, result.errors.join('\n'));
+    assert.equal(result.expectedArtifact, null);
+  });
+
+  it('passes with empty expected artifact (backward compatibility)', () => {
+    const result = evaluateGitHubReviewAudit({
+      ...data(),
+      expectedArtifact: '',
+    });
+    assert.equal(result.ok, true, result.errors.join('\n'));
+    assert.equal(result.expectedArtifact, null);
+  });
+});
+
+describe('Review workspace validation', () => {
+  it('accepts a workspace whose HEAD equals the expected dispatched artifact', () => {
+    const result = validateReviewWorkspace({
+      workspace: 'C:/review-workspace',
+      expectedArtifact: HEAD,
+      commandRunner: () => ({ status: 0, stdout: `${HEAD}\n`, stderr: '' }),
+    });
+
+    assert.deepEqual(result, {
+      provided: true,
+      workspace: 'C:/review-workspace',
+      head: HEAD,
+      error: null,
+    });
+  });
+
+  it('rejects a supplied workspace without an expected full artifact', () => {
+    const result = validateReviewWorkspace({
+      workspace: 'C:/review-workspace',
+      commandRunner: () => ({ status: 0, stdout: `${HEAD}\n`, stderr: '' }),
+    });
+
+    assert.match(result.error, /requires --expect-artifact/);
+  });
+
+  it('rejects a workspace at a different artifact', () => {
+    const result = validateReviewWorkspace({
+      workspace: 'C:/review-workspace',
+      expectedArtifact: HEAD,
+      commandRunner: () => ({ status: 0, stdout: `${OLD_HEAD}\n`, stderr: '' }),
+    });
+
+    assert.match(result.error, /does not match expected artifact/);
+  });
+
+  it('rejects a workspace whose Git HEAD cannot be read', () => {
+    const result = validateReviewWorkspace({
+      workspace: 'C:/missing-workspace',
+      expectedArtifact: HEAD,
+      commandRunner: () => ({ status: 128, stdout: '', stderr: 'not a git repository' }),
+    });
+
+    assert.match(result.error, /could not resolve workspace HEAD/);
+  });
+
+  it('stops the GitHub audit before remote reads when the workspace is invalid', () => {
+    let ghCalled = false;
+
+    assert.throws(
+      () => runGitHubReviewAudit({
+        pr: 42,
+        workspace: 'C:/review-workspace',
+        commandRunner: () => {
+          ghCalled = true;
+          return { status: 0, stdout: '{}', stderr: '' };
+        },
+      }),
+      /requires --expect-artifact/
+    );
+    assert.equal(ghCalled, false);
   });
 });

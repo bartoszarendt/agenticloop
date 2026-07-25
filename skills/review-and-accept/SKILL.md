@@ -132,6 +132,11 @@ accepted outcome; use `--expect-status needs_revision` for revision audits. If i
 cannot run, report that limitation and follow the backend's blocked or exception
 path; do not claim mechanical validation.
 
+For an artifact-bound review delegation, add `--expect-artifact <full-40-character-sha>`
+to prove the PR still has the dispatched head. When the maintainer is given a
+local review workspace, also pass `--workspace <path>`; it must resolve to the
+same exact Git HEAD before that workspace is used for review.
+
 The linked task issue expresses the independent-review requirement through
 canonical YAML frontmatter `independent_review_required: true`; the explicit
 `AGENT_INDEPENDENT_REVIEW_REQUIRED: true` marker remains a supported
@@ -763,21 +768,54 @@ another substantive implementation edit would be needed; or a second fixup episo
 necessary. On failure, do not silently erase or rewrite history: record the truthful current
 artifact and evidence, post or record `needs_revision`, and hand the task to the engineer.
 
-## Re-review handoff (engineer)
+## Review handoff (engineer)
 
-Before requesting re-review after a revision, the engineer confirms the durable
-artifact matches the current state.
+Before requesting review (first review or re-review), the engineer confirms the
+durable artifact matches the current state. One canonical handoff contract
+applies to every review request; re-review adds a revision-resolution
+requirement.
 
-### Neutral rule
+### Common handoff requirements
 
 Do not hand back for review until all hold:
 
-- Required checks were rerun after the last edit and their fresh output is in the durable
-  artifact, not a prior round's output.
-- Stale `Known Limitations` from earlier artifact revisions were removed or reclassified against
-  the current state.
-- Any file outside `Expected Files or Areas` is triaged under `Deviations From Plan`, not left
-  for the reviewer to discover.
+- The exact implementation artifact is current and verifiable:
+  - GitHub: the full 40-character `headRefOid` equals the commit the
+    implementation summary cites.
+  - Files: `implementation_artifact` in task-file frontmatter is set and matches
+    the current local final state.
+- Required checks were rerun after the last edit and their fresh output is in the
+  durable artifact, not a prior round's output.
+- The canonical completion-summary sections are present and current:
+  `Scope Completed`, `Artifacts`, and `Evidence` are substantive;
+  `Deviations`, `Known Gaps`, and `Follow-Ups` may explicitly say `None`.
+  Artifact references in the summary cannot contradict the current head.
+- Stale `Known Limitations` from earlier artifact revisions were removed or
+  reclassified against the current state.
+- Any file outside `Expected Files or Areas` is triaged under
+  `Deviations From Plan`, not left for the reviewer to discover.
+- When the task's structured `allowed_paths` (or its compatibility alias) is
+  defined, every changed file matches a pattern or is named as an exact
+  repo-relative path with a non-empty rationale in the current `## Deviations`.
+  Missing, ambiguous, or stale deviation declarations are a handoff defect.
+- Where cooperative attribution mechanically establishes an agent-authored
+  handoff, the body role trailer and current head commit's `Task:`/`Agent:`
+  trailers are consistent.
+
+### Re-review addition: revision-resolution matrix
+
+A re-review handoff additionally requires one current resolution matrix keyed to
+the prior review's numbered required findings. Each item has exactly one
+disposition:
+
+- `resolved` -- the Engineer verified the correction on the dispatched artifact,
+  with current-artifact evidence.
+- `disputed` -- the finding invokes the existing sustain/withdraw protocol with
+  evidence; it is routed to the Maintainer.
+- `blocked` -- the finding uses the existing blocked-state path and cannot be
+  presented as review-ready.
+
+No prior required finding may silently disappear through summary replacement.
 
 ### GitHub projection
 
@@ -811,12 +849,32 @@ Do not hand back for review until all hold:
 - `review_status` in the task file is not stale for the current implementation artifact.
   `review_status` is mutable current state; a stale value for a newer artifact is a blocker.
 
-A re-review request that fails any item is a Lens 1 revision defect. The
+A handoff request that fails any item is a Lens 1 revision defect. The
 maintainer returns `needs_revision` on the handoff itself. Classify it under the
 Lens 1 decision flow: when it is record-only and the exact implementation
 artifact remains available and meaningfully reviewable, complete full Lens 2/Lens
 3 in that same review; otherwise use the implementation-changing revision review
 and its Structural Risk Sweep. Do not accept until the handoff is clean.
+
+## Hard-case routing
+
+The following ownership is locked and consistent across methodology, roles, and
+delegation rules:
+
+| Case | Owner | Rule |
+|---|---|---|
+| Mechanical preflight defect | Engineer | Correct and re-preflight before review |
+| Dispatched/current artifact mismatch | Orchestrator | Reject the handoff or returned result; re-route without interpreting findings |
+| Disputed review finding | Maintainer | Sustain or withdraw with evidence |
+| Task-contract ambiguity | Maintainer | Resolve; use change-request-gate and human authority when the contract changes |
+| Review-budget churn coordination | Orchestrator | Record the process cause; delegate semantic subquestions to Maintainer |
+| Cross-lane finding disposition | Maintainer | Decide apply/reject/defer; Orchestrator verifies disposition exists |
+| Eligible Lens 2/Lens 3 fix during active review | Reviewing Maintainer | Use existing Maintainer Review Fixup |
+| Lens 1, implementation-changing, uncertain, repeated, or ineligible fix | Engineer | Normal revision path |
+
+A stale review is invalid as a whole. Orchestrator must not salvage, sustain, or
+withdraw individual findings from it; a fresh Maintainer review decides what
+remains true on the current artifact.
 
 ## Disputed items
 

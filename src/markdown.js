@@ -198,6 +198,25 @@ export function markdownProseBlocks(markdown) {
   return blocks.filter(Boolean);
 }
 
+/**
+ * Filter out lines inside fenced code blocks, indented code blocks, and
+ * blockquotes so that example/quoted markers are not treated as live state.
+ *
+ * Fenced block matching is Markdown-consistent: the opening and closing fence
+ * must use the same character (backtick or tilde), the closing fence must be
+ * at least as long as the opening fence, and only trailing whitespace is
+ * allowed after a closing fence. A line indented four or more spaces is
+ * indented code, not a fence.
+ *
+ * @param {string} body
+ * @returns {string} The body with non-live regions blanked out
+ */
+export function filterLiveLines(body) {
+  return markdownLines(String(body ?? ''))
+    .map(line => line.live ? line.raw : '')
+    .join('\n');
+}
+
 /** @param {string} value */
 function stripCodeSpans(value) {
   return value.replace(/(`+)([\s\S]*?)\1/g, match => ' '.repeat(match.length));

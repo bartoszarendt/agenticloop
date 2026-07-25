@@ -144,6 +144,17 @@ rerun-repairable** — not globally atomic:
 - Default setup/init output reports step and mutation summaries. Individual
   planned/applied paths and detailed detection evidence require `--verbose`.
 
+## GitHub review audit
+
+Use `agenticloop github-review-audit --pr <number>` to validate the current
+artifact-bound review outcome for a pull request. Add
+`--expect-status needs_revision` when validating a revision request instead of
+acceptance. For a dispatched review, add `--expect-artifact <full-sha>` to
+require that both the PR head and review marker still match the dispatched
+artifact. If a local review checkout is supplied, add `--workspace <path>` as
+well; it requires `--expect-artifact` and rejects a workspace whose Git HEAD
+does not match that exact SHA.
+
 ## Exit statuses
 
 | Status | Meaning |

@@ -357,6 +357,59 @@ projection:
   accept only after a fresh three-lens review round, with `review_mode: single_agent_fallback`.
 - Use `closed` only after integration, as before.
 
+### Review Round Checkpoint
+
+When `needs_revision` rounds reach the task's `review_budget` (default 3), the
+orchestrator must record a durable checkpoint before routing the next revision.
+For files-backed, append review outcomes and the checkpoint to the one
+append-only `## Review History` section:
+
+```text
+## Review History
+
+### Review 3
+
+- Status: needs_revision
+- Mode: host_subagent
+- Artifact: commit:abc123
+- Findings: F-1, F-2
+- Maintainer: maintainer
+
+### Review Round Checkpoint
+
+- Direction: targeted_revision | needs_context | blocked
+- Cause: <implementation_defect | evidence_drift | task_contract_ambiguity | scope_pollution | reviewer_engineer_disagreement | external_blocker>
+- Review count: <current needs_revision count>
+- Artifact: <implementation_artifact reference>
+- Target: <specific finding or decision>  (required for targeted_revision)
+- Reference: <Maintainer or human judgment reference>  (required for needs_context or blocked)
+- Orchestrator: <attribution>
+```
+
+The checkpoint schema requires:
+- `direction`: one of `targeted_revision`, `needs_context`, or `blocked`
+- `cause`: the canonical process cause
+- `review_count`: the current number of durable `needs_revision` outcomes
+- `artifact`: the latest reviewed artifact
+- `target`: required when direction is `targeted_revision`
+- `reference`: required when direction is `needs_context` or `blocked`
+- `orchestrator`: required
+
+A `targeted_revision` checkpoint authorizes exactly one next revision. If that
+revision receives another `needs_revision`, a new current checkpoint is required.
+The budget is never reset and an old checkpoint cannot be replayed. Reject
+missing, stale, malformed, or reused checkpoint authorization.
+
+Files task validation and `task status needs_revision -> in-progress` reject an
+over-budget next revision without a current checkpoint. The checkpoint binds
+reviewed artifact A and authorizes one next revision B; it does not reset the
+review budget.
+
+When prior `needs_revision` outcomes have recorded finding IDs, a
+`## Revision Resolution` section with exactly one row per finding is required
+before re-review. Each row must have a disposition of `resolved`, `disputed`,
+or `blocked` with current evidence.
+
 ### Close Or Accept Task
 
 Set:
@@ -404,7 +457,7 @@ truncated:
 - `## Verification Attempts` – per-`RC-N` attempt, prediction, and triage
   history. Append entries only; do not rewrite a prior record.
 - Blocker sections added while the task is blocked.
-- Maintainer review sections appended per review round.
+- `## Review History` – append-only numbered review outcomes and checkpoints.
 
 ### Correction rule
 

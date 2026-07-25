@@ -160,7 +160,16 @@ task-record obligation.
   `npx agenticloop github-preflight --pr <number>` and fix the pull request body
   (required-check evidence, `Current PR head` marker) until it passes. A failing
   preflight is a revision defect, not a reviewer task.
-- Address review feedback or dispute it with evidence.
+- Address review feedback or dispute it with evidence. Before requesting review
+  (first or re-review), confirm the handoff requirements in [[review-and-accept]]
+  are met: the exact implementation artifact is current, required checks pass,
+  the completion summary is complete, scope/deviation accounting is done, and
+   (for re-review) every prior required finding has a resolution matrix entry.
+- At the review-budget boundary, do not start another implementation revision
+  unless the durable Review Round Checkpoint is `targeted_revision`, is bound to
+  the latest reviewed artifact, and names the exact target. A checkpoint at
+  artifact A authorizes one revision to B; after B is reviewed it cannot be
+  replayed. `needs_context` and `blocked` authorize no implementation.
 - May create `status: proposed` decisions from current evidence only for existing
   `quality`, `architecture`, `process`, or accepted-project scopes. Exceptional
   verification observations stay in `## Verification Attempts`; routine passes
@@ -187,7 +196,7 @@ task-record obligation.
   return it. For routed findings, return exactly one disposition per finding:
   `applied`, `already satisfied`, `rejected` with evidence, or `deferred` with
   reason and effect on correctness, safety, acceptance, and evidence. Deferral
-  remains blocking pending maintainer/orchestrator triage.
+  remains blocking pending Maintainer disposition.
 - Perform an integration rehearsal only when the orchestrator explicitly
   assigns it. Compose a disposable non-published candidate; record its exact
   tree/commit, artifact order, commands, and results. Return conflicts as a

@@ -288,6 +288,35 @@ carrier is absent. For terminal work, the latest attempt in each carrier must
 pass or have final non-blocker maintainer triage; an active failed, blocked, or
 timed-out attempt and blocker triage prevent readiness.
 
+#### Phase 29 additions to preflight
+
+The preflight gate also validates:
+
+- **Exact head**: `Current PR head` must be a full 40-character SHA equal to
+  `headRefOid`. Short prefixes, stale full hashes, and missing markers fail.
+- **Scope/deviations**: When the linked task has structured `allowed_paths` (or
+  `expected_files`), every PR file is matched against the patterns. Each
+  non-matching file must appear as an exact repo-relative path in `## Deviations`
+  with a non-empty reason.
+- **Summary shape**: The PR body must contain all six canonical headings:
+  `## Scope Completed`, `## Artifacts`, `## Evidence`, `## Deviations`,
+  `## Known Gaps`, and `## Follow-Ups`. The first three are substantive; the
+  latter three may explicitly say `None`.
+- **Attribution**: When cooperative attribution can be mechanically established
+  (body role trailer + commit trailers), the `Task:` and `Agent:` trailers must
+  agree with the linked task and body role. Human-authored commits are not
+  rejected merely because attribution cannot be established.
+- **Checkpoint enforcement**: When there are `needs_revision` review outcomes at
+  or beyond the budget boundary, a current, non-stale checkpoint must be present
+  in the PR comments.
+- **Resolution matrix**: When prior `needs_revision` outcomes have recorded
+  finding IDs, the PR body must contain a `## Revision Resolution` section with
+  exactly one row per finding.
+
+Structured failure categories: `head_identity`, `summary_shape`,
+`scope_deviations`, `attribution`, `evidence`, `checks`, `review_checkpoint`,
+`revision_resolution`, `review_provenance`, `other`.
+
 ### Link Implementation Artifact
 
 Open one pull request per normal implementation task. Include the
@@ -372,6 +401,7 @@ AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
 AGENT_REVIEW_STATUS: needs_revision
 AGENT_REVIEW_MODE: host_subagent
 AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+AGENT_REVIEW_FINDINGS: F-1, F-2
 ```
 
 `AGENT_REVIEW_ARTIFACT` is the full current PR head SHA. The audit discovers loop
@@ -396,7 +426,12 @@ blockquotes, or indented code are ignored during marker parsing.
 Run `npx agenticloop github-review-audit --pr <number> [--repo <owner/name>]`
 before final acceptance or merge. The default audit expects an accepted outcome
 on the current head; use `--expect-status needs_revision` to audit a revision
-request. The audit verifies:
+request. Use `--expect-artifact <full-40-character-sha>` to verify that the
+current PR head matches the originally dispatched artifact; this prevents a
+review dispatched at artifact A from being accepted when the PR head has moved
+to artifact B. When a local review workspace is supplied, add
+`--workspace <path>` with `--expect-artifact`; the audit fails unless that
+workspace's `git rev-parse HEAD` is the same exact SHA. The audit verifies:
 
 - loop markers are discovered from both PR issue comments and PR review bodies;
 - marker authorship matches the authenticated loop GitHub account;
@@ -478,6 +513,51 @@ review, a stale review artifact, or a failed independent-review requirement
 always blocks merge. The original `github-preflight` (pre-review) and
 `github-review-audit` (provenance) commands remain available for their narrower
 purposes.
+
+### Review Round Checkpoint
+
+When `needs_revision` rounds reach the task's `review_budget` (default 3), the
+orchestrator must record a durable checkpoint before routing the next revision.
+For GitHub, append the checkpoint to the PR conversation with Orchestrator
+attribution:
+
+```text
+<!-- AGENTIC_LOOP_REVIEW_ROUND_CHECKPOINT -->
+
+## Review Round Checkpoint
+
+- Direction: targeted_revision | needs_context | blocked
+- Cause: <implementation_defect | evidence_drift | task_contract_ambiguity | scope_pollution | reviewer_engineer_disagreement | external_blocker>
+- Review count: <current needs_revision count>
+- Artifact: <full 40-character SHA>
+- Target: <specific finding or decision>  (required for targeted_revision)
+- Reference: <Maintainer or human judgment reference>  (required for blocked)
+- Orchestrator: <attribution>
+
+[[agent: orchestrator]]
+```
+
+The checkpoint schema requires:
+- `direction`: one of `targeted_revision`, `needs_context`, or `blocked`
+- `cause`: the canonical process cause
+- `review_count`: the current number of durable `needs_revision` outcomes
+- `artifact`: a full 40-character commit SHA matching the latest reviewed artifact
+- `target`: required when direction is `targeted_revision`
+- `reference`: required when direction is `needs_context` or `blocked`
+- `orchestrator`: required and must match the authenticated comment author
+
+`github-preflight` separately paginates PR conversation comments and review
+bodies, while linked issue comments remain verification-attempt history. It
+validates that an over-budget changed artifact has a current, non-stale
+checkpoint authorization bound to the immediately preceding reviewed artifact.
+Missing, stale, malformed, untrusted, or replayed checkpoints fail preflight.
+The checkpoint does not reset the review budget; it authorizes exactly one
+targeted A-to-B next step.
+
+`github-preflight` also validates the revision resolution matrix when there are
+prior `needs_revision` outcomes with recorded finding IDs. Every prior finding
+must have exactly one row in the `## Revision Resolution` section with a
+disposition of `resolved`, `disputed`, or `blocked` and current evidence.
 
 ### Close Or Accept Task
 

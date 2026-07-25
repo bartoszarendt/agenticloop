@@ -20,6 +20,7 @@ import {
   FILES_TASK_STATUSES,
   sectionBody,
   validateFilesTaskRecord,
+  validateFilesReviewControls,
   validateTaskRecord,
 } from './validate-config.js';
 import { validateVerificationAttempts } from './verification-learning.js';
@@ -463,6 +464,17 @@ export async function cmdTask(args, io = createIo()) {
       if (transitionError) {
         io.err(transitionError);
         return 1;
+      }
+
+      if (currentStatus === 'needs_revision' && nextStatus === 'in-progress') {
+        const revisionErrors = validateFilesReviewControls(parsedContent, filePath.replace(/\\/g, '/'), {
+          frontmatter,
+          authorizingRevision: true,
+        });
+        if (revisionErrors.length > 0) {
+          for (const error of revisionErrors) io.err(error);
+          return 1;
+        }
       }
 
       // --- Acceptance gate for accepted/closed ---

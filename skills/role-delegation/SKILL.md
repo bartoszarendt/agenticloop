@@ -200,14 +200,93 @@ A successful Maintainer Review Fixup does not alter the original role invocation
 delegation mode; the final fixup review still uses
 `review_mode: single_agent_fallback`.
 
+## Review Delegation and Artifact-Bound Dispatch
+
+Before delegating GitHub review, Orchestrator must:
+
+1. Fetch the full current PR head (`headRefOid`).
+2. Run `github-preflight` against that live state.
+3. Confirm the returned preflight head equals the artifact being dispatched.
+4. Prevent Engineer mutation/push during the active review lease.
+
+The Maintainer delegation packet must include:
+
+```text
+Repository:          <owner/name>
+PR:                  <number>
+Linked task issue:   <number>
+Expected artifact:   <full 40-char SHA>
+Expected review outcome protocol: accepted | needs_revision
+Independent review:  required | not required
+Review workspace:    <verified local path> | unavailable
+```
+
+A supplied workspace must resolve to the exact expected artifact before use.
+GitHub remains authoritative for PR metadata, comments, reviews, checks, and
+head identity; absence of a reusable workspace is explicit and does not itself
+authorize or prohibit review.
+
+After Maintainer returns, Orchestrator must:
+
+1. Refetch the current PR head.
+2. Validate the returned marker/status/provenance using the existing review
+   audit.
+3. Validate against both the expected status and the originally dispatched
+   artifact.
+4. Reject and freshly re-delegate when the head or artifact changed.
+
+For files-backed review, the same invariant applies:
+`reviewed_artifact` must equal the exact `implementation_artifact` captured at
+dispatch, and current validation must pass before the verdict is routed.
+
+### Review lease
+
+During an active review, Engineer must not mutate or push the dispatched
+artifact. The lease ends when the review returns or the lease is cancelled by
+Orchestrator.
+
 ## Review Round Checkpoint
 
-The orchestrator counts `needs_revision` rounds per task. Before the revision
-that would exceed the task record's `review_budget` (default 3, so before a
-fourth revision), run the Review Round Checkpoint in `agenticloop/AGENTIC_LOOP.md`:
-classify the churn cause, then route one targeted revision plan naming the cause,
-or record `needs_context` or `blocked` with [[blocked-state]]. Do not route an
-undirected fourth revision.
+The orchestrator counts `needs_revision` rounds per task from durable valid
+outcomes. Before the revision that would exceed the task record's
+`review_budget` (default 3, so before a fourth revision), run the Review Round
+Checkpoint in `agenticloop/AGENTIC_LOOP.md`.
+
+At the budget boundary, Orchestrator records a durable checkpoint bound to the
+current review count and latest reviewed artifact:
+
+```text
+<!-- AGENTIC_LOOP_REVIEW_ROUND_CHECKPOINT -->
+
+## Review Round Checkpoint
+
+- Direction: targeted_revision | needs_context | blocked
+- Cause: implementation_defect | evidence_drift | task_contract_ambiguity | scope_pollution | reviewer_engineer_disagreement | external_blocker
+- Review count: <current needs_revision count>
+- Artifact: <full 40-character SHA>
+- Target: <specific finding>                 # targeted_revision
+- Reference: <durable judgment reference>    # needs_context or blocked
+- Orchestrator: <authenticated orchestrator login>
+
+[[agent: orchestrator]]
+```
+
+A `targeted_revision` checkpoint binds reviewed artifact A and authorizes exactly
+one next Engineer revision B. If B receives another review outcome, require a new
+checkpoint before a further revision. Never
+reset or erase review history. Reject missing, stale, malformed, or replayed
+checkpoint authorization.
+
+For GitHub, append the checkpoint to the PR conversation with the marker, full
+SHA, authenticated Orchestrator field, and final role trailer. For files-backed,
+append the same semantic fields under `## Review History` / `### Review Round
+Checkpoint`; it uses the files `implementation_artifact` form and no HTML marker.
+
+Use `github-preflight` as the GitHub fail-closed backstop before over-budget
+work returns to review. The files task validation/status provides the equivalent
+backstop. Orchestrator's delegation contract still requires the checkpoint before
+implementation begins; the later preflight is not permission to start an
+unauthorized revision.
 
 ## Delegation Prompt Shape
 

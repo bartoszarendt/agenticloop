@@ -31,6 +31,7 @@ import {
   runPreflight,
   PreflightError,
 } from '../src/github-preflight.js';
+import { evaluateGitHubReviewAudit } from '../src/github-review-audit.js';
 
 const HEAD = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0';
 const LOOP_ACCOUNT = { login: 'loop-bot', type: 'User' };
@@ -48,14 +49,14 @@ function issueBody(checks) {
 }
 
 function prBody({ head = HEAD, entries = [], evidenceExtra = [] } = {}) {
-  const lines = ['## Scope Completed', 'Did the thing.', '', '## Evidence', `Current PR head: ${head}`, ''];
+  const lines = ['## Scope Completed', 'Did the thing.', '', '## Artifacts', `PR at ${head}.`, '', '## Evidence', `Current PR head: ${head}`, ''];
   for (const e of entries) {
     lines.push(`- Required check: ${e.check}`);
     if (e.verdict !== undefined) lines.push(`  Verdict: ${e.verdict}`);
     if (e.evidence !== undefined) lines.push(`  Evidence: ${e.evidence}`);
   }
   lines.push(...evidenceExtra);
-  lines.push('', '## Deviations', 'None.');
+  lines.push('', '## Deviations', 'None.', '', '## Known Gaps', 'None.', '', '## Follow-Ups', 'None.');
   return lines.join('\n');
 }
 
@@ -125,6 +126,47 @@ function trustedVerificationComment(entries, checkId = 'RC-1') {
   return {
     body: `${verificationComment(entries, checkId)}\n\n[[agent: maintainer]]`,
     author: LOOP_ACCOUNT,
+  };
+}
+
+function needsRevisionComment({ artifact = HEAD, findings = ['F-1'], author = LOOP_ACCOUNT } = {}) {
+  return {
+    id: 100 + findings.length,
+    html_url: `https://example.invalid/comments/${100 + findings.length}`,
+    created_at: '2026-07-25T10:00:00Z',
+    body: [
+      'AGENT_REVIEW_STATUS: needs_revision',
+      'AGENT_REVIEW_MODE: host_subagent',
+      `AGENT_REVIEW_ARTIFACT: ${artifact}`,
+      `AGENT_REVIEW_FINDINGS: ${findings.join(', ')}`,
+      '',
+      '[[agent: maintainer]]',
+    ].join('\n'),
+    user: author,
+  };
+}
+
+function checkpointComment({ artifact = HEAD, reviewCount = 3, author = LOOP_ACCOUNT, cause = 'implementation_defect' } = {}) {
+  return {
+    id: 200 + reviewCount,
+    html_url: `https://example.invalid/comments/${200 + reviewCount}`,
+    created_at: '2026-07-25T10:01:00Z',
+    body: [
+      '<!-- AGENTIC_LOOP_REVIEW_ROUND_CHECKPOINT -->',
+      '',
+      '## Review Round Checkpoint',
+      '',
+      '- Direction: targeted_revision',
+      `- Cause: ${cause}`,
+      `- Review count: ${reviewCount}`,
+      `- Artifact: ${artifact}`,
+      '- Target: repair F-1',
+      '- Reference: maintainer finding F-1',
+      `- Orchestrator: ${LOOP_ACCOUNT.login}`,
+      '',
+      '[[agent: orchestrator]]',
+    ].join('\n'),
+    user: author,
   };
 }
 
@@ -289,8 +331,8 @@ describe('headMatches', () => {
   it('matches identical shas', () => {
     assert.equal(headMatches(HEAD, HEAD), true);
   });
-  it('matches a short prefix sha', () => {
-    assert.equal(headMatches('a1b2c3d', HEAD), true);
+  it('rejects a short prefix sha', () => {
+    assert.equal(headMatches('a1b2c3d', HEAD), false);
   });
   it('rejects a different sha', () => {
     assert.equal(headMatches('deadbeef', HEAD), false);
@@ -619,7 +661,7 @@ describe('evaluatePreflight', () => {
     const prData = {
       number: 42,
       headRefOid: HEAD,
-      body: `## Scope Completed\nDid it.\nCurrent PR head: ${HEAD}`,
+      body: `## Scope Completed\nDid it.\n## Artifacts\nPR at ${HEAD}.\nCurrent PR head: ${HEAD}`,
       statusCheckRollup: [],
     };
     const issueData = { number: 7, body: issueBody(['`npm test`']) };
@@ -632,7 +674,7 @@ describe('evaluatePreflight', () => {
     const prData = {
       number: 42,
       headRefOid: HEAD,
-      body: '## Evidence\n- Required check: `npm test`\n  Verdict: passed\n  Evidence: ok',
+      body: '## Scope Completed\nDone.\n## Artifacts\nPR.\n## Evidence\n- Required check: `npm test`\n  Verdict: passed\n  Evidence: ok',
       statusCheckRollup: [],
     };
     const issueData = { number: 7, body: issueBody(['`npm test`']) };
@@ -831,7 +873,7 @@ describe('runPreflight (injected gh runner)', () => {
     };
     const issueData = { number: 7, body: issueBody(['`npm test`']), comments: [] };
     let issueArgs = [];
-    let commentApiArgs = [];
+    const commentApiArgs = [];
     const runner = (command, args) => {
       assert.equal(command, 'gh');
       if (args[0] === 'pr') return { status: 0, stdout: JSON.stringify(prData), stderr: '' };
@@ -842,7 +884,7 @@ describe('runPreflight (injected gh runner)', () => {
       if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'o/r' }), stderr: '' };
       if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify(LOOP_ACCOUNT), stderr: '' };
       if (args[0] === 'api' && args.includes('--paginate')) {
-        commentApiArgs = args;
+        commentApiArgs.push(args);
         return { status: 0, stdout: JSON.stringify([issueData.comments ?? []]), stderr: '' };
       }
       throw new Error(`unexpected gh call: ${args.join(' ')}`);
@@ -850,8 +892,9 @@ describe('runPreflight (injected gh runner)', () => {
     const result = runPreflight({ pr: 42, commandRunner: runner });
     assert.equal(result.ok, true, JSON.stringify(result.errors));
     assert.doesNotMatch(issueArgs[issueArgs.indexOf('--json') + 1], /comments/);
-    assert.ok(commentApiArgs.includes('--paginate') && commentApiArgs.includes('--slurp'));
-    assert.ok(commentApiArgs.some(arg => /issues\/7\/comments\?per_page=100$/.test(arg)));
+    assert.ok(commentApiArgs.some(args => args.includes('--paginate') && args.includes('--slurp')));
+    assert.ok(commentApiArgs.some(args => args.some(arg => /issues\/7\/comments\?per_page=100$/.test(arg))));
+    assert.ok(commentApiArgs.some(args => args.some(arg => /issues\/42\/comments\?per_page=100$/.test(arg))));
   });
 
   it('validates marked comments returned on later paginated API pages', () => {
@@ -910,5 +953,1150 @@ describe('runPreflight (injected gh runner)', () => {
 
   it('throws PreflightError on a non-positive --pr', () => {
     assert.throws(() => runPreflight({ pr: '0' }), PreflightError);
+  });
+
+  function productionHistoryRunner(prData, issueData, { comments = [], reviews = [] } = {}) {
+    return (command, args) => {
+      assert.equal(command, 'gh');
+      if (args[0] === 'pr') return { status: 0, stdout: JSON.stringify(prData), stderr: '' };
+      if (args[0] === 'issue') return { status: 0, stdout: JSON.stringify(issueData), stderr: '' };
+      if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'o/r' }), stderr: '' };
+      if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify(LOOP_ACCOUNT), stderr: '' };
+      if (args[0] === 'api' && args.includes('--paginate')) {
+        const endpoint = args.find(arg => /^repos\/o\/r\//.test(arg));
+        if (/issues\/7\/comments/.test(endpoint)) return { status: 0, stdout: JSON.stringify([[]]), stderr: '' };
+        if (/issues\/42\/comments/.test(endpoint)) return { status: 0, stdout: JSON.stringify([[], comments]), stderr: '' };
+        if (/pulls\/42\/reviews/.test(endpoint)) return { status: 0, stdout: JSON.stringify([reviews]), stderr: '' };
+      }
+      throw new Error(`unexpected gh call: ${args.join(' ')}`);
+    };
+  }
+
+  it('enforces the default review budget from paginated PR conversation comments', () => {
+    const prData = {
+      number: 42,
+      headRefOid: 'b'.repeat(40),
+      body: prBody({ head: 'b'.repeat(40), entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+      closingIssuesReferences: [{ number: 7 }],
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['`npm test`']) };
+    const comments = [
+      needsRevisionComment(),
+      needsRevisionComment(),
+      needsRevisionComment(),
+    ];
+    const result = runPreflight({
+      pr: 42,
+      commandRunner: productionHistoryRunner(prData, issueData, { comments }),
+    });
+    assert.equal(result.ok, false, result.errors.join('\n'));
+    assert.ok(result.errors.some(error => /checkpoint.*required|budget.*exhausted/i.test(error)));
+  });
+
+  it('derives a non-default review_budget from linked task frontmatter', () => {
+    const artifact = 'b'.repeat(40);
+    const prData = {
+      number: 42,
+      headRefOid: artifact,
+      body: prBody({ head: artifact, entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+      closingIssuesReferences: [{ number: 7 }],
+      statusCheckRollup: [],
+    };
+    const issueData = {
+      number: 7,
+      body: `---\nreview_budget: 1\n---\n\n${issueBody(['\`npm test\`'])}`,
+    };
+    const result = runPreflight({
+      pr: 42,
+      commandRunner: productionHistoryRunner(prData, issueData, {
+        comments: [needsRevisionComment()],
+      }),
+    });
+    assert.equal(result.ok, false, result.errors.join('\n'));
+    assert.ok(result.errors.some(error => /budget.*1|review round budget/i.test(error)));
+  });
+
+  it('uses a trusted checkpoint from the PR conversation to authorize revision A to B', () => {
+    const artifactB = 'b'.repeat(40);
+    const prData = {
+      number: 42,
+      headRefOid: artifactB,
+      body: prBody({ head: artifactB, entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) + `\n\n## Revision Resolution\n\n- [F-1] resolved: repaired the evidence on ${artifactB}`,
+      closingIssuesReferences: [{ number: 7 }],
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['`npm test`']) };
+    const comments = [
+      needsRevisionComment(),
+      needsRevisionComment(),
+      needsRevisionComment(),
+      checkpointComment(),
+    ];
+    const result = runPreflight({
+      pr: 42,
+      commandRunner: productionHistoryRunner(prData, issueData, { comments }),
+    });
+    assert.equal(result.ok, true, result.errors.join('\n'));
+    assert.equal(result.checkpointValidation?.authorized, true);
+  });
+
+  it('does not accept an untrusted or malformed latest checkpoint carrier', () => {
+    const artifactB = 'b'.repeat(40);
+    const prData = {
+      number: 42,
+      headRefOid: artifactB,
+      body: prBody({ head: artifactB, entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+      closingIssuesReferences: [{ number: 7 }],
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['`npm test`']) };
+    const comments = [
+      needsRevisionComment(),
+      needsRevisionComment(),
+      needsRevisionComment(),
+      checkpointComment(),
+      {
+        ...checkpointComment(),
+        body: '<!-- AGENTIC_LOOP_REVIEW_ROUND_CHECKPOINT -->\n\n## Review Round Checkpoint\n\n- Direction: targeted_revision',
+      },
+    ];
+    const result = runPreflight({
+      pr: 42,
+      commandRunner: productionHistoryRunner(prData, issueData, { comments }),
+    });
+    assert.equal(result.ok, false, result.errors.join('\n'));
+    assert.ok(result.errors.some(error => /checkpoint/i.test(error)));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 29: exact-head, path/deviation, summary, and attribution tests
+// ---------------------------------------------------------------------------
+
+describe('Phase 29 - exact head identity', () => {
+  it('rejects a seven-character SHA prefix in the PR body marker', () => {
+    const shortHead = HEAD.slice(0, 7);
+    const prData = {
+      number: 42,
+      headRefOid: HEAD,
+      body: prBody({ head: shortHead, entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['`npm test`']) };
+    const result = evaluatePreflight({ prData, issueData });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(e => /stale/.test(e)), result.errors.join('\n'));
+  });
+
+  it('rejects a missing head marker', () => {
+    const prData = {
+      number: 42,
+      headRefOid: HEAD,
+      body: '## Scope Completed\nDone.\n## Artifacts\nPR.\n## Evidence\n- Required check: `npm test`\n  Verdict: passed\n  Evidence: ok',
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['`npm test`']) };
+    const result = evaluatePreflight({ prData, issueData });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(e => /Current PR head/.test(e)));
+  });
+
+  it('accepts an exact full 40-character SHA', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+  });
+});
+
+describe('Phase 29 - path/deviation validation', () => {
+  const devIssueBody = [
+    '---',
+    'allowed_paths:',
+    '  - src/**',
+    '  - test/**',
+    '---',
+    '',
+    '# T-001 Sample',
+    '',
+    '## Required Checks',
+    '- `npm test`',
+    '',
+    '## Acceptance Criteria',
+    '- done',
+  ].join('\n');
+
+  it('accepts when all PR files match allowed_paths', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        files: [{ path: 'src/foo.js' }, { path: 'test/foo.test.js' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: devIssueBody, comments: [] },
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+  });
+
+  it('rejects unexpected file without deviation declaration', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        files: [{ path: 'src/foo.js' }, { path: 'package.json' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: devIssueBody, comments: [] },
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(e => /unexpected file.*package\.json/.test(e)), result.errors.join('\n'));
+  });
+
+  it('accepts exact path plus rationale deviation', () => {
+    const body = prBody({
+      entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }],
+    });
+    const bodyWithDeviation = body.replace('## Deviations\nNone.', '## Deviations\n- `package.json`: added new dependency for feature X');
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: bodyWithDeviation,
+        files: [{ path: 'src/foo.js' }, { path: 'package.json' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: devIssueBody, comments: [] },
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+  });
+
+  it('rejects deviation without a reason', () => {
+    const body = prBody({
+      entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }],
+    });
+    const bodyWithBadDeviation = body.replace('## Deviations\nNone.', '## Deviations\n- `package.json`:');
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: bodyWithBadDeviation,
+        files: [{ path: 'src/foo.js' }, { path: 'package.json' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: devIssueBody, comments: [] },
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(e => /empty reason/.test(e)), result.errors.join('\n'));
+  });
+
+  it('handles rename destinations in PR files', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        files: [{ path: 'src/old.js' }, { path: 'src/new.js' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: devIssueBody, comments: [] },
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+  });
+});
+
+describe('Phase 29 - completion summary validation', () => {
+  it('rejects missing Artifacts section', () => {
+    const prData = {
+      number: 42,
+      headRefOid: HEAD,
+      body: '## Scope Completed\nDone.\n## Evidence\nCurrent PR head: ' + HEAD + '\n- Required check: `npm test`\n  Verdict: passed\n  Evidence: ok\n## Deviations\nNone.',
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['`npm test`']), comments: [] };
+    const result = evaluatePreflight({ prData, issueData });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(e => /Artifacts/.test(e)));
+  });
+
+  it('accepts valid summary with None sections', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+  });
+
+  it('rejects artifact reference contradicting current head', () => {
+    const wrongSha = 'f'.repeat(40);
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] });
+    const bodyWithWrongRef = body.replace(`PR at ${HEAD}.`, `PR at ${wrongSha}.`);
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: bodyWithWrongRef,
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(e => /contradicts/.test(e)), result.errors.join('\n'));
+  });
+});
+
+describe('Phase 29 - attribution validation', () => {
+  it('does not reject a human-authored commit without trailers', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        statusCheckRollup: [],
+        commits: [{ oid: HEAD, messageHeadline: 'fix: bug', messageBody: '', message: 'fix: bug' }],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(result.attributionValidation.established, false);
+  });
+
+  it('rejects mechanically inconsistent agent attribution', () => {
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) + '\n\n[[agent: engineer]]';
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body,
+        statusCheckRollup: [],
+        commits: [{ oid: HEAD, messageHeadline: 'fix: bug', messageBody: 'Task: #7\nAgent: maintainer', message: 'fix: bug\nTask: #7\nAgent: maintainer' }],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(e => /Agent:.*does not match/.test(e)), result.errors.join('\n'));
+  });
+
+  it('accepts consistent agent attribution', () => {
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) + '\n\n[[agent: engineer]]';
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body,
+        statusCheckRollup: [],
+        commits: [{ oid: HEAD, messageHeadline: 'feat: impl', messageBody: 'Task: #7\nAgent: engineer', message: 'feat: impl\nTask: #7\nAgent: engineer' }],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.equal(result.attributionValidation.established, true);
+  });
+});
+
+describe('Phase 29 - structured failure categories', () => {
+  it('returns categorized errors on failure', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [] }),
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.ok, false);
+    assert.ok(Array.isArray(result.failureCategories));
+    assert.ok(result.failureCategories.length > 0);
+    assert.ok(result.failureCategories.every(c => c.category && Array.isArray(c.errors)));
+  });
+
+  it('returns empty categories on success', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.failureCategories, []);
+  });
+});
+
+// ============================================================================
+// Phase 29 - Characterization tests for confirmed defects (should fail before fixes)
+// ============================================================================
+
+describe('Phase 29 - Defect: canonical Task: T-001 rejected in favor of #7', () => {
+  function issueBodyWithTaskId(taskId) {
+    return [
+      '---',
+      `task_id: ${taskId}`,
+      '---',
+      '',
+      '# T-001 Sample',
+      '',
+      '## Required Checks',
+      '- `npm test`',
+      '',
+      '## Acceptance Criteria',
+      '- done',
+    ].join('\n');
+  }
+
+  it('FAILS: canonical Task: T-001 trailer is rejected when issue has task_id T-001', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) + '\n\n[[agent: engineer]]',
+        statusCheckRollup: [],
+        commits: [{ oid: HEAD, messageHeadline: 'feat: impl', messageBody: 'Task: T-001\nAgent: engineer', message: 'feat: impl\nTask: T-001\nAgent: engineer' }],
+      },
+      issueData: { number: 7, body: issueBodyWithTaskId('T-001'), comments: [] },
+    });
+    // Currently fails because linkedTaskId is `#7` not `T-001`
+    // After fix: should pass with attributionEstablished = true
+    assert.equal(result.ok, true, `Expected ok=true, got errors: ${result.errors.join('; ')}`);
+    assert.equal(result.attributionValidation.established, true);
+  });
+});
+
+describe('Phase 29 - Defect: malformed allowed_paths disables scope validation', () => {
+  function issueBodyWithAllowedPaths(value) {
+    return [
+      '---',
+      `allowed_paths: ${value}`,
+      '---',
+      '',
+      '# T-001 Sample',
+      '',
+      '## Required Checks',
+      '- `npm test`',
+      '',
+      '## Acceptance Criteria',
+      '- done',
+    ].join('\n');
+  }
+
+  it('FAILS: non-list allowed_paths is a hard error, not silently ignored', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        files: [{ path: 'src/foo.js' }, { path: 'package.json' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBodyWithAllowedPaths('"not-a-list"'), comments: [] },
+    });
+    // Currently: silently ignores non-list and passes
+    // After fix: should fail with hard error
+    assert.equal(result.ok, false, 'Expected failure for non-list allowed_paths');
+    assert.ok(result.errors.some(e => /must be a YAML list/.test(e)), `Expected 'must be a YAML list' error, got: ${result.errors.join('; ')}`);
+  });
+
+  it('FAILS: allowed_paths as scalar string is a hard error', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        files: [{ path: 'src/foo.js' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBodyWithAllowedPaths('src/**'), comments: [] },
+    });
+    assert.equal(result.ok, false, 'Expected failure for scalar allowed_paths');
+    assert.ok(result.errors.some(e => /must be a YAML list/.test(e)), `Expected 'must be a YAML list' error, got: ${result.errors.join('; ')}`);
+  });
+});
+
+describe('Phase 29 - Defect: unsafe path patterns silently discarded', () => {
+  function issueBodyWithUnsafePatterns(patterns) {
+    const patternLines = patterns.map(p => `  - ${p}`).join('\n');
+    return [
+      '---',
+      `allowed_paths:\n${patternLines}`,
+      '---',
+      '',
+      '# T-001 Sample',
+      '',
+      '## Required Checks',
+      '- `npm test`',
+      '',
+      '## Acceptance Criteria',
+      '- done',
+    ].join('\n');
+  }
+
+  it('FAILS: absolute path pattern is a hard error, not silently discarded', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        files: [{ path: 'src/foo.js' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBodyWithUnsafePatterns(['/absolute/path']), comments: [] },
+    });
+    // Currently: silently discards unsafe pattern, scope becomes empty, validation may pass incorrectly
+    // After fix: should fail with hard error
+    assert.equal(result.ok, false, 'Expected failure for absolute path pattern');
+    assert.ok(result.errors.some(e => /unsafe or malformed/.test(e) || /malformed/.test(e)), `Expected unsafe pattern error, got: ${result.errors.join('; ')}`);
+  });
+
+  it('FAILS: path traversal pattern is a hard error', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        files: [{ path: 'src/foo.js' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBodyWithUnsafePatterns(['../outside']), comments: [] },
+    });
+    assert.equal(result.ok, false, 'Expected failure for path traversal pattern');
+    assert.ok(result.errors.some(e => /unsafe or malformed/.test(e) || /malformed/.test(e)), `Expected unsafe pattern error, got: ${result.errors.join('; ')}`);
+  });
+
+  it('FAILS: Windows drive letter pattern is a hard error', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        files: [{ path: 'src/foo.js' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBodyWithUnsafePatterns(['C:/windows-pattern']), comments: [] },
+    });
+    assert.equal(result.ok, false, 'Expected failure for Windows drive letter pattern');
+    assert.ok(result.errors.some(e => /unsafe or malformed/.test(e) || /malformed/.test(e)), `Expected unsafe pattern error, got: ${result.errors.join('; ')}`);
+  });
+
+  it('FAILS: mixed valid/invalid list fails rather than partially applying', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        files: [{ path: 'src/foo.js' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBodyWithUnsafePatterns(['src/**', '../outside']), comments: [] },
+    });
+    assert.equal(result.ok, false, 'Expected failure for mixed valid/invalid list');
+    assert.ok(result.errors.some(e => /unsafe or malformed/.test(e) || /malformed/.test(e)), `Expected unsafe pattern error, got: ${result.errors.join('; ')}`);
+  });
+});
+
+describe('Phase 29 - Defect: fenced/quoted/indented attribution treated as live', () => {
+  it('FAILS: fenced code block with [[agent: engineer]] is ignored (not treated as live)', () => {
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) +
+      '\n```\n[[agent: engineer]]\n```\n';
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body,
+        statusCheckRollup: [],
+        commits: [{ oid: HEAD, messageHeadline: 'feat: impl', messageBody: 'Task: T-001\nAgent: engineer', message: 'feat: impl\nTask: T-001\nAgent: engineer' }],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    // Currently: treats fenced trailer as live, establishes attribution
+    // After fix: should NOT establish attribution from fenced code
+    assert.equal(result.attributionValidation.established, false, 'Fenced trailer should not establish attribution');
+  });
+
+  it('FAILS: blockquoted [[agent: engineer]] is ignored', () => {
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) +
+      '\n> [[agent: engineer]]\n';
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body,
+        statusCheckRollup: [],
+        commits: [{ oid: HEAD, messageHeadline: 'feat: impl', messageBody: 'Task: T-001\nAgent: engineer', message: 'feat: impl\nTask: T-001\nAgent: engineer' }],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.attributionValidation.established, false, 'Blockquoted trailer should not establish attribution');
+  });
+
+  it('FAILS: indented code block [[agent: engineer]] is ignored', () => {
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) +
+      '\n    [[agent: engineer]]\n';
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body,
+        statusCheckRollup: [],
+        commits: [{ oid: HEAD, messageHeadline: 'feat: impl', messageBody: 'Task: T-001\nAgent: engineer', message: 'feat: impl\nTask: T-001\nAgent: engineer' }],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.attributionValidation.established, false, 'Indented code trailer should not establish attribution');
+  });
+
+  it('FAILS: example trailer before real final trailer - only final live trailer counts', () => {
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) +
+      '\n```\n[[agent: engineer]]\n```\n\n[[agent: maintainer]]\n';
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body,
+        statusCheckRollup: [],
+        commits: [{ oid: HEAD, messageHeadline: 'feat: impl', messageBody: 'Task: T-001\nAgent: maintainer', message: 'feat: impl\nTask: T-001\nAgent: maintainer' }],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    // After fix: should use the final live trailer (maintainer), not the fenced example (engineer)
+    assert.equal(result.attributionValidation.established, true);
+    // The body role should be maintainer, commit agent should be maintainer
+  });
+});
+
+describe('Phase 29 - Defect: commit trailer regexes match mid-prose', () => {
+  it('mid-prose "Task: T-001" is not treated as a valid trailer', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) + '\n\n[[agent: engineer]]',
+        statusCheckRollup: [],
+        commits: [{ oid: HEAD, messageHeadline: 'feat: impl', messageBody: 'This commit implements Task: T-001 as requested', message: 'feat: impl\nThis commit implements Task: T-001 as requested' }],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    // A final agent handoff establishes attribution, so prose cannot satisfy
+    // either required commit trailer.
+    assert.equal(result.attributionValidation.established, true);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(error => /missing required Task:|missing required Agent:/.test(error)));
+  });
+
+  it('mid-prose "Agent: engineer" is not treated as a valid trailer', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) + '\n\n[[agent: engineer]]',
+        statusCheckRollup: [],
+        commits: [{ oid: HEAD, messageHeadline: 'feat: impl', messageBody: 'Implemented by Agent: engineer per spec', message: 'feat: impl\nImplemented by Agent: engineer per spec' }],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.attributionValidation.established, true);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(error => /missing required Task:|missing required Agent:/.test(error)));
+  });
+
+  it('duplicate trailers fail', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) + '\n\n[[agent: engineer]]',
+        statusCheckRollup: [],
+        commits: [{ oid: HEAD, messageHeadline: 'feat: impl', messageBody: 'Task: T-001\nTask: T-002\nAgent: engineer', message: 'feat: impl\nTask: T-001\nTask: T-002\nAgent: engineer' }],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    // Duplicate Task: trailers should fail
+    assert.ok(result.errors.some(e => /duplicate/i.test(e)), 'Duplicate Task trailers should fail');
+  });
+
+  it('conflicting trailers fail', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) + '\n\n[[agent: engineer]]',
+        statusCheckRollup: [],
+        commits: [{ oid: HEAD, messageHeadline: 'feat: impl', messageBody: 'Task: T-001\nAgent: engineer\nAgent: maintainer', message: 'feat: impl\nTask: T-001\nAgent: engineer\nAgent: maintainer' }],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.ok(result.errors.some(e => /conflict/i.test(e) || /duplicate/i.test(e)), 'Conflicting Agent trailers should fail');
+  });
+});
+
+describe('Phase 29 - Defect: summary validation allows placeholders and rejects historical SHAs', () => {
+  it('FAILS: placeholder "TBD" in Artifacts section is rejected', () => {
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] })
+      .replace('PR at ' + HEAD + '.', 'PR at TBD.');
+    const result = evaluatePreflight({
+      prData: { number: 42, headRefOid: HEAD, body, statusCheckRollup: [] },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.ok, false, 'Placeholder TBD in Artifacts should fail');
+    assert.ok(result.errors.some(e => /placeholder|TBD|substantive/.test(e)), `Expected placeholder error, got: ${result.errors.join('; ')}`);
+  });
+
+  it('FAILS: placeholder "None" in Artifacts section is rejected', () => {
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] })
+      .replace('PR at ' + HEAD + '.', 'PR at None.');
+    const result = evaluatePreflight({
+      prData: { number: 42, headRefOid: HEAD, body, statusCheckRollup: [] },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.ok, false, 'Placeholder None in Artifacts should fail');
+  });
+
+  it('FAILS: empty bullet in Artifacts section is rejected', () => {
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] })
+      .replace('PR at ' + HEAD + '.\n', 'PR at ' + HEAD + '.\n- \n');
+    const result = evaluatePreflight({
+      prData: { number: 42, headRefOid: HEAD, body, statusCheckRollup: [] },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.ok, false, 'Empty bullet in Artifacts should fail');
+  });
+
+  it('FAILS: legitimate base SHA in Artifacts (for context) is rejected', () => {
+    const baseSha = 'b'.repeat(40);
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) +
+      '\nBase: ' + baseSha + '\n';
+    const result = evaluatePreflight({
+      prData: { number: 42, headRefOid: HEAD, body, statusCheckRollup: [] },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    // Currently: rejects any 40-char SHA that doesn't match head
+    // After fix: should allow base SHAs when clearly labeled
+    assert.equal(result.ok, true, 'Legitimate base SHA reference should be allowed');
+  });
+
+  it('FAILS: commit range (base..head) in Artifacts is rejected', () => {
+    const baseSha = 'b'.repeat(40);
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) +
+      '\nRange: ' + baseSha + '..' + HEAD + '\n';
+    const result = evaluatePreflight({
+      prData: { number: 42, headRefOid: HEAD, body, statusCheckRollup: [] },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.ok, true, 'Commit range reference should be allowed');
+  });
+
+  it('FAILS: short current head SHA (7 chars) in Artifacts is rejected', () => {
+    const shortHead = HEAD.slice(0, 7);
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] })
+      .replace('PR at ' + HEAD + '.', 'PR at ' + shortHead + '.');
+    const result = evaluatePreflight({
+      prData: { number: 42, headRefOid: HEAD, body, statusCheckRollup: [] },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+    });
+    assert.equal(result.ok, false, 'Short SHA for current artifact should fail');
+  });
+});
+
+describe('Phase 29 - Defect: structured error routing uses ambiguous substring matching', () => {
+  it('FAILS: missing Artifacts error categorized as summary_shape not head_identity', () => {
+    const prData = {
+      number: 42,
+      headRefOid: HEAD,
+      body: '## Scope Completed\nDone.\n## Evidence\nCurrent PR head: ' + HEAD + '\n- Required check: `npm test`\n  Verdict: passed\n  Evidence: ok',
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['`npm test`']), comments: [] };
+    const result = evaluatePreflight({ prData, issueData });
+    const cats = result.failureCategories;
+    const summaryCat = cats.find(c => c.category === 'summary_shape');
+    const headCat = cats.find(c => c.category === 'head_identity');
+    assert.ok(summaryCat, 'Should have summary_shape category');
+    assert.ok(summaryCat.errors.some(e => /Artifacts/.test(e)), 'Missing Artifacts should be in summary_shape');
+    assert.ok(!headCat || !headCat.errors.some(e => /Artifacts/.test(e)), 'Missing Artifacts should NOT be in head_identity');
+  });
+
+  it('FAILS: empty Evidence error categorized as summary_shape', () => {
+    const prData = {
+      number: 42,
+      headRefOid: HEAD,
+      body: '## Scope Completed\nDone.\n## Artifacts\nPR at ' + HEAD + '.\n## Evidence\n',
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['`npm test`']), comments: [] };
+    const result = evaluatePreflight({ prData, issueData });
+    const cats = result.failureCategories;
+    const summaryCat = cats.find(c => c.category === 'summary_shape');
+    assert.ok(summaryCat, 'Should have summary_shape category');
+    assert.ok(summaryCat.errors.some(e => /Evidence/.test(e)), 'Empty Evidence should be in summary_shape');
+  });
+
+  it('FAILS: wrong Task trailer error categorized as attribution', () => {
+    const prData = {
+      number: 42,
+      headRefOid: HEAD,
+      body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) + '\n\n[[agent: engineer]]',
+      statusCheckRollup: [],
+      commits: [{ oid: HEAD, messageHeadline: 'feat', messageBody: 'Task: WRONG-TASK\nAgent: engineer', message: 'feat\nTask: WRONG-TASK\nAgent: engineer' }],
+    };
+    const issueData = { number: 7, body: issueBody(['`npm test`']), comments: [] };
+    const result = evaluatePreflight({ prData, issueData });
+    const cats = result.failureCategories;
+    const attrCat = cats.find(c => c.category === 'attribution');
+    assert.ok(attrCat, 'Should have attribution category');
+    assert.ok(attrCat.errors.some(e => /Task:.*does not match/.test(e)), 'Wrong Task trailer should be in attribution');
+  });
+
+  it('FAILS: missing deviation error categorized as scope_deviations', () => {
+    const devIssueBody = [
+      '---',
+      'allowed_paths:',
+      '  - src/**',
+      '---',
+      '',
+      '# T-001 Sample',
+      '',
+      '## Required Checks',
+      '- `npm test`',
+      '',
+      '## Acceptance Criteria',
+      '- done',
+    ].join('\n');
+    const prData = {
+      number: 42,
+      headRefOid: HEAD,
+      body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+      files: [{ path: 'src/foo.js' }, { path: 'package.json' }],
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: devIssueBody, comments: [] };
+    const result = evaluatePreflight({ prData, issueData });
+    const cats = result.failureCategories;
+    const scopeCat = cats.find(c => c.category === 'scope_deviations');
+    assert.ok(scopeCat, 'Should have scope_deviations category');
+    assert.ok(scopeCat.errors.some(e => /unexpected file.*package\.json/.test(e)), 'Missing deviation should be in scope_deviations');
+  });
+
+  it('FAILS: stale head error categorized as head_identity', () => {
+    const prData = {
+      number: 42,
+      headRefOid: HEAD,
+      body: prBody({ head: 'deadbeefdeadbeef', entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['`npm test`']), comments: [] };
+    const result = evaluatePreflight({ prData, issueData });
+    const cats = result.failureCategories;
+    const headCat = cats.find(c => c.category === 'head_identity');
+    assert.ok(headCat, 'Should have head_identity category');
+    assert.ok(headCat.errors.some(e => /stale|head/.test(e)), 'Stale head should be in head_identity');
+  });
+
+  it('FAILS: missing checkpoint error categorized as review_checkpoint', () => {
+    const revisedHead = 'b'.repeat(40);
+    const reviewOutcomes = [
+      { status: 'needs_revision', artifact: HEAD },
+      { status: 'needs_revision', artifact: HEAD },
+      { status: 'needs_revision', artifact: HEAD },
+    ];
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: revisedHead,
+        body: prBody({ head: revisedHead, entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+      reviewOutcomes,
+      reviewBudget: 3,
+    });
+    const cats = result.failureCategories;
+    const checkpointCat = cats.find(c => c.category === 'review_checkpoint');
+    assert.ok(checkpointCat, 'Should have review_checkpoint category');
+    assert.ok(checkpointCat.errors.some(e => /checkpoint.*required|budget.*exhausted/i.test(e)),
+      `Expected checkpoint error in category, got: ${checkpointCat.errors.join('; ')}`);
+  });
+});
+
+describe('Phase 29 - Defect: stale deviation declarations not rejected', () => {
+  function devIssueBody() {
+    return [
+      '---',
+      'allowed_paths:',
+      '  - src/**',
+      '---',
+      '',
+      '# T-001 Sample',
+      '',
+      '## Required Checks',
+      '- `npm test`',
+      '',
+      '## Acceptance Criteria',
+      '- done',
+    ].join('\n');
+  }
+
+  it('FAILS: deviation for file not in current PR is rejected', () => {
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] })
+      .replace('## Deviations\nNone.', '## Deviations\n- `old-file.js`: removed in previous revision');
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body,
+        files: [{ path: 'src/foo.js' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: devIssueBody(), comments: [] },
+    });
+    assert.equal(result.ok, false, 'Stale deviation should fail');
+    assert.ok(result.errors.some(e => /deviation declared.*not in the current PR/.test(e)), `Expected stale deviation error, got: ${result.errors.join('; ')}`);
+  });
+
+  it('FAILS: deviation for file that IS in allowed_paths is rejected as unnecessary', () => {
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] })
+      .replace('## Deviations\nNone.', '## Deviations\n- `src/foo.js`: this is actually in scope');
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body,
+        files: [{ path: 'src/foo.js' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: devIssueBody(), comments: [] },
+    });
+    assert.equal(result.ok, false, 'Deviation for in-scope file should fail');
+    assert.ok(result.errors.some(e => /already covered|in scope|unnecessary/.test(e)), `Expected in-scope deviation error, got: ${result.errors.join('; ')}`);
+  });
+
+  it('FAILS: duplicate deviation paths are rejected', () => {
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] })
+      .replace('## Deviations\nNone.', '## Deviations\n- `package.json`: reason one\n- `package.json`: reason two');
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body,
+        files: [{ path: 'src/foo.js' }, { path: 'package.json' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: devIssueBody(), comments: [] },
+    });
+    assert.equal(result.ok, false, 'Duplicate deviation paths should fail');
+    assert.ok(result.errors.some(e => /duplicate/i.test(e)), `Expected duplicate deviation error, got: ${result.errors.join('; ')}`);
+  });
+});
+
+describe('Phase 29 - Defect: over-budget review without checkpoint passes', () => {
+  it('fourth revision without checkpoint should fail preflight', () => {
+    const revisedHead = 'b'.repeat(40);
+    const reviewOutcomes = [
+      { status: 'needs_revision', artifact: HEAD },
+      { status: 'needs_revision', artifact: HEAD },
+      { status: 'needs_revision', artifact: HEAD },
+    ];
+    const result = evaluatePreflight({
+      prData: { number: 42, headRefOid: revisedHead, body: prBody({ head: revisedHead, entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }), statusCheckRollup: [] },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+      reviewOutcomes,
+      reviewBudget: 3,
+    });
+    assert.equal(result.ok, false, 'Over-budget revision without checkpoint should fail');
+    assert.ok(result.checkpointValidation, 'Should have checkpoint validation result');
+    assert.equal(result.checkpointValidation.authorized, false, 'Should not be authorized');
+    assert.ok(result.checkpointValidation.errors.some(e => /checkpoint.*required|budget.*exhausted/i.test(e)),
+      `Expected checkpoint error, got: ${result.checkpointValidation.errors.join('; ')}`);
+  });
+
+  it('third revision within budget should pass without checkpoint', () => {
+    const reviewOutcomes = [
+      { status: 'needs_revision', artifact: HEAD },
+      { status: 'needs_revision', artifact: HEAD },
+    ];
+    const result = evaluatePreflight({
+      prData: { number: 42, headRefOid: HEAD, body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }), statusCheckRollup: [] },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+      reviewOutcomes,
+      reviewBudget: 3,
+    });
+    assert.equal(result.ok, true, 'Third revision within budget should pass');
+  });
+});
+
+describe('Phase 29 - Defect: checkpoint replay passes', () => {
+  it('replayed checkpoint after another needs_revision should fail', () => {
+    const artifactB = 'b'.repeat(40);
+    const artifactC = 'c'.repeat(40);
+    const reviewOutcomes = [
+      { status: 'needs_revision', artifact: HEAD },
+      { status: 'needs_revision', artifact: HEAD },
+      { status: 'needs_revision', artifact: HEAD },
+      { status: 'needs_revision', artifact: artifactB },
+    ];
+    const checkpointBody = [
+      '<!-- AGENTIC_LOOP_REVIEW_ROUND_CHECKPOINT -->',
+      '',
+      '## Review Round Checkpoint',
+      '',
+      '- Direction: targeted_revision',
+      '- Cause: implementation_defect',
+      '- Review count: 3',
+      `- Artifact: ${HEAD}`,
+      '- Target: fix failing test evidence',
+      '- Reference: maintainer finding F-1',
+      '- Orchestrator: loop-bot',
+      '',
+      '[[agent: orchestrator]]',
+    ].join('\n');
+    const comments = [{ body: checkpointBody }];
+    const result = evaluatePreflight({
+      prData: { number: 42, headRefOid: artifactC, body: prBody({ head: artifactC, entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }), statusCheckRollup: [], comments },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+      reviewOutcomes,
+      reviewBudget: 3,
+    });
+    assert.equal(result.ok, false, 'Checkpoint replay should fail');
+    assert.ok(result.checkpointValidation, 'Should have checkpoint validation result');
+    assert.equal(result.checkpointValidation.authorized, false, 'Should not be authorized');
+    assert.ok(result.checkpointValidation.errors.some(e => /consumed|replay|stale|review_count.*does not match/i.test(e)),
+      `Expected replay/count mismatch error, got: ${result.checkpointValidation.errors.join('; ')}`);
+  });
+
+  it('fresh targeted checkpoint at budget boundary should authorize one revision', () => {
+    const artifactB = 'b'.repeat(40);
+    const reviewOutcomes = [
+      { status: 'needs_revision', artifact: HEAD },
+      { status: 'needs_revision', artifact: HEAD },
+      { status: 'needs_revision', artifact: HEAD },
+    ];
+    const checkpointBody = [
+      '<!-- AGENTIC_LOOP_REVIEW_ROUND_CHECKPOINT -->',
+      '',
+      '## Review Round Checkpoint',
+      '',
+      '- Direction: targeted_revision',
+      '- Cause: implementation_defect',
+      '- Review count: 3',
+      `- Artifact: ${HEAD}`,
+      '- Target: fix failing test evidence',
+      '- Reference: maintainer finding F-1',
+      '- Orchestrator: loop-bot',
+      '',
+      '[[agent: orchestrator]]',
+    ].join('\n');
+    const comments = [{ body: checkpointBody }];
+    const result = evaluatePreflight({
+      prData: { number: 42, headRefOid: artifactB, body: prBody({ head: artifactB, entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }), statusCheckRollup: [], comments },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+      reviewOutcomes,
+      reviewBudget: 3,
+    });
+    assert.equal(result.ok, true, 'Targeted checkpoint should authorize one revision');
+  });
+});
+
+describe('Phase 29 - Defect: missing resolution-matrix row passes', () => {
+  it('re-review without resolution matrix should fail', () => {
+    const reviewOutcomes = [
+      { status: 'needs_revision', artifact: HEAD, findingIds: ['F-1', 'F-2', 'F-3'] },
+    ];
+    const result = evaluatePreflight({
+      prData: { number: 42, headRefOid: HEAD, body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }), statusCheckRollup: [] },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+      reviewOutcomes,
+    });
+    assert.equal(result.ok, false, 'Re-review without resolution matrix should fail');
+    assert.ok(result.resolutionMatrixValidation === null, 'Should have no matrix validation because matrix is missing');
+    assert.ok(result.errors.some(e => /resolution matrix/i.test(e)),
+      `Expected resolution matrix error, got: ${result.errors.join('; ')}`);
+  });
+
+  it('first review without prior findings should pass without matrix', () => {
+    const result = evaluatePreflight({
+      prData: { number: 42, headRefOid: HEAD, body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }), statusCheckRollup: [] },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+      reviewOutcomes: [],
+    });
+    assert.equal(result.ok, true, 'First review should pass without matrix');
+  });
+
+  it('complete resolution matrix should allow re-review', () => {
+    const reviewOutcomes = [
+      { status: 'needs_revision', artifact: HEAD, findingIds: ['F-1', 'F-2'] },
+    ];
+    const matrixBody = [
+      '## Revision Resolution',
+      '',
+      '- [F-1] resolved: Fixed missing test evidence on commit ' + HEAD,
+      '- [F-2] disputed: Scope deviation was declared [ref: maintainer review comment 5]',
+    ].join('\n');
+    const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) + '\n\n' + matrixBody;
+    const result = evaluatePreflight({
+      prData: { number: 42, headRefOid: HEAD, body, statusCheckRollup: [] },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+      reviewOutcomes,
+    });
+    assert.equal(result.ok, true, 'Complete resolution matrix should allow re-review');
+  });
+});
+
+describe('Phase 29 - Defect: dispatched artifact A, current head B not rejected', () => {
+  it('push from A to B during review lease should fail audit', () => {
+    const result = evaluateGitHubReviewAudit({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        closingIssuesReferences: [{ number: 7 }],
+        comments: [{
+          body: `AGENT_REVIEW_STATUS: accepted\nAGENT_REVIEW_MODE: single_agent_fallback\nAGENT_REVIEW_ARTIFACT: ${HEAD}\n\n[[agent: maintainer]]`,
+          author: { login: 'loop-bot', type: 'User' },
+        }],
+        reviews: [],
+        commits: [{ oid: HEAD, messageHeadline: 'feat', messageBody: '', message: 'feat' }],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']) },
+      expectedAccount: LOOP_ACCOUNT,
+      expectedArtifact: HEAD,
+    });
+    assert.equal(result.ok, true, 'Same artifact should pass');
+    assert.equal(result.expectedArtifact, HEAD, 'Should include expected artifact in result');
+
+    // Now test with mismatched artifact
+    const differentHead = 'b'.repeat(40);
+    const resultMismatch = evaluateGitHubReviewAudit({
+      prData: {
+        number: 42,
+        headRefOid: differentHead,
+        closingIssuesReferences: [{ number: 7 }],
+        comments: [{
+          body: `AGENT_REVIEW_STATUS: accepted\nAGENT_REVIEW_MODE: single_agent_fallback\nAGENT_REVIEW_ARTIFACT: ${differentHead}\n\n[[agent: maintainer]]`,
+          author: { login: 'loop-bot', type: 'User' },
+        }],
+        reviews: [],
+        commits: [{ oid: differentHead, messageHeadline: 'feat', messageBody: '', message: 'feat' }],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']) },
+      expectedAccount: LOOP_ACCOUNT,
+      expectedArtifact: HEAD,
+    });
+    assert.equal(resultMismatch.ok, false, 'Mismatched artifact should fail');
+    assert.ok(resultMismatch.errors.some(e => /dispatched artifact|expected.*artifact/i.test(e)),
+      `Expected artifact mismatch error, got: ${resultMismatch.errors.join('; ')}`);
   });
 });

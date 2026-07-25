@@ -152,12 +152,14 @@ export const COMMAND_REGISTRY = {
   },
   'github-review-audit': {
     summary: 'Verify artifact-bound GitHub review provenance for a PR.',
-    usage: 'agenticloop github-review-audit --pr <number> [--issue <number>] [--repo <owner/name>] [--expect-status <accepted|needs_revision>] [--json]',
+    usage: 'agenticloop github-review-audit --pr <number> [--issue <number>] [--repo <owner/name>] [--expect-status <accepted|needs_revision>] [--expect-artifact <sha>] [--workspace <path>] [--json]',
     options: [
       opt('pr', 'string', 'Pull request number to audit. Required.'),
       opt('issue', 'string', 'Linked task issue number (default: inferred from PR closing references).'),
       opt('repo', 'string', 'Target repository (default: gh-resolved current repo).'),
       opt('expect-status', 'string', 'Expected review status (default: accepted).', { enum: ['accepted', 'needs_revision'] }),
+      opt('expect-artifact', 'string', 'Expected dispatched artifact: a full 40-character commit SHA. When provided, the current PR head must equal this SHA.'),
+      opt('workspace', 'string', 'Optional local review workspace. Requires --expect-artifact and must resolve to that exact Git HEAD.'),
       jsonOption,
     ],
   },

@@ -291,6 +291,36 @@ describe('validateFilesTaskRecord review provenance', () => {
     const errors = validateFilesTaskRecord(content, 'T-001.md', { activeTaskBackend: 'files' });
     assert.deepEqual(errors, []);
   });
+
+  it('enforces files review history budget and a complete resolution matrix', () => {
+    const history = [
+      '## Review History',
+      '',
+      '### Review 1',
+      '- Status: needs_revision',
+      '- Mode: host_subagent',
+      '- Artifact: commit:abc123',
+      '- Findings: F-1',
+      '- Maintainer: maintainer',
+      '',
+      '### Review 2',
+      '- Status: needs_revision',
+      '- Mode: host_subagent',
+      '- Artifact: commit:abc123',
+      '- Findings: F-1',
+      '- Maintainer: maintainer',
+      '',
+      '### Review 3',
+      '- Status: needs_revision',
+      '- Mode: host_subagent',
+      '- Artifact: commit:abc123',
+      '- Findings: F-1',
+      '- Maintainer: maintainer',
+    ].join('\n');
+    const content = `${filesTaskRecord({ status: 'in-progress', implementationArtifact: 'commit:def456' })}\n\n${history}`;
+    const errors = validateFilesTaskRecord(content, 'T-001.md', { activeTaskBackend: 'files' });
+    assert.ok(errors.some(error => /checkpoint.*required|budget.*exhausted/i.test(error)), errors.join('\n'));
+  });
 });
 
 // ---------------------------------------------------------------------------

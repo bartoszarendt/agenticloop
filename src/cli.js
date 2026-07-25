@@ -799,9 +799,10 @@ async function cmdGithubReviewAudit(args, io) {
     return EXIT_USAGE;
   }
   const expectedStatus = opts.expectStatus ?? 'accepted';
+  const expectedArtifact = opts.expectArtifact ?? undefined;
   let result;
   try {
-    result = runGitHubReviewAudit({ pr: opts.pr, issue: opts.issue, repo: opts.repo, expectedStatus });
+    result = runGitHubReviewAudit({ pr: opts.pr, issue: opts.issue, repo: opts.repo, expectedStatus, expectedArtifact, workspace: opts.workspace });
   } catch (error) {
     if (!(error instanceof GitHubReviewAuditError)) throw error;
     if (asJson) io.out(JSON.stringify({ ok: false, errors: [error.message] }));
@@ -819,6 +820,8 @@ async function cmdGithubReviewAudit(args, io) {
     io.out(`  current head: ${result.headRefOid || 'unknown'}`);
     io.out(`  independent review required: ${result.independentReviewRequired}`);
     io.out(`  expected status: ${result.expectedStatus}`);
+    if (result.expectedArtifact) io.out(`  expected artifact: ${result.expectedArtifact}`);
+    if (result.reviewWorkspace?.provided) io.out(`  review workspace: ${result.reviewWorkspace.workspace} (${result.reviewWorkspace.head})`);
     if (result.outcome) io.out(`  outcome: ${result.outcome.status} via ${result.outcome.mode}`);
     if (result.ok) {
       io.out(`  provenance valid: yes`);
