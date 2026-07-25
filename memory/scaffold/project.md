@@ -1,5 +1,8 @@
 ---
 development_stage: unconfirmed
+default_attempt_budget: 5
+default_review_budget: 5
+default_audit_budget: 3
 max_parallel_implementation_lanes: 5
 task_backend: files
 event_logging: disabled
@@ -100,6 +103,17 @@ not apply one. `development_stage_rationale` and
 otherwise eligible parallel implementation lanes. It is not a total live-agent
 budget and does not apply automatically to review, coordination, or integration
 lanes.
+
+`default_attempt_budget` defaults to `5` and is the hard stop for equivalent
+attempts that produce no new evidence. Its precedence is task `attempt_budget`,
+then project `default_attempt_budget`, then built-in `5`. New tasks materialize
+the effective value; existing task records retain their stored value.
+
+`default_review_budget` defaults to `5` and is the checkpoint threshold for
+counted `needs_revision` outcomes on tasks that do not set `review_budget`.
+It is not a hard review cap. `default_audit_budget` defaults to `3` and applies
+when a new audit record has no explicit `audit new --budget` override. All three
+budget defaults and the implementation-lane ceiling must be positive safe integers.
 
 ## Verification Operating Facts
 
@@ -290,7 +304,7 @@ under `adapters.<host>.roleSettings.auditor`. The Maintainer model is never
 silently copied into the Auditor slot.
 
 The audit lifecycle, the six audit perspectives, verdicts, and the separate
-`audit_budget` (default 5) are owned by
+`audit_budget` (default 3) are owned by
 `agenticloop/skills/work-unit-audit/SKILL.md`.
 
 ## Optional GitHub Projection

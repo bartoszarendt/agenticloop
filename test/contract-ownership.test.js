@@ -330,13 +330,33 @@ describe('contract ownership', () => {
   it('the work-unit-audit skill owns the audit budget and closeout gate; roles reference it', () => {
     // Distinctive budget wording lives only in the canonical skill; role files
     // and methodology point at it rather than copying it.
-    const owners = ownersOf(body => body.includes('audit_budget` defaults to `5`'));
+    const owners = ownersOf(body => /^## 11\. Audit budget$/m.test(body));
     assert.deepEqual(owners, ['skills/work-unit-audit/SKILL.md'], owners.join(', '));
 
     assert.match(read('agents/auditor.md'), /\[\[work-unit-audit\]\]/);
     assert.match(read('agents/orchestrator.md'), /\[\[work-unit-audit\]\]/);
     assert.match(read('agents/maintainer.md'), /\[\[work-unit-audit\]\]/);
     assert.match(read('skills/task-closeout/SKILL.md'), /\[\[work-unit-audit\]\]/);
+  });
+
+  it('task-closeout owns the detailed conditional plan-progress procedure', () => {
+    const owners = ownersOf(body => /^### Conditional source-plan progress synchronization$/m.test(body));
+    assert.deepEqual(owners, ['skills/task-closeout/SKILL.md'], owners.join(', '));
+
+    const owner = read('skills/task-closeout/SKILL.md');
+    assert.match(owner, /documents\.plan/);
+    assert.match(owner, /Never invent a checkbox,\s+percentage, status vocabulary/);
+    assert.match(owner, /If no selected plan\s+exists, record no plan mutation and continue closeout normally/);
+    assert.match(owner, /no\s+explicit progress-update instruction is not a closeout failure/);
+    assert.match(owner, /mapping, authority, or the\s+write itself is ambiguous, prohibited, or fails, do not publish/);
+    assert.match(owner, /rerun idempotent/);
+    assert.match(owner, /before the final candidate freeze/);
+    assert.match(owner, /post-sync audit\s+certificate/);
+    const planSync = owner.indexOf('Complete the permitted plan update');
+    const baseline = owner.indexOf('audit baseline to that exact resulting artifact');
+    const marker = owner.indexOf('publish the closeout marker only after');
+    assert.ok(planSync >= 0 && baseline > planSync && marker > baseline,
+      'plan synchronization must precede baseline refresh, audit, and closeout marker');
   });
 
   it('keeps auditor-role rationale in methodology and operational constraints in the role', () => {

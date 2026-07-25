@@ -882,9 +882,9 @@ Review items are claims, not orders. Before implementing a review item, the engi
 
 If a review item is wrong or conflicts with the task record, the engineer lists it under `Disputed Items` in the revision summary with evidence.
 
-The next review must explicitly sustain or withdraw each disputed item. If sustained-and-disputed review rounds exhaust the attempt budget (default 3, or the task record's `attempt_budget`; see Attempt Budget in `agenticloop/AGENTIC_LOOP.md`), use [[blocked-state]] so a human can decide.
+The next review must explicitly sustain or withdraw each disputed item. If sustained-and-disputed review rounds exhaust the attempt budget (task `attempt_budget`, then project `default_attempt_budget`, then built-in 5; see Attempt Budget in `agenticloop/AGENTIC_LOOP.md`), use [[blocked-state]] so a human can decide.
 
-Distinct from a single sustained-and-disputed item: once `needs_revision` rounds on one task reach the task record's `review_budget` (default 3) – regardless of whether the findings repeat – the orchestrator runs the Review Round Checkpoint in `agenticloop/AGENTIC_LOOP.md` before routing any further revision.
+Distinct from a single sustained-and-disputed item: once `needs_revision` rounds on one task reach the task record's `review_budget` (default 5 unless the project or task materialized another value) – regardless of whether the findings repeat – the orchestrator runs the Review Round Checkpoint in `agenticloop/AGENTIC_LOOP.md` before routing any further revision. Acceptance does not itself update a source plan; [[task-closeout]] owns that conditional mutation before final certification.
 
 ## Mandatory triage before accepting
 

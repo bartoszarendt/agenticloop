@@ -292,10 +292,11 @@ export const AUDIT_INVOCATION_MODES = Object.freeze([
 
 export const AUDIT_BLOCKED_REASON_BUDGET_EXHAUSTED = 'audit_budget_exhausted';
 
-// Deliberately higher than the default-3 attempt and review budgets: this bounds
-// an expensive work-unit assurance loop while still allowing the initial audit
-// plus several remediation/re-audit cycles before mandatory human intervention.
-export const DEFAULT_AUDIT_BUDGET = 5;
+// Workflow defaults are centralized here so task validation, GitHub preflight,
+// telemetry, and record creation cannot drift from one another.
+export const DEFAULT_ATTEMPT_BUDGET = 5;
+export const DEFAULT_REVIEW_BUDGET = 5;
+export const DEFAULT_AUDIT_BUDGET = 3;
 
 export const WORK_UNIT_AUDIT_MODES = Object.freeze(['enabled', 'disabled']);
 export const DEFAULT_WORK_UNIT_AUDIT_MODE = 'enabled';

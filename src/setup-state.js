@@ -101,6 +101,9 @@ export function detectSetupState(target, options = {}) {
   let groupingProfile = null;
   let developmentStage = null;
   let maxParallelImplementationLanes = null;
+  let defaultAttemptBudget = PROJECT_MAP_DEFAULTS.default_attempt_budget;
+  let defaultReviewBudget = PROJECT_MAP_DEFAULTS.default_review_budget;
+  let defaultAuditBudget = PROJECT_MAP_DEFAULTS.default_audit_budget;
   let developmentStageConfirmed = false;
   // Absent project map still resolves to the default: work-unit audit is on.
   let workUnitAudit = resolveWorkUnitAudit(null);
@@ -116,6 +119,9 @@ export function detectSetupState(target, options = {}) {
       developmentStage = projectMap.development_stage ?? 'unconfirmed';
       maxParallelImplementationLanes = projectMap.max_parallel_implementation_lanes ??
         PROJECT_MAP_DEFAULTS.max_parallel_implementation_lanes;
+      defaultAttemptBudget = projectMap.default_attempt_budget ?? PROJECT_MAP_DEFAULTS.default_attempt_budget;
+      defaultReviewBudget = projectMap.default_review_budget ?? PROJECT_MAP_DEFAULTS.default_review_budget;
+      defaultAuditBudget = projectMap.default_audit_budget ?? PROJECT_MAP_DEFAULTS.default_audit_budget;
       developmentStageConfirmed = hasConfirmedDevelopmentStage(projectMap);
       workUnitAudit = resolveWorkUnitAudit(projectMap);
     } else {
@@ -208,6 +214,9 @@ export function detectSetupState(target, options = {}) {
     developmentStageConfirmed,
     workUnitAudit,
     maxParallelImplementationLanes,
+    defaultAttemptBudget,
+    defaultReviewBudget,
+    defaultAuditBudget,
     stateDirectoryExists,
     tasksDirectoryExists,
     decisionsDirectoryExists,
@@ -324,6 +333,9 @@ export function formatSetupChecklist(state) {
   if (state.maxParallelImplementationLanes) {
     lines.push(`  ${check(true)} Maximum implementation lanes: ${state.maxParallelImplementationLanes}`);
   }
+  lines.push(`  ${check(true)} Default equivalent-attempt budget: ${state.defaultAttemptBudget ?? PROJECT_MAP_DEFAULTS.default_attempt_budget}`);
+  lines.push(`  ${check(true)} Default review checkpoint budget: ${state.defaultReviewBudget ?? PROJECT_MAP_DEFAULTS.default_review_budget}`);
+  lines.push(`  ${check(true)} Default audit budget: ${state.defaultAuditBudget ?? PROJECT_MAP_DEFAULTS.default_audit_budget}`);
 
   if (state.taskBackend) {
     lines.push(`  ${check(true)} Task backend: ${state.taskBackend}`);

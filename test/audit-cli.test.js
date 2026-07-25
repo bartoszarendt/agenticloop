@@ -37,11 +37,15 @@ const PROJECT_MAP = [
   '',
 ].join('\n');
 
-function makeTarget(name) {
+function makeTarget(name, projectMapLines = []) {
   const target = mkdtempSync(join(tmpDir, `${name}-`));
   mkdirSync(join(target, '.agenticloop', 'audits'), { recursive: true });
   mkdirSync(join(target, '.agenticloop', 'tasks'), { recursive: true });
-  writeFileSync(join(target, '.agenticloop', 'project.md'), PROJECT_MAP, 'utf-8');
+  writeFileSync(
+    join(target, '.agenticloop', 'project.md'),
+    PROJECT_MAP.replace('grouping_profile: phase\n---', `grouping_profile: phase\n${projectMapLines.join('\n')}\n---`),
+    'utf-8'
+  );
   for (const taskId of ['T-041', 'T-042', 'T-055', 'T-099']) {
     writeFileSync(
       join(target, '.agenticloop', 'tasks', `${taskId}.md`),
@@ -92,7 +96,7 @@ describe('audit CLI', () => {
     assert.ok(existsSync(join(target, '.agenticloop', 'audits', 'AUD-001.md')));
     const record = readRecord(target);
     assert.equal(record.workUnit, 'phase:4');
-    assert.equal(record.auditBudget, 5);
+    assert.equal(record.auditBudget, 3);
     assert.equal((await run(['lint'], target)).status, 0);
   });
 
@@ -311,10 +315,10 @@ describe('audit CLI', () => {
     assert.equal(fresh.status, 0, fresh.stderr);
   });
 
-  it('blocks a sixth report and reopens it only after a recorded override', async () => {
+  it('blocks a fourth report and reopens it only after a recorded override', async () => {
     const target = makeTarget('budget');
     await seedRecord(target);
-    for (let index = 1; index <= 5; index++) {
+    for (let index = 1; index <= 3; index++) {
       const result = await run([
         'report', 'AUD-001', '--verdict', 'needs_remediation',
         '--invocation-mode', 'host_subagent', '--invocation-ref', `ref-${index}`,
@@ -324,13 +328,13 @@ describe('audit CLI', () => {
     }
     assert.equal(readRecord(target).auditState, 'blocked');
 
-    const sixth = await run([
+    const fourth = await run([
       'report', 'AUD-001', '--verdict', 'needs_remediation',
-      '--invocation-mode', 'host_subagent', '--invocation-ref', 'ref-6',
+      '--invocation-mode', 'host_subagent', '--invocation-ref', 'ref-4',
       '--assessment', 'again', '--evidence', 'npm test (pass)',
     ], target);
-    assert.equal(sixth.status, 1);
-    assert.match(sixth.stderr, /exhausted/);
+    assert.equal(fourth.status, 1);
+    assert.match(fourth.stderr, /exhausted/);
 
     const noAuthority = await run(['override', 'AUD-001', '--budget', '7'], target);
     assert.equal(noAuthority.status, 1);
@@ -341,11 +345,36 @@ describe('audit CLI', () => {
 
     const reopened = await run([
       'report', 'AUD-001', '--verdict', 'certified',
-      '--invocation-mode', 'host_subagent', '--invocation-ref', 'ref-6',
+      '--invocation-mode', 'host_subagent', '--invocation-ref', 'ref-4',
       '--assessment', 'clean', '--evidence', 'npm test (pass)',
     ], target);
     assert.equal(reopened.status, 0, reopened.stderr);
     assert.equal(readRecord(target).auditState, 'certified');
+  });
+
+  it('uses a project default unless an explicit --budget overrides it', async () => {
+    const target = makeTarget('project-budget', ['default_audit_budget: "4"']);
+    await seedRecord(target);
+    assert.equal(readRecord(target).auditBudget, 4);
+
+    const override = await run([
+      'new', '--work-unit', 'phase:5', '--covered-tasks', 'T-055', '--artifact', 'commit:def456',
+      '--goal', 'Deliver Phase 5.', '--completion-oracle', 'The outcome is observable.',
+      '--evidence', 'Integrated verification for commit:def456.', '--budget', '6',
+    ], target);
+    assert.equal(override.status, 0, override.stderr);
+    assert.equal(readRecord(target, 'AUD-002').auditBudget, 6);
+  });
+
+  it('lets an explicit --budget win even when the lower-precedence project default is invalid', async () => {
+    const target = makeTarget('explicit-budget-invalid-project-default', ['default_audit_budget: nope']);
+    const result = await run([
+      'new', '--work-unit', 'phase:5', '--covered-tasks', 'T-055', '--artifact', 'commit:def456',
+      '--goal', 'Deliver Phase 5.', '--completion-oracle', 'The outcome is observable.',
+      '--evidence', 'Integrated verification for commit:def456.', '--budget', '4',
+    ], target);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readRecord(target).auditBudget, 4);
   });
 
   it('locates a record by work-unit identity as well as audit id', async () => {

@@ -42,8 +42,13 @@ import {
   validateAuditRecord,
   validateAuditRecords,
 } from './audit-record.js';
-import { AUDITS_DIRECTORY_RELATIVE_PATH, DEFAULT_AUDIT_BUDGET } from './layout.js';
-import { loadProjectMap, PROJECT_MAP_DEFAULTS, resolveWorkUnitAudit } from './project-map.js';
+import { AUDITS_DIRECTORY_RELATIVE_PATH } from './layout.js';
+import {
+  loadProjectMap,
+  PROJECT_MAP_DEFAULTS,
+  resolveProjectAuditBudget,
+  resolveWorkUnitAudit,
+} from './project-map.js';
 import { createLocalVerificationContext } from './verification-context.js';
 
 function optionString(value) {
@@ -235,8 +240,18 @@ export async function cmdAudit(args, io = createIo()) {
         return 1;
       }
       const budgetRaw = optionString(opts.budget);
-      const budget = budgetRaw ? Number(budgetRaw) : DEFAULT_AUDIT_BUDGET;
-      if (!Number.isInteger(budget) || budget <= 0) {
+      let budget;
+      if (budgetRaw) {
+        budget = Number(budgetRaw);
+      } else {
+        const projectBudget = resolveProjectAuditBudget(projectConfig(target));
+        if (projectBudget.error) {
+          io.err(`audit new cannot resolve its default budget: ${projectBudget.error}`);
+          return EXIT_USAGE;
+        }
+        budget = projectBudget.budget;
+      }
+      if (!Number.isSafeInteger(budget) || budget <= 0) {
         io.err('audit new --budget must be a positive integer');
         return EXIT_USAGE;
       }

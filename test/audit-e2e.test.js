@@ -4,7 +4,7 @@
  * Walks one work unit through: accepted tasks -> initial audit -> needs
  * remediation -> remediation integrated -> old certificate goes stale -> fresh
  * invocation audits the new candidate -> certification unlocks closeout ->
- * separately, five non-certifying reports exhaust the budget -> and an explicit
+ * separately, three non-certifying reports exhaust the budget -> and an explicit
  * disabled configuration bypasses the gate visibly. No model invocation, no
  * credentials, no network.
  */
@@ -167,19 +167,19 @@ describe('audit end-to-end lifecycle', () => {
     assert.equal(reopened.allowed, false);
   });
 
-  it('exhausts the budget after five non-certifying reports without inventing a verdict', async () => {
+  it('exhausts the budget after three non-certifying reports without inventing a verdict', async () => {
     const target = makeTarget('budget');
     await audit(target, newAuditArgs('T-041', 'commit:ccc333'));
 
-    for (let index = 1; index <= 5; index++) {
-      const verdict = index === 5 ? 'needs_human_decision' : 'needs_remediation';
+    for (let index = 1; index <= 3; index++) {
+      const verdict = index === 3 ? 'needs_human_decision' : 'needs_remediation';
       assert.equal((await reportRun(target, { verdict, ref: `ref-${index}` })).status, 0, `run ${index}`);
     }
 
     const record = findAuditRecord(target, 'phase:4').record;
     assert.equal(record.auditState, 'awaiting_human');
     assert.equal(record.auditBlockedReason, '');
-    // The blocked state preserves the fifth Auditor's actual verdict; it is not
+    // The blocked state preserves the third Auditor's actual verdict; it is not
     // rewritten to a manufactured needs_human_decision because the budget ran out.
     assert.equal(record.latestVerdict, 'needs_human_decision');
     assert.equal(record.history.at(-1).verdict, 'needs_human_decision');

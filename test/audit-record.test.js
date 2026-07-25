@@ -146,7 +146,7 @@ describe('audit record validation', () => {
 
   it('rejects model, reasoning effort, provider, and mutable round fields by contract', () => {
     for (const key of ['model', 'reasoning_effort', 'provider', 'audit_round', 'completed_audits']) {
-      const content = baseRecord().replace('audit_budget: 5', `${key}: something\naudit_budget: 5`);
+      const content = baseRecord().replace('audit_budget: 3', `${key}: something\naudit_budget: 3`);
       const errors = validateAuditRecord(content, '.agenticloop/audits/AUD-001.md');
       assert.ok(errors.some(e => e.includes(`must not set '${key}'`)), `${key}: ${errors.join('\n')}`);
     }
@@ -388,44 +388,44 @@ describe('fresh invocation provenance', () => {
 });
 
 describe('audit budget', () => {
-  it('defaults to 5 and is separate from attempt/review budgets', () => {
-    assert.equal(DEFAULT_AUDIT_BUDGET, 5);
+  it('defaults to 3 and is separate from attempt/review budgets', () => {
+    assert.equal(DEFAULT_AUDIT_BUDGET, 3);
     const record = parseAuditRecord(baseRecord());
-    assert.equal(record.auditBudget, 5);
-    assert.equal(auditBudgetState(record).budget, 5);
+    assert.equal(record.auditBudget, 3);
+    assert.equal(auditBudgetState(record).budget, 3);
   });
 
-  it('accepts reports 1 through 5 and blocks a sixth without an override', () => {
-    const exhausted = appendRuns(baseRecord(), 5);
+  it('accepts reports 1 through 3 and blocks a fourth without an override', () => {
+    const exhausted = appendRuns(baseRecord(), 3);
     const record = parseAuditRecord(exhausted);
-    assert.equal(completedAuditRuns(record), 5);
+    assert.equal(completedAuditRuns(record), 3);
     assert.equal(record.auditState, 'blocked');
     assert.equal(record.auditBlockedReason, 'audit_budget_exhausted');
 
-    const sixth = appendAuditReport(exhausted, report({ invocationReference: 'ref-6' }));
-    assert.equal(sixth.ok, false);
-    assert.ok(sixth.errors.some(e => e.includes('is exhausted')));
+    const fourth = appendAuditReport(exhausted, report({ invocationReference: 'ref-4' }));
+    assert.equal(fourth.ok, false);
+    assert.ok(fourth.errors.some(e => e.includes('is exhausted')));
   });
 
-  it('preserves the fifth Auditor verdict instead of inventing one on exhaustion', () => {
-    const exhausted = appendRuns(baseRecord(), 4);
-    const fifth = appendAuditReport(
+  it('preserves the third Auditor verdict instead of inventing one on exhaustion', () => {
+    const exhausted = appendRuns(baseRecord(), 2);
+    const third = appendAuditReport(
       exhausted,
-      report({ invocationReference: 'ref-5', verdict: 'needs_human_decision' })
+      report({ invocationReference: 'ref-3', verdict: 'needs_human_decision' })
     );
-    assert.ok(fifth.ok, fifth.errors.join('; '));
-    const record = parseAuditRecord(fifth.content);
+    assert.ok(third.ok, third.errors.join('; '));
+    const record = parseAuditRecord(third.content);
     assert.equal(record.auditState, 'awaiting_human');
     assert.equal(record.latestVerdict, 'needs_human_decision');
     assert.equal(record.history.at(-1).verdict, 'needs_human_decision');
-    assert.deepEqual(validateAuditRecord(fifth.content, 'AUD-001.md'), []);
+    assert.deepEqual(validateAuditRecord(third.content, 'AUD-001.md'), []);
   });
 
   it('preserves both the human-decision gate and an exhausted budget', () => {
-    const afterFour = appendRuns(baseRecord(), 4);
+    const afterTwo = appendRuns(baseRecord(), 2);
     const waiting = appendAuditReport(
-      afterFour,
-      report({ invocationReference: 'ref-5', verdict: 'needs_human_decision' })
+      afterTwo,
+      report({ invocationReference: 'ref-3', verdict: 'needs_human_decision' })
     );
     const resolved = applyAuditHumanResolution(waiting.content, {
       authority: 'human: alex',
@@ -439,7 +439,7 @@ describe('audit budget', () => {
 
     const stillBlocked = appendAuditReport(
       resolved.content,
-      report({ invocationReference: 'ref-6', verdict: 'certified' })
+      report({ invocationReference: 'ref-4', verdict: 'certified' })
     );
     assert.equal(stillBlocked.ok, false);
     assert.ok(stillBlocked.errors.some(error => error.includes('is exhausted')));
@@ -462,17 +462,17 @@ describe('audit budget', () => {
     });
     const record = parseAuditRecord(rebaselined);
     assert.equal(completedAuditRuns(record), 2, 'baseline replacement must not reset history');
-    assert.equal(auditBudgetState(record).remaining, 3);
+    assert.equal(auditBudgetState(record).remaining, 1);
   });
 
   it('permits another report only after a recorded human-approved override', () => {
-    const exhausted = appendRuns(baseRecord(), 5);
+    const exhausted = appendRuns(baseRecord(), 3);
 
     const noAuthority = applyAuditBudgetOverride(exhausted, { budget: 7, authority: '' });
     assert.equal(noAuthority.ok, false);
     assert.ok(noAuthority.errors.some(e => e.includes('human authority reference')));
 
-    const notHigher = applyAuditBudgetOverride(exhausted, { budget: 5, authority: 'human: alex' });
+    const notHigher = applyAuditBudgetOverride(exhausted, { budget: 3, authority: 'human: alex' });
     assert.equal(notHigher.ok, false);
 
     const override = applyAuditBudgetOverride(exhausted, { budget: 7, authority: 'human: alex' });
@@ -482,13 +482,16 @@ describe('audit budget', () => {
     assert.equal(overridden.auditState, 'active');
     assert.match(override.content, /audit_budget raised to 7 by human: alex/);
 
-    const sixth = appendAuditReport(override.content, report({ invocationReference: 'ref-6' }));
-    assert.ok(sixth.ok, sixth.errors.join('; '));
-    assert.equal(sixth.runNumber, 6);
+    const fourth = appendAuditReport(override.content, report({ invocationReference: 'ref-4' }));
+    assert.ok(fourth.ok, fourth.errors.join('; '));
+    assert.equal(fourth.runNumber, 4);
   });
 
-  it('flags a hand-edited record whose history exceeds its budget', () => {
-    const exhausted = appendRuns(baseRecord(), 5).replace('audit_budget: 5', 'audit_budget: 3');
+  it('keeps an existing stored budget of 5 valid and flags history above a lowered budget', () => {
+    const existing = appendRuns(baseRecord({ auditBudget: 5 }), 5);
+    assert.equal(parseAuditRecord(existing).auditBudget, 5);
+    assert.deepEqual(validateAuditRecord(existing, 'AUD-001.md'), []);
+    const exhausted = existing.replace('audit_budget: 5', 'audit_budget: 3');
     const errors = validateAuditRecord(exhausted, 'AUD-001.md');
     assert.ok(errors.some(e => e.includes('above audit_budget 3')), errors.join('\n'));
   });
@@ -751,7 +754,7 @@ describe('closeout gate', () => {
 
   it('reports a blocked audit rather than allowing completion', () => {
     const target = makeTarget('gate-blocked');
-    writeAudit(target, 'AUD-001', appendRuns(baseRecord(), 5));
+    writeAudit(target, 'AUD-001', appendRuns(baseRecord(), 3));
     const gate = evaluateAuditCloseoutGate(target, { workUnit: 'phase:4', workUnitAudit: 'enabled' });
     assert.equal(gate.allowed, false);
     assert.equal(gate.state, 'audit_blocked');

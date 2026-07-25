@@ -79,6 +79,12 @@ acting.
   implement remediation, edit the audit record's verdict, or accept a limitation
   the human has not accepted. See [[work-unit-audit]].
 - Run closeout when the configured grouping says closeout is enabled, or when a human-identified task set finishes. After acceptance and integration, run `npx agenticloop worktree cleanup --dry-run` to preview which `.agenticloop/worktrees/*` lanes are safe to remove, then `npx agenticloop worktree cleanup --yes` to remove them. Cleanup is destructive filesystem cleanup and requires the dry-run/yes confirmation pattern. Keep open PRs, locked worktrees, worktrees with blocking dirty source or shared `.agenticloop` state, external or detached worktrees, and lanes with active task state. Task-specific lane-local `.agenticloop` state is flat only (`logs`, `tasks`, `summaries` (legacy; preserved for migration only – current projects do not create a summaries directory), and `decisions` files directly under `.agenticloop/<dir>/`); it is preserved before removal and does not by itself block cleanup. Nested or shared `.agenticloop` files are not lane-local and dirty shared state blocks cleanup. Git worktree removal may be forced internally only after preservation succeeds. For `.jsonl` lane-local files, preservation is safe when the root file already contains every lane line (a root superset). If lane-local preservation conflicts with existing root state, use `npx agenticloop worktree resolve-state <task-id|path> --strategy <prefer-root|prefer-worktree|union-jsonl> --yes` (default `--dry-run`) to resolve before cleanup: `prefer-root` copies the root file into the lane, `prefer-worktree` copies the lane file into the root, and `union-jsonl` computes a root-first max-count multiset union and writes the result to both files. resolve-state never removes worktrees or branches. Shared `.agenticloop` files are not preserved. Project-root bare coordinator repos are supported. Branch deletion is not part of v1 cleanup.
+- During closeout preparation after covered tasks are accepted, use the
+  single-writer Maintainer/closeout lane to perform only the conditional
+  source-plan progress synchronization defined by [[task-closeout]]. Inspect the
+  selected plan's own instructions, do not invent a status convention, record the
+  before/after evidence, and finish this mutation before final integration or
+  freeze and audit.
 - Honor any delegation lease from the orchestrator, including observable-step
   checkpoint cadence, no-progress budget, and stop condition.
 - Prefer file-backed or API-backed payload handoff over inline shell strings for
@@ -217,8 +223,9 @@ aggregatable. Emit `attempt_budget`, `review_budget`, `context_overflow_risk`
 (`medium|high`), and a one-line `context_note` only when set non-default or
 present. Keep `context_note` to one verdict line, never discovery output or
 transcripts. On `task.closed` emit `feature_telemetry_version: 1`,
-`review_rounds`, `review_budget` when non-default, `review_budget_exceeded:
-true|false` when the budget was reached, and `context_overflow_risk` plus
+`review_rounds`, the task's materialized `review_budget` when present,
+`review_budget_exceeded: true|false` when the budget was reached, and
+`context_overflow_risk` plus
 `context_pressure_encountered: true|false` when the task carried context risk.
 `event-logging validate` warns when a telemetry `task.created` omits
 `minimalism` or a `context_note` looks like a dump; `report --features` warns

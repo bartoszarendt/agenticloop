@@ -101,6 +101,9 @@ describe('detectSetupState', () => {
     assert.equal(state.setupStatus, 'unconfirmed');
     assert.equal(state.taskBackend, 'files');
     assert.equal(state.groupingProfile, 'flat');
+    assert.equal(state.defaultAttemptBudget, 5);
+    assert.equal(state.defaultReviewBudget, 5);
+    assert.equal(state.defaultAuditBudget, 3);
     assert.equal(state.setupComplete, false);
   });
 
@@ -120,6 +123,9 @@ describe('detectSetupState', () => {
     assert.equal(state.developmentStage, 'expansion');
     assert.equal(state.developmentStageConfirmed, true);
     assert.equal(state.setupComplete, true);
+    assert.equal(state.defaultAttemptBudget, 5);
+    assert.equal(state.defaultReviewBudget, 5);
+    assert.equal(state.defaultAuditBudget, 3);
   });
 
   it('routes a confirmed project missing development stage back through setup', () => {

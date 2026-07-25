@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Centralized workflow budgets: equivalent attempts and review checkpoints default
+  to 5, work-unit audits default to 3, and project maps can set
+  `default_attempt_budget`, `default_review_budget`, `default_audit_budget`, and
+  the existing 5-lane implementation ceiling. Attempt budgets resolve from task,
+  project, then built-in policy without rewriting legacy task records.
+- New task and audit records materialize their effective project defaults, while
+  existing records retain their stored budgets.
+- Closeout conditionally synchronizes selected-plan progress before final audit
+  freeze, then certifies the resulting exact candidate before publishing complete.
+
 ## 0.3.1 - 2026-07-25
 
 ### Added

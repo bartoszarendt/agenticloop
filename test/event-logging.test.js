@@ -39,7 +39,12 @@ function eventLogPath(target, fileName) {
   return join(target, '.agenticloop', 'logs', fileName);
 }
 
-function writeProjectMap(target, { eventLogging = 'disabled', taskBackend = 'files' } = {}) {
+function writeProjectMap(target, {
+  eventLogging = 'disabled',
+  taskBackend = 'files',
+  defaultAttemptBudget,
+  defaultReviewBudget,
+} = {}) {
   mkdirSync(join(target, '.agenticloop'), { recursive: true });
   writeFileSync(
     join(target, '.agenticloop', 'project.md'),
@@ -49,6 +54,8 @@ function writeProjectMap(target, { eventLogging = 'disabled', taskBackend = 'fil
       'setup_confirmed_at: ""',
       'setup_confirmed_by: ""',
       `task_backend: ${taskBackend}`,
+      ...(defaultAttemptBudget === undefined ? [] : [`default_attempt_budget: ${defaultAttemptBudget}`]),
+      ...(defaultReviewBudget === undefined ? [] : [`default_review_budget: ${defaultReviewBudget}`]),
       `event_logging: ${eventLogging}`,
       'event_logging_command: ""',
       'task_id_pattern: "T-<number>"',
@@ -1217,20 +1224,42 @@ describe('feature-adoption telemetry', () => {
     assert.equal(features.tasksWithTelemetry, 0, 'no emitted telemetry present');
   });
 
-  it('reports tasks above the default review budget', () => {
+  it('reports tasks that reach the default review checkpoint threshold', () => {
     const target = makeTarget('features-over-budget');
-    for (let i = 0; i < 4; i += 1) {
+    for (let i = 0; i < 5; i += 1) {
       appendFixtureEvent(target, 'P12-01', {
         eventType: 'review.result', role: 'maintainer', summary: `Round ${i + 1}`, outcome: 'needs_revision',
       });
     }
-    appendFixtureEvent(target, 'P12-01', {
-      eventType: 'review.result', role: 'maintainer', summary: 'Accepted', outcome: 'accepted',
-    });
-
     const { features } = reportEventLogs({ target });
     assert.ok(features.reviewRounds.tasksOverBudget.includes('P12-01'));
     assert.equal(features.reviewRounds.maxDerivedReviewRounds, 5);
+  });
+
+  it('reports effective attempt and review policies separately from explicit task overrides', () => {
+    const target = makeTarget('features-project-review-budget');
+    writeProjectMap(target, { defaultAttemptBudget: 4, defaultReviewBudget: 2 });
+    for (let i = 0; i < 2; i += 1) {
+      appendFixtureEvent(target, 'P12-02', {
+        eventType: 'review.result', role: 'maintainer', summary: `Round ${i + 1}`, outcome: 'needs_revision',
+      });
+    }
+    appendFixtureEvent(target, 'P12-03', {
+      eventType: 'task.created', role: 'maintainer', summary: 'Created task',
+      data: { feature_telemetry_version: 1, attempt_budget: 7, review_budget: 7 },
+    });
+    appendFixtureEvent(target, 'P12-04', {
+      eventType: 'task.created', role: 'maintainer', summary: 'Created task at project policy',
+      data: { feature_telemetry_version: 1, attempt_budget: 4, review_budget: 2 },
+    });
+
+    const { features } = reportEventLogs({ target });
+    assert.deepEqual(features.budgets.effectiveDefaultAttempt, { budget: 4, source: 'project' });
+    assert.deepEqual(features.budgets.effectiveDefaultReview, { budget: 2, source: 'project' });
+    assert.ok(features.reviewRounds.tasksOverBudget.includes('P12-02'));
+    assert.deepEqual(features.budgets.taskAttemptOverrides, [{ taskId: 'P12-03', attemptBudget: 7 }]);
+    assert.deepEqual(features.budgets.nonDefaultAttempt, [{ taskId: 'P12-03', attemptBudget: 7 }]);
+    assert.deepEqual(features.budgets.taskReviewOverrides, [{ taskId: 'P12-03', reviewBudget: 7 }]);
   });
 
   it('does not warn on historical logs without telemetry', () => {
@@ -1274,7 +1303,11 @@ describe('feature-adoption telemetry', () => {
     assert.equal(features.tasksWithTelemetry, 1);
     assert.equal(features.minimalism.none, 1);
     assert.deepEqual(features.minimalismTriggers, [{ trigger: 'verification-sweep', count: 1 }]);
-    assert.deepEqual(features.budgets.nonDefaultReview, [{ taskId: 'P23-16', reviewBudget: 5 }]);
+    assert.deepEqual(features.budgets.effectiveDefaultReview, { budget: 5, source: 'built_in' });
+    assert.deepEqual(features.budgets.effectiveDefaultAttempt, { budget: 5, source: 'built_in' });
+    assert.deepEqual(features.budgets.taskAttemptOverrides, []);
+    assert.deepEqual(features.budgets.nonDefaultReview, []);
+    assert.deepEqual(features.budgets.taskReviewOverrides, []);
     assert.equal(features.contextOverflowRisk.medium, 1);
     assert.deepEqual(features.contextOverflowRisk.tasks, ['P23-16']);
     assert.equal(features.contextPressure.false, 1);
@@ -1290,11 +1323,11 @@ describe('feature-adoption telemetry', () => {
     });
     appendFixtureEvent(target, 'P30-01', {
       eventType: 'task.closed', role: 'maintainer', summary: 'Closed', outcome: 'success',
-      data: { feature_telemetry_version: 1, review_rounds: 5 },
+      data: { feature_telemetry_version: 1, review_rounds: 6 },
     });
 
     const { features } = reportEventLogs({ target });
-    assert.equal(features.reviewRounds.maxDerivedReviewRounds, 5);
+    assert.equal(features.reviewRounds.maxDerivedReviewRounds, 6);
     assert.ok(features.reviewRounds.tasksOverBudget.includes('P30-01'));
     // Over budget with no review_budget_exceeded recorded -> warns (missing).
     assert.ok(features.warnings.some(warning => warning.includes('P30-01') && warning.includes('missing')));

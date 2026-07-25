@@ -23,6 +23,12 @@ GitHub backend.
 The files backend is not an autonomous runner. It is a storage projection for
 the same Agentic Loop roles, skills, and review gates.
 
+New files-backed tasks materialize `attempt_budget` from project
+`default_attempt_budget`, then built-in `5`. A task-specific override is an
+explicit task-record edit made before work begins; the files `task new` command
+does not accept a budget override option. The field is the hard stop for
+equivalent no-progress attempts; existing stored task values remain authoritative.
+
 ## Parallel Write Lanes
 
 Concurrency safety is governed by mutation, not by role. Files-backed task
@@ -374,7 +380,8 @@ projection:
 
 ### Review Round Checkpoint
 
-When `needs_revision` rounds reach the task's `review_budget` (default 3), the
+When `needs_revision` rounds reach the task's `review_budget` (default 5 unless
+materialized from project policy otherwise), the
 orchestrator must record a durable checkpoint before routing the next revision.
 For files-backed, append review outcomes and the checkpoint to the one
 append-only `## Review History` section:
@@ -443,6 +450,12 @@ When a human-identified task set or configured group finishes, confirm each
 task's inline `## Scope Completed` summary and evidence are complete, then record
 the closeout status marker on the last accepted task record (see
 [[task-closeout]]).
+
+Before the final audit freeze, the single-writer Maintainer closeout lane follows
+the conditional selected-plan progress procedure in [[task-closeout]]. Record its
+path, affected item, state transition, and covered task IDs in the closeout note.
+If it changes the repository, refresh the candidate baseline and certification
+before publishing `AGENT_CLOSEOUT_STATUS: complete`.
 
 ## Current State and History Discipline
 

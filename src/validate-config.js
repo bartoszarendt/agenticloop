@@ -98,6 +98,7 @@ import {
   isValidTaskId,
   loadProjectMap,
   PROJECT_MAP_DEFAULTS,
+  resolveProjectReviewBudget,
   validateProjectMap,
 } from './project-map.js';
 import {
@@ -139,7 +140,12 @@ import {
 import { loadEvents, resolveEventLogPath } from './event-logging.js';
 import { validateVerificationAttempts } from './verification-learning.js';
 import { parseFilesReviewHistory } from './review-history.js';
-import { evaluateReviewCheckpoint, parseReviewBudgetValue } from './review-checkpoint.js';
+import {
+  countTaskBudgetFieldOccurrences,
+  evaluateReviewCheckpoint,
+  parseReviewBudgetValue,
+  resolveTaskAttemptBudget,
+} from './review-checkpoint.js';
 import { parseResolutionMatrix, validateResolutionMatrix } from './resolution-matrix.js';
 
 const PLACEHOLDER_PATTERNS = [
@@ -621,7 +627,11 @@ export function validateFilesTaskRecord(content, filename, options = {}) {
   errors.push(...validateFilesReviewControls(content, filename, {
     frontmatter,
     implementationArtifact,
+    projectMapConfig,
   }));
+
+  const attemptBudget = resolveTaskAttemptBudget(content, projectMapConfig);
+  if (attemptBudget.error) errors.push(`Task record '${filename}' ${attemptBudget.error}`);
 
   // Durable Maintainer Review Fixup subsection (when present). The final
   // '## Evidence' body is passed through so the fixup validator can require
@@ -720,13 +730,18 @@ export function validateFilesTaskRecord(content, filename, options = {}) {
 export function validateFilesReviewControls(content, filename, {
   frontmatter = parseFrontmatter(content)[0] ?? {},
   implementationArtifact = frontmatterString(frontmatter?.implementation_artifact),
+  projectMapConfig = null,
   authorizingRevision = false,
 } = {}) {
   const errors = [];
-  const budgetOccurrences = String(content ?? '').match(/^review_budget\s*:/gm)?.length ?? 0;
-  let budget = parseReviewBudgetValue(frontmatter?.review_budget);
-  if (!Object.hasOwn(frontmatter ?? {}, 'review_budget')) budget = { budget: 3, error: null };
-  if (budgetOccurrences > 1) budget = { budget: 3, error: 'review_budget appears more than once in frontmatter' };
+  const budgetOccurrences = countTaskBudgetFieldOccurrences(content, 'review_budget');
+  const projectBudget = resolveProjectReviewBudget(projectMapConfig);
+  let budget = Object.hasOwn(frontmatter ?? {}, 'review_budget')
+    ? parseReviewBudgetValue(frontmatter.review_budget)
+    : projectBudget;
+  if (budgetOccurrences > 1) {
+    budget = { budget: projectBudget.budget, error: 'review_budget appears more than once in frontmatter' };
+  }
   if (budget.error) errors.push(`Task record '${filename}' ${budget.error}`);
 
   const history = parseFilesReviewHistory(content);

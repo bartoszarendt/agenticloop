@@ -9,6 +9,9 @@ import {
   loadProjectMap,
   validateProjectMap,
   isValidTaskId,
+  resolveProjectAttemptBudget,
+  resolveProjectAuditBudget,
+  resolveProjectReviewBudget,
   resolveWorkUnitAudit,
 } from '../src/project-map.js';
 import { validateConfig } from '../src/validate-config.js';
@@ -56,11 +59,15 @@ describe('loadProjectMap', () => {
     assert.equal(result.config.work_unit_audit, 'enabled');
     assert.equal(resolveWorkUnitAudit(result.config), 'enabled');
     assert.equal(result.config.development_stage, 'unconfirmed');
+    assert.equal(result.config.default_attempt_budget, 5);
+    assert.equal(result.config.default_review_budget, 5);
+    assert.equal(result.config.default_audit_budget, 3);
     assert.equal(result.config.max_parallel_implementation_lanes, 5);
     assert.equal(result.config.task_id_pattern, 'T-<number>');
     assert.equal(result.config.task_id_regex, '^T-\\d{3,}$');
     assert.equal(result.config.grouping_profile, 'flat');
     assert.equal(result.config.group_closeout, false);
+    assert.deepEqual(resolveProjectAttemptBudget(result.config), { budget: 5, source: 'built_in', error: null });
     assert.equal(result.config.documents.rules, 'AGENTS.md');
     // plan is a task-source role, not a forced default; absent unless detected/selected.
     assert.equal(result.config.documents.plan, undefined);
@@ -327,12 +334,54 @@ describe('validateProjectMap', () => {
     assert.deepEqual(validateProjectMap(configured.config, configured.raw, configuredDir).errors, []);
   });
 
-  for (const value of ['0', '-1', '1.5', '"five"']) {
-    it(`rejects invalid implementation-lane maximum ${value}`, () => {
-      const dir = makeProjectMap([`max_parallel_implementation_lanes: ${value}`]);
+  it('normalizes and resolves explicit project budget defaults', () => {
+    const dir = makeProjectMap([
+      'default_review_budget: "7"',
+      'default_attempt_budget: "8"',
+      'default_audit_budget: "4"',
+      'max_parallel_implementation_lanes: "6"',
+    ]);
+    const result = loadProjectMap(dir);
+    assert.equal(result.config.default_review_budget, 7);
+    assert.equal(result.config.default_attempt_budget, 8);
+    assert.equal(result.config.default_audit_budget, 4);
+    assert.equal(result.config.max_parallel_implementation_lanes, 6);
+    assert.deepEqual(resolveProjectReviewBudget(result.config), { budget: 7, source: 'project', error: null });
+    assert.deepEqual(resolveProjectAttemptBudget(result.config), { budget: 8, source: 'project', error: null });
+    assert.deepEqual(resolveProjectAuditBudget(result.config), { budget: 4, source: 'project', error: null });
+    assert.deepEqual(validateProjectMap(result.config, result.raw, dir).errors, []);
+  });
+
+  it('rejects explicitly empty project budgets instead of treating them as omitted', () => {
+    const dir = makeProjectMap([
+      'default_attempt_budget: ""',
+      'default_review_budget: ""',
+      'default_audit_budget: ""',
+    ]);
+    const result = loadProjectMap(dir);
+    for (const resolved of [
+      resolveProjectAttemptBudget(result.config),
+      resolveProjectReviewBudget(result.config),
+      resolveProjectAuditBudget(result.config),
+    ]) {
+      assert.ok(resolved.error);
+      assert.equal(resolved.source, 'built_in');
+    }
+  });
+
+  for (const value of ['0', '-1', '1.5', '""', '"five"', '9007199254740992']) {
+    it(`rejects invalid workflow control value ${value}`, () => {
+      const dir = makeProjectMap([
+        `default_review_budget: ${value}`,
+        `default_attempt_budget: ${value}`,
+        `default_audit_budget: ${value}`,
+        `max_parallel_implementation_lanes: ${value}`,
+      ]);
       const result = loadProjectMap(dir);
-      assert.ok(validateProjectMap(result.config, result.raw, dir).errors
-        .some(error => error.includes('max_parallel_implementation_lanes must be a positive integer')));
+      const errors = validateProjectMap(result.config, result.raw, dir).errors;
+      for (const field of ['default_attempt_budget', 'default_review_budget', 'default_audit_budget', 'max_parallel_implementation_lanes']) {
+        assert.ok(errors.some(error => error.includes(`${field} must be a positive safe integer`)), errors.join('\n'));
+      }
     });
   }
 

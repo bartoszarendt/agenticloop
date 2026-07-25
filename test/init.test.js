@@ -212,6 +212,7 @@ describe('init - .agenticloop/project.md handling', () => {
     await init({ target: d });
     const content = readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8');
     assert.ok(content.includes('development_stage: unconfirmed'));
+    assert.ok(content.includes('default_attempt_budget: 5'));
     assert.ok(content.includes('max_parallel_implementation_lanes: 5'));
   });
 

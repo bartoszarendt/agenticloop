@@ -95,6 +95,9 @@ describe('setup state matrix', () => {
     });
     assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
     assert.equal(readProjectMap(target).setup_status, 'confirmed');
+    assert.equal(readProjectMap(target).default_attempt_budget, '5');
+    assert.equal(readProjectMap(target).default_review_budget, '5');
+    assert.equal(readProjectMap(target).default_audit_budget, '3');
     assert.ok(existsSync(join(target, 'agenticloop', 'manifest.json')));
   });
 

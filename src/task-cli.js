@@ -15,7 +15,13 @@ import {
   resolveToolkitAssetLayout,
   resolveToolkitAssetPath,
 } from './layout.js';
-import { isValidTaskId, loadProjectMap, PROJECT_MAP_DEFAULTS } from './project-map.js';
+import {
+  isValidTaskId,
+  loadProjectMap,
+  PROJECT_MAP_DEFAULTS,
+  resolveProjectAttemptBudget,
+  resolveProjectReviewBudget,
+} from './project-map.js';
 import { resolveTaskBackend } from './task-backend.js';
 import {
   FILES_TASK_STATUSES,
@@ -427,14 +433,26 @@ export async function cmdTask(args, io = createIo()) {
         io.err(`Task record already exists: ${relative(target, filePath).replace(/\\/g, '/')}`);
         return 1;
       }
+      const reviewBudget = resolveProjectReviewBudget(projectConfig);
+      if (reviewBudget.error) {
+        io.err(`Cannot create task: ${reviewBudget.error}`);
+        return 1;
+      }
+      const attemptBudget = resolveProjectAttemptBudget(projectConfig);
+      if (attemptBudget.error) {
+        io.err(`Cannot create task: ${attemptBudget.error}`);
+        return 1;
+      }
       mkdirSync(dirname(filePath), { recursive: true });
       // A freshly scaffolded skeleton is not yet ready for an agent; the
       // canonical template ships `agent-ready`, so open new tasks as `draft`.
-      const newContent = replaceFrontmatterField(
+      let newContent = replaceFrontmatterField(
         instantiateTaskTemplate(target, projectConfig, taskId, title),
         'status',
         'draft'
       );
+      newContent = replaceFrontmatterField(newContent, 'attempt_budget', String(attemptBudget.budget));
+      newContent = replaceFrontmatterField(newContent, 'review_budget', String(reviewBudget.budget));
       writeFileSync(filePath, newContent, 'utf-8');
       if (opts.json) io.out(JSON.stringify({ task_id: taskId, file: relative(target, filePath).replace(/\\/g, '/') }, null, 2));
       else io.out(`Created ${relative(target, filePath).replace(/\\/g, '/')}`);
@@ -476,6 +494,7 @@ export async function cmdTask(args, io = createIo()) {
       if (currentStatus === 'needs_revision' && nextStatus === 'in-progress') {
         const revisionErrors = validateFilesReviewControls(parsedContent, filePath.replace(/\\/g, '/'), {
           frontmatter,
+          projectMapConfig: projectConfig,
           authorizingRevision: true,
         });
         if (revisionErrors.length > 0) {

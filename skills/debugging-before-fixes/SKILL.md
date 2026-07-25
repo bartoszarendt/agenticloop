@@ -73,7 +73,7 @@ No debug marker may survive into the implementation artifact.
 
 ## Stop rule
 
-After failed fix attempts exhaust the attempt budget (default 3, or the task record's `attempt_budget`; see Attempt Budget in `agenticloop/AGENTIC_LOOP.md`), stop fixing. The problem is likely a wrong assumption, contract gap, or architecture conflict.
+After failed fix attempts exhaust the attempt budget (task `attempt_budget`, then project `default_attempt_budget`, then built-in 5; see Attempt Budget in `agenticloop/AGENTIC_LOOP.md`), stop fixing. The problem is likely a wrong assumption, contract gap, or architecture conflict.
 
 - Before a GitHub PR exists on GitHub-backed work, post a `needs_context` request through [[blocked-state]].
 - For files-backed work, record the same `needs_context` state in the task file through [[blocked-state]].

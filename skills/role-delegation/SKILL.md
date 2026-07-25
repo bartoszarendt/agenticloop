@@ -249,8 +249,9 @@ Orchestrator.
 
 The orchestrator counts `needs_revision` rounds per task from durable valid
 outcomes. Before the revision that would exceed the task record's
-`review_budget` (default 3, so before a fourth revision), run the Review Round
-Checkpoint in `agenticloop/AGENTIC_LOOP.md`.
+`review_budget` (default 5, so after five counted outcomes and before routing the
+next revision), run the Review Round Checkpoint in
+`agenticloop/AGENTIC_LOOP.md`.
 
 At the budget boundary, Orchestrator records a durable checkpoint bound to the
 current review count and latest reviewed artifact:
@@ -500,10 +501,14 @@ checkpoint.
   action for each.
 - If the human replies with a selected action, restate the chosen action and perform it before
   starting unrelated work.
-- After merge approval and merge execution, the next gate is to confirm merged state,
-  verify the GitHub task issue is closed for GitHub-backed tasks, emit or record
-  task closure when applicable, run closeout if configured, then ask before starting
-  a new task unless the human explicitly approved continuing.
+- After covered tasks are accepted and before merge approval or final candidate
+  freeze, route conditional plan-progress synchronization to the single-writer
+  Maintainer closeout-preparation lane.
+- After merge approval and merge execution, confirm the merged state, verify the
+  GitHub task issue is closed for GitHub-backed tasks, emit or record task closure
+  when applicable, bind or refresh the audit baseline and certificate to the
+  resulting post-sync candidate, run the final closeout gate if configured, then
+  ask before starting a new task unless the human explicitly approved continuing.
 
 ## Backend Enforcement
 
@@ -576,7 +581,8 @@ omit the delegation field.
 - Files-backed work starts from a draft task record, lacks `implementation_artifact` or an inline
   task-file summary, silently rewrites evidence without a dated correction, leaves the task record
   untracked without exception, or leaves `review_status` unset or stale.
-- A revision beyond the task record's `review_budget` (default 3, i.e. a fourth) is routed on one task without running the Review Round Checkpoint.
+- A revision after the task record's `review_budget` (default 5) counted `needs_revision` outcomes is routed without running the Review Round Checkpoint.
+- Final certification or a closeout marker is routed before the Maintainer has completed the conditional plan-progress synchronization required by [[task-closeout]].
 - A human checkpoint is skipped before implementation or merge, requested for a routine in-scope
   step, or ignored after merge approval while the agent starts a new task first.
 - Sequential actions are presented as numbered alternatives, or a numeric choice is acted on without

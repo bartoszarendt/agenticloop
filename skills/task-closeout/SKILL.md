@@ -1,6 +1,6 @@
 ---
 name: task-closeout
-description: Use when every task in a configured group is accepted and integrated or closed according to the configured backend, when a human-identified work unit finishes in a flat project, or when cleaning up an accepted worktree after integration. Defines what closeout inspects, when it runs, the durable status marker it posts, the work-unit certification gate, and the human approval gate for grouped projects. Closeout is a verify-and-mark gate; it does not write a separate summary file.
+description: Use when preparing pre-certification closeout once covered tasks are accepted, running the final closeout gate once the resulting candidate is integrated or frozen and certified, finishing a human-identified work unit in a flat project, or cleaning up an accepted worktree after integration. Defines conditional source-plan synchronization, what final closeout inspects, the durable status marker it posts, the work-unit certification gate, and the human approval gate for grouped projects. Final closeout is a verify-and-mark gate; it does not write a separate summary file.
 metadata:
   area: task-closeout
   side_effects: writes-backend
@@ -24,10 +24,55 @@ Run closeout:
 - for each configured group when `.agenticloop/project.md` says `group_closeout: true`, or
 - when a human-identified task set or work unit finishes, including in flat projects.
 
-Closeout is a verify-and-mark gate. It does not produce a separate summary
-artifact. The durable record is the per-task inline summary plus the backend
-(task files or GitHub issues/PRs); closeout confirms that record is complete and
-posts a status marker.
+Closeout has two ordered parts. **Closeout preparation** may begin once covered
+tasks are accepted; it performs only the conditional source-plan synchronization
+below so that any permitted plan edit can be included in the final candidate.
+The **final closeout gate** runs after that resulting candidate is integrated or
+frozen and, when enabled, certified. It is a verify-and-mark gate and does not
+produce a separate summary artifact. The durable record is the per-task inline
+summary plus the backend (task files or GitHub issues/PRs); final closeout
+confirms that record is complete and posts a status marker.
+
+### Conditional source-plan progress synchronization
+
+This section is the canonical procedure for source-plan progress synchronization
+during closeout preparation. It is deliberately conditional: closing a task does
+not authorize inventing a plan status convention or rewriting a target-owned
+plan.
+
+1. Resolve `documents.plan` from `.agenticloop/project.md`. If no selected plan
+   exists, record no plan mutation and continue closeout normally.
+2. Read only the selected plan's explicit instructions for maintaining progress
+   or status, plus the task/work-unit source references that could map the
+   completed work to one plan entry. Do not infer instructions from a plan's
+   heading shape, prose tone, or unrelated checklist.
+3. Mutate the plan only when its explicit instructions define the allowed
+   progress/status update, one relevant entry maps unambiguously to the closing
+   work unit, and repository rules allow the mutation. Never invent a checkbox,
+   percentage, status vocabulary, completion convention, or plan structure.
+4. Route this narrow plan edit to the single-writer Maintainer/closeout lane,
+   never an Engineer implementation lane. Preserve unrelated target-owned plan
+   content. If the requested state is already correct, make no rewrite.
+5. Record the plan path, affected section or item, previous state, new state,
+   and covered task IDs in the closeout evidence or note. This evidence makes a
+   rerun idempotent: it must neither duplicate the entry nor reapply an already
+   correct state.
+
+If a plan explicitly requires progress maintenance but mapping, authority, or the
+write itself is ambiguous, prohibited, or fails, do not publish
+`AGENT_CLOSEOUT_STATUS: complete`. Use `follow_up_required`, `needs_context`, or
+`blocked` according to the existing routing rules. A selected plan with no
+explicit progress-update instruction is not a closeout failure and receives no
+invented mutation.
+
+#### Certification ordering
+
+A plan edit changes the candidate artifact. Complete the permitted plan update
+and integrate it before the final candidate freeze. Then bind or refresh the
+audit baseline to that exact resulting artifact, run the final Auditor gate, and
+publish the closeout marker only after the certificate is current. Never edit a
+repository plan after certification without refreshing the candidate baseline and
+certification; the earlier exact-artifact certificate is stale.
 
 Every accepted or closed task must have a filled inline task summary in the task
 record using the work-unit summary section shape with `summary_unit: task`. For
@@ -162,6 +207,10 @@ AGENT_CLOSEOUT_STATUS: follow_up_required
 
 If gaps remain, create or link follow-up task records and use `follow_up_required` until they are resolved or explicitly deferred by a human.
 
+The complete marker's evidence/note includes the conditional plan-sync record
+when a plan was selected and updated. Do not publish it until the post-sync audit
+certificate is current.
+
 If the work unit spans multiple task records, record the marker once for the
 work unit, citing the task ids it covers.
 
@@ -196,7 +245,9 @@ Add to `task.closed --data-json`:
 
 - `feature_telemetry_version: 1`
 - `review_rounds`: the final closeout review-round count.
-- `review_budget` when it was set non-default on the task.
+- the task's materialized `review_budget` when present. The feature report
+  classifies it as an override only when it differs from the effective project
+  or built-in review policy.
 - `review_budget_exceeded: true|false` when the review budget was reached or
   exceeded.
 - `context_overflow_risk` when it was set on the task, and

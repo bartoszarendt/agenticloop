@@ -170,9 +170,9 @@ Require delegated roles to use their own required skills.
 
 ## Backend Use
 
-Read `.agenticloop/project.md` for `development_stage`,
-`max_parallel_implementation_lanes`, `task_backend`, task naming, grouping
-rules, and typed document selections.
+Read `.agenticloop/project.md` for `development_stage`, `default_attempt_budget`,
+`default_review_budget`, `default_audit_budget`, `max_parallel_implementation_lanes`, `task_backend`, task
+naming, grouping rules, and typed document selections.
 
 The default backend is `files`. Follow `agenticloop/backends/files.md` for task-record operations
 unless `task_backend: github` is set, in which case follow `agenticloop/backends/github.md` instead.
@@ -208,10 +208,12 @@ natural stop condition, per the Advance Authorization Boundary in
 9. After the implementation join, decide review concurrency. Prefer a bounded parallel coordination/review phase when the orchestrator records or extends the concurrency plan for distinct review targets and backend objects with no comparison, joining, or ordering requirement; record a concrete reason for serial review when eligible review candidates exist.
 10. Have maintainer review each implementation artifact using one three-lens review round. Durable review outcomes wait for the implementation join; only explicitly planned read-only review activities may start earlier. For GitHub review, first fetch the full current PR head, run `github-preflight` against that live state, and dispatch only when the returned head equals the intended review artifact. Integration and merge stay serial after review unless a specific case is shown safe.
 11. Have engineer revise until accepted, unless the reviewing maintainer completes one eligible bounded Maintainer Review Fixup under [[review-and-accept]]; a successful fixup accepts within the current review round with no engineer invocation, while any ineligible, failed, or expanded finding routes to the engineer.
-12. When the work unit's covered tasks are accepted and integrated and work-unit audit is enabled, freeze the exact candidate and invoke a fresh auditor. Route a non-certifying report through maintainer disposition and ordinary engineer remediation, then re-audit with a new invocation until certified or the separate `audit_budget` stops for human direction.
-13. Ask the human before merge or configured group transition.
+12. When covered tasks are accepted, route any conditional selected-plan progress synchronization to the single-writer Maintainer closeout lane under [[task-closeout]]. Required-but-ambiguous, prohibited, or failed synchronization blocks complete closeout.
+13. Obtain the required human merge approval, integrate the accepted implementation and permitted plan update, then freeze that resulting exact candidate.
+14. When work-unit audit is enabled, bind or refresh the audit baseline to the frozen candidate and invoke a fresh auditor. Route a non-certifying report through maintainer disposition and ordinary engineer remediation, then re-audit with a new invocation until certified or the separate `audit_budget` stops for human direction.
+15. Publish the closeout marker only after the current post-sync audit gate passes.
 
-Steps 5 through 12 are the authorized unit's routine lifecycle. Do not add a
+Steps 5 through 14 are the authorized unit's routine lifecycle. Do not add a
 per-transition approval prompt between them – in particular, do not ask whether
 to proceed to maintainer review once the implementation artifact is ready. See
 the Authorized Work Units boundary in `agenticloop/AGENTIC_LOOP.md`.

@@ -337,10 +337,38 @@ describe('validateFilesTaskRecord review provenance', () => {
   });
 
   it('enforces files review history budget and a complete resolution matrix', () => {
-    const history = filesReviewHistory();
+    const history = filesReviewHistory({ rounds: 5 });
     const content = `${filesTaskRecord({ status: 'in-progress', implementationArtifact: 'commit:def456' })}\n\n${history}`;
     const errors = validateFilesTaskRecord(content, 'T-001.md', { activeTaskBackend: 'files' });
     assert.ok(errors.some(error => /checkpoint.*required|budget.*exhausted/i.test(error)), errors.join('\n'));
+  });
+
+  it('uses the project review default only when the task has no explicit override', () => {
+    const history = filesReviewHistory({ rounds: 2 });
+    const projectMapConfig = { default_review_budget: 2 };
+    const projectDefault = [
+      filesTaskRecord({ status: 'in-progress', implementationArtifact: 'commit:def456' }),
+      history,
+    ].join('\n\n');
+    const projectErrors = validateFilesTaskRecord(projectDefault, 'T-001.md', {
+      activeTaskBackend: 'files',
+      projectMapConfig,
+    });
+    assert.ok(projectErrors.some(error => /checkpoint.*required|budget.*exhausted/i.test(error)), projectErrors.join('\n'));
+
+    const overridden = [
+      filesTaskRecord({
+        status: 'in-progress',
+        implementationArtifact: 'commit:abc123',
+        extra: ['review_budget: 4'],
+      }),
+      history,
+    ].join('\n\n');
+    const overrideErrors = validateFilesTaskRecord(overridden, 'T-001.md', {
+      activeTaskBackend: 'files',
+      projectMapConfig,
+    });
+    assert.ok(!overrideErrors.some(error => /checkpoint.*required|budget.*exhausted/i.test(error)), overrideErrors.join('\n'));
   });
 
   it('requires the resolution matrix after a checkpoint-authorized artifact change', () => {

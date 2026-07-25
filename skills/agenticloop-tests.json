@@ -151,6 +151,7 @@
       "shouldTrigger": [
         "Clean up the accepted worktree after integration.",
         "Every task in the configured group is accepted and integrated; run closeout before the next grouped batch.",
+        "Covered tasks are accepted; synchronize the selected plan's required progress state before freezing the final candidate.",
         "Confirm every inline summary is complete and post the closeout status marker.",
         "The maintainer must run closeout after all tasks in this group are complete."
       ],

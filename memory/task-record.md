@@ -31,12 +31,16 @@ review_mode:
 # ultra requires explicit human request.
 minimalism: none
 # Effort bounds: process ceilings, not scope reducers. Omit to keep defaults.
-# attempt_budget tunes the default-3 equivalent-attempt guard; review_budget is
-# the needs_revision round count allowed before the churn checkpoint. Lower them
-# to save effort on cheap/low-risk tasks; raising above the default needs a
-# concrete reason. They never loosen the deliberately-tighter no-progress guards.
-attempt_budget: 3
-review_budget: 3
+# attempt_budget is the hard equivalent-attempt guard. Its precedence is task
+# value, then project default_attempt_budget, then built-in 5. review_budget is
+# the needs_revision checkpoint threshold. A task normally materializes the
+# project default (5 when unset); after that many counted needs_revision outcomes,
+# run a Review Round Checkpoint before routing the next revision. It is not a hard
+# maximum number of reviews. Lower either budget to save effort on cheap/low-risk
+# tasks; raising above its default needs a concrete reason. They never loosen the
+# deliberately-tighter no-progress guards.
+attempt_budget: 5
+review_budget: 5
 # Context overflow risk: stored values are medium | high. Omit for ordinary
 # low-risk tasks; do not write "low". Add context_note only when medium/high
 # changes delegation or stop behavior.

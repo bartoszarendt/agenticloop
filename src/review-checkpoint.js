@@ -7,8 +7,12 @@
  */
 
 import { markdownLines, markdownSection } from './markdown.js';
+import { DEFAULT_ATTEMPT_BUDGET, DEFAULT_REVIEW_BUDGET } from './layout.js';
+import { parseFrontmatter } from './frontmatter.js';
+import { resolveProjectAttemptBudget } from './project-map.js';
 
-export const DEFAULT_REVIEW_BUDGET = 3;
+// Compatibility re-export: layout.js is the single canonical owner.
+export { DEFAULT_ATTEMPT_BUDGET, DEFAULT_REVIEW_BUDGET } from './layout.js';
 export const VALID_DIRECTIONS = new Set(['targeted_revision', 'needs_context', 'blocked']);
 export const VALID_CHECKPOINT_CAUSES = new Set([
   'implementation_defect',
@@ -19,16 +23,55 @@ export const VALID_CHECKPOINT_CAUSES = new Set([
   'external_blocker',
 ]);
 
-/** Parse the scalar review_budget value shared by both task backends. */
-export function parseReviewBudgetValue(value) {
-  const text = typeof value === 'string' ? value.trim() : '';
+/** Parse a positive safe-integer task budget shared by both task backends. */
+export function parseTaskBudgetValue(value, field, fallback) {
+  const text = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
   if (!/^[1-9]\d*$/.test(text)) {
-    return { budget: DEFAULT_REVIEW_BUDGET, error: `review_budget '${String(value ?? '')}' must be a positive integer` };
+    return { budget: fallback, error: `${field} '${String(value ?? '')}' must be a positive integer` };
   }
   const budget = Number(text);
   return Number.isSafeInteger(budget)
     ? { budget, error: null }
-    : { budget: DEFAULT_REVIEW_BUDGET, error: `review_budget '${text}' is outside the supported integer range` };
+    : { budget: fallback, error: `${field} '${text}' is outside the supported integer range` };
+}
+
+/** Count top-level frontmatter fields without matching examples in the body. */
+export function countTaskBudgetFieldOccurrences(content, field) {
+  const block = String(content ?? '').match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/)?.[1] ?? '';
+  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return block.match(new RegExp(`^${escapedField}[ \t]*:`, 'gm'))?.length ?? 0;
+}
+
+/** Parse the scalar review_budget value shared by both task backends. */
+export function parseReviewBudgetValue(value) {
+  return parseTaskBudgetValue(value, 'review_budget', DEFAULT_REVIEW_BUDGET);
+}
+
+/** Parse the scalar attempt_budget value shared by both task backends. */
+export function parseAttemptBudgetValue(value) {
+  return parseTaskBudgetValue(value, 'attempt_budget', DEFAULT_ATTEMPT_BUDGET);
+}
+
+/**
+ * Resolve a task's equivalent-attempt budget without rewriting legacy records.
+ * A stored task value is authoritative; only a missing field consults project
+ * policy and then the built-in default.
+ */
+export function resolveTaskAttemptBudget(content, projectMapConfig = null) {
+  const raw = String(content ?? '');
+  const [frontmatter] = parseFrontmatter(raw);
+  const projectBudget = resolveProjectAttemptBudget(projectMapConfig);
+  const occurrences = countTaskBudgetFieldOccurrences(raw, 'attempt_budget');
+  if (occurrences > 1) {
+    return {
+      budget: projectBudget.budget,
+      error: 'attempt_budget appears more than once in frontmatter (duplicate field)',
+    };
+  }
+  if (!frontmatter || !Object.hasOwn(frontmatter, 'attempt_budget')) {
+    return projectBudget;
+  }
+  return parseAttemptBudgetValue(frontmatter.attempt_budget);
 }
 
 function fieldsFromLiveLines(body) {
@@ -219,7 +262,7 @@ export function evaluateReviewCheckpoint({
 } = {}) {
   const errors = [];
   const warnings = [];
-  if (!Number.isInteger(budget) || budget < 1) {
+  if (!Number.isSafeInteger(budget) || budget < 1) {
     return { authorized: false, errors: [`review_budget must be a positive integer, got ${budget}`], warnings };
   }
 

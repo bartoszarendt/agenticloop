@@ -28,6 +28,8 @@ import {
   statusCheckName,
   headMatches,
   evaluatePreflight,
+  parseAttemptBudget,
+  parseReviewBudget,
   runPreflight,
   PreflightError,
 } from '../src/github-preflight.js';
@@ -1044,17 +1046,76 @@ describe('runPreflight (injected gh runner)', () => {
       statusCheckRollup: [],
     };
     const issueData = { number: 7, body: issueBody(['`npm test`']) };
-    const comments = [
-      needsRevisionComment(),
-      needsRevisionComment(),
-      needsRevisionComment(),
-    ];
+    const comments = Array.from({ length: 5 }, () => needsRevisionComment());
     const result = runPreflight({
       pr: 42,
       commandRunner: productionHistoryRunner(prData, issueData, { comments }),
     });
     assert.equal(result.ok, false, result.errors.join('\n'));
     assert.ok(result.errors.some(error => /checkpoint.*required|budget.*exhausted/i.test(error)));
+  });
+
+  it('resolves a project review default only when the linked task omits its own budget', () => {
+    const projectPolicy = { default_review_budget: 2 };
+    assert.deepEqual(parseReviewBudget('---\n---\n# Task', projectPolicy), {
+      budget: 2,
+      source: 'project',
+      error: null,
+    });
+    assert.deepEqual(parseReviewBudget('---\nreview_budget: 7\n---\n# Task', projectPolicy), {
+      budget: 7,
+      error: null,
+    });
+    const duplicate = parseReviewBudget('---\nreview_budget: 7\nreview_budget: 8\n---\n# Task', projectPolicy);
+    assert.equal(duplicate.budget, 2);
+    assert.match(duplicate.error, /duplicate/);
+  });
+
+  it('resolves, preserves, and validates attempt budgets from GitHub task metadata', () => {
+    const projectPolicy = { default_attempt_budget: 2 };
+    assert.deepEqual(parseAttemptBudget('---\n---\n# Task', projectPolicy), {
+      budget: 2,
+      source: 'project',
+      error: null,
+    });
+    assert.deepEqual(parseAttemptBudget('---\nattempt_budget: 7\n---\n# Task', projectPolicy), {
+      budget: 7,
+      error: null,
+    });
+    assert.deepEqual(parseAttemptBudget('---\n---\n# Legacy task'), {
+      budget: 5,
+      source: 'built_in',
+      error: null,
+    });
+    const duplicate = parseAttemptBudget('---\nattempt_budget: 7\nattempt_budget: 8\n---\n# Task', projectPolicy);
+    assert.equal(duplicate.budget, 2);
+    assert.match(duplicate.error, /duplicate/);
+    const invalid = parseAttemptBudget('---\nattempt_budget: 1.5\n---\n# Task', projectPolicy);
+    assert.equal(invalid.budget, 5);
+    assert.match(invalid.error, /positive integer/);
+    const invalidProjectFallback = parseAttemptBudget(
+      '---\n---\n# Legacy task',
+      { default_attempt_budget: '' }
+    );
+    assert.equal(invalidProjectFallback.budget, 5);
+    assert.match(invalidProjectFallback.error, /default_attempt_budget must be a positive safe integer/);
+
+    const preflight = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        statusCheckRollup: [],
+      },
+      issueData: {
+        number: 7,
+        body: `---\nattempt_budget: 0\n---\n${issueBody(['`npm test`'])}`,
+        comments: [],
+      },
+      projectMapConfig: projectPolicy,
+    });
+    assert.ok(preflight.errors.some(error => error.includes("attempt_budget '0' must be a positive integer")));
+    assert.ok(preflight.failureCategories.some(category => category.category === 'task_policy'));
   });
 
   it('derives a non-default review_budget from linked task frontmatter', () => {
@@ -2149,7 +2210,7 @@ describe('Phase 29 - Defect: stale deviation declarations not rejected', () => {
 });
 
 describe('Phase 29 - Defect: over-budget review without checkpoint passes', () => {
-  it('fourth revision without checkpoint should fail preflight', () => {
+  it('a revision after an explicit budget-3 checkpoint boundary should fail preflight', () => {
     const revisedHead = 'b'.repeat(40);
     const reviewOutcomes = [
       { status: 'needs_revision', artifact: HEAD },
@@ -2169,7 +2230,7 @@ describe('Phase 29 - Defect: over-budget review without checkpoint passes', () =
       `Expected checkpoint error, got: ${result.checkpointValidation.errors.join('; ')}`);
   });
 
-  it('third revision within budget should pass without checkpoint', () => {
+  it('a revision within an explicit budget-3 threshold should pass without checkpoint', () => {
     const reviewOutcomes = [
       { status: 'needs_revision', artifact: HEAD },
       { status: 'needs_revision', artifact: HEAD },

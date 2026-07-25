@@ -11,6 +11,9 @@ import { join } from 'node:path';
 import { parseFrontmatter } from './frontmatter.js';
 import { getDefaultDocumentSelections, getDocumentRoleNames } from './document-roles.js';
 import {
+  DEFAULT_ATTEMPT_BUDGET,
+  DEFAULT_AUDIT_BUDGET,
+  DEFAULT_REVIEW_BUDGET,
   DEFAULT_WORK_UNIT_AUDIT_MODE,
   PROJECT_MAP_RELATIVE_PATH,
   WORK_UNIT_AUDIT_MODES,
@@ -21,6 +24,9 @@ export const PROJECT_MAP_PATH = PROJECT_MAP_RELATIVE_PATH;
 
 export const PROJECT_MAP_DEFAULTS = {
   development_stage: 'unconfirmed',
+  default_attempt_budget: DEFAULT_ATTEMPT_BUDGET,
+  default_review_budget: DEFAULT_REVIEW_BUDGET,
+  default_audit_budget: DEFAULT_AUDIT_BUDGET,
   max_parallel_implementation_lanes: 5,
   task_backend: 'files',
   event_logging: 'disabled',
@@ -75,12 +81,23 @@ const VALID_WORK_UNIT_AUDIT_VALUES = new Set(WORK_UNIT_AUDIT_MODES);
 const VALID_SETUP_STATUSES = new Set(['unconfirmed', 'confirmed']);
 const VALID_DEVELOPMENT_STAGES = new Set(DEVELOPMENT_STAGES);
 const YYYY_MM_DD_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+const PROJECT_MAP_RAW = Symbol('projectMapRaw');
 
 function parseBoolean(value) {
   if (value === true || value === false) return value;
   if (value === 'true') return true;
   if (value === 'false') return false;
   return value;
+}
+
+function normalizeIntegerString(value) {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  return /^\d+$/.test(trimmed) ? Number(trimmed) : trimmed;
+}
+
+function isPositiveSafeInteger(value) {
+  return Number.isSafeInteger(value) && value > 0;
 }
 
 function normalizeRawFrontmatter(raw) {
@@ -117,12 +134,14 @@ function normalizeRawFrontmatter(raw) {
     }
   }
 
-  if (typeof normalized.max_parallel_implementation_lanes === 'string') {
-    const trimmedLanes = normalized.max_parallel_implementation_lanes.trim();
-    if (/^\d+$/.test(trimmedLanes)) {
-      normalized.max_parallel_implementation_lanes = Number(trimmedLanes);
-    } else {
-      normalized.max_parallel_implementation_lanes = trimmedLanes;
+  for (const key of [
+    'default_attempt_budget',
+    'default_review_budget',
+    'default_audit_budget',
+    'max_parallel_implementation_lanes',
+  ]) {
+    if (normalized[key] !== undefined) {
+      normalized[key] = normalizeIntegerString(normalized[key]);
     }
   }
 
@@ -146,6 +165,42 @@ function mergeDocuments(rawDocuments = {}) {
 
 function getTrimmedString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function resolveProjectBudget(config, field, fallback) {
+  const source = config?.[PROJECT_MAP_RAW] ?? config;
+  const hasConfiguredValue =
+    source !== null &&
+    source !== undefined &&
+    source !== PROJECT_MAP_DEFAULTS &&
+    Object.prototype.hasOwnProperty.call(source, field);
+  if (!hasConfiguredValue) {
+    return { budget: fallback, source: 'built_in', error: null };
+  }
+  const configured = source[field];
+  if (!isPositiveSafeInteger(configured)) {
+    return {
+      budget: fallback,
+      source: 'built_in',
+      error: `project.md: ${field} must be a positive safe integer`,
+    };
+  }
+  return { budget: configured, source: 'project', error: null };
+}
+
+/** Resolve the project equivalent-attempt budget, falling back to the built-in policy. */
+export function resolveProjectAttemptBudget(config) {
+  return resolveProjectBudget(config, 'default_attempt_budget', DEFAULT_ATTEMPT_BUDGET);
+}
+
+/** Resolve the project review checkpoint threshold, falling back to the built-in policy. */
+export function resolveProjectReviewBudget(config) {
+  return resolveProjectBudget(config, 'default_review_budget', DEFAULT_REVIEW_BUDGET);
+}
+
+/** Resolve the project audit-report budget, falling back to the built-in policy. */
+export function resolveProjectAuditBudget(config) {
+  return resolveProjectBudget(config, 'default_audit_budget', DEFAULT_AUDIT_BUDGET);
 }
 
 /**
@@ -193,6 +248,9 @@ export function loadProjectMap(repoRoot) {
     ...raw,
     documents: mergeDocuments(raw.documents),
   };
+  // Keep defaults available to ordinary callers while allowing policy resolvers
+  // to distinguish an omitted project field from an explicit value equal to it.
+  Object.defineProperty(config, PROJECT_MAP_RAW, { value: raw });
   const verificationFacts = parseVerificationOperatingFacts(content, {
     taskIdRegex: config.task_id_regex,
   }).facts;
@@ -280,11 +338,15 @@ export function validateProjectMap(config, raw, repoRoot) {
     }
   }
 
-  if (
-    !Number.isInteger(config.max_parallel_implementation_lanes) ||
-    config.max_parallel_implementation_lanes <= 0
-  ) {
-    errors.push('project.md: max_parallel_implementation_lanes must be a positive integer');
+  for (const field of [
+    'default_attempt_budget',
+    'default_review_budget',
+    'default_audit_budget',
+    'max_parallel_implementation_lanes',
+  ]) {
+    if (!isPositiveSafeInteger(config[field])) {
+      errors.push(`project.md: ${field} must be a positive safe integer`);
+    }
   }
 
   if (config.task_backend !== 'files' && config.task_backend !== 'github') {
@@ -316,7 +378,7 @@ export function validateProjectMap(config, raw, repoRoot) {
   // models or change adapter generation.
   if (
     raw.engineer_context_window_tokens !== undefined &&
-    (!Number.isInteger(raw.engineer_context_window_tokens) || raw.engineer_context_window_tokens <= 0)
+    !isPositiveSafeInteger(raw.engineer_context_window_tokens)
   ) {
     errors.push('project.md: engineer_context_window_tokens must be a positive integer when provided');
   }

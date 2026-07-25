@@ -423,16 +423,20 @@ The optional `attempt_budget` and `review_budget` fields tune the process
 ceilings that already exist in `agenticloop/AGENTIC_LOOP.md`. They are process
 bounds, not scope reducers.
 
-- `attempt_budget`: overrides the default-3 shared Attempt Budget for equivalent
-  no-progress attempts. Default is `3` when omitted.
+- `attempt_budget`: hard stop for equivalent no-progress attempts. Precedence is
+  task value, then project `default_attempt_budget`, then built-in `5`. New task
+  records materialize the effective value; stored historical values remain
+  authoritative and a legacy missing field resolves without rewriting.
 - `review_budget`: the number of `needs_revision` rounds allowed before the
-  Review Round Checkpoint runs. Default is `3` when omitted (the checkpoint runs
-  before a fourth revision).
+  Review Round Checkpoint runs. New records materialize the project
+  `default_review_budget` (`5` when unset); the checkpoint runs after that many
+  counted outcomes and before the next revision. It is a checkpoint threshold,
+  not a hard review maximum.
 
 Direction matters. Lower these to save effort on cheap or low-risk tasks;
 raising either above its default needs a concrete recorded reason, because a
 higher ceiling means more churn, not more assurance. They bound only the
-default-3 guards: they never loosen the deliberately-tighter no-progress guards
+default-5 guards: they never loosen the deliberately-tighter no-progress guards
 (empty-result command, recorded-setup-gap, the "maintainer is needed" stop, and
 the self-loop guard), which get no extra attempts regardless of these fields.
 
@@ -441,14 +445,22 @@ When a budget is reached or is likely to be exceeded, the role returns status
 discovery, review, or revision pass. Effort bounds never override acceptance
 criteria, required checks, proof pressure, or review.
 
-It is procedural enforcement; there is no `attempt_budget`/`review_budget`
-validator.
+`attempt_budget` and `review_budget` are validated by the files task validator
+and GitHub preflight; malformed or duplicate task fields fail closed.
+
+When a selected source plan explicitly gives a task item reference, preserve that
+reference in `## Source Reference` or the task/work-unit evidence. Do not mark the
+plan complete during implementation or acceptance: conditional plan-progress
+synchronization belongs to [[task-closeout]].
 
 ## Backend enforcement
 
 Before creating a task record, read `.agenticloop/project.md` for the `task_backend`
-value and task naming convention. If `.agenticloop/project.md` is absent, the default
-backend is `files`.
+value, task naming convention, and effective attempt and review budgets. If
+`.agenticloop/project.md` is absent, the default backend is `files`. Files task
+creation materializes the effective attempt and review budgets; GitHub task
+authors do the same in issue frontmatter so later project-policy changes do not alter active
+records.
 
 If `task_backend` is `files` (the default):
 

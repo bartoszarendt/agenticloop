@@ -67,6 +67,12 @@ The issue body must contain the full task-record contract from
 Template` and a non-placeholder `## Reviewer Checklist`. Labels indicate state
 but do not substitute for complete issue content.
 
+Newly authored issues must materialize the effective `attempt_budget`: an
+explicit task value wins, otherwise use project `default_attempt_budget`, then
+built-in `5`. GitHub preflight rejects duplicate or invalid attempt-budget
+frontmatter. Existing issue values remain authoritative; an older issue with no
+field resolves policy without being rewritten.
+
 `## Expected Files or Areas` is the task's current human-readable scope map. The
 optional frontmatter field `allowed_paths` is the structured scope map: a YAML
 list of repo-relative glob-like path patterns. Forward slashes are canonical;
@@ -537,7 +543,8 @@ purposes.
 
 ### Review Round Checkpoint
 
-When `needs_revision` rounds reach the task's `review_budget` (default 3), the
+When `needs_revision` rounds reach the task's `review_budget` (default 5 unless
+materialized from project policy otherwise), the
 orchestrator must record a durable checkpoint before routing the next revision.
 For GitHub, append the checkpoint to the PR conversation with Orchestrator
 attribution:
@@ -633,6 +640,12 @@ AGENT_CLOSEOUT_STATUS: follow_up_required
 
 An exceptional verification episode that does not end in a pass or final
 non-blocker maintainer triage blocks `AGENT_CLOSEOUT_STATUS: complete`.
+
+Before the final audit freeze, route conditional selected-plan progress
+synchronization to the single-writer Maintainer closeout lane under
+[[task-closeout]]. Include its evidence in the issue or PR closeout comment. A
+plan edit changes the candidate, so final-head evidence, the audit baseline, and
+certification must be refreshed before the complete marker is posted.
 
 ## Bootstrap Labels (GitHub-Only First Run Setup)
 

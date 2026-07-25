@@ -107,7 +107,7 @@ function isValidStage(value) {
 }
 
 function isPositiveInteger(value) {
-  return Number.isInteger(value) && value > 0;
+  return Number.isSafeInteger(value) && value > 0;
 }
 
 function formatDevelopmentStageChoices() {
@@ -230,7 +230,14 @@ async function promptPositiveInteger(prompts, write, label, currentValue) {
   while (true) {
     const answer = (await prompts.ask(`  ${label} (${currentValue}): `)).trim();
     if (!answer) {
-      if (!rejectedInput) return { value: currentValue, cancelled: false };
+      if (!rejectedInput && isPositiveInteger(currentValue)) {
+        return { value: currentValue, cancelled: false };
+      }
+      if (!rejectedInput) {
+        rejectedInput = true;
+        write(`  ${label} must be a positive integer.`);
+        continue;
+      }
       write(`  ${label} update cancelled; enter a positive integer to continue.`);
       return { value: currentValue, cancelled: true };
     }
@@ -465,12 +472,39 @@ export async function setup(options) {
                 detection.existingConfig.max_parallel_implementation_lanes ??
                   PROJECT_MAP_DEFAULTS.max_parallel_implementation_lanes
               );
+          const attemptBudgetResult = lanesResult.cancelled
+            ? { cancelled: true }
+            : await promptPositiveInteger(
+                prompts,
+                write,
+                'Default equivalent-attempt budget',
+                detection.existingConfig.default_attempt_budget ?? PROJECT_MAP_DEFAULTS.default_attempt_budget
+              );
+          const reviewCheckpointBudgetResult = attemptBudgetResult.cancelled
+            ? { cancelled: true }
+            : await promptPositiveInteger(
+                prompts,
+                write,
+                'Default review checkpoint budget',
+                detection.existingConfig.default_review_budget ?? PROJECT_MAP_DEFAULTS.default_review_budget
+              );
+          const auditBudgetResult = reviewCheckpointBudgetResult.cancelled
+            ? { cancelled: true }
+            : await promptPositiveInteger(
+                prompts,
+                write,
+                'Default audit budget',
+                detection.existingConfig.default_audit_budget ?? PROJECT_MAP_DEFAULTS.default_audit_budget
+              );
 
-          if (stageResult.cancelled || lanesResult.cancelled) {
+          if (stageResult.cancelled || lanesResult.cancelled || attemptBudgetResult.cancelled || reviewCheckpointBudgetResult.cancelled || auditBudgetResult.cancelled) {
             write('  Profile update cancelled; continuing setup without profile changes.');
           } else {
             updateValues.development_stage = stageResult.value;
             updateValues.max_parallel_implementation_lanes = lanesResult.value;
+            updateValues.default_attempt_budget = attemptBudgetResult.value;
+            updateValues.default_review_budget = reviewCheckpointBudgetResult.value;
+            updateValues.default_audit_budget = auditBudgetResult.value;
 
             const backendResult = await promptTaskBackend(
               prompts,
@@ -509,6 +543,9 @@ export async function setup(options) {
       const confirmValues = stageMigration
         ? {
             development_stage: detection.stage.developmentStage,
+            default_attempt_budget: detection.existingConfig?.default_attempt_budget ?? PROJECT_MAP_DEFAULTS.default_attempt_budget,
+            default_review_budget: detection.existingConfig?.default_review_budget ?? PROJECT_MAP_DEFAULTS.default_review_budget,
+            default_audit_budget: detection.existingConfig?.default_audit_budget ?? PROJECT_MAP_DEFAULTS.default_audit_budget,
             max_parallel_implementation_lanes: detection.existingConfig?.max_parallel_implementation_lanes ??
               PROJECT_MAP_DEFAULTS.max_parallel_implementation_lanes,
           }
@@ -517,6 +554,9 @@ export async function setup(options) {
             setup_confirmed_at: new Date().toISOString().slice(0, 10),
             setup_confirmed_by: 'human',
             development_stage: detection.stage.developmentStage,
+            default_attempt_budget: PROJECT_MAP_DEFAULTS.default_attempt_budget,
+            default_review_budget: PROJECT_MAP_DEFAULTS.default_review_budget,
+            default_audit_budget: PROJECT_MAP_DEFAULTS.default_audit_budget,
             max_parallel_implementation_lanes: PROJECT_MAP_DEFAULTS.max_parallel_implementation_lanes,
             task_backend: detection.backend.backend,
             task_id_pattern: detection.taskId.taskIdPattern,
@@ -571,6 +611,42 @@ export async function setup(options) {
           return { errors, warnings };
         }
         confirmValues.max_parallel_implementation_lanes = lanesResult.value;
+
+        const attemptBudgetResult = await promptPositiveInteger(
+          prompts,
+          write,
+          'Default equivalent-attempt budget',
+          confirmValues.default_attempt_budget
+        );
+        if (attemptBudgetResult.cancelled) {
+          write('Setup cancelled. Edited project map values were not written.');
+          return { errors, warnings };
+        }
+        confirmValues.default_attempt_budget = attemptBudgetResult.value;
+
+        const reviewBudgetResult = await promptPositiveInteger(
+          prompts,
+          write,
+          'Default review checkpoint budget',
+          confirmValues.default_review_budget
+        );
+        if (reviewBudgetResult.cancelled) {
+          write('Setup cancelled. Edited project map values were not written.');
+          return { errors, warnings };
+        }
+        confirmValues.default_review_budget = reviewBudgetResult.value;
+
+        const auditBudgetResult = await promptPositiveInteger(
+          prompts,
+          write,
+          'Default audit budget',
+          confirmValues.default_audit_budget
+        );
+        if (auditBudgetResult.cancelled) {
+          write('Setup cancelled. Edited project map values were not written.');
+          return { errors, warnings };
+        }
+        confirmValues.default_audit_budget = auditBudgetResult.value;
 
         const currentRationale = detection.existingRaw?.development_stage_rationale ?? '';
         const rationaleAnswer = (await prompts.ask(`  Development stage rationale (${currentRationale || 'optional'}): `)).trim();

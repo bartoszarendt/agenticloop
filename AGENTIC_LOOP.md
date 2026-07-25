@@ -132,7 +132,7 @@ target projects do not need toolkit-root `docs/` files at runtime.
   `needs_remediation`, or `needs_human_decision`. The last of these moves the
   record to `audit_state: awaiting_human` until a separate human resolution is
   recorded. Budget exhaustion is a workflow stop, never a manufactured verdict.
-- **Audit budget**: the separate default-5 bound on completed substantive Auditor
+- **Audit budget**: the separate default-3 bound on completed substantive Auditor
   reports for one work unit, independent of `attempt_budget` and `review_budget`.
 - **Required checks**: exact commands or manual checks that must be run before a
   task can be accepted.
@@ -258,9 +258,10 @@ role contracts.
 ## Source Documents
 
 At the start of a non-trivial task, read `.agenticloop/project.md` for
-`development_stage`, `max_parallel_implementation_lanes`, `task_backend`, task
-naming, optional grouping settings, typed document selections, and relevant
-current verification operating facts and Project Operating Facts.
+`development_stage`, `default_attempt_budget`, `default_review_budget`, `default_audit_budget`,
+`max_parallel_implementation_lanes`, `task_backend`, task naming, optional
+grouping settings, typed document selections, and relevant current verification
+operating facts and Project Operating Facts.
 
 Document roles are:
 
@@ -684,7 +685,11 @@ command just because the result is empty.
 Repeating an action that makes no progress is the most common loop failure.
 Bound it with a shared attempt budget.
 
-The default budget is 3, or the task record's `attempt_budget` when it sets one.
+The precedence is task `attempt_budget`, then project `default_attempt_budget`,
+then built-in `5`. New task records materialize their effective value; existing
+records retain their stored budget, including historical values. A missing legacy
+task field resolves the project default and then built-in `5` without rewriting
+the record.
 An attempt counts against the budget when it is equivalent to a previous one –
 the same command, check, fix, delegation, or report against the same target –
 and yields no new evidence or change in task state. A restated intended next
@@ -702,7 +707,7 @@ When the budget is exhausted, stop repeating. Record `needs_context` if the task
 record can be amended, or `blocked` if a human decision is required, and report
 what was tried. Do not spend the next turn on the same equivalent attempt.
 
-This default of 3 governs repeated fix attempts in [[debugging-before-fixes]]
+This default of 5 governs repeated fix attempts in [[debugging-before-fixes]]
 and a sustained-and-disputed review item in [[review-and-accept]]. Some guards
 are deliberately tighter than the default: the empty-result command rule above,
 the recorded-setup-gap rule, and the "maintainer is needed" stop in the
@@ -729,8 +734,9 @@ six perspectives, findings, verdicts, remediation routing, re-audit, budget, and
 the closeout gate - is owned by [[work-unit-audit]].
 
 ```text
-covered tasks accepted and integrated
--> freeze the exact candidate artifact
+covered tasks accepted
+-> perform any required conditional source-plan synchronization
+-> integrate or freeze the exact resulting candidate artifact
 -> invoke a fresh Auditor
 -> Auditor returns one consolidated report
 -> certified?
@@ -777,6 +783,10 @@ diagnostic and does not replace that closeout gate.
 
 Existing Engineer-owned integration rehearsal remains the pre-integration
 composition proof. Audit runs after the exact candidate is integrated or frozen.
+When the selected plan explicitly requires a permitted progress update, the
+Maintainer performs it through [[task-closeout]] before that final freeze; a plan
+edit after certification makes the certificate stale until baseline and audit are
+refreshed.
 
 Remediation uses ordinary Maintainer, Engineer, review, evidence, and
 change-request rules. Remediation tasks carry their own `attempt_budget` and
@@ -784,10 +794,9 @@ change-request rules. Remediation tasks carry their own `attempt_budget` and
 
 ### Audit Budget
 
-`audit_budget` defaults to 5 and is deliberately separate from the default-3
-`attempt_budget` and `review_budget`. Five bounds an expensive work-unit
-assurance loop while still allowing the initial audit plus several
-remediation/re-audit cycles before mandatory human intervention.
+`audit_budget` defaults to `3` unless a new audit record materializes an explicit
+`--budget` or project `default_audit_budget` value. It is separate from the
+default-5 `attempt_budget` and the default-5 Review Round Checkpoint threshold.
 
 The budget counts completed substantive reports, derived from the audit record's
 append-only history. An invocation that failed without producing a report does
@@ -795,14 +804,14 @@ not consume it; repeated equivalent invocation failures stay bounded by the
 Attempt Budget above. Remediation work does not consume it, and replacing the
 baseline or the audit record does not reset it.
 
-After five non-certifying reports the audit record moves to
+After three non-certifying reports the audit record moves to
 `audit_state: blocked` with reason `audit_budget_exhausted` while preserving the
-fifth Auditor's actual verdict. If that actual verdict is
+third Auditor's actual verdict. If that actual verdict is
 `needs_human_decision`, `audit_state: awaiting_human` takes precedence until the
 human direction is recorded; resolution then exposes the still-exhausted budget
 as the ordinary `audit_budget_exhausted` block. Budget exhaustion is a workflow
 stop, not a verdict: never manufacture `needs_human_decision` because the budget
-ran out. A sixth report requires every applicable human-decision resolution and
+ran out. A fourth report requires every applicable human-decision resolution and
 a recorded human-approved budget override.
 
 ### Supervised execution compatibility
@@ -821,9 +830,12 @@ The attempt budget counts equivalent attempts and resets on new evidence, so a
 task that fails review repeatedly with a different finding each round never
 trips it. Bound that churn separately.
 
-After 3 valid `needs_revision` rounds on one task – or after the task record's
-positive-integer `review_budget` when it sets one – the orchestrator pauses
-before routing the next revision and asks Maintainer to classify the churn cause:
+After 5 valid `needs_revision` rounds on one task – or after the task record's
+materialized positive-integer `review_budget` – the orchestrator pauses before
+routing the next revision and asks Maintainer to classify the churn cause. The
+task field takes precedence over project `default_review_budget`, which takes
+precedence over the built-in `5`. This is a checkpoint threshold, not an absolute
+maximum number of reviews:
 
 - implementation defect – the code is genuinely not done;
 - evidence drift – the code is fine but the durable summary cites a stale head;
@@ -836,8 +848,8 @@ Orchestrator records Maintainer's disposition as a durable checkpoint bound to
 the current review count and latest reviewed artifact, then either routes a single
 targeted revision plan that names the specific cause, or records
 `needs_context` or `blocked` using [[blocked-state]] when a contract change or
-human decision is required. A fourth undirected "try again" revision is not
-allowed.
+human decision is required. After five counted outcomes, the next undirected
+"try again" revision is not allowed.
 
 ### Durable checkpoint record
 
@@ -1664,15 +1676,21 @@ understand who produced which artifact.
 
 ## Closeout
 
-When a project's configured grouping says closeout is enabled, the maintainer
-runs closeout after all tasks in the current group are accepted and integrated or closed
-according to the configured backend. In flat projects, closeout runs when a
-human-identified task set or work unit finishes.
+When a project's configured grouping says closeout is enabled, closeout
+preparation may begin after all tasks in the current group are accepted. It
+performs only the conditional source-plan synchronization owned by
+[[task-closeout]], then that permitted update is integrated or frozen with the
+resulting candidate before final audit. The maintainer runs the final closeout
+gate after the resulting candidate is integrated or frozen and certified, or
+closed according to the configured backend. In flat projects, the same ordered
+preparation and final gate apply when a human-identified task set or work unit
+finishes.
 
-Closeout is a verify-and-mark gate. It does not write a separate summary
+Final closeout is a verify-and-mark gate. It does not write a separate summary
 artifact: the durable record is the per-task inline summary (the `## Scope
 Completed` section in each task file, or the PR body for GitHub-backed work) plus
-the backend. Closeout confirms that record is complete and posts a status marker.
+the backend. Final closeout confirms that record is complete and posts a status
+marker.
 
 When `work_unit_audit` resolves to `enabled` (the default, including when the key
 is absent), closeout cannot publish `AGENT_CLOSEOUT_STATUS: complete` without a

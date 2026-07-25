@@ -250,10 +250,9 @@ Then invoke a fresh Auditor and append the new report to the same audit record.
 
 ## 11. Audit budget
 
-`audit_budget` defaults to `5` and is independent of `attempt_budget` and
-`review_budget`, which default to `3`. Five is deliberate: it bounds an expensive
-work-unit assurance loop while still allowing the initial audit plus several
-remediation and re-audit cycles before mandatory human intervention.
+`audit_budget` defaults to `3`, after explicit `audit new --budget` and project
+`default_audit_budget` are considered. It is independent of default-5
+`attempt_budget` and default-5 `review_budget` checkpoint threshold.
 
 - Count only completed substantive reports, derived from `## Audit History`.
 - Count both certifying and non-certifying reports, but stop immediately after
@@ -262,13 +261,13 @@ remediation and re-audit cycles before mandatory human intervention.
 - Remediation work does not consume it.
 - Baseline replacement does not reset history.
 
-After five non-certifying reports, set `audit_state: blocked` with
+After three non-certifying reports, set `audit_state: blocked` with
 `audit_blocked_reason: audit_budget_exhausted` and keep `latest_verdict` at the
-fifth Auditor's actual verdict. Budget exhaustion is a workflow stop, not an
+third Auditor's actual verdict. Budget exhaustion is a workflow stop, not an
 Auditor verdict: never manufacture `needs_human_decision` merely because the
-budget ran out. If the fifth verdict actually is `needs_human_decision`, keep
+budget ran out. If the third verdict actually is `needs_human_decision`, keep
 the record in `awaiting_human` until `audit resolve`; after resolution the
-exhausted-budget block remains. A sixth report requires all applicable
+exhausted-budget block remains. A fourth report requires all applicable
 resolution and a recorded human-approved override:
 
 ```text
@@ -280,6 +279,12 @@ history consistency. That is not a claim of tamper-proof enforcement against
 arbitrary manual Git history rewriting.
 
 ## 12. Closeout certification
+
+Before the final candidate is frozen, the Maintainer completes any conditional
+source-plan progress synchronization required by [[task-closeout]]. That plan
+edit changes the candidate artifact, so the audit baseline and final Auditor
+report must be bound to the resulting artifact. Do not edit the plan after a
+current certificate without refreshing the baseline and certification.
 
 When `work_unit_audit` resolves to `enabled`, work-unit closeout may publish
 `AGENT_CLOSEOUT_STATUS: complete` only when all of these hold:

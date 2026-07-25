@@ -19,7 +19,7 @@ const HEAD = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0';
 function checkpointText({
   direction = 'targeted_revision',
   cause = 'implementation_defect',
-  reviewCount = 3,
+  reviewCount = DEFAULT_REVIEW_BUDGET,
   artifact = HEAD,
   target = 'fix failing test evidence',
   reference = null,
@@ -56,7 +56,7 @@ describe('parseReviewCheckpoint', () => {
     assert.equal(result.errors.length, 0);
     assert.equal(result.checkpoint.direction, 'targeted_revision');
     assert.equal(result.checkpoint.cause, 'implementation_defect');
-    assert.equal(result.checkpoint.reviewCount, 3);
+    assert.equal(result.checkpoint.reviewCount, DEFAULT_REVIEW_BUDGET);
     assert.equal(result.checkpoint.artifact, HEAD);
     assert.equal(result.checkpoint.target, 'fix failing test evidence');
   });
@@ -185,6 +185,15 @@ describe('countNeedsRevisionRounds', () => {
 });
 
 describe('evaluateReviewCheckpoint', () => {
+  it('uses the canonical default threshold of five counted needs_revision outcomes', () => {
+    assert.equal(DEFAULT_REVIEW_BUDGET, 5);
+    const result = evaluateReviewCheckpoint({
+      reviewOutcomes: Array.from({ length: 5 }, () => ({ status: 'needs_revision', artifact: HEAD })),
+    });
+    assert.equal(result.authorized, false);
+    assert.ok(result.errors.some(error => /checkpoint.*required|budget.*exhausted/i.test(error)));
+  });
+
   it('authorizes rounds within budget without checkpoint', () => {
     const result = evaluateReviewCheckpoint({
       reviewOutcomes: [

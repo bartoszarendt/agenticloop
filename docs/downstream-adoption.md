@@ -60,9 +60,17 @@ proposal, and explicitly select or confirm one stage. The one-time migration
 preserves the target-owned project-map body and does not bundle document,
 backend, naming, or grouping changes into the stage confirmation.
 
-Existing maps without `max_parallel_implementation_lanes` inherit the default
-`5`. This is only an implementation-lane ceiling; the current Parallel
+Existing maps without `default_attempt_budget`, `default_review_budget`,
+`default_audit_budget`, or `max_parallel_implementation_lanes` inherit `5`,
+`5`, `3`, and `5` respectively. Existing task records are not rewritten.
+The lane setting is only an implementation-lane ceiling; the current Parallel
 Opportunity Scan may authorize fewer lanes or require serial work.
+
+When a selected target plan explicitly defines a progress/status convention,
+closeout may apply one mapped, permitted update in its single-writer Maintainer
+lane. It does not rewrite or port the plan, invent a status convention, or run
+after certification: a permitted plan edit is part of the final candidate and
+requires the audit baseline and certificate to be current afterward.
 
 ### Parallel write ownership and managed joins
 

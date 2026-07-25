@@ -73,6 +73,22 @@ function verificationHistory(classification, reference) {
 - Triaged at: 2026-07-17T12:30:00Z`;
 }
 
+function needsRevisionHistory(rounds, artifact = 'commit:abc123') {
+  const entries = ['## Review History', ''];
+  for (let round = 1; round <= rounds; round += 1) {
+    entries.push(
+      `### Review ${round}`,
+      '- Status: needs_revision',
+      '- Mode: host_subagent',
+      `- Artifact: ${artifact}`,
+      '- Findings: F-1',
+      '- Maintainer: maintainer',
+      ''
+    );
+  }
+  return entries.join('\n');
+}
+
 const PROJECT_FACT = `### VF-full-suite
 
 - Command: \`npm test\`
@@ -171,6 +187,8 @@ describe('task CLI', () => {
     assertOk(created);
     assert.match(created.stdout, /Created \.agenticloop\/tasks\/T-001\.md/);
     assert.ok(existsSync(taskPath(target, 'T-001')));
+    assert.match(readFileSync(taskPath(target, 'T-001'), 'utf-8'), /^attempt_budget: 5$/m);
+    assert.match(readFileSync(taskPath(target, 'T-001'), 'utf-8'), /^review_budget: 5$/m);
 
     const list = await run(['task', 'list', '--target', target]);
     assertOk(list);
@@ -202,6 +220,112 @@ describe('task CLI', () => {
     const lint = await run(['task', 'lint', 'T-001', '--target', target]);
     assertOk(lint);
     assert.doesNotMatch(lint.stdout, /exact 'range:|undeclared path/);
+  });
+
+  it('materializes the configured project review budget without rewriting existing tasks', async () => {
+    const target = makeTarget('project-review-budget');
+    const projectPath = join(target, '.agenticloop', 'project.md');
+    writeFileSync(
+      projectPath,
+      readFileSync(projectPath, 'utf-8').replace('default_review_budget: 5', 'default_review_budget: 7'),
+      'utf-8'
+    );
+    assertOk(await run(['task', 'new', 'Policy task', '--target', target]));
+    assert.match(readFileSync(taskPath(target, 'T-001'), 'utf-8'), /^review_budget: 7$/m);
+
+    writeFileSync(projectPath, readFileSync(projectPath, 'utf-8').replace('default_review_budget: 7', 'default_review_budget: 2'), 'utf-8');
+    assert.match(readFileSync(taskPath(target, 'T-001'), 'utf-8'), /^review_budget: 7$/m);
+  });
+
+  it('materializes the configured project attempt budget without rewriting existing tasks', async () => {
+    const target = makeTarget('project-attempt-budget');
+    const projectPath = join(target, '.agenticloop', 'project.md');
+    writeFileSync(
+      projectPath,
+      readFileSync(projectPath, 'utf-8').replace('default_attempt_budget: 5', 'default_attempt_budget: 8'),
+      'utf-8'
+    );
+    assertOk(await run(['task', 'new', 'Attempt policy task', '--target', target]));
+    assert.match(readFileSync(taskPath(target, 'T-001'), 'utf-8'), /^attempt_budget: 8$/m);
+
+    const taskFile = taskPath(target, 'T-001');
+    writeFileSync(taskFile, readFileSync(taskFile, 'utf-8').replace(/^attempt_budget: 8$/m, 'attempt_budget: 3'), 'utf-8');
+    writeFileSync(projectPath, readFileSync(projectPath, 'utf-8').replace('default_attempt_budget: 8', 'default_attempt_budget: 2'), 'utf-8');
+    assert.match(readFileSync(taskFile, 'utf-8'), /^attempt_budget: 3$/m);
+    assertOk(await run(['task', 'lint', 'T-001', '--target', target]));
+  });
+
+  it('accepts legacy missing attempt budgets and rejects invalid or duplicate stored values', async () => {
+    const target = makeTarget('attempt-budget-validation');
+    const projectPath = join(target, '.agenticloop', 'project.md');
+    writeFileSync(
+      projectPath,
+      readFileSync(projectPath, 'utf-8').replace('default_attempt_budget: 5', 'default_attempt_budget: 2'),
+      'utf-8'
+    );
+    assertOk(await run(['task', 'new', 'Legacy attempt policy task', '--target', target]));
+    const path = taskPath(target, 'T-001');
+
+    const legacy = readFileSync(path, 'utf-8').replace(/^attempt_budget: 2\r?\n/m, '');
+    writeFileSync(path, legacy, 'utf-8');
+    assertOk(await run(['task', 'lint', 'T-001', '--target', target]));
+    assert.doesNotMatch(readFileSync(path, 'utf-8'), /^attempt_budget:/m);
+
+    writeFileSync(projectPath, readFileSync(projectPath, 'utf-8').replace('default_attempt_budget: 2', 'default_attempt_budget: 0'), 'utf-8');
+    const invalidProjectFallback = await run(['task', 'lint', 'T-001', '--target', target]);
+    assert.notEqual(invalidProjectFallback.status, 0);
+    assert.match(invalidProjectFallback.stdout, /default_attempt_budget must be a positive safe integer/);
+    writeFileSync(projectPath, readFileSync(projectPath, 'utf-8').replace('default_attempt_budget: 0', 'default_attempt_budget: 2'), 'utf-8');
+
+    writeFileSync(path, legacy.replace(/^review_budget:/m, 'attempt_budget: 0\nreview_budget:'), 'utf-8');
+    const invalid = await run(['task', 'lint', 'T-001', '--target', target]);
+    assert.notEqual(invalid.status, 0);
+    assert.match(invalid.stdout, /attempt_budget '0' must be a positive integer/);
+
+    writeFileSync(path, legacy.replace(/^review_budget:/m, 'attempt_budget: 2\nattempt_budget: 3\nreview_budget:'), 'utf-8');
+    const duplicate = await run(['task', 'lint', 'T-001', '--target', target]);
+    assert.notEqual(duplicate.status, 0);
+    assert.match(duplicate.stdout, /attempt_budget appears more than once in frontmatter/);
+  });
+
+  it('rejects an explicitly empty project attempt budget during task creation', async () => {
+    const target = makeTarget('empty-attempt-project-policy');
+    const projectPath = join(target, '.agenticloop', 'project.md');
+    writeFileSync(
+      projectPath,
+      readFileSync(projectPath, 'utf-8').replace('default_attempt_budget: 5', 'default_attempt_budget: ""'),
+      'utf-8'
+    );
+
+    const result = await run(['task', 'new', 'Invalid policy task', '--target', target]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /default_attempt_budget must be a positive safe integer/);
+    assert.equal(existsSync(taskPath(target, 'T-001')), false);
+  });
+
+  it('uses the project review budget when authorizing a legacy task revision', async () => {
+    const target = makeTarget('legacy-project-review-budget');
+    const projectPath = join(target, '.agenticloop', 'project.md');
+    writeFileSync(
+      projectPath,
+      readFileSync(projectPath, 'utf-8').replace('default_review_budget: 5', 'default_review_budget: 2'),
+      'utf-8'
+    );
+    assertOk(await run(['task', 'new', 'Legacy policy task', '--target', target]));
+
+    const path = taskPath(target, 'T-001');
+    let content = readFileSync(path, 'utf-8')
+      .replace(/^status: draft$/m, 'status: needs_revision')
+      .replace(/^review_budget: 2\r?\n/m, '')
+      .replace(/^implementation_artifact:$/m, 'implementation_artifact: commit:abc123')
+      .replace(/^review_status:$/m, 'review_status: needs_revision');
+    content = `${content.trimEnd()}\n\n${needsRevisionHistory(2)}\n`;
+    writeFileSync(path, content, 'utf-8');
+
+    const result = await run(['task', 'status', 'T-001', 'in-progress', '--target', target]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /checkpoint.*required|budget.*exhausted/i);
+    assert.match(readFileSync(path, 'utf-8'), /^status: needs_revision$/m);
   });
 
   it('enforces artifact-bound ownership during task lint', async () => {

@@ -127,8 +127,8 @@ Every meaningful state change should produce a durable artifact. Nothing importa
 
 A loose chat session degrades as it grows: context evaporates, failed attempts repeat, and "done" gets cheaper the longer the session runs. The loop is engineered so that multi-hour runs on complex tasks stay stable:
 
-- **Attempt budgets.** Repeating an equivalent action that produces no new evidence hits a hard budget (default 3). When it is exhausted, the agent stops repeating and records a blocked or needs-context state instead of thrashing.
-- **Review round checkpoints.** A task that keeps failing review is bounded separately: after three `needs_revision` rounds the orchestrator must classify the cause and route one targeted revision. A fourth undirected "try again" is not allowed.
+- **Attempt budgets.** Repeating an equivalent action that produces no new evidence hits a hard budget (task `attempt_budget`, then project `default_attempt_budget`, then built-in `5`). When it is exhausted, the agent stops repeating and records a blocked or needs-context state instead of thrashing.
+- **Review round checkpoints.** A task that keeps failing review is bounded separately: after five `needs_revision` rounds by default, the orchestrator must classify the cause and route one targeted revision. This is a checkpoint threshold, not a review cap.
 - **Blocked states, not guesses.** When progress requires a human decision or missing context, the agent records a durable blocked state naming what it needs. The loop resumes when the blocker is cleared.
 - **Verification learning.** Observed check behavior – slow suites, flaky commands, timeouts – is recorded as durable operating facts, so later tasks and sessions do not rediscover it.
 - **Everything durable.** Task records, evidence, review outcomes, and decisions live in files, not chat. A run survives session death: a fresh session reads the task record and continues where the last one stopped.

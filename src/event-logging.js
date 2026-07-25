@@ -4,7 +4,13 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { TextDecoder } from 'node:util';
 
 import { loadAgenticLoopConfig } from './json.js';
-import { isValidTaskId, loadProjectMap } from './project-map.js';
+import {
+  isValidTaskId,
+  loadProjectMap,
+  resolveProjectAttemptBudget,
+  resolveProjectReviewBudget,
+} from './project-map.js';
+import { DEFAULT_ATTEMPT_BUDGET, DEFAULT_REVIEW_BUDGET } from './layout.js';
 import {
   DELEGATION_MODES,
   FALLBACK_CAUSES,
@@ -103,8 +109,8 @@ const BANNED_PRIVACY_KEYS = new Set([
 // backend. The event log is the telemetry/audit stream, not the task contract.
 // `data` stays free-form (normalizeData); these are conventions, not new schema.
 export const FEATURE_TELEMETRY_VERSION = 1;
-export const DEFAULT_ATTEMPT_BUDGET = 3;
-export const DEFAULT_REVIEW_BUDGET = 3;
+// Compatibility re-export: layout.js is the single canonical owner.
+export { DEFAULT_ATTEMPT_BUDGET, DEFAULT_REVIEW_BUDGET } from './layout.js';
 export const MINIMALISM_LEVELS = ['none', 'lite', 'full', 'ultra'];
 export const CONTEXT_OVERFLOW_RISK_LEVELS = ['medium', 'high'];
 // One verdict/reason line. Longer values are the caller dumping discovery output.
@@ -1413,7 +1419,10 @@ function summarizeEvents(events, repoRoot) {
 // data.review_rounds total), so it works on
 // historical logs with no producer changes. The knob fields (minimalism, budgets,
 // context risk/pressure) are read from emitted telemetry when present.
-function summarizeTaskFeatures(events) {
+function summarizeTaskFeatures(events, {
+  defaultAttemptBudget = DEFAULT_ATTEMPT_BUDGET,
+  defaultReviewBudget = DEFAULT_REVIEW_BUDGET,
+} = {}) {
   const created = events.find(event => event.event_type === 'task.created') ?? null;
   let closed = null;
   for (const event of events) {
@@ -1438,11 +1447,17 @@ function summarizeTaskFeatures(events) {
 
   const reviewBudgetExplicit = toFiniteNumber(closed?.data?.review_budget)
     ?? toFiniteNumber(created?.data?.review_budget);
-  const reviewBudget = reviewBudgetExplicit ?? DEFAULT_REVIEW_BUDGET;
-  const reviewBudgetIsDefault = reviewBudgetExplicit === null;
+  const reviewBudget = reviewBudgetExplicit ?? defaultReviewBudget;
+  const reviewBudgetIsOverride =
+    reviewBudgetExplicit !== null && reviewBudgetExplicit !== defaultReviewBudget;
+  const reviewBudgetIsDefault = !reviewBudgetIsOverride;
   const overReviewBudget = derivedReviewRounds > reviewBudget || needsRevisionCount >= reviewBudget;
 
-  const attemptBudget = toFiniteNumber(created?.data?.attempt_budget);
+  const attemptBudgetExplicit = toFiniteNumber(closed?.data?.attempt_budget)
+    ?? toFiniteNumber(created?.data?.attempt_budget);
+  const attemptBudget = attemptBudgetExplicit ?? defaultAttemptBudget;
+  const attemptBudgetIsOverride =
+    attemptBudgetExplicit !== null && attemptBudgetExplicit !== defaultAttemptBudget;
   const minimalism = normalizeNullableString(created?.data?.minimalism);
   const minimalismTrigger = normalizeNullableString(created?.data?.minimalism_trigger);
   const contextOverflowRisk = normalizeNullableString(created?.data?.context_overflow_risk)
@@ -1468,9 +1483,11 @@ function summarizeTaskFeatures(events) {
     derivedReviewRounds,
     reviewBudget,
     reviewBudgetIsDefault,
+    reviewBudgetIsOverride,
     overReviewBudget,
     reviewBudgetExceededRecorded,
     attemptBudget,
+    attemptBudgetIsOverride,
     minimalism,
     minimalismTrigger,
     contextOverflowRisk,
@@ -1521,8 +1538,20 @@ function createEmptyFeatureAggregate() {
     minimalism: { none: 0, lite: 0, full: 0, ultra: 0, missing: 0, other: 0 },
     minimalismTriggers: [],
     budgets: {
+      effectiveDefaultReview: {
+        budget: DEFAULT_REVIEW_BUDGET,
+        source: 'built_in',
+      },
+      effectiveDefaultAttempt: {
+        budget: DEFAULT_ATTEMPT_BUDGET,
+        source: 'built_in',
+      },
+      // Compatibility alias. Its entries now mean explicit task values that
+      // differ from the effective project/built-in attempt policy.
       nonDefaultAttempt: [],
       nonDefaultReview: [],
+      taskAttemptOverrides: [],
+      taskReviewOverrides: [],
     },
     contextOverflowRisk: { medium: 0, high: 0, tasks: [] },
     contextPressure: { true: 0, false: 0, missingForRiskTasks: [] },
@@ -1631,11 +1660,16 @@ function accumulateTaskFeatures(features, triggerCounts, taskId, taskFeatures) {
     if (taskFeatures.minimalismTrigger) incrementCount(triggerCounts, taskFeatures.minimalismTrigger);
   }
 
-  if (taskFeatures.attemptBudget !== null && taskFeatures.attemptBudget !== DEFAULT_ATTEMPT_BUDGET) {
-    features.budgets.nonDefaultAttempt.push({ taskId, attemptBudget: taskFeatures.attemptBudget });
+  if (taskFeatures.attemptBudgetIsOverride) {
+    const override = { taskId, attemptBudget: taskFeatures.attemptBudget };
+    features.budgets.nonDefaultAttempt.push(override);
+    features.budgets.taskAttemptOverrides.push(override);
   }
-  if (!taskFeatures.reviewBudgetIsDefault && taskFeatures.reviewBudget !== DEFAULT_REVIEW_BUDGET) {
+  if (taskFeatures.reviewBudgetIsOverride && taskFeatures.reviewBudget !== DEFAULT_REVIEW_BUDGET) {
     features.budgets.nonDefaultReview.push({ taskId, reviewBudget: taskFeatures.reviewBudget });
+  }
+  if (taskFeatures.reviewBudgetIsOverride) {
+    features.budgets.taskReviewOverrides.push({ taskId, reviewBudget: taskFeatures.reviewBudget });
   }
 
   if (taskFeatures.contextOverflowRisk === 'medium' || taskFeatures.contextOverflowRisk === 'high') {
@@ -1701,6 +1735,8 @@ function finalizeFeatureAggregate(features, triggerCounts) {
   features.reviewRounds.churnTasks.sort((a, b) => String(a.taskId).localeCompare(String(b.taskId)));
   features.budgets.nonDefaultAttempt.sort((a, b) => String(a.taskId).localeCompare(String(b.taskId)));
   features.budgets.nonDefaultReview.sort((a, b) => String(a.taskId).localeCompare(String(b.taskId)));
+  features.budgets.taskAttemptOverrides.sort((a, b) => String(a.taskId).localeCompare(String(b.taskId)));
+  features.budgets.taskReviewOverrides.sort((a, b) => String(a.taskId).localeCompare(String(b.taskId)));
   features.contextOverflowRisk.tasks.sort((a, b) => String(a).localeCompare(String(b)));
   features.contextPressure.missingForRiskTasks.sort((a, b) => String(a).localeCompare(String(b)));
   features.omissionCandidates.contextRiskPressureNoPredict
@@ -1715,6 +1751,9 @@ function finalizeFeatureAggregate(features, triggerCounts) {
 export function reportEventLogs({ target } = {}) {
   const resolvedTarget = target ? resolve(target) : process.cwd();
   const { directory, files } = listEventLogFiles(resolvedTarget);
+  const projectMapConfig = loadProjectMap(resolvedTarget)?.config ?? null;
+  const attemptBudgetPolicy = resolveProjectAttemptBudget(projectMapConfig);
+  const reviewBudgetPolicy = resolveProjectReviewBudget(projectMapConfig);
 
   const result = {
     directory,
@@ -1746,6 +1785,18 @@ export function reportEventLogs({ target } = {}) {
     features: createEmptyFeatureAggregate(),
     missingLogs: false,
   };
+
+  result.features.budgets.effectiveDefaultReview = {
+    budget: reviewBudgetPolicy.budget,
+    source: reviewBudgetPolicy.source,
+  };
+  result.features.budgets.effectiveDefaultAttempt = {
+    budget: attemptBudgetPolicy.budget,
+    source: attemptBudgetPolicy.source,
+  };
+
+  if (attemptBudgetPolicy.error) result.warnings.push(attemptBudgetPolicy.error);
+  if (reviewBudgetPolicy.error) result.warnings.push(reviewBudgetPolicy.error);
 
   if (files.length === 0) {
     result.missingLogs = true;
@@ -1894,7 +1945,15 @@ export function reportEventLogs({ target } = {}) {
       result.tasksWithReviewChurn.push(taskId);
     }
 
-    accumulateTaskFeatures(result.features, featureTriggerCounts, taskId, summarizeTaskFeatures(entry.events));
+    accumulateTaskFeatures(
+      result.features,
+      featureTriggerCounts,
+      taskId,
+      summarizeTaskFeatures(entry.events, {
+        defaultAttemptBudget: attemptBudgetPolicy.budget,
+        defaultReviewBudget: reviewBudgetPolicy.budget,
+      })
+    );
     accumulateProvenanceQuality(result.provenanceQuality, taskId, summary.provenanceQuality);
 
     if (!summary.strictAudit.presentEventTypes.includes('role.invoked')) {

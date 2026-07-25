@@ -9,7 +9,7 @@ candidate_artifact: commit:0000000
 certified_artifact:
 certified_covered_tasks: []
 latest_verdict:
-audit_budget: 5
+audit_budget: 3
 ---
 
 # AUD-001: Work-Unit Audit

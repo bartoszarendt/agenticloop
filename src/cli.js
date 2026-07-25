@@ -232,11 +232,19 @@ function printFeatureReport(result, commandLabel, io) {
     `  minimalism (telemetry tasks): none=${m.none}, lite=${m.lite}, full=${m.full}, ultra=${m.ultra}, missing=${m.missing}, other=${m.other}`
   );
   io.out(`  minimalism triggers: ${formatCountSummary(f.minimalismTriggers.map(entry => ({ value: entry.trigger, count: entry.count })))}`);
+  const attemptPolicy = f.budgets.effectiveDefaultAttempt;
   io.out(
-    `  non-default attempt budgets: ${f.budgets.nonDefaultAttempt.length} (${formatTaskIdList(f.budgets.nonDefaultAttempt.map(entry => `${entry.taskId}=${entry.attemptBudget}`))})`
+    `  effective default attempt budget: ${attemptPolicy.budget} (${attemptPolicy.source === 'project' ? 'project policy' : 'built-in policy'})`
   );
   io.out(
-    `  non-default review budgets: ${f.budgets.nonDefaultReview.length} (${formatTaskIdList(f.budgets.nonDefaultReview.map(entry => `${entry.taskId}=${entry.reviewBudget}`))})`
+    `  explicit task attempt overrides: ${f.budgets.taskAttemptOverrides.length} (${formatTaskIdList(f.budgets.taskAttemptOverrides.map(entry => `${entry.taskId}=${entry.attemptBudget}`))})`
+  );
+  const reviewPolicy = f.budgets.effectiveDefaultReview;
+  io.out(
+    `  effective default review budget: ${reviewPolicy.budget} (${reviewPolicy.source === 'project' ? 'project policy' : 'built-in policy'})`
+  );
+  io.out(
+    `  explicit task review overrides: ${f.budgets.taskReviewOverrides.length} (${formatTaskIdList(f.budgets.taskReviewOverrides.map(entry => `${entry.taskId}=${entry.reviewBudget}`))})`
   );
   io.out(
     `  context overflow risk: medium=${f.contextOverflowRisk.medium}, high=${f.contextOverflowRisk.high} (tasks: ${formatTaskIdList(f.contextOverflowRisk.tasks)})`

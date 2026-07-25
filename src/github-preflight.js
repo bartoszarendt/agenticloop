@@ -30,6 +30,10 @@ import { validateGitHubVerificationAttempts } from './verification-learning.js';
 import { createLocalVerificationContext } from './verification-context.js';
 import { parseFrontmatter } from './frontmatter.js';
 import {
+  loadProjectMap,
+  resolveProjectReviewBudget,
+} from './project-map.js';
+import {
   parseScopePatterns,
   parseDeviations,
   validatePathsAgainstDeviations,
@@ -41,10 +45,12 @@ import {
   validateGitHubSharedMutationContents,
 } from './parallel-ownership.js';
 import {
+  countTaskBudgetFieldOccurrences,
   parseReviewCheckpoint,
   evaluateReviewCheckpoint,
   DEFAULT_REVIEW_BUDGET,
   parseReviewBudgetValue,
+  resolveTaskAttemptBudget,
 } from './review-checkpoint.js';
 import { collectGitHubReviewHistory } from './review-history.js';
 import {
@@ -90,18 +96,24 @@ export function extractSectionBody(markdown, heading) {
  * separate from review event parsing so malformed task metadata fails closed
  * before it can loosen the revision limit.
  */
-export function parseReviewBudget(taskBody) {
+export function parseReviewBudget(taskBody, projectMapConfig = null) {
   const raw = String(taskBody ?? '');
   const [frontmatter] = parseFrontmatter(raw);
-  const occurrences = raw.match(/^review_budget\s*:/gm)?.length ?? 0;
-  if (occurrences > 1) return { budget: DEFAULT_REVIEW_BUDGET, error: 'task record has duplicate review_budget frontmatter fields' };
+  const occurrences = countTaskBudgetFieldOccurrences(raw, 'review_budget');
+  const projectBudget = resolveProjectReviewBudget(projectMapConfig);
+  if (occurrences > 1) return { budget: projectBudget.budget, error: 'task record has duplicate review_budget frontmatter fields' };
   if (!frontmatter || !Object.hasOwn(frontmatter, 'review_budget')) {
-    return { budget: DEFAULT_REVIEW_BUDGET, error: null };
+    return projectBudget;
   }
   const parsed = parseReviewBudgetValue(frontmatter.review_budget);
   return parsed.error
     ? { ...parsed, error: `task ${parsed.error}` }
     : parsed;
+}
+
+/** Read the equivalent-attempt budget from GitHub task metadata. */
+export function parseAttemptBudget(taskBody, projectMapConfig = null) {
+  return resolveTaskAttemptBudget(taskBody, projectMapConfig);
 }
 
 /**
@@ -657,6 +669,7 @@ export function categorizePreflightErrors(errors) {
     attribution: [],
     evidence: [],
     checks: [],
+    task_policy: [],
     review_checkpoint: [],
     revision_resolution: [],
     review_provenance: [],
@@ -713,7 +726,8 @@ export function categorizePreflightErrors(errors) {
  *   Ordered, trusted review history derived from durable GitHub carriers.
  * @param {Array<{ status: string, artifact?: string }>} [params.reviewOutcomes]
  *   Legacy pure-test input; production callers pass reviewHistory.
- * @param {number} [params.reviewBudget] Override for review budget (default: 3).
+ * @param {number} [params.reviewBudget] Effective review budget override (built-in default: 5).
+ * @param {object} [params.projectMapConfig] Project policy used to resolve attempt_budget.
  * @returns {object} structured result.
  */
 export function evaluatePreflight({
@@ -728,12 +742,17 @@ export function evaluatePreflight({
   reviewOutcomes = [],
   reviewBudget = DEFAULT_REVIEW_BUDGET,
   reviewBudgetError = null,
+  projectMapConfig = null,
 }) {
   const errors = [];
   const warnings = [];
   const headRefOid = String(prData?.headRefOid ?? '').toLowerCase();
   const prNumber = prData?.number ?? null;
   const issueNumber = issueData?.number ?? null;
+  const attemptBudget = parseAttemptBudget(issueData?.body, projectMapConfig);
+  if (attemptBudget.error) {
+    errors.push({ message: attemptBudget.error, category: 'task_policy' });
+  }
 
   if (!headRefOid) {
     errors.push('PR head commit (headRefOid) is unavailable; cannot verify evidence freshness');
@@ -1005,6 +1024,7 @@ export function evaluatePreflight({
     pathValidation: pathValidation ? { unmatched: pathValidation.unmatched, missingDeviations: pathValidation.missingDeviations } : null,
     summaryValidation: { errors: summaryValidation.errors.map(e => typeof e === 'string' ? e : e.message) },
     attributionValidation: { established: attributionValidation.attributionEstablished, errors: attributionValidation.errors },
+    attemptBudget: { budget: attemptBudget.budget, source: attemptBudget.source ?? 'task' },
     reviewHistory: { events: historyEvents.length, errors: durableHistory?.errors ?? [] },
     checkpointValidation: checkpointValidation ? { authorized: checkpointValidation.authorized, errors: checkpointValidation.errors } : null,
     resolutionMatrixValidation: resolutionMatrixValidation ? { valid: resolutionMatrixValidation.valid, errors: resolutionMatrixValidation.errors } : null,
@@ -1191,7 +1211,8 @@ export function runPreflight({
   const localContext = verificationContext ?? createLocalVerificationContext(target);
   const authenticatedAccount = expectedAccount ?? resolveAuthenticatedAccount(commandRunner);
   const reviewHistory = collectGitHubReviewHistory(prData, authenticatedAccount);
-  const reviewBudget = parseReviewBudget(issueData.body);
+  const projectMapConfig = loadProjectMap(target)?.config ?? null;
+  const reviewBudget = parseReviewBudget(issueData.body, projectMapConfig);
 
   return evaluatePreflight({
     prData,
@@ -1202,5 +1223,6 @@ export function runPreflight({
     reviewHistory,
     reviewBudget: reviewBudget.budget,
     reviewBudgetError: reviewBudget.error,
+    projectMapConfig,
   });
 }

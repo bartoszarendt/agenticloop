@@ -254,8 +254,9 @@ When upgrading a project whose map is already confirmed but has no
 `development_stage`, validation intentionally stops normal task work. Run
 `npx agenticloop setup` interactively and confirm the one-time stage migration.
 The migration preserves the existing project-map body and does not silently
-change document selections, backend, naming, or grouping values. A missing
-`max_parallel_implementation_lanes` field inherits the default `5` ceiling.
+change document selections, backend, naming, or grouping values. Missing
+`default_review_budget`, `default_audit_budget`, and
+`max_parallel_implementation_lanes` fields inherit `5`, `3`, and `5`.
 
 ## Configuration
 
@@ -273,6 +274,8 @@ setup_status: unconfirmed
 setup_confirmed_at: ""
 setup_confirmed_by: ""
 development_stage: unconfirmed
+default_review_budget: 5
+default_audit_budget: 3
 max_parallel_implementation_lanes: 5
 task_backend: files
 task_id_pattern: "T-<number>"
@@ -308,6 +311,12 @@ repeat interactive profile update and also requires human confirmation.
 `max_parallel_implementation_lanes` defaults to `5`. It is a ceiling only for
 otherwise eligible implementation lanes, not a total live-agent budget or a
 target; review, coordination, and integration lanes use their own rules.
+
+`default_review_budget` defaults to `5`; a task's explicit `review_budget`
+wins, otherwise new task records materialize this value. It is the number of
+counted `needs_revision` outcomes before a Review Round Checkpoint, not a hard
+review maximum. `default_audit_budget` defaults to `3`; `audit new --budget`
+wins, otherwise each new audit record materializes this project value.
 
 `backend_confirmed_at`, `backend_confirmed_by`, and `backend_evidence_summary`
 are optional frontmatter notes for the bounded backend-evidence review.
@@ -448,6 +457,7 @@ Recommended prompt for hosts without command activation:
 
 ```text
 Use Agentic Loop. Read .agenticloop/project.md for development_stage,
+default_attempt_budget, default_review_budget, default_audit_budget,
 max_parallel_implementation_lanes, task_backend, task naming, grouping rules,
 and typed document selections. If setup_status is unconfirmed or the stage is
 not human-confirmed, route setup-agenticloop or confirm the profile before
@@ -506,6 +516,13 @@ npx agenticloop audit report AUD-001 --verdict certified \
 npx agenticloop audit gate AUD-001
 ```
 
+Before the final audit command, closeout conditionally synchronizes the selected
+plan only when that plan itself defines a permitted progress/status update and a
+task/work-unit reference maps unambiguously to one item. That Maintainer-owned
+update is integrated into the candidate first; then the baseline is refreshed,
+the Auditor certifies that exact artifact, and only then can closeout publish its
+complete marker. Plans without progress instructions receive no invented edit.
+
 `audit status` remains available for diagnostics. `audit gate` is the
 fail-closed closeout check. A `needs_human_decision` verdict requires a separate
 recorded resolution before another Auditor report:
@@ -515,9 +532,9 @@ npx agenticloop audit resolve AUD-001 \
   --authority "human: <identity>" --note "<decision and direction>"
 ```
 
-`audit_budget` defaults to 5 and is separate from the default-3 `attempt_budget`
-and `review_budget`. After five non-certifying reports the record blocks for
-human direction; a sixth requires
+`audit_budget` defaults to 3 and is separate from the default-5 `attempt_budget`
+and default-5 Review Round Checkpoint threshold. After three non-certifying
+reports the record blocks for human direction; a fourth requires
 `npx agenticloop audit override AUD-001 --budget <n> --authority "human: <identity>"`.
 
 To opt out, a human sets `work_unit_audit: disabled` in

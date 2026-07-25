@@ -238,7 +238,7 @@ export const COMMAND_REGISTRY = {
           opt('work-unit', 'string', 'Canonical work-unit identity (phase:4, milestone:M2, epic:x, custom:x, work-unit:x). Required.'),
           opt('covered-tasks', 'string', 'Comma-separated exact covered task ids. Required.'),
           opt('artifact', 'string', 'Exact frozen candidate artifact (e.g. commit:<sha>). Required.'),
-          opt('budget', 'string', `Audit budget (default: ${DEFAULT_AUDIT_BUDGET}; separate from attempt/review budgets).`),
+          opt('budget', 'string', `Explicit audit budget override (otherwise project default_audit_budget, then built-in ${DEFAULT_AUDIT_BUDGET}).`),
           opt('goal', 'string', 'Concrete work-unit goal statement. Required.'),
           opt('completion-oracle', 'string', 'Observable completion oracle. Required.'),
           opt('evidence', 'string', 'Integrated evidence bound to the frozen candidate. Required.'),

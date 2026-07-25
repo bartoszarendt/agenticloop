@@ -155,6 +155,18 @@ artifact. If a local review checkout is supplied, add `--workspace <path>` as
 well; it requires `--expect-artifact` and rejects a workspace whose Git HEAD
 does not match that exact SHA.
 
+## Workflow budgets
+
+`task new` materializes `attempt_budget` from target
+`default_attempt_budget`, then built-in `5`. A task-specific override is a
+subsequent task-record edit made before work begins; `task new` has no budget
+override option. The field is the hard limit for equivalent no-progress
+attempts. The command also materializes `review_budget` from the target
+project's `default_review_budget`, then the built-in `5`; this is a Review Round
+Checkpoint threshold, not a review cap. `audit new --budget <n>` is an explicit override;
+without it, the command materializes `default_audit_budget`, then the built-in
+`3`. Existing task and audit records keep their stored values.
+
 ## Exit statuses
 
 | Status | Meaning |

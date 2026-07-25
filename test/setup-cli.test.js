@@ -140,6 +140,9 @@ describe('setup CLI', () => {
     const [fm] = parseFrontmatter(content);
     assert.equal(fm.setup_status, 'confirmed');
     assert.equal(fm.development_stage, 'greenfield');
+    assert.equal(fm.default_attempt_budget, '5');
+    assert.equal(fm.default_review_budget, '5');
+    assert.equal(fm.default_audit_budget, '3');
     assert.equal(fm.max_parallel_implementation_lanes, '5');
   });
 
@@ -153,6 +156,9 @@ describe('setup CLI', () => {
     const result = run(['setup', '--target', d], { input });
 
     assert.ok(result.stdout.includes('Setup checklist'));
+    assert.ok(result.stdout.includes('Default equivalent-attempt budget: 5'));
+    assert.ok(result.stdout.includes('Default review checkpoint budget: 5'));
+    assert.ok(result.stdout.includes('Default audit budget: 3'));
   });
 
   it('runs full validation when accepted after files-only setup', () => {
@@ -304,15 +310,18 @@ describe('setup CLI', () => {
       'edit',
       'prod',
       'stabilization',
-      '0',
-      '4',
-      'Release hardening is the current priority.',
+       '0',
+       '4',
+       '',
+       '',
+       '',
+       'Release hardening is the current priority.',
       'The next capability roadmap is accepted.',
-      '',
-      '',
-      '',
-      '',
-      'yes',
+         '',
+         '',
+         '',
+         '',
+       'yes',
       '',
       '3',
       'y',
@@ -328,6 +337,37 @@ describe('setup CLI', () => {
     assert.equal(fm.max_parallel_implementation_lanes, '4');
     assert.equal(fm.development_stage_rationale, 'Release hardening is the current priority.');
     assert.equal(fm.development_stage_revisit_when, 'The next capability roadmap is accepted.');
+  });
+
+  it('validates and persists edited attempt, review, and audit defaults', () => {
+    const d = makeEmptyTarget();
+    writeFileSync(join(d, 'AGENTS.md'), '# AGENTS\n');
+    writeFileSync(join(d, 'README.md'), '# README\n');
+    writeFileSync(join(d, 'IMPLEMENTATION_PLAN.md'), '# Plan\n');
+
+    const input = [
+       'edit',
+       '', // stage
+       '', // implementation lanes
+       '0', '7', // attempt budget: invalid, then valid
+       '0', '6', // review budget: invalid, then valid
+      '-1', '4', // audit budget: invalid, then valid
+      '', '', // stage notes
+      '', '', '', // backend, grouping, task id pattern
+      '', // task id regex
+      'yes',
+      '', '3', 'y',
+    ].join('\n');
+    const result = run(['setup', '--target', d], { input });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.match(result.stdout, /Default equivalent-attempt budget must be a positive integer/);
+    assert.match(result.stdout, /Default review checkpoint budget must be a positive integer/);
+    assert.match(result.stdout, /Default audit budget must be a positive integer/);
+    const [fm] = parseFrontmatter(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'));
+    assert.equal(fm.default_attempt_budget, '7');
+    assert.equal(fm.default_review_budget, '6');
+    assert.equal(fm.default_audit_budget, '4');
   });
 
   it('does not persist an edited stage when human confirmation is declined', () => {
@@ -376,16 +416,19 @@ describe('setup CLI', () => {
     writeFileSync(join(d, 'ROADMAP.md'), '# Roadmap\n\nThis is a greenfield project.\n');
 
     const input = [
-      'yes',
-      '3',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      'yes',
+       'yes',
+       '3',
+       '',
+       '',
+       '',
+       '',
+       '',
+       '',
+        '',
+        '',
+        '',
+        '',
+       'yes',
       '',
       '3',
       'y',
@@ -417,7 +460,7 @@ describe('setup CLI', () => {
     });
 
     const transition = run(['setup', '--target', d], {
-      input: ['yes', '4', '3', '', 'Compatibility commitments now govern changes.', 'After a planned major migration.', 'yes', '', '3', 'y'].join('\n'),
+      input: ['yes', '4', '3', '', '', '', '', 'Compatibility commitments now govern changes.', 'After a planned major migration.', 'yes', '', '3', 'y'].join('\n'),
     });
     assert.equal(transition.status, 0, `stdout:\n${transition.stdout}\nstderr:\n${transition.stderr}`);
     assert.match(transition.stdout, /Select development stage:/);
@@ -445,7 +488,7 @@ describe('setup CLI', () => {
     });
 
     const result = run(['setup', '--target', d], {
-      input: ['yes', 'maintenance', '', '', '', '', 'no', '', '3', 'y'].join('\n'),
+      input: ['yes', 'maintenance', '', '', '', '', '', '', '', 'no', '', '3', 'y'].join('\n'),
     });
 
     assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
@@ -563,10 +606,13 @@ describe('setup task backend selection', () => {
     const d = makeDocTarget();
 
     const input = [
-      'edit',
-      '',      // keep detected stage
-      '',      // keep default lanes
-      '',      // no rationale
+       'edit',
+       '',      // keep detected stage
+       '',      // keep default lanes
+       '',      // keep default attempt budget
+       '',      // keep default review budget
+       '',      // keep default audit budget
+       '',      // no rationale
       '',      // no revisit trigger
       '2',     // Task backend: GitHub
       '',      // keep grouping
@@ -588,8 +634,8 @@ describe('setup task backend selection', () => {
     const d = makeDocTarget();
 
     const input = [
-      'edit',
-      '', '', '', '',
+       'edit',
+       '', '', '', '', '', '', '',
       '',      // Task backend: blank selects the default (files)
       '', '', '',
       'yes',
@@ -607,8 +653,8 @@ describe('setup task backend selection', () => {
     const d = makeDocTarget();
 
     const input = [
-      'edit',
-      '', '', '', '',
+       'edit',
+       '', '', '', '', '', '', '',
       'banana', // invalid: must produce a useful message and reprompt
       '2',
       '', '', '',
@@ -628,7 +674,7 @@ describe('setup task backend selection', () => {
     const d = makeConfirmedTarget('github');
 
     const result = run(['setup', '--target', d], {
-      input: ['yes', '', '', '', '', '', 'no', '', '3', 'y'].join('\n'),
+      input: ['yes', '', '', '', '', '', '', '', '', 'no', '', '3', 'y'].join('\n'),
     });
 
     assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
@@ -640,7 +686,7 @@ describe('setup task backend selection', () => {
     const d = makeConfirmedTarget('github');
 
     const result = run(['setup', '--target', d], {
-      input: ['yes', '', '', '', '', '', 'yes', '', '3', 'y'].join('\n'),
+      input: ['yes', '', '', '', '', '', '', '', '', 'yes', '', '3', 'y'].join('\n'),
     });
 
     assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
@@ -651,13 +697,13 @@ describe('setup task backend selection', () => {
     const d = makeConfirmedTarget('files');
 
     const toGithub = run(['setup', '--target', d], {
-      input: ['yes', '', '', '2', '', '', 'yes', '', '3', 'y'].join('\n'),
+      input: ['yes', '', '', '', '', '', '2', '', '', 'yes', '', '3', 'y'].join('\n'),
     });
     assert.equal(toGithub.status, 0, `stdout:\n${toGithub.stdout}\nstderr:\n${toGithub.stderr}`);
     assert.equal(readBackend(d), 'github');
 
     const toFiles = run(['setup', '--target', d], {
-      input: ['yes', '', '', '1', '', '', 'yes', '', '3', 'y'].join('\n'),
+      input: ['yes', '', '', '', '', '', '1', '', '', 'yes', '', '3', 'y'].join('\n'),
     });
     assert.equal(toFiles.status, 0, `stdout:\n${toFiles.stdout}\nstderr:\n${toFiles.stderr}`);
     assert.equal(readBackend(d), 'files');
@@ -667,7 +713,7 @@ describe('setup task backend selection', () => {
     const d = makeConfirmedTarget('files');
 
     const result = run(['setup', '--target', d], {
-      input: ['yes', '', '', '2', '', '', 'yes', '', '3', 'y'].join('\n'),
+      input: ['yes', '', '', '', '', '', '2', '', '', 'yes', '', '3', 'y'].join('\n'),
     });
     assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
     const [fm] = parseFrontmatter(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'));

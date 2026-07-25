@@ -466,7 +466,7 @@ export function completedAuditRuns(record) {
  * @returns {{ budget: number, completed: number, remaining: number, exhausted: boolean }}
  */
 export function auditBudgetState(record) {
-  const budget = Number.isInteger(record?.auditBudget) && record.auditBudget > 0
+  const budget = Number.isSafeInteger(record?.auditBudget) && record.auditBudget > 0
     ? record.auditBudget
     : DEFAULT_AUDIT_BUDGET;
   const completed = completedAuditRuns(record);
@@ -822,7 +822,7 @@ export function validateAuditRecord(content, label, options = {}) {
     );
   }
 
-  if (record.auditBudget === null || !Number.isInteger(record.auditBudget) || record.auditBudget <= 0) {
+  if (record.auditBudget === null || !Number.isSafeInteger(record.auditBudget) || record.auditBudget <= 0) {
     errors.push(`Audit record '${label}' audit_budget must be a positive integer`);
   }
 
@@ -1160,7 +1160,7 @@ export function createAuditRecordContent(options) {
       certifiedArtifact: '',
       certifiedCoveredTasks: [],
       latestVerdict: '',
-      auditBudget: Number.isInteger(options.auditBudget) && options.auditBudget > 0
+      auditBudget: Number.isSafeInteger(options.auditBudget) && options.auditBudget > 0
         ? options.auditBudget
         : DEFAULT_AUDIT_BUDGET,
     },
@@ -1515,7 +1515,7 @@ export function applyAuditBudgetOverride(content, options, validationOptions = {
     validationOptions
   ).map(error => `existing audit record is invalid: ${error}`));
 
-  if (!Number.isInteger(budget) || budget <= 0) {
+  if (!Number.isSafeInteger(budget) || budget <= 0) {
     errors.push('budget override must be a positive integer');
   } else if (record.auditBudget !== null && budget <= record.auditBudget) {
     errors.push(

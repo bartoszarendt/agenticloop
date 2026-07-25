@@ -202,6 +202,11 @@ Implementation-lane maximum:
   max_parallel_implementation_lanes: 5
   note: ceiling for eligible implementation lanes only, not a total-agent budget
 
+Workflow defaults:
+  default_attempt_budget: 5
+  default_review_budget: 5
+  default_audit_budget: 3
+
 Proposed .agenticloop/project.md values:
   documents.plan: "ROADMAP.md"
   documents.design: "ARCHITECTURE_PLAN.md"
@@ -211,18 +216,21 @@ Proposed .agenticloop/project.md values:
   task_id_regex: "^P\\d+-\\d{2,}$"
   group_closeout: true
   development_stage: expansion
+  default_attempt_budget: 5
+  default_review_budget: 5
+  default_audit_budget: 3
   max_parallel_implementation_lanes: 5
 
 Confirm these document selections, task naming/grouping values, backend choice,
-development stage, and implementation-lane maximum? (yes / no / edit)
+development stage, attempt/review/audit defaults, and implementation-lane maximum? (yes / no / edit)
 ```
 
 Ask the human to confirm before writing. Confirmation may either record typed
 selections or explicitly accept the defaults already shown in the project map.
 If they say "edit", accept their corrections, including one exact stage from the
 allowed set, optional `development_stage_rationale`, optional
-`development_stage_revisit_when`, and a positive integer implementation-lane
-maximum. Reject and re-prompt invalid stage or lane input; never retain the AI
+`development_stage_revisit_when`, and positive safe integer attempt, review, audit, and
+implementation-lane values. Reject and re-prompt invalid stage or budget input; never retain the AI
 proposal as a fallback for a rejected correction. If they say "no", do not
 write anything and leave `setup_status: unconfirmed`.
 
@@ -254,7 +262,10 @@ After confirmation, always write:
 - `setup_confirmed_by: <human or maintainer>`
 - `task_backend: <confirmed backend choice>`
 - `development_stage: <human-confirmed greenfield|expansion|stabilization|maintenance>`
-- `max_parallel_implementation_lanes: <positive integer; default 5>`
+- `default_attempt_budget: <positive safe integer; default 5>`
+- `default_review_budget: <positive safe integer; default 5>`
+- `default_audit_budget: <positive safe integer; default 3>`
+- `max_parallel_implementation_lanes: <positive safe integer; default 5>`
 
 Do this even when no non-conventional document selections are needed and the
 human only confirms the default conventions.
@@ -284,8 +295,9 @@ When `.agenticloop/project.md` already exists:
 
 When `.agenticloop/project.md` does not exist, write a fresh file using the
 project-map shape: YAML frontmatter with `setup_status`,
-   `setup_confirmed_at`, `setup_confirmed_by`, `development_stage`,
-   `max_parallel_implementation_lanes`, `task_backend`,
+    `setup_confirmed_at`, `setup_confirmed_by`, `development_stage`,
+    `default_attempt_budget`, `default_review_budget`, `default_audit_budget`,
+    `max_parallel_implementation_lanes`, `task_backend`,
 `task_id_pattern`, `task_id_regex`, `task_file_template`,
 optional `engineer_context_window_tokens`, and optional typed `documents` keys, followed by a
 `# Agentic Loop Project Map` heading and the canonical empty `## Verification
