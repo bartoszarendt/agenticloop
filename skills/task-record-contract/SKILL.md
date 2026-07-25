@@ -193,9 +193,43 @@ retry rule, and triage classifications are owned by [[verification-evidence]].
 
 The expected files or areas section is the task's human-readable scope map. It names the files, modules, commands, tests, and docs the engineer is expected to inspect or touch.
 
-The optional frontmatter field `allowed_paths` is the structured scope map. It accepts a YAML list of repo-relative glob-like path patterns. Forward slashes are canonical. Absolute paths and `..` traversal are not allowed. Directory entries may end with `/` and mean everything beneath that directory. Exact file paths match that file. Simple glob support is enough for now: `*`, `**`, and `?`. The compatibility alias `expected_files` is accepted when `allowed_paths` is absent.
+The optional frontmatter field `allowed_paths` is the structured scope and
+deviation map. It accepts a YAML list of repo-relative glob-like path patterns.
+Forward slashes are canonical. Absolute paths and `..` traversal are not allowed.
+Directory entries may end with `/` and mean everything beneath that directory.
+Exact file paths match that file. Simple glob support is enough for now: `*`,
+`**`, and `?`. The compatibility alias `expected_files` is accepted when
+`allowed_paths` is absent. It is deliberately not an exact write promise: broad
+scope overlap alone is not a parallel mutation collision.
 
 When `allowed_paths` is present, `agenticloop validate` performs a warn-only mechanical check that changed files in the working tree match at least one allowed pattern. Out-of-scope changed files surface as warnings; reviewers still enforce unexpected files through `## Deviations From Plan`. The structured field does not replace the human-readable `## Expected Files or Areas` section.
+
+For a multi-task unit, add `owned_paths` as the machine-readable expected-write
+projection. It uses the same safe path-pattern rules and must be mechanically
+contained by `allowed_paths` when that broader map exists. Add
+`shared_mutations` only for a Maintainer-classified managed join. It is a mapping
+from an exact shared file to one predicted operation object:
+
+```yaml
+owned_paths:
+  - schemas/invoice.py
+shared_mutations:
+  schemas/__init__.py:
+    operation: add_export
+    target: InvoiceSchema
+```
+
+Supported managed operations are `add_export` with an exact export name and
+`add_json_key` with a `scripts.<key>` target in `package.json`. Shared paths can
+never be globs and must be within `allowed_paths` when it exists. Malformed,
+escaping, broad, or out-of-scope declarations fail validation. The full
+eligibility, pairwise classification, reconciliation, and escalation law lives
+only in [[parallel-delegation]].
+
+Artifact-bound validation proves the declared operation from exact base/head
+file contents; naming a shared path does not authorize arbitrary changes within
+that file. Files-backed structured ownership therefore requires an exact
+`range:<full-40-sha>..<full-40-sha>` implementation artifact.
 
 If implementation changes an unexpected file, the implementation summary must explain why. Review treats unexplained unexpected files as a scope issue under [[review-and-accept]].
 Bundling an incidental toolkit, dependency, or asset-refresh change into a task that does not require it is the same scope violation. If a refresh is genuinely needed, it is its own task and its own artifact.
@@ -277,6 +311,15 @@ design questions, backend/worktree ownership, host/liveness capability,
 verification/integration implications, decision, independent rationale, and
 rescan trigger.
 
+For a managed join, the same single-writer plan additionally records each task's
+`eligible | blocked | unknown` result; each candidate pair's `disjoint |
+managed_join | blocked | unknown` relation; exact shared operations; the
+Maintainer classification; exact lane base/head bindings; composition order;
+dedicated join task, artifact, existing attempt budget, and lease; mandatory
+integrated checks; escalation route; and invalidation when any lane artifact,
+operation, order, final artifact, or promoted/landed tree changes. Do not copy
+the managed-join procedure into individual task records.
+
 ## Parallel Safety
 
 Add `## Parallel Safety` when the task belongs to an authorized multi-task work
@@ -287,6 +330,10 @@ Files or Areas` and the `allowed_paths` frontmatter; it does not replace them.
 Fields:
 
 - **Owned paths**: the paths this task expects to own for writes.
+- **Structured ownership**: frontmatter `owned_paths` is the mechanical
+  projection of Owned paths; `shared_mutations` records an exact shared file and
+  predicted operation only when a managed join is proposed. `allowed_paths`
+  remains the broad scope/deviation map.
 - **Shared or generated files**: bundler/codegen output, fixtures, snapshots that
   other tasks might also touch.
 - **Test/fixture/snapshot/shared-helper surfaces**: test modules, fixtures,
@@ -306,7 +353,7 @@ Fields:
   invalidate a sibling lane's assumptions, plan, implementation, or
   verification interpretation.
 - **Parallel eligibility**: `eligible`, `blocked`, or `unknown` – the
-  mutation-collision verdict.
+  per-task mutation-collision verdict. It is not a pairwise join verdict.
 - **Knowledge coupling**: `independent`, `coupled`, or `unknown` – the
   knowledge verdict. `coupled` work uses the two-wave pattern in
   [[parallel-delegation]]. Parallel writes require `eligible` plus
@@ -315,10 +362,13 @@ Fields:
 - **Reason**: the concrete basis for both verdicts; when either is `unknown`,
   name what a bounded discovery step would resolve.
 
-When either verdict is `unknown` and 2 or more ready tasks could otherwise run
-in parallel, the maintainer runs one bounded read-only discovery pass before
-returning; if a verdict stays unknown, state what stayed unknown and recommend
-serial. Host/lane capability unknowns stay with the orchestrator.
+When structured ownership is absent, broad, malformed, or otherwise unresolved
+and 2 or more ready tasks could otherwise run in parallel, the maintainer runs
+one bounded read-only discovery pass before returning; if a verdict stays
+unknown, state what stayed unknown and recommend serial. Host/lane capability
+unknowns stay with the orchestrator. The maintainer owns code/collision and
+joinability classification; the orchestrator only verifies required inputs,
+host/liveness/join facts, records the batch decision, and routes results.
 
 A standalone single task outside a multi-task unit may omit the section.
 
@@ -335,12 +385,17 @@ A bugfix without a confirmed or explicitly investigated reproduction starts from
 ## Frontmatter fields
 
 Task-file frontmatter carries machine-readable current state. Required fields:
-`task_id`, `status`, `backend`. Optional fields include `implementation_artifact`,
+`task_id`, `status`, `backend`. Optional fields include `implementation_artifact`, `integrated_by`,
 `review_status`, `reviewed_artifact`, `review_mode`, `independent_review_required`, `human_review_ref`,
-`allowed_paths`, `minimalism`, `attempt_budget`, `review_budget`,
+`allowed_paths`, `owned_paths`, `shared_mutations`, `minimalism`, `attempt_budget`, `review_budget`,
 `context_overflow_risk`, and `context_note`. Review provenance fields are owned
 by [[review-and-accept]]. Select `independent_review_required: true` before
 implementation when required by task assurance or project policy.
+
+`integrated_by` is exact managed-join provenance recorded only after validated
+integration. GitHub uses `pr:<number>@<full-40-sha>`; files uses
+`commit:<full-40-sha>` or `range:<full-40-sha>..<full-40-sha>`. It does not
+authorize merge or promotion.
 
 ### minimalism
 

@@ -35,6 +35,12 @@ import {
   validatePathsAgainstDeviations,
 } from './scope-matcher.js';
 import {
+  collectGitHubArtifactChangedPaths,
+  parseOwnershipDeclaration,
+  validateChangedPathsAgainstOwnership,
+  validateGitHubSharedMutationContents,
+} from './parallel-ownership.js';
+import {
   parseReviewCheckpoint,
   evaluateReviewCheckpoint,
   DEFAULT_REVIEW_BUDGET,
@@ -58,6 +64,7 @@ const VALID_VERDICTS = new Set(['passed', 'failed', 'blocked', 'not run']);
 const PR_FIELDS = [
   'number',
   'body',
+  'baseRefOid',
   'headRefOid',
   'files',
   'closingIssuesReferences',
@@ -831,6 +838,45 @@ export function evaluatePreflight({
     }
   }
 
+  // `allowed_paths` remains the broad scope/deviation map. When a task opts
+  // into structured ownership, the exact current PR file list must also stay
+  // inside its exclusive ownership or its declared exact shared mutations.
+  const ownership = parseOwnershipDeclaration(issueData?.body);
+  const [taskFrontmatter] = parseFrontmatter(String(issueData?.body ?? ''));
+  const integratedBy = typeof taskFrontmatter?.integrated_by === 'string'
+    ? taskFrontmatter.integrated_by.trim()
+    : '';
+  if (integratedBy && !/^pr:\d+@[0-9a-f]{40}$/i.test(integratedBy)) {
+    errors.push({
+      message: "GitHub task integrated_by must be an exact 'pr:<number>@<40-sha>' artifact",
+      category: 'scope_deviations',
+    });
+  }
+  for (const error of ownership.errors) {
+    errors.push({ message: error, category: 'scope_deviations' });
+  }
+  if (ownership.present && ownership.errors.length === 0) {
+    const changed = collectGitHubArtifactChangedPaths(prData?.files);
+    if (changed.error) {
+      errors.push({ message: changed.error, category: 'scope_deviations' });
+    } else {
+      const ownershipValidation = validateChangedPathsAgainstOwnership(changed.paths, ownership);
+      for (const error of ownershipValidation.errors) {
+        errors.push({ message: error, category: 'scope_deviations' });
+      }
+      if (ownershipValidation.ok) {
+        const operationValidation = validateGitHubSharedMutationContents(
+          changed.paths,
+          ownership,
+          prData?.sharedMutationContents
+        );
+        for (const error of operationValidation.errors) {
+          errors.push({ message: error, category: 'scope_deviations' });
+        }
+      }
+    }
+  }
+
   // Phase 29: completion-summary shape validation
   const summaryValidation = validateCompletionSummary(prData?.body, headRefOid);
   for (const err of summaryValidation.errors) {
@@ -1018,6 +1064,49 @@ function fetchAllPrReviews(commandRunner, ownerName, prNumber) {
   return fetchAllPaginated(commandRunner, ownerName, `pulls/${prNumber}/reviews`, 'PR review');
 }
 
+function repositoryContentEndpoint(ownerName, path, ref) {
+  const [owner, repo] = String(ownerName).split('/');
+  const encodedPath = String(path).split('/').map(segment => encodeURIComponent(segment)).join('/');
+  return `repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`;
+}
+
+function fetchRepositoryContentAtRef(commandRunner, ownerName, path, ref) {
+  const data = runGhPreflightJson(commandRunner, [
+    'api',
+    repositoryContentEndpoint(ownerName, path, ref),
+  ]);
+  if (!data || data.encoding !== 'base64' || typeof data.content !== 'string') {
+    throw new PreflightError(`GitHub content response for '${path}' at '${ref}' is incomplete`);
+  }
+  return Buffer.from(data.content.replace(/\s/g, ''), 'base64').toString('utf-8');
+}
+
+function hydrateSharedMutationContents(prData, issueData, commandRunner, ownerName) {
+  const declaration = parseOwnershipDeclaration(issueData?.body);
+  if (!declaration.present || declaration.errors.length > 0 || !(declaration.sharedMutations?.length > 0)) return;
+  const changed = new Set(collectGitHubArtifactChangedPaths(prData?.files).paths);
+  const baseRefOid = String(prData?.baseRefOid ?? '').toLowerCase();
+  const headRefOid = String(prData?.headRefOid ?? '').toLowerCase();
+  prData.sharedMutationContents = {};
+  for (const mutation of declaration.sharedMutations) {
+    if (!changed.has(mutation.path)) continue;
+    if (!/^[0-9a-f]{40}$/.test(baseRefOid) || !/^[0-9a-f]{40}$/.test(headRefOid)) {
+      prData.sharedMutationContents[mutation.path] = {
+        error: 'PR lacks exact base/head SHA identities for shared-operation validation',
+      };
+      continue;
+    }
+    try {
+      prData.sharedMutationContents[mutation.path] = {
+        baseContent: fetchRepositoryContentAtRef(commandRunner, ownerName, mutation.path, baseRefOid),
+        headContent: fetchRepositoryContentAtRef(commandRunner, ownerName, mutation.path, headRefOid),
+      };
+    } catch (error) {
+      prData.sharedMutationContents[mutation.path] = { error: error.message };
+    }
+  }
+}
+
 /**
  * Resolve which issue number to treat as the task record for a PR.
  *
@@ -1091,6 +1180,7 @@ export function runPreflight({
   if (repo) issueArgs.push('--repo', repo);
   const issueData = runGhPreflightJson(commandRunner, issueArgs);
   const ownerName = resolveRepoOwnerName(commandRunner, repo);
+  hydrateSharedMutationContents(prData, issueData, commandRunner, ownerName);
   issueData.comments = fetchAllIssueComments(commandRunner, ownerName, issueNumber);
   // PR conversation comments are not interchangeable with task-issue comments:
   // the former are durable review/checkpoint carriers, the latter verification

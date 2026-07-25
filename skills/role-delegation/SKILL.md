@@ -350,6 +350,13 @@ requires split-or-tighten. Host tool-call counters are not delegation budgets
 unless recorded in `Lease:` or `Stop condition:`; hard host limits return status
 with concrete unknowns rather than reduced quality or guesses.
 
+For a managed-join reconciliation, the `Scope`, `Expected output`, `Concurrency`,
+`Budgets`, `Lease`, and `Stop condition` fields additionally name the dedicated
+join task, exact base and lane artifacts, composition order, exact conflict
+paths, Maintainer-pre-classified operations, required integrated checks, and
+escalation route. The delegated Engineer may not infer omitted paths or
+operations. [[parallel-delegation]] owns the complete authorization and stop law.
+
 
 ## Context Read Discipline
 

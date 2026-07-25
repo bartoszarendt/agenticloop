@@ -10,6 +10,7 @@
 import {
   classifyWorktreesForCleanup,
   createAgenticLoopWorktree,
+  lookupGitHubTaskState,
   lookupPullRequestState,
   resolveGitRepositoryContext,
 } from '../src/worktree.js';
@@ -215,7 +216,7 @@ describe("worktree CLI: cleanup shared state and PR classification", () => {
   });
 
 
-    it('lookupPullRequestState requests --state all', () => {
+  it('lookupPullRequestState requests --state all', () => {
     const repo = makeGitRepo();
     makeGithubBackendProjectMap(repo);
     assertGitOk(git(repo, ['remote', 'add', 'origin', 'https://github.com/example/repo.git']));
@@ -235,6 +236,84 @@ describe("worktree CLI: cleanup shared state and PR classification", () => {
     assert.ok(capturedArgs.includes('all'), 'should pass all');
     assert.equal(result.state, 'MERGED');
     assert.equal(result.number, 7);
+  });
+
+  it('removes a closed lane PR worktree only after its exact integrated join artifact is validated', () => {
+    const repo = makeGitRepo();
+    const worktree = addStandardWorktree(repo, 'T-JOIN', 'task/T-JOIN');
+    makeGithubBackendProjectMap(repo);
+
+    const closed = () => new Map([[
+      'refs/heads/task/T-JOIN',
+      { state: 'CLOSED', number: 71, warning: null, source: 'mock' },
+    ]]);
+    const result = classifyWorktreesForCleanup(repo, {
+      lookupPrStates: closed,
+      lookupGithubTaskState: () => ({
+        taskId: 'T-JOIN',
+        status: 'accepted',
+        integratedBy: `pr:77@${'a'.repeat(40)}`,
+        warning: null,
+      }),
+      lookupIntegratedJoin: (_root, integratedBy) => ({
+        valid: integratedBy === `pr:77@${'a'.repeat(40)}`,
+        pr: 77,
+      }),
+    });
+    assert.ok(result.wouldRemove.some(item => item.path === worktree), JSON.stringify(result));
+    const item = result.wouldRemove.find(entry => entry.path === worktree);
+    assert.match(item.reason, /validated integration by join PR #77/);
+  });
+
+  it('keeps a closed lane PR worktree when its recorded join artifact is not validated', () => {
+    const repo = makeGitRepo();
+    const worktree = addStandardWorktree(repo, 'T-JOIN-STALE', 'task/T-JOIN-STALE');
+    makeGithubBackendProjectMap(repo);
+
+    const result = classifyWorktreesForCleanup(repo, {
+      lookupPrStates: () => new Map([[
+        'refs/heads/task/T-JOIN-STALE',
+        { state: 'CLOSED', number: 72, warning: null, source: 'mock' },
+      ]]),
+      lookupGithubTaskState: () => ({
+        taskId: 'T-JOIN-STALE',
+        status: 'accepted',
+        integratedBy: `pr:78@${'b'.repeat(40)}`,
+        warning: null,
+      }),
+      lookupIntegratedJoin: () => ({ valid: false, warning: 'join PR head changed' }),
+    });
+    assert.ok(result.needsReview.some(item => item.path === worktree && /closed unmerged PR/.test(item.reason)), JSON.stringify(result));
+  });
+
+  it('reads integrated_by from the exact canonical GitHub task issue', () => {
+    const repo = makeGitRepo();
+    makeGithubBackendProjectMap(repo);
+    assertGitOk(git(repo, ['remote', 'add', 'origin', 'https://github.com/example/repo.git']));
+    let capturedArgs = [];
+    const state = lookupGitHubTaskState(repo, 'T-ISSUE', {
+      commandRunner: (_command, args) => {
+        capturedArgs = args;
+        return {
+          status: 0,
+          stdout: JSON.stringify([
+            {
+              number: 15,
+              body: `---\ntask_id: T-OTHER\nstatus: accepted\nintegrated_by: pr:80@${'c'.repeat(40)}\n---`,
+            },
+            {
+              number: 16,
+              body: `---\ntask_id: T-ISSUE\nstatus: accepted\nintegrated_by: pr:81@${'d'.repeat(40)}\n---`,
+            },
+          ]),
+          stderr: '',
+        };
+      },
+    });
+    assert.ok(capturedArgs.includes('--state') && capturedArgs.includes('all'));
+    assert.equal(state.issue, 16);
+    assert.equal(state.integratedBy, `pr:81@${'d'.repeat(40)}`);
+    assert.equal(state.warning, null);
   });
 
 });

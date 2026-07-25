@@ -3,11 +3,15 @@ task_id: T-001
 status: agent-ready
 backend: files
 implementation_artifact:
+integrated_by:
 review_status:
 reviewed_artifact:
 review_mode:
 # reviewed_artifact: exact value copied from implementation_artifact for the
 # current review outcome. Required whenever review_status is set.
+# integrated_by: exact managed-join provenance after validated integration.
+# GitHub uses pr:<number>@<full-40-sha>; files uses commit:<full-40-sha> or
+# range:<full-40-sha>..<full-40-sha>. It is provenance, not merge authority.
 # review_mode: see [[review-and-accept]].
 # independent_review_required: set true before implementation when final
 # acceptance must not use same-session single_agent_fallback (security or
@@ -42,7 +46,23 @@ review_budget: 3
 # validation. Examples: ["src/example.js", "test/example.test.js", "docs/"].
 # Leave empty or omit to rely on the human-readable `## Expected Files or Areas`
 # section and reviewer enforcement through `## Deviations From Plan`.
+# allowed_paths is a broad scope/deviation map, not a precise write promise.
 allowed_paths: []
+# Optional structured expected-write projection for a multi-task parallel scan.
+# Uncomment only when the task participates in a current multi-task unit. Use
+# the same safe repo-relative path syntax as allowed_paths; it must be contained
+# by allowed_paths when that field exists.
+# owned_paths:
+#   - src/example.js
+# Optional exact shared managed mutations. A key is an exact file, never a glob;
+# each value contains only operation and target. Supported operations are
+# add_export (an identifier target) and add_json_key (scripts.<key> in
+# package.json). Maintainer classification and the full join plan live in the
+# single-writer concurrency plan.
+# shared_mutations:
+#   schemas/__init__.py:
+#     operation: add_export
+#     target: InvoiceSchema
 ---
 
 # T-001 - Short Task Title
@@ -158,6 +178,14 @@ test/fixture/snapshot/shared-helper ownership. Also record:
   condition covers finding dispositions and required integrated evidence before
   durable review outcome, acceptance, merge, or closeout.
 
+For a managed join, also record each task's `eligible | blocked | unknown`
+eligibility separately from each candidate pair's `disjoint | managed_join |
+blocked | unknown` relation. Record Maintainer's exact operation classification,
+the lane base/head artifacts, ordered composition, dedicated join task and
+artifact, its existing `attempt_budget` and lease, named conflict paths, required
+integrated checks, escalation route, fresh final-artifact review, and invalidation
+when an artifact, operation, order, promotion, or landed tree changes.
+
 ## Parallel Safety
 
 Required when the task belongs to an authorized multi-task work unit, so the
@@ -165,6 +193,10 @@ orchestrator's Parallel Opportunity Scan can classify the task. It complements
 `## Expected Files or Areas` and `allowed_paths`; it does not replace them.
 
 - Owned paths:
+- Structured ownership: frontmatter `owned_paths`; `allowed_paths` remains the
+  broad scope/deviation map.
+- Shared mutations: frontmatter `shared_mutations` exact file, operation, target
+  (or none).
 - Shared or generated files:
 - Test/fixture/snapshot/shared-helper surfaces:
 - Schema/API/lockfile risk:
@@ -178,7 +210,8 @@ orchestrator's Parallel Opportunity Scan can classify the task. It complements
 - Knowledge coupling: independent | coupled | unknown
 - Reason:
 
-`Parallel eligibility` is the mutation-collision verdict. `Knowledge coupling`
+`Parallel eligibility` is the per-task mutation-collision verdict. It remains
+separate from the batch pair relation. `Knowledge coupling`
 is the separate knowledge verdict: `independent` when no likely discovery in
 one lane can invalidate a sibling lane's assumptions, plan, implementation, or
 verification interpretation; `coupled` when shared assumptions mean the
@@ -192,11 +225,12 @@ not two independent engineers. Resolve them before parallel implementation write
 or use the two-wave read-only diagnosis and reconciliation pattern. Disjoint
 files do not imply independent design authority.
 
-If code/collision eligibility or knowledge coupling is unknown and 2 or more
-ready tasks could otherwise run in parallel, the maintainer resolves it with one
-bounded read-only discovery pass before returning. If still unknown, state what
-stayed unknown and recommend serial. Host/lane capability unknowns stay with
-the orchestrator.
+If structured ownership, code/collision eligibility, or knowledge coupling is
+unknown and 2 or more ready tasks could otherwise run in parallel, the maintainer
+resolves it with one bounded read-only discovery pass before returning. If still
+unknown, state what stayed unknown and recommend serial. Host/lane capability
+unknowns stay with the orchestrator. Maintainer classifies code/collision and
+joinability; Orchestrator verifies inputs and records/routes the batch decision.
 
 ## Completion Summary Template
 

@@ -276,6 +276,43 @@ describe('contract ownership', () => {
     }
   });
 
+  it('keeps the complete managed-join law in parallel-delegation while roles and backends project local duties', () => {
+    const owners = ownersOf(body => /^## Managed Join$/m.test(body));
+    assert.deepEqual(owners, ['skills/parallel-delegation/SKILL.md'], owners.join(', '));
+
+    const parallel = read('skills/parallel-delegation/SKILL.md');
+    assert.match(parallel, /Maintainer alone classifies code\/collision joinability/i);
+    assert.match(parallel, /Orchestrator verifies the supplied required inputs/i);
+    assert.match(parallel, /dedicated backend-neutral task/i);
+    assert.match(parallel, /fresh full ordered Lens 1, Lens 2, and Lens 3 review/i);
+    assert.match(parallel, /reconciliation event, role, or budget/i);
+
+    assert.match(read('agents/orchestrator.md'), /managed join/i);
+    assert.match(read('agents/maintainer.md'), /Maintainer alone classifies code\/collision/);
+    assert.match(read('agents/engineer.md'), /Reconcile a managed join/i);
+    assert.match(read('backends/files.md'), /dedicated files-backed join task/i);
+    assert.match(read('backends/github.md'), /dedicated join task has its own issue, branch, and/i);
+  });
+
+  it('rejects stale disjoint-files mirrors and preserves Phase 25 role duties', () => {
+    for (const rel of [
+      'agents/orchestrator.md',
+      'agents/maintainer.md',
+      'backends/files.md',
+      'backends/github.md',
+    ]) {
+      assert.doesNotMatch(
+        read(rel),
+        /disjoint (?:expected|allowed) files or areas/i,
+        `${rel} must not restore the pre-Phase-30 scope-ceiling hard gate`
+      );
+    }
+    assert.match(read('agents/maintainer.md'), /fill \[\[task-record-contract\]\] `## Parallel Safety` with owned paths\/backend objects/i);
+    assert.match(read('agents/maintainer.md'), /one bounded read-only pass/i);
+    assert.match(read('agents/orchestrator.md'), /reassess source proposals against current records\s+and repository state/i);
+    assert.match(read('agents/orchestrator.md'), /knowledge independence plus either disjoint structured\s+exclusive ownership or a valid managed-join plan/i);
+  });
+
   it('every referenced skill exists', () => {
     const known = new Set(skillNames());
     // Documentation placeholder used to explain the [[skill-name]] convention.

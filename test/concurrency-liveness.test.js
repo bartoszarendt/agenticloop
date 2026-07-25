@@ -164,6 +164,8 @@ describe('Parallel Safety task-record section is documented', () => {
     const text = readFileSync(join(REPO_ROOT, 'memory', 'task-record.md'), 'utf-8');
     assert.match(text, /## Parallel Safety/);
     assert.match(text, /Parallel eligibility: eligible \| blocked \| unknown/);
+    assert.match(text, /owned_paths:/);
+    assert.match(text, /shared_mutations:/);
   });
 
   it('the task-record-contract skill documents Parallel Safety', () => {
@@ -545,6 +547,35 @@ describe('integration rehearsal is risk-triggered, engineer-owned, and non-publi
     assert.match(github, /disposable non-published candidate/i);
     assert.match(github, /never pushes, publishes, opens or merges a pull request/i);
     assert.match(github, /actual merged composition differs from the rehearsed candidate/i);
+  });
+});
+
+describe('managed joins remain bounded ownership exceptions', () => {
+  it('parallel-delegation defines per-task and pairwise verdicts plus exact-operation limits', () => {
+    const text = canonicalText(CANONICAL.parallel);
+    assert.match(text, /eligible`, `blocked`, or `unknown`/i);
+    assert.match(text, /`disjoint`, `managed_join`, `blocked`, or `unknown`/i);
+    assert.match(text, /allowed-path overlap alone is neither a collision/i);
+    assert.match(text, /exact `shared_mutations` file, never a glob/i);
+    assert.match(text, /Lockfiles, migrations, generated state/i);
+  });
+
+  it('roles preserve Maintainer classification and bounded Engineer reconciliation', () => {
+    assert.match(canonicalText(CANONICAL.maintainer), /Maintainer alone classifies code\/collision/i);
+    assert.match(canonicalText(CANONICAL.orchestrator), /does not originate or override/i);
+    assert.match(canonicalText(CANONICAL.engineer), /edit named paths only/i);
+    assert.match(canonicalText(CANONICAL.engineer), /run\s+final checks/i);
+  });
+
+  it('backend projections retain the dedicated join artifact and GitHub lane disposition', () => {
+    const files = canonicalText(CANONICAL.filesBackend);
+    const github = canonicalText(CANONICAL.githubBackend);
+    assert.match(files, /dedicated files-backed join task/i);
+    assert.match(files, /integrated_by/i);
+    assert.match(github, /Managed-batch lane PRs/i);
+    assert.match(github, /non-closing reference/i);
+    assert.match(github, /closing references for the join/i);
+    assert.match(github, /independent of merge strategy or ancestry/i);
   });
 });
 

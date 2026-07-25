@@ -333,6 +333,19 @@ comments mention the issue. Skip the closing keyword only when the task record
 contains an explicit no-PR or no-close backend exception approved before
 implementation.
 
+Managed-batch lane PRs are the explicit narrow exception: they remain lane
+evidence artifacts and link their own issue with a non-closing reference such as
+`Refs #<issue-number>`. The dedicated join task has its own issue, branch, and
+PR. Its PR carries the integrated evidence and closing references for the join
+issue and every lane issue. Run preflight/readiness with the join issue supplied
+explicitly when multiple closing references exist. After the join PR lands, each
+lane task records the exact `integrated_by: pr:<number>@<full-40-sha>` join
+artifact; close any
+still-open lane PR with that truthful disposition. Do not hide reconciliation in
+an arbitrary lane PR or rely on GitHub indirect-merge behavior.
+The field lives in the canonical lane issue frontmatter. Cleanup resolves the
+issue by its exact `task_id`; a local files-backend mirror is never authoritative.
+
 An issue comment with implementation evidence is not a substitute for the pull
 request. If a task is intentionally completed without a PR, the task record and
 summary must state the explicit exception and why no reviewable PR artifact
@@ -360,9 +373,11 @@ rules.
 GitHub-backend deltas:
 
 - Each parallel implementation lane requires its own repo-internal worktree,
-  task branch, GitHub issue, pull request, disjoint expected files or areas,
-  lease, join condition, and merge barrier. One pull request per implementation
-  task, as before.
+  task branch, GitHub issue, pull request, lease, join condition, and merge
+  barrier. Its structured exclusive `owned_paths` must be disjoint from other
+  lanes unless a complete Maintainer-classified managed-join plan authorizes
+  every exact shared operation. One pull request per implementation task, as
+  before.
 - Parallel coordination/review lanes may mutate GitHub backend state only when
   each lane owns distinct backend objects, such as distinct issues or distinct
   PR review targets. Shared issues, PRs, labels, comments, status markers,
@@ -385,6 +400,12 @@ GitHub-backend deltas:
   required checks rerun against the merged tree.
 - Missing pushed branch, missing PR, or missing expected backend update at join
   time is a failed or blocked lane, not a pending lane.
+- A managed join uses a dedicated join issue, branch, and PR rather than mutating
+  a lane PR. The join PR owns exact final-head integrated evidence and fresh
+  review. Lane PRs use non-closing task references; the join PR closes its own
+  and every lane issue after human-authorized landing. Worktree cleanup may remove
+  a closed lane PR worktree only when its recorded exact `integrated_by` join
+  artifact is validated as landed, independent of merge strategy or ancestry.
 
 ### Record Review Status
 

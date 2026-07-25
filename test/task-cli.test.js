@@ -1,5 +1,6 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -25,6 +26,12 @@ function run(args) {
 
 function assertOk(result) {
   assert.equal(result.status, 0, `expected pass\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+}
+
+function git(cwd, args) {
+  const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf-8' });
+  assert.equal(result.status, 0, `git ${args.join(' ')}\n${result.stdout}\n${result.stderr}`);
+  return result.stdout.trim();
 }
 
 // Minimal per-test fixture in place of a full `agenticloop init`.
@@ -182,6 +189,49 @@ describe('task CLI', () => {
     assert.match(content, /^status: in-progress$/m);
     assert.match(content, /Started implementation/);
     assert.match(content, /## Verification Attempts\n\nNo verification attempts are currently recorded\./);
+  });
+
+  it('does not opt a serial task template into artifact-bound ownership', async () => {
+    const target = makeTarget('serial-template');
+    assertOk(await run(['task', 'new', 'Serial task', '--target', target]));
+    const path = taskPath(target, 'T-001');
+    const content = readFileSync(path, 'utf-8')
+      .replace('implementation_artifact:', 'implementation_artifact: branch:serial-task');
+    writeFileSync(path, content, 'utf-8');
+
+    const lint = await run(['task', 'lint', 'T-001', '--target', target]);
+    assertOk(lint);
+    assert.doesNotMatch(lint.stdout, /exact 'range:|undeclared path/);
+  });
+
+  it('enforces artifact-bound ownership during task lint', async () => {
+    const target = makeTarget('ownership-artifact');
+    assertOk(await run(['task', 'new', 'Owned artifact', '--target', target]));
+    const path = taskPath(target, 'T-001');
+    let content = readFileSync(path, 'utf-8')
+      .replace('allowed_paths: []', 'allowed_paths:\n  - src/**')
+      .replace('# owned_paths:\n#   - src/example.js', 'owned_paths:\n  - src/expected.js');
+    writeFileSync(path, content, 'utf-8');
+
+    git(target, ['init', '-q', '-b', 'main']);
+    git(target, ['config', 'user.email', 'agenticloop@example.invalid']);
+    git(target, ['config', 'user.name', 'Agentic Loop Test']);
+    git(target, ['add', '.']);
+    git(target, ['commit', '-q', '-m', 'base']);
+    const base = git(target, ['rev-parse', 'HEAD']);
+
+    mkdirSync(join(target, 'src'), { recursive: true });
+    writeFileSync(join(target, 'src', 'actual.js'), 'export const actual = true;\n', 'utf-8');
+    git(target, ['add', 'src/actual.js']);
+    git(target, ['commit', '-q', '-m', 'unexpected write']);
+    const head = git(target, ['rev-parse', 'HEAD']);
+    content = readFileSync(path, 'utf-8')
+      .replace('implementation_artifact:', `implementation_artifact: range:${base}..${head}`);
+    writeFileSync(path, content, 'utf-8');
+
+    const lint = await run(['task', 'lint', 'T-001', '--target', target]);
+    assert.notEqual(lint.status, 0);
+    assert.match(lint.stdout, /artifact changed undeclared path 'src\/actual\.js'/);
   });
 
   it('appends notes to the live Comments section, not a fenced example', async () => {

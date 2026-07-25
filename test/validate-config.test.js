@@ -2783,6 +2783,97 @@ describe('Structured scope-map changed-file validation', () => {
       `safe pattern should not be reported as error: ${JSON.stringify(errors)}`
     );
   });
+
+  it('validates structured ownership against the recorded exact range, not working-tree scope', () => {
+    const d = makeFilesFirstTarget('ownership-artifact-range');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    const base = 'a'.repeat(40);
+    const head = 'b'.repeat(40);
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-001.md'),
+      taskRecordWithFrontmatter([
+        'task_id: T-001',
+        'status: agent-ready',
+        'backend: files',
+        `implementation_artifact: range:${base}..${head}`,
+        'review_status:',
+        'allowed_paths:',
+        '  - src/**',
+        'owned_paths:',
+        '  - src/owned.js',
+      ])
+    );
+    const runner = (command, args) => {
+      if (command === 'git' && args.join(' ') === `diff --name-only ${base}..${head}`) {
+        return { status: 0, stdout: 'src/owned.js\n', stderr: '' };
+      }
+      return gitStatusRunner([])(command, args);
+    };
+    const { errors } = validateConfig(d, { commandRunner: runner });
+    assert.deepEqual(errors, []);
+  });
+
+  it('rejects an undeclared path in the recorded exact artifact range', () => {
+    const d = makeFilesFirstTarget('ownership-artifact-unexpected');
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    const base = 'a'.repeat(40);
+    const head = 'b'.repeat(40);
+    writeFileSync(
+      join(d, '.agenticloop', 'tasks', 'T-001.md'),
+      taskRecordWithFrontmatter([
+        'task_id: T-001',
+        'status: agent-ready',
+        'backend: files',
+        `implementation_artifact: range:${base}..${head}`,
+        'review_status:',
+        'allowed_paths:',
+        '  - src/**',
+        'owned_paths:',
+        '  - src/owned.js',
+      ])
+    );
+    const runner = (command, args) => {
+      if (command === 'git' && args.join(' ') === `diff --name-only ${base}..${head}`) {
+        return { status: 0, stdout: 'src/unexpected.js\n', stderr: '' };
+      }
+      return gitStatusRunner([])(command, args);
+    };
+    const { errors } = validateConfig(d, { commandRunner: runner });
+    assert.ok(errors.some(error => error.includes("artifact changed undeclared path 'src/unexpected.js'")), errors.join('\n'));
+  });
+
+  it('validates exact files-backend integrated_by provenance', () => {
+    const valid = makeFilesFirstTarget('integrated-by-valid');
+    mkdirSync(join(valid, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(
+      join(valid, '.agenticloop', 'tasks', 'T-001.md'),
+      taskRecordWithFrontmatter([
+        'task_id: T-001',
+        'status: agent-ready',
+        'backend: files',
+        'implementation_artifact:',
+        `integrated_by: commit:${'a'.repeat(40)}`,
+        'review_status:',
+      ])
+    );
+    assert.deepEqual(validateConfig(valid).errors, []);
+
+    const invalid = makeFilesFirstTarget('integrated-by-invalid');
+    mkdirSync(join(invalid, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(
+      join(invalid, '.agenticloop', 'tasks', 'T-001.md'),
+      taskRecordWithFrontmatter([
+        'task_id: T-001',
+        'status: agent-ready',
+        'backend: files',
+        'implementation_artifact:',
+        'integrated_by: commit:abc123',
+        'review_status:',
+      ])
+    );
+    const { errors } = validateConfig(invalid);
+    assert.ok(errors.some(error => /integrated_by must be an exact/.test(error)), errors.join('\n'));
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { dirname, join, relative, resolve } from 'node:path';
 import { parseFrontmatter } from './frontmatter.js';
 import { markdownSection } from './markdown.js';
@@ -33,6 +34,10 @@ import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.
 
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function taskLintCommandRunner(command, args, options = {}) {
+  return spawnSync(command, args, { encoding: 'utf-8', ...options });
 }
 
 function resolveProject(target) {
@@ -134,6 +139,8 @@ function lintTaskFile(filePath, target, projectConfig, verificationContext) {
       projectVerificationFacts: verificationContext.projectFacts,
       decisionExists: verificationContext.decisionExists,
       taskExists: verificationContext.taskExists,
+      repoRoot: target,
+      commandRunner: taskLintCommandRunner,
       warnings,
     }),
   ];

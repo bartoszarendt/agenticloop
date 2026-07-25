@@ -128,6 +128,10 @@ import {
   isFileInScope as sharedIsFileInScope,
 } from './scope-matcher.js';
 import {
+  parseOwnershipDeclaration,
+  validateArtifactOwnership,
+} from './parallel-ownership.js';
+import {
   crossCheckMaintainerFixup,
   detectFixupEpisodes,
   validateFilesFixup,
@@ -535,6 +539,7 @@ export function validateFilesTaskRecord(content, filename, options = {}) {
   const taskId = frontmatterString(frontmatter.task_id);
   const status = frontmatterString(frontmatter.status);
   const implementationArtifact = frontmatterString(frontmatter.implementation_artifact);
+  const integratedBy = frontmatterString(frontmatter.integrated_by);
   const reviewStatus = frontmatterString(frontmatter.review_status);
   const reviewMode = frontmatterString(frontmatter.review_mode);
   const reviewedArtifact = frontmatterString(frontmatter.reviewed_artifact);
@@ -542,6 +547,12 @@ export function validateFilesTaskRecord(content, filename, options = {}) {
   const humanReviewRef = frontmatterString(frontmatter.human_review_ref);
   const blockCategory = frontmatterString(frontmatter.block_category);
   const expectedBackend = 'files';
+
+  if (integratedBy && !/^(?:commit:[0-9a-f]{40}|range:[0-9a-f]{40}\.\.[0-9a-f]{40})$/i.test(integratedBy)) {
+    errors.push(
+      `Task record '${filename}' integrated_by must be an exact commit:<40-sha> or range:<40-sha>..<40-sha> files artifact`
+    );
+  }
 
   if (!taskId) {
     errors.push(`Task record '${filename}' missing required frontmatter field 'task_id'`);
@@ -681,6 +692,21 @@ export function validateFilesTaskRecord(content, filename, options = {}) {
       scope,
       warnings
     );
+  }
+
+  // Structured write ownership is stricter than the broad scope/deviation map.
+  // Validate declarations whenever present, but only derive an actual lane diff
+  // after the task has recorded the exact base/head range artifact.
+  const ownership = parseOwnershipDeclaration(content);
+  errors.push(...ownership.errors.map(error => `Task record '${filename}' ${error}`));
+  if (ownership.present && implementationArtifact && options.repoRoot && options.commandRunner) {
+    const ownershipValidation = validateArtifactOwnership({
+      repoRoot: options.repoRoot,
+      artifact: implementationArtifact,
+      declaration: ownership,
+      commandRunner: options.commandRunner,
+    });
+    errors.push(...ownershipValidation.errors.map(error => `Task record '${filename}' ${error}`));
   }
 
   return errors;

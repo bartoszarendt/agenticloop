@@ -60,6 +60,13 @@ the auditor answers the question no task review asks – does the combined resul
 actually work, and is it proven? Findings route back through ordinary maintainer
 and engineer remediation, and a fresh auditor re-audits the new baseline. When ready tasks are independent, the orchestrator can run up to the configured implementation-lane maximum (default five) in parallel, each in its own guarded repo-internal `git worktree`, after a current Parallel Opportunity Scan. The limit is a ceiling, not a total-agent budget or an eligibility grant. In practice it feels like having a well-organized development team at your fingertips: a coordinator, parallel implementers, and a demanding reviewer – each with its own model budget (see [Cost-quality routing by role](#cost-quality-routing-by-role)).
 
+Parallel scope is deliberately separate from expected writes: broad `allowed_paths`
+does not by itself prove a collision. Structured `owned_paths` enables disjoint
+lanes, while a Maintainer-classified managed join can reconcile only exact,
+additive shared operations into a separately verified and fully reviewed join
+artifact. [Downstream adoption](docs/downstream-adoption.md#parallel-write-ownership-and-managed-joins)
+has the user-facing guide; merge remains human-controlled.
+
 ## What it gives your agent
 
 | Capability | What it does |

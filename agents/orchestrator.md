@@ -79,17 +79,21 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 - Coordinate serially by default. Every authorized multi-task unit receives a
   current [[parallel-delegation]] Parallel Opportunity Scan after decomposition.
   With fewer than two ready tasks, record not-currently-eligible status and a
-  rescan trigger; otherwise use maintainer-supplied `## Parallel Safety`
-  classifications as input, reassess source proposals against current records and
-  repository state, add host/lane checks, and require mutation plus knowledge
-  independence for parallel writes. Record the configured implementation-lane
-  ceiling, decision scope, shared design questions, independent rationale, and
+  rescan trigger; otherwise use Maintainer-supplied `## Parallel Safety`
+  classifications as input, reassess source proposals against current records
+  and repository state, and verify artifact, host, liveness, and join facts.
+  Orchestrator does not originate or override Maintainer's code/collision
+  classification. Require knowledge independence plus either disjoint structured
+  exclusive ownership or a valid managed-join plan for parallel writes;
+  `allowed_paths` is scope, not collision proof. Record the configured
+  implementation-lane ceiling, decision scope, shared design questions,
+  independent rationale, and
   bounded plan/join or concrete serial reason; coupled work uses the two-wave
   pattern. The configured maximum applies only to implementation lanes.
 - Start parallel role work only when [[parallel-delegation]]'s concurrency plan,
   lane ownership, lease, backend-specific write rules, and join requirements are
   satisfied. Unknown collision criteria never start write lanes.
-- Collect cross-lane findings at checkpoints/join, route relevant ones on the
+- Collect cross-lane findings at checkpoints/join, route relevant ones at the
   next delegation/resume, and require a recorded disposition. Keep the join
   incomplete while any routed finding lacks a disposition. A deferred finding
   remains blocking until Maintainer records no threat to
@@ -102,6 +106,10 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   that integrated evidence binds to the exact combined tree/commit. A rehearsal
   never pushes, publishes, merges, or accepts work. If the real tree differs,
   rerun required checks.
+- For a managed join, route dedicated task/artifact; delegate bounded
+  reconciliation only under its budget/lease. Route ambiguity, unexpected
+  writes, and failed checks; require fresh evidence/review before landing. See
+  [[parallel-delegation]].
 - Create or verify worktrees before delegation when authorizing parallel
   file-mutating write work. After acceptance and integration, run
   `npx agenticloop worktree cleanup --dry-run` to preview lane removal and

@@ -1,6 +1,6 @@
 ---
 name: parallel-delegation
-description: Use when an authorized multi-task work unit needs its required current Parallel Opportunity Scan, especially when 2 or more ready independent tasks may parallelize, or the orchestrator must decide serial versus parallel execution, or when planning, reviewing, joining, or troubleshooting parallel lanes, leases, backend-specific parallel writes, bounded delegation liveness, knowledge coupling between lanes, cross-lane finding routing, verification topology across base/lane/integrated/merged trees, or a non-publishing integration rehearsal.
+description: Use when an authorized multi-task work unit needs its required current Parallel Opportunity Scan, especially when 2 or more ready independent tasks may parallelize, or the orchestrator must decide serial versus parallel execution, or when planning, reviewing, joining, troubleshooting, or boundedly reconciling parallel lanes, leases, structured write ownership, classified managed joins, distinct shared exports or package scripts, backend-specific writes, knowledge coupling, cross-lane finding disposition, semantic conflict between lane artifacts, verification topology, integration rehearsal, or the human merge checkpoint.
 metadata:
   area: orchestration
   side_effects: writes-backend
@@ -25,9 +25,10 @@ Before selecting an execution order, the orchestrator records the scan in the
 canonical `## Concurrency Plan`, an authorized task-record surface, or a
 single-writer coordination output. Do not duplicate it into every task or create
 a shared mutable findings ledger. The maintainer supplies per-task code/collision
-classifications through `## Parallel Safety`; the orchestrator re-evaluates them
-against current task records and repository state, adds host/lane capability
-checks, and records its own final parallel or serial decision.
+and joinability classifications through `## Parallel Safety`; the orchestrator
+verifies required task, artifact, host, liveness, and join inputs, then records
+and routes the batch decision. The orchestrator does not originate or override a
+semantic/code classification.
 
 With fewer than two ready tasks, record `not currently eligible - <n> ready
 task(s)` plus a concrete rescan trigger. With two or more ready tasks, perform
@@ -38,8 +39,10 @@ backend collision state, or a cross-lane finding changes.
 For each ready task, the scan must cover:
 
 - **Dependency edges** – which other tasks must finish first.
-- **Expected files or owned paths** – the task's scope map (`Expected Files or
-  Areas` plus `allowed_paths`).
+- **Scope and write ownership** – `Expected Files or Areas` and `allowed_paths`
+  are the broad scope/deviation map; machine-readable `owned_paths` is the
+  expected exclusive write projection, and `shared_mutations` names any exact
+  shared file and predicted operation.
 - **Test and validation surfaces** – writable tests, fixtures, snapshots,
   generated expectations, and shared validation helpers.
 - **Backend objects owned** – task file(s), GitHub issue/PR, or other backend
@@ -90,9 +93,11 @@ rationale. A copied proposal conclusion is not a valid scan.
 Decision after the scan:
 
 - If 2 or more tasks are independent on both dimensions (no dependency edge
-  between them, knowledge classification `independent`) and the collision
-  criteria are **known and disjoint**, prefer a bounded parallel batch over
-  serial execution.
+  between them, knowledge classification `independent`) and structured ownership
+  is **known and disjoint**, prefer a bounded parallel batch over serial
+  execution. A Maintainer-classified `managed_join` is the one bounded exception
+  for exact additive shared operations; allowed-path overlap alone is neither a
+  collision nor a managed-join classification.
 - **Configured maximum parallel implementation lanes:** read
   `max_parallel_implementation_lanes` from `.agenticloop/project.md` (default
   `5`). It applies only to implementation lanes and is a ceiling, never a target
@@ -250,7 +255,10 @@ concurrency plan in the task record or coordination output. The plan must name:
 - owned backend objects for each lane,
 - worktree path and branch for each write lane that mutates repository files,
 - implementation or workflow artifact for each write lane,
-- allowed files or areas for each lane,
+- allowed files or areas plus structured exclusive `owned_paths` for each lane,
+- every exact `shared_mutations` path and per-lane predicted operation, if any,
+- per-task eligibility (`eligible | blocked | unknown`) and each candidate
+  pair's relation (`disjoint | managed_join | blocked | unknown`),
 - decision scope for each lane and the shared design questions that remain with
   the maintainer or a serial reconciliation step,
 - shared files, generated files, lockfiles, schemas, APIs, and external state
@@ -267,6 +275,10 @@ concurrency plan in the task record or coordination output. The plan must name:
 - the integration-rehearsal trigger and owner when combined-state proof is
   required, or the recorded reason it is omitted,
 - the intended artifact composition order for integration,
+- for managed join only: Maintainer's operation classification, the dedicated
+  backend-neutral join task/owner, exact lane base/head artifacts, named conflict
+  paths, its existing attempt budget and lease, mandatory integrated checks, and
+  escalation route,
 - the rerun/invalidation trigger that makes earlier integrated or rehearsal
   evidence stale,
 - liveness checkpoint cadence and stop condition for each delegated lane,
@@ -288,9 +300,12 @@ Safe parallel work is limited to:
   branch. A branch in a shared checkout or a copied-file directory is not
   isolation because worktree and index state still collide.
 
-Additionally, parallel write lanes must have disjoint allowed files or areas, no
-shared generated files or lockfiles, no schema or API ordering dependency, no
-shared external state, and no overlapping task-record or backend-object updates.
+Additionally, parallel write lanes must have disjoint structured `owned_paths`,
+unless this skill's explicit managed-join law classifies their exact shared
+operations; no shared generated files or lockfiles, no schema or API ordering
+dependency, no shared external state, and no overlapping task-record or
+backend-object updates. `allowed_paths` remains the broad scope/deviation map
+and cannot by itself produce a collision verdict.
 
 ## Test And Validation Surfaces
 
@@ -306,6 +321,10 @@ they are not parallel-write eligible unless the work is explicitly:
   order, or
 - deferred to an exclusively owned serial integration task.
 
+The only parallel exception is a Maintainer-classified managed join under the
+next section. It does not make a test/helper file generally mergeable: each lane
+must still declare an exact file and one supported additive operation.
+
 A lane that discovers mid-flight that it must touch a test module or shared
 helper owned by another lane stops and returns status instead of writing.
 
@@ -316,7 +335,9 @@ orchestrator owns host, worktree, lease, stop, and join unknowns. After
 discovery, decide:
 
 - a parallel batch with a recorded concurrency plan, when the criteria came back
-  known and disjoint, or
+  known and disjoint;
+- a Maintainer-classified `managed_join` when discovery proves every exact
+  shared operation and the complete join plan satisfies the law below; or
 - serial execution with a concrete disqualifying reason.
 
 If uncertainty remains after bounded discovery, run serial and record it; do
@@ -337,7 +358,8 @@ parallel implementation lane requires:
 - its own task branch,
 - its own GitHub issue (task record),
 - its own pull request,
-- disjoint expected files or areas,
+- disjoint structured `owned_paths`, or a valid managed-join plan for an exact
+  classified shared mutation,
 - no shared generated files, lockfiles, schema, API, or external-state
   collision,
 - a lease with observable-step checkpoint cadence, stop condition, and
@@ -370,7 +392,8 @@ write lane requires:
 - its implementation or workflow artifact recorded as `branch:<name>` plus
   `commit:<sha>` or `range:<base>..<head>` in the task file (patch is a
   fallback, not the preferred form),
-- disjoint expected files or areas,
+- disjoint structured `owned_paths`, or a valid managed-join plan for an exact
+  classified shared mutation,
 - a lease,
 - a join condition.
 
@@ -514,6 +537,79 @@ Backend-neutral: the rehearsal procedure above is identical across backends.
 Backend projections only change where the durable records live – see
 `agenticloop/backends/files.md` and `agenticloop/backends/github.md` for the
 concise backend-specific statements. The full procedure is not restated there.
+
+## Managed Join
+
+A managed join is an opt-in bounded exception to disjoint mutation ownership,
+not a second workflow or project-wide switch. Ordinary worktree, lease, finding,
+evidence, review, and human merge barriers still apply.
+
+### Classification and authorization
+
+Each task remains `eligible`, `blocked`, or `unknown`; each pair is `disjoint`,
+`managed_join`, `blocked`, or `unknown`. Maintainer alone classifies code/collision joinability
+and operation; Orchestrator verifies the supplied required inputs, host/liveness/join facts,
+records and routes without overriding it. `disjoint` means structured `owned_paths` are
+mechanically disjoint. Broad `allowed_paths` overlap never proves collision;
+unknown/malformed ownership gets one bounded read-only pass, then serial if still
+unknown. Never start speculative writes.
+
+`managed_join` requires all of the following before writes begin:
+
+- lanes are `eligible`, dependency- and knowledge-independent, with no exclusive
+  overlap;
+- every overlap is an exact `shared_mutations` file, never a glob, with distinct
+  supported additive operations; and
+- Maintainer records commutativity, ordered exact base/head lane artifacts,
+  dedicated join task/owner, its existing attempt budget/lease, conflict paths,
+  integrated checks, escalation, and invalidation for artifact, operation, or
+  order change.
+
+Only distinct named exports and `package.json#scripts` keys are mechanically
+classified. Same export/key, dependency selection, ordering/coupling, or an
+unclassified operation is `blocked`/`unknown`.
+Lockfiles, migrations, generated state, competing definitions, semantic/external/coordination
+state, task/project records, event logs, scratch, and group/status/closeout state are ineligible;
+use a combined, stacked, or serial task.
+
+### Artifact-bound lane return
+
+Each lane returns exact base/head artifacts and derives its diff from that range
+or the exact GitHub PR file list, never an ambient working tree. Changes outside
+exclusive ownership or declared shared operations, missing identity/diff, or a
+new overlap stop the lane. Artifact, operation, or order changes invalidate
+classification/evidence; a changed promoted or landed tree also invalidates
+evidence and review.
+
+A changed shared file also requires exact base/head content proof. A file-list
+match alone is insufficient: `add_json_key` proves that only the absent declared
+`scripts.<key>` was added, and `add_export` proves an additive export line for
+only the declared symbol with no removed or rewritten content. GitHub reads the
+shared file at the immutable PR base and head SHAs. Any other content change
+stops the lane.
+
+### Dedicated join task and bounded reconciliation
+
+The join is a dedicated backend-neutral task, never a hidden lane merge: record
+its owner, base, ordered lanes, reconciliation revision, final artifact,
+integrated evidence/review identity, and staleness triggers. Clean composition
+still runs mandatory integrated checks on the exact candidate.
+
+Only after all lanes return may Orchestrator explicitly delegate Engineer
+reconciliation of Maintainer-pre-classified mechanical operations. The packet
+names join/base/lane artifacts, order, permitted operations and exact conflict
+paths, checks, existing join-task attempt budget/lease, and stop. Engineer edits
+only those paths, records exact result/resolution diff, and reruns integrated
+checks after the final edit. Use existing `task`, `role`, `check.run`, and
+`review` events: no reconciliation event, role, or budget.
+
+Ambiguous, semantic, architectural, scope/contract-expanding, exhausted, or
+check-failing work stops: route code ambiguity to Maintainer, contract change to
+change-request/human authority, and lane defects to owners. Engineer never
+chooses design, publishes, accepts, merges, or edits unrelated content. After
+green final checks, Maintainer runs a fresh full ordered Lens 1, Lens 2, and Lens 3 review
+on the exact join artifact; files bind `reviewed_artifact == implementation_artifact`,
+GitHub markers bind exact join head, and human promotion/merge remains separate.
 
 
 ## Delegation Liveness

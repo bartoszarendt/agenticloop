@@ -247,7 +247,8 @@
       ],
       "nearMiss": [
         "Before claiming the service works, run the smoke command and read the full output.",
-        "Do not cite the baseline run as proof that the integrated composed tree passes its checks."
+        "Do not cite the baseline run as proof that the integrated composed tree passes its checks.",
+        "A timed-out cited check needs a durable retry record and fresh final-state evidence before another run."
       ],
       "nearMissTarget": "review-and-accept"
     },
@@ -284,7 +285,9 @@
         "The integration rehearsal hit a semantic conflict between the two lane artifacts; return a conflict and ordering result for the owning task branches rather than silently resolving it.",
         "The actual merged tree differs from the integration rehearsal candidate; the integrated evidence is stale and must rerun.",
         "Provably disjoint lanes may omit the integration rehearsal when the concurrency plan records the reason.",
-        "A passing integration rehearsal never authorizes the actual merge; merge stays a human checkpoint."
+        "A passing integration rehearsal never authorizes the actual merge; merge stays a human checkpoint.",
+        "Classify these exact shared exports as a managed join and reconcile only the Maintainer-approved textual conflict under the dedicated join task budget.",
+        "The two lanes overlap only in different package.json script keys; record structured owned paths, shared mutations, and an exact-artifact managed join plan."
       ],
       "shouldNotTrigger": [
         "Implement this single task serially and report the result.",
@@ -294,7 +297,8 @@
       ],
       "nearMiss": [
         "Plan parallel delegation for four ready tasks with disjoint backend objects, leases, and a join condition.",
-        "The integrated check must bind to the exact combined candidate tree, not to either lane head."
+        "For a managed parallel join, plan every integrated check against the exact combined candidate tree rather than either lane head.",
+        "A semantic conflict between two parallel lane artifacts must route to the owning branches, not be silently resolved."
       ],
       "nearMissTarget": "role-delegation"
     },

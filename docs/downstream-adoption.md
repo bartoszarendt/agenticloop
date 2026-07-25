@@ -64,6 +64,33 @@ Existing maps without `max_parallel_implementation_lanes` inherit the default
 `5`. This is only an implementation-lane ceiling; the current Parallel
 Opportunity Scan may authorize fewer lanes or require serial work.
 
+### Parallel write ownership and managed joins
+
+`allowed_paths` remains each task's broad scope and deviation map. It is not an
+exact promise of every write, so two broad scopes overlapping does not by itself
+serialize work. A multi-task task record instead declares safe structured
+`owned_paths` for expected exclusive writes. Those paths use the same safe
+repo-relative matching rules and must sit inside `allowed_paths` when one exists.
+Missing or unclear ownership gets one bounded read-only discovery pass; it never
+starts speculative write lanes.
+
+Most parallel pairs are mechanically `disjoint`. The narrow `managed_join`
+exception is for Maintainer-classified exact additive operations on a named shared
+file, such as distinct exports in `schemas/__init__.py` or distinct
+`package.json#scripts` keys. It is not available for the same export/key,
+dependency or lockfile changes, migrations, generated/coordination state,
+ordering decisions, or shared semantic/API assumptions. Maintainer classifies
+the code/operation; Orchestrator verifies the inputs and routes the result.
+
+Managed joins use a dedicated join task and exact artifact. If a textual conflict
+is pre-classified as mechanical, an explicitly delegated Engineer may reconcile
+only named conflict paths under that join task's existing lease and attempt
+budget. Integrated checks and a fresh three-lens Maintainer review run against
+the exact final join artifact. Any artifact, operation, order, promotion, or
+landed-tree change makes prior join evidence and review stale. Human authorization
+still controls promotion and merge. See [[parallel-delegation]] for the canonical
+procedure.
+
 The project map also carries the maintainer-owned `## Verification Operating
 Facts` and `## Project Operating Facts` profiles. Project Operating Facts are
 lightweight, current, non-binding, source-linked project-wide operating facts

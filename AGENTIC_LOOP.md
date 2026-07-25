@@ -188,6 +188,10 @@ target projects do not need toolkit-root `docs/` files at runtime.
   candidate composed from the verified base plus lane artifacts in the intended
   order. It is not a merge and grants no merge, push, publish, or acceptance
   authority.
+- **Managed join**: the `parallel-delegation` skill's bounded exception for a
+  Maintainer-classified pair of exact additive shared mutations. It has a
+  dedicated join task/artifact, exact artifact-bound integrated evidence, and a
+  fresh three-lens review; it never authorizes merge or semantic conflict choice.
 - **Decision record**: a tracked Markdown record for a durable project decision
   that constrains future work. It is separate from task records.
 - **Summary**: the completion summary for a task, recorded inline in the task
@@ -484,8 +488,10 @@ mutation-independent and knowledge-independent tasks, and host-supported bounded
 lanes. Review, coordination, and integration lanes use their separate ownership
 rules and do not inherit this value.
 
-Every parallel write lane needs its own owned backend objects, allowed files or
-areas, implementation or workflow artifact, lease, and join condition. Every
+Every parallel write lane needs its own owned backend objects, broad allowed
+scope/deviation map, structured expected-write ownership, implementation or
+workflow artifact, lease, and join condition. `allowed_paths` overlap is not a
+mutation verdict: `owned_paths` and exact `shared_mutations` drive it. Every
 write lane that mutates repository files also needs its own repo-internal
 worktree and branch. Unknown collision criteria never start write lanes; run one
 bounded read-only discovery pass when parallel work is otherwise plausible, then
@@ -539,6 +545,17 @@ same command on different branch heads is different evidence. A verified
 baseline may be referenced across lanes only under strict artifact and
 environment identity and only to establish baseline state; it never satisfies a
 lane-final, integrated, review, acceptance, or post-merge final-state claim.
+
+**Managed join.** A pair may be `disjoint`, `managed_join`, `blocked`, or
+`unknown` while each task remains `eligible`, `blocked`, or `unknown`. Only the
+Maintainer classifies exact additive shared operations; Orchestrator verifies
+inputs, host/liveness/join facts, records the decision, and routes results. A
+managed join requires dependency and knowledge independence, an exact operation
+plan, dedicated join task, exact lane artifacts, integrated checks, and fresh
+full review of the exact final artifact. Artifact, operation, order, promotion,
+or landed-tree changes make classification, evidence, and review stale. Full
+procedure, bounded Engineer reconciliation, and escalation live in
+[[parallel-delegation]].
 
 **Integration rehearsal.** When knowledge coupling, adjacent behavior, shared
 invariants, or ordering/composition risk makes individually green lane evidence

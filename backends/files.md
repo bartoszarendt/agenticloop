@@ -53,6 +53,13 @@ Files-backend deltas:
   publishes nothing, and merge or publish after acceptance remains a human
   decision. When the eventual merged tree differs from the rehearsed candidate,
   the rehearsal evidence is stale and the required checks rerun.
+- A managed join is one dedicated files-backed join task, branch, and exact
+  commit/range artifact. It records its exact base, ordered lane artifacts,
+  reconciliation revision when any, final artifact, integrated evidence, fresh
+  three-lens review identity, and stale trigger. Each lane records the exact
+  `integrated_by` join artifact after validated integration. A changed promoted
+  or landed tree makes the evidence and review stale; actual merge remains a
+  separate human-authorized action.
 - Non-Git targets do not allow parallel write lanes. Run all write work serially;
   read-only parallel discovery is still allowed.
 
@@ -312,6 +319,14 @@ implementation_artifact: branch:<name>
 
 Other valid references include `commit:<sha>`, `range:<base>..<head>`, or a
 patch path if the project uses patch files.
+
+For a managed join, use an exact
+`range:<full-40-sha>..<full-40-sha>` for the dedicated join task so
+artifact-bound ownership validation has both identities. Record lane
+`integrated_by: commit:<full-40-sha>` or
+`range:<full-40-sha>..<full-40-sha>` only
+after the final candidate, integrated checks, and review are valid. This field
+is provenance, not merge authorization.
 
 ### Record Review Status
 

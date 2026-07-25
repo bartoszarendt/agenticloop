@@ -202,6 +202,9 @@ task-record obligation.
   tree/commit, artifact order, commands, and results. Return conflicts as a
   conflict/ordering result for the owning task branches. A rehearsal never
   authorizes pushing, publishing, accepting, or actually merging.
+- Reconcile a managed join only as explicitly delegated under
+  [[parallel-delegation]]: edit named paths only, record the exact result, run
+  final checks, and route ambiguity, unexpected writes, exhaustion, or failure.
 
 ### Agentic Loop Edit Boundary
 

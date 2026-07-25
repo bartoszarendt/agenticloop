@@ -25,6 +25,7 @@ import {
 import { resolveTaskBackend } from './task-backend.js';
 import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
 import { loadProjectMap } from './project-map.js';
+import { parseFrontmatter } from './frontmatter.js';
 
 export const WORKTREE_PARENT = '.agenticloop/worktrees';
 
@@ -986,22 +987,95 @@ export function lookupPullRequestStates(repoRoot, branches, options = {}) {
   return result;
 }
 
+/** Parse the exact managed-join provenance written to a lane task record. */
+export function parseIntegratedBy(value) {
+  const match = String(value ?? '').trim().match(/^pr:(\d+)@([0-9a-f]{40})$/i);
+  if (!match) return null;
+  return { pr: Number(match[1]), head: match[2].toLowerCase() };
+}
+
+/**
+ * Verify that the exact join PR head recorded by a closed lane has landed.
+ * This deliberately uses the join PR's immutable head identity instead of
+ * ancestry, so squash/rebase/merge-commit strategy cannot change cleanup.
+ */
+export function lookupIntegratedJoinArtifact(repoRoot, integratedBy, options = {}) {
+  const parsed = typeof integratedBy === 'string' ? parseIntegratedBy(integratedBy) : integratedBy;
+  if (!parsed) return { valid: false, warning: 'missing or malformed integrated_by join artifact' };
+  const context = resolveGitRepositoryContext(repoRoot);
+  const repo = options.repo ?? resolveRepoOwnerRepo(context);
+  if (!repo) return { valid: false, warning: 'could not determine GitHub repo for integrated_by validation' };
+  const commandRunner = options.commandRunner ?? defaultGhCommandRunner;
+  try {
+    const joinPr = runGhJson(commandRunner, [
+      'pr', 'view', String(parsed.pr), '--repo', repo, '--json', 'number,state,headRefOid',
+    ]);
+    const state = String(joinPr?.state ?? '').toUpperCase();
+    const head = String(joinPr?.headRefOid ?? '').toLowerCase();
+    if (state !== 'MERGED') return { valid: false, warning: `join PR #${parsed.pr} is not merged` };
+    if (head !== parsed.head) return { valid: false, warning: `join PR #${parsed.pr} head does not match recorded integrated_by artifact` };
+    return { valid: true, pr: parsed.pr, head: parsed.head };
+  } catch (error) {
+    return { valid: false, warning: `integrated_by join lookup failed: ${error.message}` };
+  }
+}
+
+function parseTaskState(content) {
+  const [frontmatter] = parseFrontmatter(String(content ?? ''));
+  const value = key => typeof frontmatter?.[key] === 'string' ? frontmatter[key].trim() : null;
+  return {
+    taskId: value('task_id'),
+    status: value('status'),
+    reviewStatus: value('review_status'),
+    integratedBy: value('integrated_by'),
+  };
+}
+
 function readTaskFileStatus(worktreePath) {
   const parts = worktreePath.replace(/\\/g, '/').split('/');
   const taskId = parts[parts.length - 1];
   const taskPath = join(worktreePath, '.agenticloop', 'tasks', `${taskId}.md`);
-  if (!existsSync(taskPath)) return { status: null, reviewStatus: null };
+  if (!existsSync(taskPath)) return { status: null, reviewStatus: null, integratedBy: null };
 
   try {
-    const content = readFileSync(taskPath, 'utf-8');
-    const statusMatch = content.match(/^status:\s*(\S+)\s*$/m);
-    const reviewMatch = content.match(/^review_status:\s*(\S+)\s*$/m);
-    return {
-      status: statusMatch?.[1] ?? null,
-      reviewStatus: reviewMatch?.[1] ?? null,
-    };
+    return parseTaskState(readFileSync(taskPath, 'utf-8'));
   } catch {
-    return { status: null, reviewStatus: null };
+    return { status: null, reviewStatus: null, integratedBy: null };
+  }
+}
+
+/**
+ * Resolve a lane's canonical GitHub issue by exact task_id frontmatter and read
+ * managed-join provenance from that issue. Local task files are never consulted
+ * for a GitHub-backed project.
+ */
+export function lookupGitHubTaskState(repoRoot, taskId, options = {}) {
+  const context = resolveGitRepositoryContext(repoRoot);
+  const repo = options.repo ?? resolveRepoOwnerRepo(context);
+  if (!repo) return { status: null, reviewStatus: null, integratedBy: null, warning: 'could not determine GitHub repo for task lookup' };
+  const commandRunner = options.commandRunner ?? defaultGhCommandRunner;
+  try {
+    const issues = runGhJson(commandRunner, [
+      'issue', 'list',
+      '--repo', repo,
+      '--state', 'all',
+      '--search', `"task_id: ${taskId}" in:body`,
+      '--json', 'number,body',
+      '--limit', '100',
+    ]);
+    if (!Array.isArray(issues)) {
+      return { status: null, reviewStatus: null, integratedBy: null, warning: 'GitHub task lookup returned malformed data' };
+    }
+    const matches = issues
+      .map(issue => ({ issue, state: parseTaskState(issue?.body) }))
+      .filter(candidate => candidate.state.taskId === taskId);
+    if (matches.length !== 1) {
+      const detail = matches.length === 0 ? 'no matching issue' : 'multiple matching issues';
+      return { status: null, reviewStatus: null, integratedBy: null, warning: `${detail} for task_id '${taskId}'` };
+    }
+    return { ...matches[0].state, issue: matches[0].issue.number ?? null, warning: null };
+  } catch (error) {
+    return { status: null, reviewStatus: null, integratedBy: null, warning: `GitHub task lookup failed: ${error.message}` };
   }
 }
 
@@ -1101,6 +1175,8 @@ export function classifyWorktreesForCleanup(contextOrTarget, options = {}) {
         return map;
       })
     : lookupPullRequestStates);
+  const lookupIntegratedJoin = options.lookupIntegratedJoin ?? lookupIntegratedJoinArtifact;
+  const lookupGithubTask = options.lookupGithubTaskState ?? lookupGitHubTaskState;
 
   const result = {
     wouldRemove: [],
@@ -1160,7 +1236,9 @@ export function classifyWorktreesForCleanup(contextOrTarget, options = {}) {
       continue;
     }
 
-    const taskState = readTaskFileStatus(worktree.path);
+    const taskState = backend.backend === 'files'
+      ? readTaskFileStatus(worktree.path)
+      : { status: null, reviewStatus: null, integratedBy: null };
     const activeStatuses = new Set(['in-progress', 'needs_context', 'blocked', 'needs_revision', 'agent-ready']);
     if (activeStatuses.has(taskState.status)) {
       item.reason = `task status ${taskState.status}`;
@@ -1197,8 +1275,29 @@ export function classifyWorktreesForCleanup(contextOrTarget, options = {}) {
     }
 
     if (prState?.state === 'CLOSED') {
-      item.reason = prState.number ? `closed unmerged PR #${prState.number}` : 'closed unmerged PR';
-      result.needsReview.push(item);
+      const canonicalTaskState = backend.backend === 'github'
+        ? lookupGithubTask(context.repoRoot, taskId, { repo: options.repo, commandRunner: options.commandRunner })
+        : taskState;
+      const integrated = canonicalTaskState.integratedBy
+        ? lookupIntegratedJoin(context.repoRoot, canonicalTaskState.integratedBy, { repo: options.repo, commandRunner: options.commandRunner })
+        : { valid: false, warning: canonicalTaskState.warning ?? 'lane has no integrated_by join artifact' };
+      if (!integrated.valid) {
+        item.reason = prState.number ? `closed unmerged PR #${prState.number}` : 'closed unmerged PR';
+        item.integratedByWarning = integrated.warning;
+        result.needsReview.push(item);
+        continue;
+      }
+      item.reason = `validated integration by join PR #${integrated.pr}`;
+      item.integratedBy = canonicalTaskState.integratedBy;
+      const removable = isCandidateRemovableByPreservation(worktree.path, context.repoRoot);
+      if (!removable.ok) {
+        item.reason = removable.reason;
+        item.preservation = removable.preservation;
+        result.needsReview.push(item);
+      } else {
+        item.preservation = removable.preservation;
+        result.wouldRemove.push(item);
+      }
       continue;
     }
 

@@ -897,6 +897,69 @@ describe('runPreflight (injected gh runner)', () => {
     assert.ok(commentApiArgs.some(args => args.some(arg => /issues\/42\/comments\?per_page=100$/.test(arg))));
   });
 
+  it('hydrates shared-operation proof from immutable PR base/head blobs', () => {
+    const baseRefOid = 'a'.repeat(40);
+    const issueData = {
+      number: 7,
+      body: [
+        '---',
+        'task_id: T-001',
+        'allowed_paths:',
+        '  - package.json',
+        'owned_paths: []',
+        'shared_mutations:',
+        '  package.json:',
+        '    operation: add_json_key',
+        '    target: scripts.safe',
+        '---',
+        '# T-001',
+        '## Required Checks',
+        '- `npm test`',
+        '## Acceptance Criteria',
+        '- done',
+        '## Parallel Safety',
+        '- **Parallel eligibility**: eligible',
+        '- **Knowledge coupling**: independent',
+      ].join('\n'),
+    };
+    const prData = {
+      number: 42,
+      baseRefOid,
+      headRefOid: HEAD,
+      body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+      closingIssuesReferences: [{ number: 7 }],
+      files: [{ path: 'package.json' }],
+      statusCheckRollup: [],
+    };
+    const base = JSON.stringify({ scripts: { test: 'node --test' } });
+    const head = JSON.stringify({ scripts: { test: 'node --test', safe: 'node safe.js' } });
+    const contentRefs = [];
+    const runner = (command, args) => {
+      assert.equal(command, 'gh');
+      if (args[0] === 'pr') return { status: 0, stdout: JSON.stringify(prData), stderr: '' };
+      if (args[0] === 'issue') return { status: 0, stdout: JSON.stringify(issueData), stderr: '' };
+      if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'o/r' }), stderr: '' };
+      if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify(LOOP_ACCOUNT), stderr: '' };
+      if (args[0] === 'api' && args.includes('--paginate')) {
+        return { status: 0, stdout: JSON.stringify([[]]), stderr: '' };
+      }
+      if (args[0] === 'api' && /contents\/package\.json\?ref=/.test(args[1])) {
+        const ref = new URL(`https://example.invalid/${args[1]}`).searchParams.get('ref');
+        contentRefs.push(ref);
+        const content = ref === baseRefOid ? base : head;
+        return {
+          status: 0,
+          stdout: JSON.stringify({ encoding: 'base64', content: Buffer.from(content).toString('base64') }),
+          stderr: '',
+        };
+      }
+      throw new Error(`unexpected gh call: ${args.join(' ')}`);
+    };
+    const result = runPreflight({ pr: 42, commandRunner: runner });
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+    assert.deepEqual(contentRefs.sort(), [baseRefOid, HEAD].sort());
+  });
+
   it('validates marked comments returned on later paginated API pages', () => {
     const prData = {
       number: 42,
@@ -1308,6 +1371,91 @@ describe('Phase 29 - path/deviation validation', () => {
       issueData: { number: 7, body: devIssueBody, comments: [] },
     });
     assert.equal(result.ok, true, JSON.stringify(result.errors));
+  });
+
+  it('fails closed when exact PR files exceed structured owned/shared declarations', () => {
+    const ownershipIssue = [
+      '---',
+      'allowed_paths:',
+      '  - src/**',
+      '  - package.json',
+      'owned_paths:',
+      '  - src/foo.js',
+      '---',
+      '# T-001 Ownership',
+      '## Required Checks',
+      '- `npm test`',
+      '## Acceptance Criteria',
+      '- done',
+      '## Parallel Safety',
+      '- **Parallel eligibility**: eligible',
+      '- **Knowledge coupling**: independent',
+    ].join('\n');
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        files: [{ path: 'src/foo.js' }, { path: 'package.json' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: ownershipIssue, comments: [] },
+    });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(error => /undeclared path 'package\.json'/.test(error)), result.errors.join('\n'));
+  });
+
+  it('requires exact base/head content proof for declared shared operations', () => {
+    const ownershipIssue = [
+      '---',
+      'allowed_paths:',
+      '  - package.json',
+      'owned_paths: []',
+      'shared_mutations:',
+      '  package.json:',
+      '    operation: add_json_key',
+      '    target: scripts.safe',
+      '---',
+      '# T-001 Ownership',
+      '## Required Checks',
+      '- `npm test`',
+      '## Acceptance Criteria',
+      '- done',
+      '## Parallel Safety',
+      '- **Parallel eligibility**: eligible',
+      '- **Knowledge coupling**: independent',
+    ].join('\n');
+    const base = JSON.stringify({ scripts: { test: 'node --test' }, private: true });
+    const validHead = JSON.stringify({ scripts: { test: 'node --test', safe: 'node safe.js' }, private: true });
+    const rewrittenHead = JSON.stringify({ scripts: { safe: 'node safe.js' }, private: false });
+    const evaluate = headContent => evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        files: [{ path: 'package.json' }],
+        sharedMutationContents: { 'package.json': { baseContent: base, headContent } },
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: ownershipIssue, comments: [] },
+    });
+    assert.equal(evaluate(validHead).ok, true);
+    const invalid = evaluate(rewrittenHead);
+    assert.equal(invalid.ok, false);
+    assert.match(invalid.errors.join('\n'), /outside declared JSON key/);
+
+    const missing = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        files: [{ path: 'package.json' }],
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: ownershipIssue, comments: [] },
+    });
+    assert.equal(missing.ok, false);
+    assert.match(missing.errors.join('\n'), /lacks exact base\/head content proof/);
   });
 });
 
