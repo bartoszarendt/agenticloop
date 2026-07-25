@@ -9,7 +9,7 @@
       "name": "agenticloop",
       "source": "./",
       "description": "Loop engineering overlay for AI coding agents -- four supervised roles plus Markdown-first skills.",
-      "version": "0.3.0"
+      "version": "0.3.1"
     }
   ]
 }

@@ -1,8 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.3.1 - 2026-07-25
 
 ### Added
+- Artifact-bound review handoffs for both task backends. Review dispatch captures
+  the exact implementation artifact, places it under a mutation lease, and
+  rejects stale verdicts when the PR head or files-backed artifact changes.
+  Re-review additionally requires a durable resolution matrix that accounts for
+  every prior finding against the current candidate.
+- Fail-closed Review Round Checkpoints at the task's `review_budget` boundary.
+  A checkpoint records the direction, classified cause, current review count,
+  exact artifact, targeted finding or durable judgment reference, and
+  authenticated orchestrator identity. Missing, stale, malformed, replayed, or
+  out-of-order authorization cannot route another revision.
+- Safe managed joins for parallel tasks that intentionally make compatible
+  changes to the same exact file. Structured `owned_paths`, `shared_mutations`,
+  and `integrated_by` metadata distinguish exclusive ownership from
+  Maintainer-classified operations such as distinct export or JSON-key
+  additions. Validation binds each lane to its immutable artifact diff,
+  rejects undeclared writes and unsafe shared targets, and requires a dedicated
+  integration task with fresh three-lens review of the combined artifact.
 - Strict, declarative CLI parsing (`src/cli-registry.js`). One registry defines
   every command, subcommand, option type, alias, repeatability, enum value,
   positional, and help text, parsed with `node:util.parseArgs` plus an explicit
@@ -61,6 +78,15 @@
   published package and asserted in a real `npm pack` archive test.
 
 ### Changed
+- Parallel scheduling no longer treats every shared writable file as an
+  automatic serial-only collision. Pairwise classification now distinguishes
+  `disjoint`, `managed_join`, `blocked`, and `unknown`; knowledge independence
+  remains mandatory, and uncertainty, lockfiles, migrations, generated files,
+  globs, overlapping JSON keys, or unaccounted mutations still fail closed.
+- GitHub cleanup for managed lanes is merge-strategy independent: it validates
+  the recorded integration task and exact join PR head identity before removing
+  a closed lane worktree. Files-backed task lint now performs the same
+  artifact-bound ownership checks as full validation.
 - **Compatibility: strict parsing.** Unknown options now exit `2` instead of
   being warned about and ignored. Accidental Boolean-value forms such as
   `--dry-run foo` or `--json foo` no longer assign the token as the flag

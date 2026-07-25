@@ -133,7 +133,7 @@ describe('setup state matrix', () => {
     writeDocs(target);
     mkdirSync(join(target, '.agenticloop'), { recursive: true });
     writeFileSync(join(target, '.agenticloop', 'generated-artifacts.json'),
-      JSON.stringify({ schemaVersion: 4, packageVersion: '0.3.0', entries: [] }, null, 2), 'utf-8');
+      JSON.stringify({ schemaVersion: 4, packageVersion: '0.3.1', entries: [] }, null, 2), 'utf-8');
     const result = await runCliInProcess(['setup', '--target', target], {
       stdin: scriptedStdin(['yes', '', '', 'y', 'n']),
     });

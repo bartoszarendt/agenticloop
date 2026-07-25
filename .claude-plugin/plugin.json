@@ -1,7 +1,7 @@
 {
   "name": "agenticloop",
   "description": "Loop engineering for AI coding agents: orchestrator, maintainer, engineer, and auditor roles plus Markdown-first skills.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": {
     "name": "Bartosz Arendt"
   },
