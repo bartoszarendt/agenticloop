@@ -80,11 +80,24 @@ function assertInstalledPayloadMatchesPackageSource(targetRoot) {
 // ---------------------------------------------------------------------------
 
 describe('init - protected docs are never overwritten', () => {
-  it('does not overwrite AGENTS.md', async () => {
+  it('does not overwrite AGENTS.md user content (guidance block is appended, never replacing)', async () => {
     const d = makeEmptyTarget();
     const original = '# My AGENTS.md - keep this\n';
     writeFileSync(join(d, 'AGENTS.md'), original);
     await init({ target: d });
+    const content = readFileSync(join(d, 'AGENTS.md'), 'utf-8');
+    // The target-owned content is preserved verbatim; init appends its owned,
+    // marker-delimited activation-guidance block below it (established CLI
+    // behavior, now planned as part of the lifecycle plan).
+    assert.ok(content.startsWith(original), `user content must be preserved verbatim, got:\n${content}`);
+    assert.match(content, /<!-- AGENTICLOOP_START -->/);
+  });
+
+  it('leaves AGENTS.md byte-identical with agentsGuidance disabled', async () => {
+    const d = makeEmptyTarget();
+    const original = '# My AGENTS.md - keep this\n';
+    writeFileSync(join(d, 'AGENTS.md'), original);
+    await init({ target: d, agentsGuidance: false });
     const content = readFileSync(join(d, 'AGENTS.md'), 'utf-8');
     assert.equal(content, original);
   });

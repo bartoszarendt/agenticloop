@@ -156,14 +156,19 @@ Run this in the root of a target project. Install from the public GitHub reposit
 
 ```text
 npm install --save-dev github:bartoszarendt/agenticloop
-npx agenticloop init
+npx agenticloop setup
 ```
 
 For a one-off run without keeping a dependency:
 
 ```text
-npm exec --yes --package=github:bartoszarendt/agenticloop -- agenticloop init
+npm exec --yes --package=github:bartoszarendt/agenticloop -- agenticloop setup
 ```
+
+`setup` is the recommended one-command onboarding path: it detects the
+project, collects your decisions, shows one complete plan, and asks before
+the first mutation. It scaffolds a fresh target or repairs a partial one,
+and it is idempotent — running it twice changes nothing the second time.
 
 This creates a files-first Agentic Loop overlay:
 
@@ -189,21 +194,19 @@ target-project/
     tmp/
 ```
 
-### Confirm setup
+### Inspect and validate
 
-Plain `init` is files-only: it does not create adapter config, and it leaves the
-project map at `setup_status: unconfirmed`. Run guided setup to confirm the
-project map, choose a host adapter, and configure per-role models in one pass:
-
-```text
-npx agenticloop setup
-```
-
-`setup` is resumable and requires explicit confirmation before writing project
-map values. Inspect onboarding state any time without changing files:
+Inspect onboarding state any time without changing files:
 
 ```text
 npx agenticloop doctor
+```
+
+Preview exactly what setup or init would do, without writing anything:
+
+```text
+npx agenticloop setup --dry-run
+npx agenticloop init --dry-run
 ```
 
 Then validate:
@@ -212,10 +215,13 @@ Then validate:
 npx agenticloop validate
 ```
 
-Prefer to skip guided setup? Confirm `.agenticloop/project.md` manually
-(set `setup_status: confirmed` after reviewing the backend) or ask your agent to
-run the `setup-agenticloop` skill, then add an adapter with
-`npx agenticloop init --adapter <host>`.
+Prefer a deterministic, non-guided scaffold? `agenticloop init` is the
+advanced files-only path; add a host directly with
+`npx agenticloop init --adapter <host>`. You can also confirm
+`.agenticloop/project.md` manually (set `setup_status: confirmed` after
+reviewing the backend) or ask your agent to run the `setup-agenticloop`
+skill. See [docs/cli-reference.md](docs/cli-reference.md) for the full CLI
+contract, including dry-run, JSON plans, and exit statuses.
 
 ## Add a host adapter
 
@@ -508,6 +514,7 @@ updates. Canonical toolkit assets (agents, skills, backends) always live under
 |---|---|
 | [AGENTIC_LOOP.md](AGENTIC_LOOP.md) | Full methodology and workflow contract. |
 | [docs/getting-started.md](docs/getting-started.md) | Setup and first-run path. |
+| [docs/cli-reference.md](docs/cli-reference.md) | CLI contract: commands, dry-run, JSON plans, exit statuses, capabilities. |
 | [docs/downstream-adoption.md](docs/downstream-adoption.md) | How the overlay model works in existing projects. |
 | [docs/host-adapters.md](docs/host-adapters.md) | Adapter support table and generation behavior. |
 | [docs/skill-anatomy.md](docs/skill-anatomy.md) | Skill authoring contract and expectations. |

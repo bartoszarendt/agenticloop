@@ -44,17 +44,16 @@ const PLANNERS = {
  */
 
 /**
- * Plan and execute adapter generation for one or more adapters transactionally.
- *
- * For 'all', computes the complete plan across all five adapters before
- * performing any writes. If any adapter has a blocked path, performs zero
- * adapter-output writes.
+ * Compute the canonical adapter generation plan without writing. Composes the
+ * per-adapter planners, plugin compatibility checks, and the generation
+ * transaction preflight so lifecycle planning can render and preflight the
+ * exact actions that `executeGenerationPlan` would apply.
  *
  * @param {GenerationOptions} options
- * @returns {GenerationOutcome}
+ * @returns {{ ok: boolean, errors: string[], plan?: object, preflight?: object, adapters: string[], outputDir: string }}
  */
-export function generateAdapterArtifacts(options) {
-  const { target, alConfig, adapter, outputDirOpt, forceGenerated = false, runPluginChecks = true, extraWrites } = options;
+export function planAdapterArtifacts(options) {
+  const { target, alConfig, adapter, outputDirOpt, forceGenerated = false, runPluginChecks = true } = options;
 
   const outputDir = resolveOutputDir(target, outputDirOpt);
   const outputRoot = computeOutputRoot(target, outputDir);
@@ -62,16 +61,14 @@ export function generateAdapterArtifacts(options) {
   const adapterList = Array.isArray(adapter) ? adapter : [adapter];
   const expanded = adapterList.includes('all') ? [...IMPLEMENTED_ADAPTERS] : /** @type {string[]} */ (adapterList.filter(Boolean));
 
-  // Plugin/config compatibility checks.
   const preflightErrors = [];
   if (runPluginChecks && expanded.some(a => a === 'codex' || a === 'cursor' || expanded.includes('all'))) {
     preflightErrors.push(...validateSharedAgenticLoopPluginCompatibility(alConfig));
   }
   if (preflightErrors.length > 0) {
-    return { ok: false, errors: preflightErrors, files: [], adapters: expanded, outputDir };
+    return { ok: false, errors: preflightErrors, adapters: expanded, outputDir };
   }
 
-  // Compute the complete plan across all requested adapters.
   const allActions = [];
   const allFiles = [];
   const adaptersWithPlans = [];
@@ -79,7 +76,7 @@ export function generateAdapterArtifacts(options) {
   for (const adapterName of expanded) {
     const planner = PLANNERS[adapterName];
     if (!planner) {
-      return { ok: false, errors: [`Unknown adapter: ${adapterName}`], files: [], adapters: expanded, outputDir };
+      return { ok: false, errors: [`Unknown adapter: ${adapterName}`], adapters: expanded, outputDir };
     }
     try {
       const plan = planner(alConfig, target, outputDir);
@@ -90,7 +87,6 @@ export function generateAdapterArtifacts(options) {
       return {
         ok: false,
         errors: [`Failed to plan ${adapterName} artifacts: ${error instanceof Error ? error.message : String(error)}`],
-        files: [],
         adapters: expanded,
         outputDir,
       };
@@ -104,17 +100,38 @@ export function generateAdapterArtifacts(options) {
     adapters: adaptersWithPlans,
   };
 
+  const preflight = preflightPlan(target, plan, forceGenerated);
+  return { ok: true, errors: [], plan, preflight, adapters: adaptersWithPlans, outputDir };
+}
+
+/**
+ * Plan and execute adapter generation for one or more adapters transactionally.
+ *
+ * For 'all', computes the complete plan across all five adapters before
+ * performing any writes. If any adapter has a blocked path, performs zero
+ * adapter-output writes.
+ *
+ * @param {GenerationOptions} options
+ * @returns {GenerationOutcome}
+ */
+export function generateAdapterArtifacts(options) {
+  const { target, forceGenerated = false, extraWrites } = options;
+  const planned = planAdapterArtifacts(options);
+  if (!planned.ok) {
+    return { ok: false, errors: planned.errors, files: [], adapters: planned.adapters, outputDir: planned.outputDir };
+  }
+
   // Execute transactionally. The transaction boundary validates fully resolved
   // action, stale-cleanup, and extra-write destinations so .github/workflows/
   // remains user-owned even when a custom output directory is requested.
-  const result = executeGenerationPlan(target, plan, { forceGenerated, extraWrites });
+  const result = executeGenerationPlan(target, planned.plan, { forceGenerated, extraWrites });
 
   return {
     ok: result.ok,
     errors: result.errors,
-    files: result.ok ? allFiles : [],
-    adapters: adaptersWithPlans,
-    outputDir,
+    files: result.ok ? planned.plan.files : [],
+    adapters: planned.adapters,
+    outputDir: planned.outputDir,
   };
 }
 

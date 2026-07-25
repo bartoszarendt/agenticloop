@@ -1,7 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -122,5 +124,40 @@ describe('Claude Code plugin packaging', () => {
     assert.ok(pkg.files.includes('.claude-plugin/'));
     assert.ok(pkg.files.includes('agents/'));
     assert.ok(pkg.files.includes('commands/'));
+  });
+
+  it('includes the CLI reference in the npm package files allowlist', () => {
+    const pkg = readJson('package.json');
+    assert.ok(pkg.files.includes('docs/cli-reference.md'));
+  });
+
+  it('ships docs/cli-reference.md in a real npm pack archive', () => {
+    const packDir = mkdtempSync(join(tmpdir(), 'al-pack-'));
+    const npmEnv = { ...process.env, npm_config_cache: join(packDir, 'npm-cache') };
+    try {
+      const packed = spawnSync('npm', ['pack', '--pack-destination', packDir], {
+        cwd: REPO_ROOT,
+        encoding: 'utf-8',
+        shell: true,
+        env: npmEnv,
+      });
+      assert.equal(packed.status, 0, `npm pack failed:\n${packed.stdout}\n${packed.stderr}`);
+      const tarball = readdirSync(packDir).find(entry => entry.endsWith('.tgz'));
+      assert.ok(tarball, 'npm pack must produce a tarball');
+      // `npm pack --dry-run --json` reports the authoritative archive file list.
+      const dryRun = spawnSync('npm', ['pack', '--dry-run', '--json'], {
+        cwd: REPO_ROOT,
+        encoding: 'utf-8',
+        shell: true,
+        env: npmEnv,
+      });
+      assert.equal(dryRun.status, 0, `npm pack --dry-run failed:\n${dryRun.stderr}`);
+      const report = JSON.parse(dryRun.stdout);
+      const files = (Array.isArray(report) ? report[0].files : report.files).map(f => f.path ?? f);
+      assert.ok(files.includes('docs/cli-reference.md'),
+        `docs/cli-reference.md must be in the packed archive; got ${files.length} files`);
+    } finally {
+      rmSync(packDir, { recursive: true, force: true });
+    }
   });
 });

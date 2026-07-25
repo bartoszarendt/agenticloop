@@ -290,8 +290,9 @@ project-map shape: YAML frontmatter with `setup_status`,
 optional `engineer_context_window_tokens`, and optional typed `documents` keys, followed by a
 `# Agentic Loop Project Map` heading and the canonical empty `## Verification
 Operating Facts` section. Do not invent an initial fact.
-Alternatively, tell the human to run `npx agenticloop init` first, which
-creates the file automatically.
+Alternatively, tell the human to run `npx agenticloop setup`, which scaffolds
+the overlay and confirms the project profile in one guided pass, or
+`npx agenticloop init`, which creates the file automatically without guidance.
 
 Do not write model IDs, provider names, or reasoning effort settings to
 `.agenticloop/project.md`. Those belong in `agenticloop.json` under

@@ -30,6 +30,7 @@ import {
 } from './generated-artifacts.js';
 import { getDocumentRoleRegistry, findFirstExistingDocumentCandidate } from './document-roles.js';
 import { loadProjectMap } from './project-map.js';
+import { loadAgenticLoopConfig } from './json.js';
 
 export const GUIDANCE_START_MARKER = '<!-- AGENTICLOOP_START -->';
 export const GUIDANCE_END_MARKER = '<!-- AGENTICLOOP_END -->';
@@ -521,4 +522,64 @@ export function computeGuidanceRemoval(content, entry, { allowModified = false }
   const remaining = content.slice(0, start) + content.slice(end);
   if (entry.createdFile && remaining === '') return { outcome: 'delete' };
   return { outcome: 'rewrite', content: remaining };
+}
+
+/**
+ * Load the optional target agenticloop.json for guidance planning/execution.
+ * Returns { config, error }: a missing config is not an error; a malformed
+ * one is reported without throwing.
+ */
+export function loadGuidanceAlConfig(target) {
+  const cfgPath = join(target, 'agenticloop.json');
+  if (!existsSync(cfgPath)) return { config: null, error: null };
+  try {
+    return { config: loadAgenticLoopConfig(cfgPath), error: null };
+  } catch (error) {
+    return { config: null, error: `agenticloop.json is malformed: ${error.message}` };
+  }
+}
+
+/**
+ * Build the shared lifecycle guidance action used by both the init and setup
+ * planners. The action is an exec descriptor: the guidance write path owns
+ * its apply logic (ownership manifest, markers, atomic write) instead of a
+ * plain content write.
+ */
+export function guidanceLifecycleAction({ installationExisted }) {
+  return {
+    kind: 'merge',
+    path: 'AGENTS.md',
+    category: 'guidance',
+    ownership: 'shared',
+    reason: installationExisted ? 'refresh owned activation-guidance block' : 'install activation-guidance block',
+    display: 'AGENTS.md (activation guidance)',
+    exec: { type: 'guidance', refreshOnly: installationExisted },
+  };
+}
+
+/**
+ * Execute one lifecycle `guidance` exec descriptor. Shared by the init and
+ * setup apply paths so guidance logic lives in exactly one place.
+ *
+ * @returns {{ ok: boolean, errors?: string[], warnings?: string[], changed?: boolean, display?: string, rolledBack?: boolean }}
+ */
+export function executeGuidanceLifecycleAction(action, target) {
+  const configResult = loadGuidanceAlConfig(target);
+  if (configResult.error) {
+    return { ok: false, rolledBack: true, errors: [configResult.error] };
+  }
+  const guidance = applyGuidance(target, {
+    alConfig: configResult.config,
+    refreshOnly: action.exec?.refreshOnly === true,
+  });
+  const warnings = [...guidance.warnings];
+  if (!guidance.ok) {
+    return { ok: false, rolledBack: true, errors: [guidance.message], warnings };
+  }
+  return {
+    ok: true,
+    changed: guidance.changed,
+    display: `guidance: ${guidance.action} in ${guidance.relPath}`,
+    warnings,
+  };
 }

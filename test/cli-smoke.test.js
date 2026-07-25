@@ -46,26 +46,26 @@ describe('CLI binary smoke tests', () => {
     assert.match(result.stdout, /agenticloop <command> \[options\]/);
   });
 
-  it('prints usage with no command and exits 0', () => {
+  it('prints the first-use screen with no command and exits 0', () => {
     const result = runBin([]);
     assert.equal(result.status, 0);
-    assert.match(result.stdout, /Commands:/);
+    assert.match(result.stdout, /agenticloop setup/);
   });
 
-  it('reports an unknown command on stderr and exits 1', () => {
+  it('reports an unknown command on stderr and exits 2', () => {
     const result = runBin(['frobnicate']);
-    assert.equal(result.status, 1);
+    assert.equal(result.status, 2);
     assert.match(result.stderr, /Unknown command: frobnicate/);
   });
 
   it('propagates a nonzero exit code from a failing command', () => {
-    // `task new` with no title is a deterministic user error that must exit 1
+    // `task new` with no title is a deterministic usage error that must exit 2
     // through the real process, proving exit-code propagation from runCli.
     const target = mkdtempSync(join(tmpDir, 'fail-'));
     assert.equal(runBin(['init', '--target', target]).status, 0);
     const result = runBin(['task', 'new', '--target', target]);
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /task new requires a title/);
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /task new: missing required <title>/);
   });
 
   it('runs a representative end-to-end command through the real binary', () => {

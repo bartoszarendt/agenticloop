@@ -7,7 +7,6 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { parseArgs, warnUnknownOptions } from './cli-args.js';
 import { parseFrontmatter } from './frontmatter.js';
 import { markdownSection } from './markdown.js';
 import {
@@ -28,7 +27,8 @@ import { createLocalVerificationContext } from './verification-context.js';
 import {
   validateReviewProvenance,
 } from './review-provenance.js';
-import { createIo } from './cli-io.js';
+import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.js';
+import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
 
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -343,8 +343,17 @@ function validateAcceptanceGate(content, filePath, verificationContext) {
 
 export async function cmdTask(args, io = createIo()) {
   const sub = args[0];
-  const { opts, positional } = parseArgs(args.slice(1));
-  const target = opts.target && opts.target !== true ? resolve(io.cwd, opts.target) : io.cwd;
+  const TASK_SUBCOMMANDS = COMMAND_REGISTRY.task.subcommands;
+  if (!sub || !TASK_SUBCOMMANDS[sub]) {
+    const suggestion = sub ? suggestName(sub, Object.keys(TASK_SUBCOMMANDS)) : null;
+    io.err(suggestion
+      ? `task: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
+      : 'task requires a subcommand: list, lint, new, status.');
+    io.err('Run "agenticloop help task" for usage.');
+    return EXIT_USAGE;
+  }
+  const { opts, positional } = parseCommandArgs(`task ${sub}`, TASK_SUBCOMMANDS[sub], args.slice(1));
+  const target = resolveCliTarget(io, opts.target);
   const guard = guardFilesBackend(target, io);
   if (!guard.ok) {
     io.err(guard.message);
@@ -359,7 +368,6 @@ export async function cmdTask(args, io = createIo()) {
 
   try {
     if (sub === 'list') {
-      warnUnknownOptions(opts, ['target', 'status', 'json'], 'task list', io);
       const rows = taskFiles(target, projectConfig)
         .map(taskRecordFromFile)
         .filter(row => !opts.status || row.status === opts.status)
@@ -377,7 +385,6 @@ export async function cmdTask(args, io = createIo()) {
     }
 
     if (sub === 'lint') {
-      warnUnknownOptions(opts, ['target', 'json'], 'task lint', io);
       const taskId = positional[0];
       const files = taskId ? [taskPathForId(target, projectConfig, taskId)] : taskFiles(target, projectConfig);
       const results = files.map(file => existsSync(file)
@@ -388,11 +395,10 @@ export async function cmdTask(args, io = createIo()) {
     }
 
     if (sub === 'new') {
-      warnUnknownOptions(opts, ['target', 'id', 'json'], 'task new', io);
       const title = positional.join(' ').trim();
       if (!title) {
         io.err('task new requires a title');
-        return 1;
+        return EXIT_USAGE;
       }
       const defaultRegex = PROJECT_MAP_DEFAULTS.task_id_regex;
       const taskId = opts.id
@@ -428,20 +434,19 @@ export async function cmdTask(args, io = createIo()) {
     }
 
     if (sub === 'status') {
-      warnUnknownOptions(opts, ['target', 'note', 'blockCategory', 'json', 'accept'], 'task status', io);
       const [taskId, nextStatus] = positional;
       if (!taskId || !nextStatus) {
         io.err('task status requires <id> and <status>');
-        return 1;
+        return EXIT_USAGE;
       }
       if (!FILES_TASK_STATUSES.has(nextStatus)) {
         io.err(`Invalid task status '${nextStatus}' (expected one of: ${[...FILES_TASK_STATUSES].join(', ')})`);
-        return 1;
+        return EXIT_USAGE;
       }
       const blockCategory = frontmatterString(opts.blockCategory);
       if (nextStatus === 'blocked' && !blockCategory) {
         io.err("task status blocked requires --block-category <category>");
-        return 1;
+        return EXIT_USAGE;
       }
       const filePath = taskPathForId(target, projectConfig, taskId);
       if (!existsSync(filePath)) {
@@ -483,9 +488,10 @@ export async function cmdTask(args, io = createIo()) {
       return 0;
     }
 
-    io.err('Unknown task subcommand. Expected: list, lint, new, status.');
-    return 1;
+    io.err(`Unknown task subcommand '${sub}'. Expected: list, lint, new, status.`);
+    return EXIT_USAGE;
   } catch (error) {
+    if (error instanceof CliUsageError) throw error;
     io.err(error.message);
     return 1;
   }

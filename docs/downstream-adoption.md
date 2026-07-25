@@ -42,7 +42,8 @@ agenticloop/                     toolkit-owned canonical source
 `agenticloop/AGENTIC_LOOP.md` is the primary portable process file.
 
 `.agenticloop/project.md` is target-owned and is created once by
-`agenticloop init`. It starts with `setup_status: unconfirmed` and
+`agenticloop init` (or by `agenticloop setup`, which composes the same
+idempotent scaffold). It starts with `setup_status: unconfirmed` and
 `development_stage: unconfirmed` and is never overwritten by `agenticloop
 update`. Edit it through human-confirmed setup/profile updates to record setup
 confirmation, typed document selections, backend choice, task naming, optional
@@ -83,7 +84,8 @@ and never scaffolded by init. Settle gitignore the same way decisions are
 handled (tracked, not ignored).
 
 `agenticloop.json` and `agenticloop/config.json` are adapter/tooling config.
-They are created only by `agenticloop init --adapter <host>` and are not part
+They are created by `agenticloop init --adapter <host>` or by choosing host
+integration during `agenticloop setup`, and are not part
 of plain init. `.agenticloop/project.md` `task_backend` selects the active
 backend. `agenticloop.json` keeps adapter settings and backend behavior
 settings under `backends.*`; it does not select the active backend.
@@ -176,12 +178,14 @@ target-owned state as well.
 `.agenticloop/project.md` remains the single source of truth for setup state and
 project-map selections. Do not add a separate status file.
 
-After `agenticloop init`, confirm the project map in one of two ways:
+After scaffolding, confirm the project map in one of three ways:
 
-1. Ask the agent to run or route `setup-agenticloop`. That skill scans only the
+1. Run `npx agenticloop setup` (recommended). Guided setup detects the project,
+   shows the proposed profile, and writes only after explicit confirmation.
+2. Ask the agent to run or route `setup-agenticloop`. That skill scans only the
    bounded candidate document list once, gathers bounded backend evidence once,
    and records the confirmed result.
-2. Manually review `.agenticloop/project.md` and change the setup fields to
+3. Manually review `.agenticloop/project.md` and change the setup fields to
    `setup_status: confirmed`, a `YYYY-MM-DD` `setup_confirmed_at` value, and a
    `setup_confirmed_by` value after reviewing the backend choice.
 

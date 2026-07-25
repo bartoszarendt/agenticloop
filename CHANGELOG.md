@@ -1,5 +1,128 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Strict, declarative CLI parsing (`src/cli-registry.js`). One registry defines
+  every command, subcommand, option type, alias, repeatability, enum value,
+  positional, and help text, parsed with `node:util.parseArgs` plus an explicit
+  kebab-case to camelCase normalization layer. Unknown options, missing values,
+  invalid values, and invalid command shapes now fail before any handler runs,
+  with close-spelling suggestions for unknown commands and options.
+- Safe help and version everywhere. `--help`/`-h` work at the root, command,
+  and subcommand level; `agenticloop help <command> [subcommand]` is
+  equivalent to `<command> --help`; `--version` and `version` report the
+  package version; a bare `agenticloop` invocation shows a short first-use
+  screen instead of the full reference dump.
+- One injectable CLI execution and I/O contract (`src/cli-io.js`). Every
+  command runs in-process through `runCli()` with injected stdin/stdout/
+  stderr, cwd, env, prompt factory, AbortSignal, and TTY/CI/color
+  capabilities (including `NO_COLOR`), returning numeric exit codes without
+  touching global `process.exitCode` or raw console. The legacy subprocess
+  bridge (`runLegacySubprocess`, `IN_PROCESS_COMMANDS`, `dispatchLegacy`, and
+  the binary's `legacyInProcess` escape hatch) is removed.
+- Documented exit statuses: `0` success/safe no-op/help/version/cancellation
+  before apply, `1` operational/configuration/validation/apply failure, `2`
+  invalid CLI usage, `130` interruption propagated through one AbortSignal
+  (in-process cancellation is the cross-platform authority; real-process
+  SIGINT coverage is POSIX-gated).
+- Trustworthy `init --dry-run` and `setup --dry-run`. Both compute and render
+  the exact lifecycle plan with zero writes (no `.gitignore`, guidance,
+  config, manifest, state, directory, or generated-shim changes), succeed
+  against readable read-only targets, and exit `1` with blockers included
+  when the plan is blocked. `--dry-run --json` is non-interactive, requires an
+  existing confirmed profile or explicit values for every human-controlled
+  decision, and emits exactly one versioned JSON plan document on stdout
+  (`schemaVersion: 1`) with diagnostics on stderr.
+- Lifecycle plan/apply architecture. A generic filesystem mutation kernel
+  (`src/fs-mutation-kernel.js`) extracted from the generation transaction
+  owns target-bound path validation, atomic writes, snapshots, rollback with
+  explicit rollback-error reporting, and transaction-created empty-directory
+  cleanup. The versioned lifecycle plan schema (`src/lifecycle-plan.js`,
+  `LIFECYCLE_PLAN_SCHEMA_VERSION = 1`) validates plans before render or apply
+  and rejects unknown versions, fields, and action kinds. Pure, no-write init
+  and setup planners (`src/init-plan.js`, `src/setup-plan.js`) compose
+  normalized create/update/merge/remove/skip/blocked actions, preflight the
+  whole plan before the first write, and fail safely when target state
+  changes between plan and apply.
+- Repair-aware guided setup (Detect, Review, Choose, Plan, Apply, Verify).
+  Setup always composes the idempotent init plan, including when a current
+  layout manifest exists, so empty, current, legacy, partial, and
+  inverse-partial targets use one path; nothing is written before the final
+  apply confirmation; default output is a concise summary with per-path
+  detail behind `--verbose`; "Files only" and "Skip adapter setup" are merged
+  into one explicit "No host integration" choice; invalid choices reprompt
+  with the valid input explained; running setup twice produces zero
+  second-run mutations.
+- `docs/cli-reference.md`: the shipped CLI contract covering the command
+  hierarchy, setup versus init, interactive and non-interactive behavior,
+  dry-run and JSON plans, stdout/stderr rules, exit statuses, capability
+  behavior, and compatibility aliases/deprecations. It is included in the
+  published package and asserted in a real `npm pack` archive test.
+
+### Changed
+- **Compatibility: strict parsing.** Unknown options now exit `2` instead of
+  being warned about and ignored. Accidental Boolean-value forms such as
+  `--dry-run foo` or `--json foo` no longer assign the token as the flag
+  value; the token is now rejected as an unexpected operand. Command-local
+  `-h` now prints help instead of being treated as a positional.
+- **Compatibility: positional operands are enforced.** Commands without
+  declared positionals (for example `init unexpected`, `setup unexpected`,
+  `update unexpected`, `validate unexpected`, `doctor unexpected`,
+  `status unexpected`, `generate opencode unexpected`, or
+  `remove --yes .agenticloop`) now exit `2` before any handler or mutation
+  runs; required positionals must be present and excess operands are
+  rejected. `--` still terminates option parsing, but the resulting operands
+  must satisfy the declared shape.
+- **Transaction semantics are explicit: per-segment, fail-stop, and
+  rerun-repairable — not globally atomic.** Lifecycle apply preflights the
+  complete plan before the first mutation, including both source and
+  destination fingerprints for legacy renames. Built-in segments are atomic:
+  a failed segment restores its own pre-state, file bytes exactly, and removes
+  only transaction-created directories. Execution stops at the first failed
+  segment, and previously committed segments are kept. Partial application is
+  reported with the committed segments, the failed segment, primary errors,
+  and rollback errors; an executor that cannot confirm rollback is reported
+  explicitly instead of being described as rolled back. Rerunning
+  `agenticloop setup` or `agenticloop init` repairs a consistent partial state
+  (a clean rerun plans zero mutations).
+- Init's `AGENTS.md` activation-guidance mutation is now part of the
+  lifecycle plan instead of a post-init side effect: `init --dry-run --json`
+  includes the guidance action, dry-run and normal init see the same plan,
+  and `--no-agents-guidance` / `--agents-guidance off` exclude it.
+- Relative `--target` values resolve against the CLI working directory
+  through one shared `resolveCliTarget` helper across every public command;
+  no command resolves targets through ambient global state.
+- The filesystem mutation kernel accepts only target-relative mutation paths
+  resolved through one canonical validator that rejects absolute,
+  drive-qualified, backslash, NUL, dot-segment, traversal, empty-segment, and
+  symlink/junction-escape paths; snapshots are explicitly absent/file-bytes/
+  directory; directory snapshots are never written; direct directory-removal
+  mutations are rejected. Pruning enumerates owned files and uses explicit
+  non-recursive `rmdir-empty` mutations for stale empty directories; those
+  directories are recreated if a later mutation in the segment fails.
+  Primary errors are reported separately from genuine rollback failures.
+- **Compatibility: exit statuses.** Invalid command-line usage exits `2`
+  instead of `1` (operational failures remain `1`; scripts treating any
+  nonzero status as failure are unaffected).
+- `agenticloop setup` is the canonical first-use command across the README,
+  Getting Started, workflow examples, downstream adoption guidance, the
+  setup skill, setup-state/doctor next steps, adapter-discovery hints, and
+  completion hints. `agenticloop setup --non-interactive` is the preferred
+  non-interactive spelling; `setup --yes` remains its compatibility alias
+  (`--yes` keeps its different, confirmation-oriented meaning on commands
+  such as `remove`; convergence is deferred to a later compatibility phase).
+  Neither spelling confirms a missing human-controlled project profile.
+- `init --setup` is deprecated with a migration hint to
+  `agenticloop setup --adapter <host>`; its behavior is unchanged during the
+  deprecation window. Direct `init --adapter <host>` remains supported for
+  all five adapters as the advanced/manual path.
+- Init and setup default output is concise (step and mutation summaries, not
+  every path); individual paths require `--verbose`.
+- Removed the unused `src/adapter-output-plan.js`; adapter preflight and
+  transactions remain in `src/generation-transaction.js`, now layered over
+  the generic mutation kernel.
+
 ## 0.3.0 - 2026-07-24
 
 ### Added

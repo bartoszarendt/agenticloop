@@ -304,10 +304,10 @@ describe('detectSetupState', () => {
 // ---------------------------------------------------------------------------
 
 describe('nextStepsFromState', () => {
-  it('recommends init for empty target', () => {
+  it('recommends setup for empty target', () => {
     const state = { toolkitInstalled: false, projectMapExists: false, adapters: {} };
     const steps = nextStepsFromState(state);
-    assert.ok(steps[0].includes('init'));
+    assert.ok(steps[0].includes('setup'));
   });
 
   it('recommends setup for unconfirmed project map', () => {

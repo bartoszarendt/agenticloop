@@ -310,15 +310,14 @@ describe('task CLI', () => {
     assert.match(missingDecision.stdout, /missing decision 'D-2026-07-17-001'/);
   });
 
-  it('warns but continues when a task subcommand receives an unknown option', async () => {
+  it('fails with exit 2 when a task subcommand receives an unknown option', async () => {
     const target = makeTarget('unknown-option');
     assertOk(await run(['task', 'new', 'Warn on unknown option', '--target', target]));
 
     const result = await run(['task', 'list', '--target', target, '--bogus']);
 
-    assertOk(result);
-    assert.match(result.stderr, /WARN: task list ignoring unknown option\(s\): --bogus/);
-    assert.match(result.stdout, /T-001/);
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /unknown option '--bogus'/);
   });
 
   // --- Lifecycle transition enforcement ---

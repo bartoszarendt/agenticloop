@@ -445,15 +445,15 @@ describe('github-ready CLI', () => {
     assert.match(result.stdout, /github-review-audit/);
   });
 
-  it('exits 1 with a clear message when --pr is missing', () => {
+  it('exits 2 with a clear message when --pr is missing', () => {
     const result = runCli(['github-ready']);
-    assert.equal(result.status, 1);
+    assert.equal(result.status, 2);
     assert.match(result.stderr, /--pr/);
   });
 
   it('emits an error JSON envelope when --pr is missing and --json is set', () => {
     const result = runCli(['github-ready', '--json']);
-    assert.equal(result.status, 1);
+    assert.equal(result.status, 2);
     const parsed = JSON.parse(result.stdout.trim());
     assert.equal(parsed.ok, false);
     assert.equal(parsed.readyForMerge, false);

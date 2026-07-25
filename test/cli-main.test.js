@@ -1,6 +1,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -36,7 +37,10 @@ describe('runCli programmatic contract', () => {
     assert.equal(result.stderr, '');
   });
 
-  it('passes the injected environment to an isolated legacy command', async () => {
+  it('runs every command in-process without a subprocess bridge', async () => {
+    // A NODE_OPTIONS --require probe would execute in a spawned child. Because
+    // runCli is fully in-process, the probe must NOT run and the marker file
+    // must stay absent while the command still honors the injected env.
     const target = mkdtempSync(join(tmpBase, 'env-'));
     const marker = join(target, 'environment.txt');
     const probe = join(target, 'environment-probe.cjs');
@@ -57,10 +61,10 @@ describe('runCli programmatic contract', () => {
     });
 
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(readFileSync(marker, 'utf-8'), 'injected');
+    assert.equal(existsSync(marker), false, 'no subprocess bridge may remain');
   });
 
-  it('keeps concurrent legacy exit codes independent and preserves process state', async () => {
+  it('keeps concurrent in-process exit codes independent and preserves process state', async () => {
     const invalidTarget = mkdtempSync(join(tmpBase, 'invalid-'));
     const validTarget = mkdtempSync(join(tmpBase, 'valid-'));
     const previousExitCode = process.exitCode;
@@ -74,7 +78,7 @@ describe('runCli programmatic contract', () => {
         runCliInProcess(['init', '--target', validTarget]),
       ]);
 
-      assert.equal(invalid.status, 1, invalid.stdout + invalid.stderr);
+      assert.equal(invalid.status, 2, invalid.stdout + invalid.stderr);
       assert.equal(valid.status, 0, valid.stdout + valid.stderr);
       assert.equal(process.exitCode, 23);
     } finally {

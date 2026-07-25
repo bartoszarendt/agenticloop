@@ -9,18 +9,22 @@ delivery loop without replacing that project's own contract docs.
 ### 1. Scaffold or refresh the overlay
 
 ```text
-npx agenticloop init
+npx agenticloop setup
 npx agenticloop update
 ```
 
-`init` creates `agenticloop/AGENTIC_LOOP.md`, `.agenticloop/project.md`,
+`setup` is the recommended first-run path: it scaffolds or repairs the overlay
+and confirms the project profile in one guided pass. (The deterministic
+`npx agenticloop init` scaffold remains available for advanced, non-guided
+use.) The overlay includes `agenticloop/AGENTIC_LOOP.md`, `.agenticloop/project.md`,
 `.agenticloop/decisions/`, `.agenticloop/improvements/`, `.agenticloop/tasks/`,
 `agenticloop/agents/`, `agenticloop/backends/`, `agenticloop/skills/`, and `.agenticloop/tmp/`. It does not overwrite an
 existing `AGENTS.md`, `IMPLEMENTATION_PLAN.md`, or architecture doc. Decision
 records under `.agenticloop/decisions/` stay separate from task records and are
 used only for durable project decisions. `.agenticloop/improvements/` is created
-on first proposal, not by init. To also generate a host adapter
-config, add `--adapter opencode` (or `codex`, `claude-code`).
+on first proposal, not by setup or init. To also generate a host adapter
+config, choose host integration during setup (or use the direct
+`npx agenticloop init --adapter opencode`, `codex`, or `claude-code` path).
 `update` refreshes Agentic Loop-owned assets and regenerates existing adapter
 artifacts without replacing target-owned config.
 

@@ -98,16 +98,16 @@ describe('audit CLI', () => {
 
   it('requires a canonical work-unit, covered tasks, and an artifact', async () => {
     const target = makeTarget('create-guards');
-    assert.equal((await run(['new', '--work-unit', 'phase-4', '--covered-tasks', 'T-041', '--artifact', 'commit:a'], target)).status, 1);
-    assert.equal((await run(['new', '--work-unit', 'phase:4', '--artifact', 'commit:a'], target)).status, 1);
-    assert.equal((await run(['new', '--work-unit', 'phase:4', '--covered-tasks', 'T-041'], target)).status, 1);
+    assert.equal((await run(['new', '--work-unit', 'phase-4', '--covered-tasks', 'T-041', '--artifact', 'commit:a'], target)).status, 2);
+    assert.equal((await run(['new', '--work-unit', 'phase:4', '--artifact', 'commit:a'], target)).status, 2);
+    assert.equal((await run(['new', '--work-unit', 'phase:4', '--covered-tasks', 'T-041'], target)).status, 2);
     const incompletePacket = await run([
       'new',
       '--work-unit', 'phase:4',
       '--covered-tasks', 'T-041',
       '--artifact', 'commit:a',
     ], target);
-    assert.equal(incompletePacket.status, 1);
+    assert.equal(incompletePacket.status, 2);
     assert.match(incompletePacket.stderr, /requires --goal/);
   });
 
@@ -201,7 +201,7 @@ describe('audit CLI', () => {
     const result = await run([
       'baseline', 'AUD-001', '--artifact', 'commit:def456',
     ], target);
-    assert.equal(result.status, 1);
+    assert.equal(result.status, 2);
     assert.match(result.stderr, /requires --evidence/);
   });
 

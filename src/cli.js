@@ -41,10 +41,21 @@
  *   agenticloop generate all          [--target <dir>] [--output-dir <dir>]
  */
 
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
-import { parseArgs, warnUnknownOptions } from './cli-args.js';
-import { createIo } from './cli-io.js';
+import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.js';
+import {
+  COMMAND_REGISTRY,
+  findHelpRequest,
+  packageVersion,
+  parseCommandArgs,
+  renderCommandHelp,
+  renderFirstUse,
+  renderFullHelp,
+  resolveCommandName,
+  suggestName,
+} from './cli-registry.js';
+import { lifecyclePlanBlockers } from './lifecycle-plan.js';
 import { init } from './init.js';
 import { bootstrapLabels } from './bootstrap-labels.js';
 import {
@@ -60,7 +71,6 @@ import {
 import { validateSharedAgenticLoopPluginCompatibility } from './adapter-plugin-compatibility.js';
 import { generateAdapterArtifacts } from './adapter-generation.js';
 import { deepMerge, loadAgenticLoopConfig } from './json.js';
-import { DEFAULT_AUDIT_BUDGET } from './layout.js';
 import { loadProjectMap } from './project-map.js';
 import { resolveTaskBackend } from './task-backend.js';
 import { cmdTask } from './task-cli.js';
@@ -70,7 +80,6 @@ import {
   parseModelMutations,
   detectHost,
   validateHost,
-  createPrompts,
   promptModelSettings,
   promptModelSettingsInteractive,
 } from './configure-models.js';
@@ -84,7 +93,6 @@ import {
   appendEventLog,
   auditTaskEventLog,
   buildEvent,
-  DEFAULT_LOG_DIR,
   reportEventLogs,
   reportTaskEventLog,
   STRICT_AUDIT_EVENT_TYPES,
@@ -115,10 +123,6 @@ import {
   removeAgenticLoopWorktree,
   resolveAgenticLoopStateConflicts,
 } from './worktree.js';
-
-const DEFAULT_LOG_DIR_DISPLAY = DEFAULT_LOG_DIR.replaceAll('\\', '/');
-const TASK_EVENT_LOG_PATH_DISPLAY = `${DEFAULT_LOG_DIR_DISPLAY}/<task-id>.jsonl`;
-const DEFAULT_EVENT_LOG_GLOB_DISPLAY = `${DEFAULT_LOG_DIR_DISPLAY}/*.jsonl`;
 
 function parseRequiredEventTypesOption(value) {
   if (value === undefined) {
@@ -307,279 +311,6 @@ function inferEventHost(target, explicitHost) {
   return undefined;
 }
 
-function usage(io) {
-  const write = io ? io.out : console.log;
-  write(`
-agenticloop <command> [options]
-
-Commands:
-  init                  Scaffold Agentic Loop overlay in a target directory.
-  setup                 Guided onboarding: project setup, adapter selection, model config.
-  update                Refresh Agentic Loop-owned assets and existing adapter output.
-  upgrade               Compatibility alias for update.
-  remove                Remove Agentic Loop assets from a target directory.
-  guidance              Manage the repository-rules activation-guidance block (apply, check, remove).
-  validate              Validate skills, config, links, and host setup.
-  github-preflight      Pre-review gate: verify a GitHub PR body carries final-state
-                        evidence for every required check, tied to the current head.
-  github-review-audit   Verify artifact-bound GitHub review provenance for a PR.
-  github-ready          Read-only pre-merge gate: run the evidence preflight and the
-                        review audit together and report one merge-readiness verdict.
-  doctor                Show setup checklist, adapter state, and next commands.
-  task                  Manage files-backed task records (list, lint, new, status).
-  audit                 Manage work-unit audit certificates (new, baseline, report, status, gate, lint, override, resolve).
-  worktree              Manage guarded Agentic Loop Git worktrees (add, guard, list, remove, cleanup, resolve-state, prune).
-  event-logging         Write events (bare event type), validate, audit, or report optional durable workflow event logs.
-  event                 Compatibility alias for event-logging.
-  configure models      Set per-host role model settings in agenticloop.json.
-  status                Show configured adapters, generated artifacts, and next steps.
-  bootstrap-labels      Create required GitHub labels in a target repo.
-  generate opencode     Generate Agentic Loop OpenCode agents and command.
-  generate codex        Generate Codex adapter artifacts.
-  generate claude-code  Generate Claude Code adapter artifacts.
-  generate copilot      Generate GitHub Copilot adapter artifacts.
-  generate cursor       Generate Cursor adapter artifacts.
-  generate all          Generate every implemented adapter artifact.
-
-Options (init):
-  --target <dir>        Target directory (default: current directory).
-  --adapter <host>      Scaffold and generate output for one host: opencode, codex, claude-code, copilot, cursor, all.
-  --opencode            Compatibility alias for --adapter opencode.
-  --setup               Prompt for model settings after scaffolding (requires one concrete --adapter).
-  --no-agents-guidance  Skip installing the repository-rules activation-guidance block.
-
-Options (setup):
-  --target <dir>        Target directory (default: current directory).
-  --adapter <host>      Preselect adapter: opencode, codex, claude-code, copilot, cursor, all.
-  --yes                 Non-interactive mode: skip interactive prompts (requires --adapter).
-  --event-logging <mode>
-                        Event logging mode: enabled or disabled. Interactive setup
-                        prompts when omitted; non-interactive setup preserves the
-                        existing value (a missing setting defaults to disabled).
-
-Options (github-preflight):
-  --pr <number>         Pull request number to check. Required.
-  --issue <number>      Linked task issue number (default: inferred from PR closing references).
-  --repo <owner/name>   Target repository (default: gh-resolved current repo).
-  --json                Emit machine-readable JSON instead of human-readable output.
-
-Options (github-review-audit):
-  --pr <number>         Pull request number to audit. Required.
-  --issue <number>      Linked task issue number (default: inferred from PR closing references).
-  --repo <owner/name>   Target repository (default: gh-resolved current repo).
-  --expect-status <accepted|needs_revision>
-                        Expected review status (default: accepted). For
-                        accepted, an independent_human review must be an
-                        APPROVED current-head native GitHub review. For
-                        needs_revision, it must be a CHANGES_REQUESTED
-                        current-head native GitHub review.
-  --json                Emit machine-readable JSON instead of human-readable output.
-
-Options (github-ready):
-  --pr <number>         Pull request number to check. Required.
-  --issue <number>      Linked task issue number (default: inferred from PR closing references).
-  --repo <owner/name>   Target repository (default: gh-resolved current repo).
-  --json                Emit machine-readable JSON instead of human-readable output.
-                        Read-only: runs github-preflight and github-review-audit and
-                        requires both (and their PR head/linked issue) to agree. It never
-                        merges, comments, or edits GitHub state.
-
-Options (doctor):
-  --target <dir>        Directory to inspect (default: current directory).
-
-Options (worktree add):
-  --target <dir>        Git repository root or working tree (default: current directory).
-  --from <ref>          Start point for a new branch (default: HEAD).
-
-Options (worktree guard):
-  --target <dir>        Git repository root or working tree (default: current directory).
-  --fix                 Write missing non-interactive Git guard config.
-  --all                 Check or fix every Agentic Loop worktree under .agenticloop/worktrees/.
-
-Options (worktree list):
-  --target <dir>        Git repository root or working tree (default: current directory).
-  --json                Emit machine-readable JSON instead of human-readable output.
-
-Options (worktree remove):
-  --target <dir>        Git repository root or working tree (default: current directory).
-  --dry-run             Print what would happen without making changes.
-  --yes                 Remove the worktree and preserve lane-local state.
-  --force               Allow removing a dirty worktree (single worktree only).
-  --json                Emit machine-readable JSON instead of human-readable output.
-
-Options (worktree cleanup):
-  --target <dir>        Git repository root or working tree (default: current directory).
-  --dry-run             Print what would happen without making changes.
-  --yes                 Remove standard worktrees classified as safe to remove.
-  --json                Emit machine-readable JSON instead of human-readable output.
-
-Options (worktree resolve-state):
-  --target <dir>        Git repository root or working tree (default: current directory).
-  --dry-run             Print what would happen without making changes (default).
-  --yes                 Resolve conflicts and update root state files.
-  --strategy <strategy> Strategy for resolving conflicts: prefer-root, prefer-worktree, union-jsonl.
-  --json                Emit machine-readable JSON instead of human-readable output.
-
-Options (worktree prune):
-  --target <dir>        Git repository root or working tree (default: current directory).
-  --dry-run             Print prunable registrations without removing them.
-  --yes                 Run git worktree prune to remove stale registrations.
-  --json                Emit machine-readable JSON instead of human-readable output.
-
-Options (update):
-  --target <dir>        Target directory (default: current directory).
-   --adapter <host>      Generate or refresh one adapter. 'all' means every implemented adapter.
-                         Without this, existing generated artifacts are refreshed.
-                         Existing adapter model settings are backfilled into
-                         agenticloop.json when missing before regeneration.
-   --force-generated     Refresh only a modified artifact already proven owned by Agentic Loop.
-
-Options (remove):
-  --target <dir>        Target directory (default: current directory).
-  --dry-run             Print files/directories that would be removed.
-  --yes                 Actually remove files/directories.
-  --include-state       Also remove target-owned .agenticloop/ state.
-
-Options (guidance apply | guidance check | guidance remove):
-  --target <dir>        Target directory (default: current directory).
-  --force               apply: refresh a modified owned block or adopt an unowned
-                        marker block. remove: remove a modified owned block.
-                        Never adopts or overwrites an unowned block without this flag.
-
-Options (validate):
-  --target <dir>        Directory containing agenticloop.json (default: current).
-  --adapter <host>      Force validation of a specific adapter (opencode, codex, claude-code, copilot, cursor).
-                        May be passed multiple times.
-
-Options (event-logging <event_type>):
-  --target <dir>        Target directory (default: current directory).
-  --output <file>       Event log path override (default: <target>/${TASK_EVENT_LOG_PATH_DISPLAY};
-                         --task <id> is required unless --output <file> is supplied).
-  --task <id>           Task id associated with the event. Required for default output.
-  --role <role>         Role: orchestrator, maintainer, engineer, auditor, human, unknown.
-  --summary <text>      Required short event summary.
-  --outcome <value>     Outcome: success, failure, blocked, needs_context, accepted, needs_revision, unknown.
-  --backend <name>      Backend: files, github, unknown.
-  --host <name>         Host label (default: unknown; inferred when exactly one generated adapter is detected). Inferred host is a heuristic, not proof of the actual runtime host; use --host when accuracy matters.
-  --trace-id <uuid>     Trace id used to correlate related events.
-  --parent-event-id <uuid>  Parent event id when this event extends an earlier gate.
-  --ref <value>         Reference string; may be passed multiple times.
-  --data-json <json>    Small JSON object with structured metadata.
-
-Options (event-logging validate):
-  --target <dir>        Target directory (default: current directory).
-  --output <file>       Event log path override (default: validate every <target>/${DEFAULT_EVENT_LOG_GLOB_DISPLAY}).
-
-Options (event-logging audit):
-  --target <dir>        Target directory (default: current directory).
-  --task <id>           Task id to audit. Required.
-  --require <a,b,c>     Override the strict-audit required event types.
-
-Options (event-logging report):
-  --target <dir>        Target directory (default: current directory).
-  --task <id>           Optional task id for a per-task report from <target>/${TASK_EVENT_LOG_PATH_DISPLAY}.
-                        Omit for a read-only aggregate report over <target>/${DEFAULT_EVENT_LOG_GLOB_DISPLAY}.
-  --features            Print a feature-adoption telemetry report (minimalism, effort
-                        budgets, context-overflow risk, and derived review-round churn)
-                        over the aggregate logs instead of the full aggregate report.
-
-Options (task list):
-  --target <dir>        Target directory (default: current directory).
-  --status <status>     Filter by task status.
-  --json                Emit machine-readable JSON instead of a table.
-
-Options (task lint):
-  --target <dir>        Target directory (default: current directory).
-  --json                Emit machine-readable JSON.
-
-Options (task new):
-  --target <dir>        Target directory (default: current directory).
-  --id <id>             Explicit task id. Omit to allocate the next default T-### id.
-
-Options (task status):
-  --target <dir>        Target directory (default: current directory).
-  --note <text>         Append a dated line under ## Comments.
-  --block-category <c>  Required when setting status to blocked.
-  --json                Emit machine-readable JSON.
-
-Options (audit new):
-  --target <dir>        Target directory (default: current directory).
-  --work-unit <id>      Canonical work-unit identity (phase:4, milestone:M2, epic:x, custom:x, work-unit:x). Required.
-  --covered-tasks <ids> Comma-separated exact covered task ids. Required.
-  --artifact <ref>      Exact frozen candidate artifact (e.g. commit:<sha>). Required.
-  --budget <n>          Audit budget (default: ${DEFAULT_AUDIT_BUDGET}; separate from attempt/review budgets).
-  --goal <text>         Concrete work-unit goal statement. Required.
-  --completion-oracle <text>  Observable completion oracle. Required.
-  --evidence <text>     Integrated evidence bound to the frozen candidate. Required.
-  --json                Emit machine-readable JSON.
-
-Options (audit baseline):
-  --target <dir>        Target directory (default: current directory).
-  --artifact <ref>      New exact candidate artifact after remediation was integrated.
-  --covered-tasks <ids> New exact covered task ids. Stale certification is cleared; history is preserved.
-  --evidence <text>     Refreshed integrated evidence bound to the candidate. Required.
-  --json                Emit machine-readable JSON.
-
-Options (audit report):
-  --target <dir>        Target directory (default: current directory).
-  --verdict <v>         certified, certified_with_accepted_limitations, needs_remediation, needs_human_decision.
-  --invocation-mode <m> host_subagent or explicit_agent_invocation. A same-session fallback is rejected.
-  --invocation-ref <id> Unique reference for this Auditor invocation. Reuse is rejected.
-  --artifact <ref>      Audited artifact; must equal the frozen candidate.
-  --assessment <text>   One consolidated assessment across all six perspectives.
-  --evidence <text>     Bounded evidence actually checked.
-  --finding-json <json> JSON array of findings (id, severity, blocking, claim, evidenceRefs, consequence, requiredOutcome, verificationRequired).
-  --json                Emit machine-readable JSON.
-
-Options (audit status | audit gate | audit lint):
-  --target <dir>        Target directory (default: current directory).
-  --json                Emit machine-readable JSON.
-
-\`audit status\` is diagnostic. \`audit gate\` is the fail-closed closeout check and,
-for the files backend, also verifies every covered task is accepted or closed.
-
-Options (audit override):
-  --target <dir>        Target directory (default: current directory).
-  --budget <n>          New audit budget; must increase the current value.
-  --authority <ref>     Recorded authority as "human: <identity>". Required.
-  --note <text>         Optional note appended under ## Comments.
-  --json                Emit machine-readable JSON.
-
-Options (audit resolve):
-  --target <dir>        Target directory (default: current directory).
-  --authority <ref>     Recorded authority as "human: <identity>". Required.
-  --note <text>         Human decision and direction for the next audit. Required.
-  --json                Emit machine-readable JSON.
-
-Options (configure models):
-  --target <dir>        Directory containing agenticloop.json (default: current).
-  --adapter <host>      Host adapter to configure (opencode, codex, claude-code, copilot, cursor).
-  --role <role>         Logical role to configure (orchestrator, maintainer, engineer, auditor).
-  --model <id>          Host-specific model identifier or alias.
-  --reasoning-effort <value>  Reasoning effort for hosts that support it (opencode, codex).
-  --profile recommended   Fill missing fields from the Codex recommended profile without replacing explicit settings.
-
-Options (status):
-  --target <dir>        Directory containing agenticloop.json (default: current).
-
-Options (bootstrap-labels):
-  --repo <owner/repo>   Target GitHub repository.
-  --dry-run             Print gh commands without running them.
-  --group <id>          Also create a grouping label.
-  --task-id <id>        Also create a task:<id> label.
-  --force               Run even when the active task backend is not github.
-
-Options (generate opencode):
-  --target <dir>        Directory containing agenticloop.json (default: current).
-   --output-dir <dir>    Output directory (default: <target>).
-   --force-generated     Refresh only a modified artifact already proven owned by Agentic Loop.
-
-Options (generate codex | generate claude-code | generate copilot | generate cursor | generate all):
-  --target <dir>        Directory containing agenticloop.json (default: current).
-   --output-dir <dir>    Output directory (default: <target>).
-   --force-generated     Refresh only a modified artifact already proven owned by Agentic Loop.
-  `.trim());
-}
 
 const VALID_ADAPTER_TARGETS = new Set(['opencode', 'codex', 'claude-code', 'copilot', 'cursor', 'all']);
 
@@ -632,17 +363,17 @@ function validateAdapterListGenerationPreflight(adapters, alConfig) {
   return [];
 }
 
-function printPreservationResult(preservation) {
-  for (const w of preservation.warnings) console.warn(`  WARN: ${w}`);
-  for (const e of preservation.errors) console.error(`  ERROR: ${e}`);
-  for (const u of preservation.updated) console.log(`  preserved: ${u}`);
+function printPreservationResult(preservation, io) {
+  for (const w of preservation.warnings) io.warn(`  WARN: ${w}`);
+  for (const e of preservation.errors) io.err(`  ERROR: ${e}`);
+  for (const u of preservation.updated) io.out(`  preserved: ${u}`);
 }
 
 function shouldPreserveExistingModels(preserveExistingModels, outputDir, target) {
   return preserveExistingModels && resolve(outputDir) === resolve(target);
 }
 
-async function generateAdapterTarget(sub, { opts, target, alConfig, preserveExistingModels = true }) {
+async function generateAdapterTarget(sub, { opts, target, alConfig, preserveExistingModels = true }, io) {
   const forceGenerated = Boolean(opts.forceGenerated);
   const outputDir = resolveOutputDir(opts, target);
 
@@ -654,9 +385,8 @@ async function generateAdapterTarget(sub, { opts, target, alConfig, preserveExis
       : (Array.isArray(sub) ? sub : [sub]);
     preservation = preserveExistingAdapterModelSettings(target, adapterList, { write: false });
     if (preservation.errors.length > 0) {
-      for (const e of preservation.errors) console.error(`  ERROR: ${e}`);
-      process.exitCode = 1;
-      return;
+      for (const e of preservation.errors) io.err(`  ERROR: ${e}`);
+      return 1;
     }
     if (preservation.updated.length > 0) effectiveConfig = deepMerge(effectiveConfig, preservation.config);
   }
@@ -671,122 +401,102 @@ async function generateAdapterTarget(sub, { opts, target, alConfig, preserveExis
   });
 
   if (!result.ok) {
-    for (const error of result.errors) console.error(`  ERROR: ${error}`);
-    process.exitCode = 1;
-    return;
+    for (const error of result.errors) io.err(`  ERROR: ${error}`);
+    return 1;
   }
 
   // Print preservation messages only after successful commit (Defect 14).
-  if (preservation) printPreservationResult(preservation);
+  if (preservation) printPreservationResult(preservation, io);
   // Print stale warnings from the transaction.
-  for (const warning of result.errors) console.warn(`  WARN: ${warning}`);
+  for (const warning of result.errors) io.warn(`  WARN: ${warning}`);
 
-  console.log(`Generated ${result.files.length} artifact(s) under ${result.outputDir}:`);
-  for (const file of result.files) console.log(`  ${file}`);
+  io.out(`Generated ${result.files.length} artifact(s) under ${result.outputDir}:`);
+  for (const file of result.files) io.out(`  ${file}`);
+  return 0;
 }
 
-async function cmdInit(args) {
-  const { opts } = parseArgs(args);
-  warnUnknownOptions(opts, ['target', 'adapter', 'setup', 'opencode', 'updateAssets', 'agentsGuidance', 'noAgentsGuidance'], 'init');
-  const target = opts.target ? resolve(opts.target) : process.cwd();
+async function cmdInit(args, io) {
+  const { opts } = parseCommandArgs('init', COMMAND_REGISTRY.init, args);
+  const target = resolveCliTarget(io, opts.target);
   const adapter = Array.isArray(opts.adapter) ? opts.adapter[0] : opts.adapter;
   const setup = Boolean(opts.setup);
-  const guidanceEnabled = !opts.noAgentsGuidance && opts.agentsGuidance !== false;
-  const installationExisted = existsSync(join(target, 'agenticloop')) ||
-    existsSync(join(target, '.agenticloop', 'project.md')) ||
-    existsSync(join(target, '.agenticloop', 'generated-artifacts.json'));
+  const guidanceEnabled = !opts.noAgentsGuidance && opts.agentsGuidance !== 'off' && opts.agentsGuidance !== false;
 
   if (opts.updateAssets) {
-    console.error("init --update-assets has been removed. Use 'agenticloop update' instead.");
-    process.exitCode = 1;
-    return;
+    io.err("init --update-assets has been removed. Use 'agenticloop update' instead.");
+    return 1;
   }
 
   if (setup) {
-    console.log('  Hint: agenticloop setup provides a guided onboarding experience.');
-    console.log(`  Try: npx agenticloop setup${adapter ? ` --adapter ${adapter}` : ''}`);
-    console.log();
+    io.warn('  DEPRECATED: init --setup is deprecated and will be removed in a later release.');
+    io.out('  Hint: agenticloop setup provides a guided onboarding experience.');
+    io.out(`  Try: npx agenticloop setup${adapter ? ` --adapter ${adapter}` : ''}`);
+    io.out();
   }
 
   if (setup && !adapter) {
-    console.error('--setup requires --adapter <host>');
-    usage();
-    process.exitCode = 1;
-    return;
+    io.err('--setup requires --adapter <host>');
+    io.err('Run "agenticloop help init" for usage.');
+    return EXIT_USAGE;
   }
   if (setup && adapter === 'all') {
-    console.error('--setup requires one concrete adapter: opencode, codex, claude-code, copilot, or cursor');
-    process.exitCode = 1;
-    return;
+    io.err('--setup requires one concrete adapter: opencode, codex, claude-code, copilot, or cursor');
+    return EXIT_USAGE;
   }
 
-  const { errors: initErrors } = await init({
+  const { errors: initErrors, plan: initPlanResult } = await init({
     target,
     opencode: Boolean(opts.opencode),
     adapter,
+    io,
+    dryRun: Boolean(opts.dryRun),
+    json: Boolean(opts.json),
+    verbose: Boolean(opts.verbose),
+    agentsGuidance: guidanceEnabled,
   });
+
+  if (opts.dryRun || opts.json) {
+    return lifecyclePlanBlockers(initPlanResult ?? { blockers: ['init plan unavailable'], adapterGroups: [] }).length > 0 ? 1 : 0;
+  }
 
   const errors = [...initErrors];
 
-  // New installation: install the repository-rules activation-guidance block by
-  // default. --no-agents-guidance opts out. The block is informational and does
-  // not activate Agentic Loop.
-  if (errors.length === 0 && guidanceEnabled) {
-    const configResult = loadOptionalAlConfig(target);
-    if (configResult.error) {
-      console.error(`  ERROR: ${configResult.error}`);
-      errors.push(configResult.error);
-    } else {
-      const priorGuidance = checkGuidance(target, { alConfig: configResult.config });
-      // Repeat init follows the same no-silent-enrollment rule as update/setup.
-      if (!installationExisted || priorGuidance.owned === true) {
-        const guidance = applyGuidance(target, { alConfig: configResult.config, refreshOnly: installationExisted });
-        if (guidance.changed) {
-          console.log(`  guidance: ${guidance.action} in ${guidance.relPath}`);
-        } else if (guidance.status === 'current') {
-          console.log(`  guidance: already current in ${guidance.relPath}`);
-        }
-        for (const warning of guidance.warnings) console.warn(`  WARN: ${warning}`);
-        if (!guidance.ok) errors.push(guidance.message);
-      }
-    }
-  }
-
   if (setup && errors.length === 0 && adapter && adapter !== 'all') {
-    const alConfig = loadAlConfigOrExit(target);
+    const alConfig = loadAlConfigOrNull(target, '', io);
     if (alConfig) {
       const roles = Object.keys(alConfig.roles ?? {});
-      const prompts = createPrompts();
+      const prompts = io.createPrompts();
       try {
         const mutations = await promptModelSettings(roles, adapter, prompts);
         const cfgResult = configureModels(target, { adapter, mutations });
-        for (const w of cfgResult.warnings) console.warn(`  WARN: ${w}`);
-        for (const e of cfgResult.errors) console.error(`  ERROR: ${e}`);
-        for (const u of cfgResult.updated) console.log(`  updated: ${u}`);
+        for (const w of cfgResult.warnings) io.warn(`  WARN: ${w}`);
+        for (const e of cfgResult.errors) io.err(`  ERROR: ${e}`);
+        for (const u of cfgResult.updated) io.out(`  updated: ${u}`);
         if (cfgResult.errors.length === 0 && cfgResult.updated.length > 0) {
-          await cmdGenerate([adapter, '--target', target]);
+          errors.push(...await cmdGenerate([adapter, '--target', target], io) === 0 ? [] : ['adapter generation failed']);
         } else if (cfgResult.updated.length === 0) {
-          console.log('  No model settings provided; skipping adapter generation.');
+          io.out('  No model settings provided; skipping adapter generation.');
         }
         errors.push(...cfgResult.errors);
       } finally {
         prompts.close();
       }
+    } else {
+      errors.push('agenticloop.json not found after init');
     }
   }
 
-  process.exitCode = errors.length > 0 ? 1 : 0;
+  return errors.length > 0 ? 1 : 0;
 }
 
-async function cmdUpdate(args) {
-  const { opts } = parseArgs(args);
-  warnUnknownOptions(opts, ['target', 'adapter', 'forceGenerated'], 'update');
-  const target = opts.target ? resolve(opts.target) : process.cwd();
+
+async function cmdUpdate(args, io) {
+  const { opts } = parseCommandArgs('update', COMMAND_REGISTRY.update, args);
+  const target = resolveCliTarget(io, opts.target);
   const configResult = loadOptionalAlConfig(target);
   if (configResult.error) {
-    console.error(`  ERROR: ${configResult.error}`);
-    process.exitCode = 1;
-    return;
+    io.err(`  ERROR: ${configResult.error}`);
+    return 1;
   }
   const guidanceConfig = configResult.config;
   // Determine whether this installation already owns a guidance block BEFORE any
@@ -795,10 +505,9 @@ async function cmdUpdate(args) {
   const guidanceOwnedBeforeUpdate = checkGuidance(target, { alConfig: guidanceConfig }).owned === true;
   const { adapters: requestedAdapters, errors: adapterErrors } = normalizeAdapterTargets(opts.adapter);
 
-  for (const e of adapterErrors) console.error(e);
+  for (const e of adapterErrors) io.err(e);
   if (adapterErrors.length > 0) {
-    process.exitCode = 1;
-    return;
+    return EXIT_USAGE;
   }
 
   // Detect adapters before refreshing toolkit assets (Defect 13).
@@ -807,45 +516,48 @@ async function cmdUpdate(args) {
     : detectGeneratedAdapterTargets(target);
 
   if (adapters.length === 0) {
-    // Still run init to refresh assets, but no adapter output needed.
-    const { errors: initErrors } = await init({ target, refreshAssets: true });
-    if (initErrors.length > 0) { process.exitCode = 1; return; }
-    refreshOwnedGuidance(target, guidanceOwnedBeforeUpdate, guidanceConfig);
-    console.log('  No existing generated adapter artifacts found.');
-    console.log("  Use 'agenticloop update --adapter <host>' to generate a specific adapter.");
-    process.exitCode = 0;
-    return;
+    // Still run init to refresh assets, but no adapter output needed. Guidance
+    // stays with the warning-only refreshOwnedGuidance path below, so the init
+    // plan excludes it (no double apply, no fatal refresh on blocked refresh).
+    const { errors: initErrors } = await init({ target, refreshAssets: true, io, agentsGuidance: false });
+    if (initErrors.length > 0) { return 1; }
+    refreshOwnedGuidance(target, guidanceOwnedBeforeUpdate, guidanceConfig, io);
+    io.out('  No existing generated adapter artifacts found.');
+    io.out("  Use 'agenticloop update --adapter <host>' to generate a specific adapter.");
+    return 0;
   }
 
   if (adapters.includes('all')) {
-    console.log('  --adapter all selected: generating every implemented adapter artifact.');
+    io.out('  --adapter all selected: generating every implemented adapter artifact.');
   }
 
   // Preserve settings recoverable from existing generated artifacts before
   // any refresh or regeneration touches them.
   const preservation = preserveExistingAdapterModelSettings(target, adapters);
-  for (const w of preservation.warnings) console.warn(`  WARN: ${w}`);
+  for (const w of preservation.warnings) io.warn(`  WARN: ${w}`);
   if (preservation.errors.length > 0) {
-    for (const e of preservation.errors) console.error(`  ERROR: ${e}`);
-    process.exitCode = 1;
-    return;
+    for (const e of preservation.errors) io.err(`  ERROR: ${e}`);
+    return 1;
   }
-  for (const u of preservation.updated) console.log(`  preserved: ${u}`);
+  for (const u of preservation.updated) io.out(`  preserved: ${u}`);
 
   // Refresh canonical toolkit assets, then reload the effective configuration
   // so preflight and generation never use a pre-refresh config object.
+  // Guidance is excluded from the init plan: update refreshes an owned block
+  // through refreshOwnedGuidance with warning-only semantics.
   const { errors: initErrors } = await init({
     target,
     refreshAssets: true,
+    io,
+    agentsGuidance: false,
   });
 
   if (initErrors.length > 0) {
-    process.exitCode = 1;
-    return;
+    return 1;
   }
 
-  let alConfig = loadAlConfigOrExit(target);
-  if (!alConfig) return;
+  let alConfig = loadAlConfigOrNull(target, '', io);
+  if (!alConfig) return 1;
 
   // Reconcile the selected adapter configuration against the refreshed
   // canonical roles (for example, adding a missing auditor role slot) without
@@ -855,84 +567,83 @@ async function cmdUpdate(args) {
     : adapters;
   const reconciliation = reconcileTargetAdapterConfig(target, reconcileHosts);
   if (reconciliation.error) {
-    console.error(`  ERROR: ${reconciliation.error}`);
-    process.exitCode = 1;
-    return;
+    io.err(`  ERROR: ${reconciliation.error}`);
+    return 1;
   }
-  for (const p of reconciliation.added) console.log(`  reconciled: ${p}`);
+  for (const p of reconciliation.added) io.out(`  reconciled: ${p}`);
 
   if (reconciliation.wrote) {
-    alConfig = loadAlConfigOrExit(target);
-    if (!alConfig) return;
+    alConfig = loadAlConfigOrNull(target, '', io);
+    if (!alConfig) return 1;
   }
 
   // Run adapter preflight against the refreshed, reconciled configuration.
   const preflightErrors = validateAdapterListGenerationPreflight(adapters, alConfig);
   if (preflightErrors.length > 0) {
-    for (const error of preflightErrors) console.error(error);
-    process.exitCode = 1;
-    return;
+    for (const error of preflightErrors) io.err(error);
+    return 1;
   }
 
-  await generateAdapterTarget(adapters.includes('all') ? 'all' : adapters, {
+  const generateCode = await generateAdapterTarget(adapters.includes('all') ? 'all' : adapters, {
     opts: { forceGenerated: Boolean(opts.forceGenerated) },
     target,
     alConfig,
     preserveExistingModels: true,
-  });
+  }, io);
 
-  refreshOwnedGuidance(target, guidanceOwnedBeforeUpdate, alConfig);
+  if (generateCode !== 0) return generateCode;
+
+  refreshOwnedGuidance(target, guidanceOwnedBeforeUpdate, alConfig, io);
+  return 0;
 }
 
 // Existing-installation update refreshes only an already-owned, unchanged
 // guidance block. It never enrolls a target that has no owned block and never
 // adopts an unowned manual marker block.
-function refreshOwnedGuidance(target, ownedBeforeUpdate, alConfig = null) {
+function refreshOwnedGuidance(target, ownedBeforeUpdate, alConfig = null, io) {
   if (!ownedBeforeUpdate) return;
   const guidance = applyGuidance(target, { alConfig, refreshOnly: true });
   if (guidance.changed) {
-    console.log(`  guidance: ${guidance.action} in ${guidance.relPath}`);
+    io.out(`  guidance: ${guidance.action} in ${guidance.relPath}`);
   }
-  for (const warning of guidance.warnings) console.warn(`  WARN: ${warning}`);
+  for (const warning of guidance.warnings) io.warn(`  WARN: ${warning}`);
   if (!guidance.ok && guidance.warnings.length === 0) {
-    console.warn(`  WARN: ${guidance.message}`);
+    io.warn(`  WARN: ${guidance.message}`);
   }
 }
 
-async function cmdRemove(args) {
-  const { opts } = parseArgs(args);
-  warnUnknownOptions(opts, ['target', 'dryRun', 'yes', 'includeState'], 'remove');
-  const target = opts.target ? resolve(opts.target) : process.cwd();
+async function cmdRemove(args, io) {
+  const { opts } = parseCommandArgs('remove', COMMAND_REGISTRY.remove, args);
+  const target = resolveCliTarget(io, opts.target);
   const dryRun = Boolean(opts.dryRun);
   const yes = Boolean(opts.yes);
   const includeState = Boolean(opts.includeState);
 
   if (!dryRun && !yes) {
-    console.error("Refusing to remove without confirmation. Run 'agenticloop remove --dry-run' first, then 'agenticloop remove --yes'.");
-    process.exitCode = 1;
-    return;
+    io.err("Refusing to remove without confirmation. Run 'agenticloop remove --dry-run' first, then 'agenticloop remove --yes'.");
+    return EXIT_USAGE;
   }
 
   const { removed, released = [], skipped, errors, cleanupErrors = [] } = removeAgenticLoop({ target, dryRun, includeState });
 
-  console.log();
-  console.log('agenticloop remove');
-  console.log('='.repeat(50));
-  if (dryRun) console.log('  (dry run - no changes will be made)');
+  io.out();
+  io.out('agenticloop remove');
+  io.out('='.repeat(50));
+  if (dryRun) io.out('  (dry run - no changes will be made)');
 
   if (removed.length === 0 && released.length === 0 && skipped.length === 0 && errors.length === 0) {
-    console.log('  No Agentic Loop assets found.');
+    io.out('  No Agentic Loop assets found.');
   }
 
   const prefix = dryRun ? 'would remove' : 'removed';
-  for (const f of removed) console.log(`  ${prefix}: ${f}`);
-  for (const f of released) console.log(`  ${dryRun ? 'would release' : 'released'}: ${f}`);
-  for (const f of skipped) console.log(`  skipped: ${f}`);
-  for (const e of errors) console.error(`  ERROR: ${e}`);
-  for (const e of cleanupErrors) console.error(`  CLEANUP ERROR: ${e}`);
-  console.log();
+  for (const f of removed) io.out(`  ${prefix}: ${f}`);
+  for (const f of released) io.out(`  ${dryRun ? 'would release' : 'released'}: ${f}`);
+  for (const f of skipped) io.out(`  skipped: ${f}`);
+  for (const e of errors) io.err(`  ERROR: ${e}`);
+  for (const e of cleanupErrors) io.err(`  CLEANUP ERROR: ${e}`);
+  io.out();
 
-  process.exitCode = errors.length > 0 || cleanupErrors.length > 0 ? 1 : 0;
+  return errors.length > 0 || cleanupErrors.length > 0 ? 1 : 0;
 }
 
 function loadOptionalAlConfig(target) {
@@ -961,74 +672,69 @@ function guidanceStatusLabel(status) {
   }
 }
 
-async function cmdGuidance(args) {
+async function cmdGuidance(args, io) {
   const sub = args[0];
-  if (!sub || !['apply', 'check', 'remove'].includes(sub)) {
-    console.error('guidance requires a subcommand: apply | check | remove');
-    process.exitCode = 1;
-    return;
+  if (!sub || !COMMAND_REGISTRY.guidance.subcommands[sub]) {
+    const suggestion = sub ? suggestName(sub, Object.keys(COMMAND_REGISTRY.guidance.subcommands)) : null;
+    io.err(suggestion
+      ? `guidance: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
+      : 'guidance requires a subcommand: apply | check | remove');
+    return EXIT_USAGE;
   }
-  const { opts } = parseArgs(args.slice(1));
-  warnUnknownOptions(opts, ['target', 'force'], `guidance ${sub}`);
-  const target = opts.target ? resolve(opts.target) : process.cwd();
+  const { opts } = parseCommandArgs(`guidance ${sub}`, COMMAND_REGISTRY.guidance.subcommands[sub], args.slice(1));
+  const target = resolveCliTarget(io, opts.target);
   const configResult = loadOptionalAlConfig(target);
   if (configResult.error) {
-    console.error(`  ERROR: ${configResult.error}`);
-    process.exitCode = 1;
-    return;
+    io.err(`  ERROR: ${configResult.error}`);
+    return 1;
   }
   const alConfig = configResult.config;
   const force = Boolean(opts.force);
 
-  console.log();
-  console.log(`agenticloop guidance ${sub}`);
-  console.log('='.repeat(50));
+  io.out();
+  io.out(`agenticloop guidance ${sub}`);
+  io.out('='.repeat(50));
 
   if (sub === 'check') {
     const result = checkGuidance(target, { alConfig });
-    console.log(`  rules document: ${result.relPath ?? '(unresolved)'}`);
-    console.log(`  status: ${guidanceStatusLabel(result.status)}`);
-    console.log(`  ${result.message}`);
-    console.log();
-    process.exitCode = ['unsafe-path', 'malformed', 'malformed-manifest', 'path-mismatch', 'multiple-owned'].includes(result.status) ? 1 : 0;
-    return;
+    io.out(`  rules document: ${result.relPath ?? '(unresolved)'}`);
+    io.out(`  status: ${guidanceStatusLabel(result.status)}`);
+    io.out(`  ${result.message}`);
+    io.out();
+    return ['unsafe-path', 'malformed', 'malformed-manifest', 'path-mismatch', 'multiple-owned'].includes(result.status) ? 1 : 0;
   }
 
   const result = sub === 'apply'
     ? applyGuidance(target, { alConfig, force })
     : removeGuidance(target, { alConfig, force });
 
-  console.log(`  rules document: ${result.relPath ?? '(unresolved)'}`);
-  console.log(`  ${result.action}: ${result.message}`);
-  for (const warning of result.warnings) console.warn(`  WARN: ${warning}`);
-  console.log();
-  process.exitCode = result.ok ? 0 : 1;
+  io.out(`  rules document: ${result.relPath ?? '(unresolved)'}`);
+  io.out(`  ${result.action}: ${result.message}`);
+  for (const warning of result.warnings) io.warn(`  WARN: ${warning}`);
+  io.out();
+  return result.ok ? 0 : 1;
 }
 
-async function cmdValidate(args) {
-  const { opts } = parseArgs(args);
-  warnUnknownOptions(opts, ['target', 'adapter', 'links'], 'validate');
-  const target = opts.target ? resolve(opts.target) : process.cwd();
+async function cmdValidate(args, io) {
+  const { opts } = parseCommandArgs('validate', COMMAND_REGISTRY.validate, args);
+  const target = resolveCliTarget(io, opts.target);
   const forcedAdapters = Array.isArray(opts.adapter) ? opts.adapter : (opts.adapter ? [opts.adapter] : []);
-  const result = runValidation(target, { adapters: forcedAdapters });
+  const result = runValidation(target, { adapters: forcedAdapters, output: io.stdout });
 
-  if (result.totalErrors > 0) {
-    process.exitCode = 1;
-  }
+  return result.totalErrors > 0 ? 1 : 0;
 }
 
-async function cmdGithubPreflight(args) {
-  const { opts } = parseArgs(args);
+async function cmdGithubPreflight(args, io) {
+  const { opts } = parseCommandArgs('github-preflight', COMMAND_REGISTRY['github-preflight'], args);
   const asJson = Boolean(opts.json);
 
   if (!opts.pr) {
     if (asJson) {
-      console.log(JSON.stringify({ ok: false, errors: ['--pr <number> is required'] }));
+      io.out(JSON.stringify({ ok: false, errors: ['--pr <number> is required'] }));
     } else {
-      console.error('github-preflight requires --pr <number>');
+      io.err('github-preflight requires --pr <number>');
     }
-    process.exitCode = 1;
-    return;
+    return EXIT_USAGE;
   }
 
   let result;
@@ -1037,64 +743,60 @@ async function cmdGithubPreflight(args) {
   } catch (error) {
     if (error instanceof PreflightError) {
       if (asJson) {
-        console.log(JSON.stringify({ ok: false, errors: [error.message] }));
+        io.out(JSON.stringify({ ok: false, errors: [error.message] }));
       } else {
-        console.error(`github-preflight failed: ${error.message}`);
+        io.err(`github-preflight failed: ${error.message}`);
       }
-      process.exitCode = 1;
-      return;
+      return 1;
     }
     throw error;
   }
 
   if (asJson) {
-    console.log(JSON.stringify(result));
-    process.exitCode = result.ok ? 0 : 1;
-    return;
+    io.out(JSON.stringify(result));
+    return result.ok ? 0 : 1;
   }
 
-  console.log();
-  console.log('agenticloop github-preflight');
-  console.log('='.repeat(50));
-  console.log(`  PR: #${result.pr}`);
-  console.log(`  issue: ${result.issue !== null ? `#${result.issue}` : 'none'}`);
-  console.log(`  current head: ${result.headRefOid || 'unknown'}`);
-  console.log(`  required checks: ${result.requiredChecks.length}`);
-  console.log(`  matched evidence: ${result.evidenceMatches.length}`);
+  io.out();
+  io.out('agenticloop github-preflight');
+  io.out('='.repeat(50));
+  io.out(`  PR: #${result.pr}`);
+  io.out(`  issue: ${result.issue !== null ? `#${result.issue}` : 'none'}`);
+  io.out(`  current head: ${result.headRefOid || 'unknown'}`);
+  io.out(`  required checks: ${result.requiredChecks.length}`);
+  io.out(`  matched evidence: ${result.evidenceMatches.length}`);
 
   if (result.statusSubstitutions.length > 0) {
-    console.log('  status-check substitutions:');
+    io.out('  status-check substitutions:');
     for (const sub of result.statusSubstitutions) {
-      console.log(`    - '${sub.check}' satisfied by status check '${sub.statusCheck}'`);
+      io.out(`    - '${sub.check}' satisfied by status check '${sub.statusCheck}'`);
     }
   } else {
-    console.log('  status-check substitutions: none');
+    io.out('  status-check substitutions: none');
   }
 
-  for (const warning of result.warnings) console.warn(`  WARN: ${warning}`);
+  for (const warning of result.warnings) io.warn(`  WARN: ${warning}`);
 
   if (result.ok) {
-    console.log('  preflight passed');
-    console.log();
-    process.exitCode = 0;
-    return;
+    io.out('  preflight passed');
+    io.out();
+    return 0;
   }
 
-  console.log('  preflight FAILED:');
-  for (const error of result.errors) console.error(`    ERROR: ${error}`);
-  console.log();
-  process.exitCode = 1;
+  io.out('  preflight FAILED:');
+  for (const error of result.errors) io.err(`    ERROR: ${error}`);
+  io.out();
+  return 1;
 }
 
-async function cmdGithubReviewAudit(args) {
-  const { opts } = parseArgs(args);
+async function cmdGithubReviewAudit(args, io) {
+  const { opts } = parseCommandArgs('github-review-audit', COMMAND_REGISTRY['github-review-audit'], args);
   const asJson = Boolean(opts.json);
   if (!opts.pr) {
     const error = '--pr <number> is required';
-    if (asJson) console.log(JSON.stringify({ ok: false, errors: [error] }));
-    else console.error(`github-review-audit requires ${error}`);
-    process.exitCode = 1;
-    return;
+    if (asJson) io.out(JSON.stringify({ ok: false, errors: [error] }));
+    else io.err(`github-review-audit requires ${error}`);
+    return EXIT_USAGE;
   }
   const expectedStatus = opts.expectStatus ?? 'accepted';
   let result;
@@ -1102,49 +804,47 @@ async function cmdGithubReviewAudit(args) {
     result = runGitHubReviewAudit({ pr: opts.pr, issue: opts.issue, repo: opts.repo, expectedStatus });
   } catch (error) {
     if (!(error instanceof GitHubReviewAuditError)) throw error;
-    if (asJson) console.log(JSON.stringify({ ok: false, errors: [error.message] }));
-    else console.error(`github-review-audit failed: ${error.message}`);
-    process.exitCode = 1;
-    return;
+    if (asJson) io.out(JSON.stringify({ ok: false, errors: [error.message] }));
+    else io.err(`github-review-audit failed: ${error.message}`);
+    return 1;
   }
   if (asJson) {
-    console.log(JSON.stringify(result));
+    io.out(JSON.stringify(result));
   } else {
-    console.log();
-    console.log('agenticloop github-review-audit');
-    console.log('='.repeat(50));
-    console.log(`  PR: #${result.pr}`);
-    console.log(`  issue: ${result.issue === null ? 'none' : `#${result.issue}`}`);
-    console.log(`  current head: ${result.headRefOid || 'unknown'}`);
-    console.log(`  independent review required: ${result.independentReviewRequired}`);
-    console.log(`  expected status: ${result.expectedStatus}`);
-    if (result.outcome) console.log(`  outcome: ${result.outcome.status} via ${result.outcome.mode}`);
+    io.out();
+    io.out('agenticloop github-review-audit');
+    io.out('='.repeat(50));
+    io.out(`  PR: #${result.pr}`);
+    io.out(`  issue: ${result.issue === null ? 'none' : `#${result.issue}`}`);
+    io.out(`  current head: ${result.headRefOid || 'unknown'}`);
+    io.out(`  independent review required: ${result.independentReviewRequired}`);
+    io.out(`  expected status: ${result.expectedStatus}`);
+    if (result.outcome) io.out(`  outcome: ${result.outcome.status} via ${result.outcome.mode}`);
     if (result.ok) {
-      console.log(`  provenance valid: yes`);
-      console.log(`  acceptance ready: ${result.acceptanceReady ? 'yes' : 'no'}`);
+      io.out(`  provenance valid: yes`);
+      io.out(`  acceptance ready: ${result.acceptanceReady ? 'yes' : 'no'}`);
       if (result.expectedStatus === 'needs_revision') {
-        console.log('  review audit passed (needs_revision confirmed)');
+        io.out('  review audit passed (needs_revision confirmed)');
       } else {
-        console.log('  review provenance passed');
+        io.out('  review provenance passed');
       }
     } else {
-      console.log(`  provenance valid: ${result.provenanceValid ? 'yes' : 'no'}`);
-      console.log(`  acceptance ready: ${result.acceptanceReady ? 'yes' : 'no'}`);
-      for (const error of result.errors) console.error(`    ERROR: ${error}`);
+      io.out(`  provenance valid: ${result.provenanceValid ? 'yes' : 'no'}`);
+      io.out(`  acceptance ready: ${result.acceptanceReady ? 'yes' : 'no'}`);
+      for (const error of result.errors) io.err(`    ERROR: ${error}`);
     }
-    console.log();
+    io.out();
   }
-  process.exitCode = result.ok ? 0 : 1;
+  return result.ok ? 0 : 1;
 }
 
-async function cmdGithubReady(args) {
-  const { opts } = parseArgs(args);
+async function cmdGithubReady(args, io) {
+  const { opts } = parseCommandArgs('github-ready', COMMAND_REGISTRY['github-ready'], args);
   const asJson = Boolean(opts.json);
   if (!opts.pr) {
-    if (asJson) console.log(JSON.stringify({ ok: false, readyForMerge: false, errors: ['--pr <number> is required'] }));
-    else console.error('github-ready requires --pr <number>');
-    process.exitCode = 1;
-    return;
+    if (asJson) io.out(JSON.stringify({ ok: false, readyForMerge: false, errors: ['--pr <number> is required'] }));
+    else io.err('github-ready requires --pr <number>');
+    return EXIT_USAGE;
   }
 
   let result;
@@ -1152,24 +852,22 @@ async function cmdGithubReady(args) {
     result = runGitHubReady({ pr: opts.pr, issue: opts.issue, repo: opts.repo });
   } catch (error) {
     if (!(error instanceof GitHubReadyError)) throw error;
-    if (asJson) console.log(JSON.stringify({ ok: false, readyForMerge: false, errors: [error.message] }));
-    else console.error(`github-ready failed: ${error.message}`);
-    process.exitCode = 1;
-    return;
+    if (asJson) io.out(JSON.stringify({ ok: false, readyForMerge: false, errors: [error.message] }));
+    else io.err(`github-ready failed: ${error.message}`);
+    return 1;
   }
 
   if (asJson) {
-    console.log(JSON.stringify(result));
-    process.exitCode = result.ok ? 0 : 1;
-    return;
+    io.out(JSON.stringify(result));
+    return result.ok ? 0 : 1;
   }
 
   const { summary, errors } = formatGitHubReadyReport(result);
-  console.log();
-  for (const line of summary) console.log(line);
-  for (const error of errors) console.error(`    ERROR: ${error}`);
-  console.log();
-  process.exitCode = result.ok ? 0 : 1;
+  io.out();
+  for (const line of summary) io.out(line);
+  for (const error of errors) io.err(`    ERROR: ${error}`);
+  io.out();
+  return result.ok ? 0 : 1;
 }
 
 async function cmdEvent(args, commandLabel = 'event-logging', io = createIo()) {
@@ -1177,44 +875,22 @@ async function cmdEvent(args, commandLabel = 'event-logging', io = createIo()) {
 
   if (!sub) {
     io.err(`${commandLabel} requires an event type, 'validate', 'audit', or 'report'`);
-    usage(io);
-    return 1;
+    io.err(`Run "agenticloop help ${commandLabel}" for usage.`);
+    return EXIT_USAGE;
   }
 
   if (sub === '--help' || sub === '-h') {
-    io.out(`${commandLabel} [event_type|validate|audit|report] [options]`);
-    io.out();
-    io.out('Subcommands:');
-    io.out('  validate              Validate event log files.');
-    io.out('  audit                 Audit task event logs for required events.');
-    io.out('  report                Generate a per-task or aggregate report from event logs.');
-    io.out('                        Add --features for a feature-adoption telemetry report.');
-    io.out();
-    io.out('Write path (bare event type):');
-    io.out(`  ${commandLabel} <event_type> --summary "..." [options]`);
+    io.out(renderCommandHelp('event-logging'));
     io.out();
     io.out('  event_type is a positional — one of:');
     for (const t of VALID_EVENT_TYPES) io.out(`    ${t}`);
     io.out();
-    io.out('Write options:');
-    io.out('  --summary <text>      Required. Event description.');
-    io.out('  --outcome <outcome>   Event outcome.');
-    io.out('  --role <role>         Role associated with the event.');
-    io.out('  --backend <backend>   Storage backend (files, github).');
-    io.out('  --task <id>           Task identifier.');
-    io.out('  --trace-id <id>       Trace identifier.');
-    io.out('  --parent-event-id <id> Parent event identifier.');
-    io.out('  --refs <a,b,...>      Comma-separated list of references.');
-    io.out('  --data-json <json>    JSON event data payload.');
-    io.out();
     return 0;
   }
 
-  const { opts } = parseArgs(args.slice(1));
-  const target = opts.target ? resolve(io.cwd, opts.target) : io.cwd;
-
   if (sub === 'validate') {
-    warnUnknownOptions(opts, ['target', 'output'], `${commandLabel} validate`, io);
+    const { opts } = parseCommandArgs(`${commandLabel} validate`, COMMAND_REGISTRY['event-logging'].subcommands.validate, args.slice(1));
+    const target = resolveCliTarget(io, opts.target);
     const eventLogDirectory = resolveLogDirectory(target);
     const pathResult = opts.output ? resolveEventLogPath(target, opts.output) : null;
     const eventLogPath = pathResult?.path ?? null;
@@ -1251,10 +927,11 @@ async function cmdEvent(args, commandLabel = 'event-logging', io = createIo()) {
   }
 
   if (sub === 'audit') {
-    warnUnknownOptions(opts, ['target', 'task', 'require'], `${commandLabel} audit`, io);
+    const { opts } = parseCommandArgs(`${commandLabel} audit`, COMMAND_REGISTRY['event-logging'].subcommands.audit, args.slice(1));
+    const target = resolveCliTarget(io, opts.target);
     if (!opts.task) {
       io.err('--task is required for event log audit');
-      return 1;
+      return EXIT_USAGE;
     }
 
     const requireResult = parseRequiredEventTypesOption(opts.require);
@@ -1315,7 +992,8 @@ async function cmdEvent(args, commandLabel = 'event-logging', io = createIo()) {
   }
 
   if (sub === 'report') {
-    warnUnknownOptions(opts, ['target', 'task', 'features'], `${commandLabel} report`, io);
+    const { opts } = parseCommandArgs(`${commandLabel} report`, COMMAND_REGISTRY['event-logging'].subcommands.report, args.slice(1));
+    const target = resolveCliTarget(io, opts.target);
     if (opts.features) {
       let result;
       try {
@@ -1516,12 +1194,21 @@ async function cmdEvent(args, commandLabel = 'event-logging', io = createIo()) {
     return 0;
   }
 
-  warnUnknownOptions(
-    opts,
-    ['target', 'summary', 'outcome', 'role', 'backend', 'task', 'traceId', 'parentEventId', 'ref', 'refs', 'dataJson', 'output', 'host'],
+  if (!VALID_EVENT_TYPES.has(sub)) {
+    const suggestion = suggestName(sub, [...VALID_EVENT_TYPES, 'validate', 'audit', 'report']);
+    io.err(suggestion
+      ? `${commandLabel}: unknown event type or subcommand '${sub}'. Did you mean '${suggestion}'?`
+      : `${commandLabel}: unknown event type or subcommand '${sub}'.`);
+    io.err(`Run "agenticloop help ${commandLabel}" for usage.`);
+    return EXIT_USAGE;
+  }
+
+  const { opts } = parseCommandArgs(
     `${commandLabel} ${sub}`,
-    io
+    { options: COMMAND_REGISTRY['event-logging'].eventTypeOptions },
+    args.slice(1)
   );
+  const target = resolveCliTarget(io, opts.target);
 
   if (opts.refs !== undefined) {
     const refs = String(opts.refs).split(',').map(ref => ref.trim()).filter(Boolean);
@@ -1531,7 +1218,7 @@ async function cmdEvent(args, commandLabel = 'event-logging', io = createIo()) {
 
   if (!opts.summary) {
     io.err('--summary is required for event writes');
-    return 1;
+    return EXIT_USAGE;
   }
 
   let data = {};
@@ -1540,12 +1227,12 @@ async function cmdEvent(args, commandLabel = 'event-logging', io = createIo()) {
       data = JSON.parse(opts.dataJson);
     } catch (error) {
       io.err(`--data-json must be valid JSON: ${error.message}`);
-      return 1;
+      return EXIT_USAGE;
     }
 
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
       io.err('--data-json must decode to a JSON object');
-      return 1;
+      return EXIT_USAGE;
     }
   }
 
@@ -1598,10 +1285,9 @@ async function cmdEvent(args, commandLabel = 'event-logging', io = createIo()) {
   return 0;
 }
 
-async function cmdConfigureModels(args) {
-  const { opts } = parseArgs(args);
-  warnUnknownOptions(opts, ['target', 'adapter', 'role', 'model', 'reasoningEffort', 'profile'], 'configure models');
-  const target = opts.target ? resolve(opts.target) : process.cwd();
+async function cmdConfigureModels(args, io) {
+  const { opts } = parseCommandArgs('configure models', COMMAND_REGISTRY.configure.subcommands.models, args);
+  const target = resolveCliTarget(io, opts.target);
   let adapter = Array.isArray(opts.adapter) ? opts.adapter[0] : opts.adapter;
   const profile = Array.isArray(opts.profile) ? opts.profile[0] : opts.profile;
 
@@ -1609,69 +1295,63 @@ async function cmdConfigureModels(args) {
     const detected = detectHost(target);
     if (detected.length === 1) {
       adapter = detected[0];
-      console.log(`Detected host: ${adapter}`);
+      io.out(`Detected host: ${adapter}`);
     } else if (detected.length > 1) {
-        console.error(`Multiple hosts detected (${detected.join(', ')}). Use --adapter <host> with one of: opencode, codex, claude-code, copilot, cursor.`);
-        process.exitCode = 1;
-        return;
+        io.err(`Multiple hosts detected (${detected.join(', ')}). Use --adapter <host> with one of: opencode, codex, claude-code, copilot, cursor.`);
+        return EXIT_USAGE;
       } else {
-        console.error('No host detected. Use --adapter <host> with one of: opencode, codex, claude-code, copilot, cursor.');
-        process.exitCode = 1;
-        return;
+        io.err('No host detected. Use --adapter <host> with one of: opencode, codex, claude-code, copilot, cursor.');
+        return EXIT_USAGE;
       }
   }
 
   const hostError = validateHost(adapter);
   if (hostError) {
-    console.error(hostError);
-    process.exitCode = 1;
-    return;
+    io.err(hostError);
+    return EXIT_USAGE;
   }
 
   const mutationFlags = new Set(['--role', '--model', '--reasoning-effort']);
   if (profile !== undefined) {
     if (args.some(arg => mutationFlags.has(arg))) {
-      console.error('--profile recommended cannot be combined with --role, --model, or --reasoning-effort.');
-      process.exitCode = 1;
-      return;
+      io.err('--profile recommended cannot be combined with --role, --model, or --reasoning-effort.');
+      return EXIT_USAGE;
     }
 
     const { errors, warnings, updated, preserved } = configureModels(target, { adapter, profile });
-    for (const w of warnings) console.warn(`  WARN: ${w}`);
-    for (const e of errors) console.error(`  ERROR: ${e}`);
-    for (const u of updated) console.log(`  added: ${u}`);
-    for (const p of preserved) console.log(`  kept: ${p}`);
+    for (const w of warnings) io.warn(`  WARN: ${w}`);
+    for (const e of errors) io.err(`  ERROR: ${e}`);
+    for (const u of updated) io.out(`  added: ${u}`);
+    for (const p of preserved) io.out(`  kept: ${p}`);
 
     if (errors.length === 0 && updated.length > 0) {
-      console.log();
-      console.log(`Run 'agenticloop generate ${adapter}' to refresh adapter artifacts.`);
+      io.out();
+      io.out(`Run 'agenticloop generate ${adapter}' to refresh adapter artifacts.`);
     }
-    process.exitCode = errors.length > 0 ? 1 : 0;
-    return;
+    return errors.length > 0 ? 1 : 0;
   }
 
   let mutations = parseModelMutations(args);
 
   if (mutations.length === 0) {
-    const alConfig = loadAlConfigOrExit(
+    const alConfig = loadAlConfigOrNull(
       target,
-      `agenticloop.json not found. Run agenticloop init --adapter <host> first to enable adapter model configuration.`
+      `agenticloop.json not found. Run agenticloop init --adapter <host> first to enable adapter model configuration.`,
+      io
     );
     if (!alConfig) {
-      process.exitCode = 1;
-      return;
+      return 1;
     }
     const roles = Object.keys(alConfig.roles ?? {});
     const currentSettings = alConfig.adapters?.[adapter]?.roleSettings ?? {};
-    const prompts = createPrompts();
+    const prompts = io.createPrompts();
     try {
       const { mutations: picked, cancelled } = await promptModelSettingsInteractive(
         roles, adapter, prompts, currentSettings, { discoverModels: true }
       );
       if (cancelled) {
-        console.log('Model configuration cancelled.');
-        process.exitCode = 0;
-        return;
+        io.out('Model configuration cancelled.');
+        return 0;
       }
       mutations = picked;
     } finally {
@@ -1680,55 +1360,46 @@ async function cmdConfigureModels(args) {
   }
 
   if (mutations.length === 0) {
-    console.log('No model settings provided; nothing to write.');
-    process.exitCode = 0;
-    return;
+    io.out('No model settings provided; nothing to write.');
+    return 0;
   }
 
   const { errors, warnings, updated } = configureModels(target, { adapter, mutations });
 
-  for (const w of warnings) console.warn(`  WARN: ${w}`);
-  for (const e of errors) console.error(`  ERROR: ${e}`);
-  for (const u of updated) console.log(`  updated: ${u}`);
+  for (const w of warnings) io.warn(`  WARN: ${w}`);
+  for (const e of errors) io.err(`  ERROR: ${e}`);
+  for (const u of updated) io.out(`  updated: ${u}`);
 
   if (errors.length === 0 && updated.length > 0) {
-    console.log();
-    console.log(`Run 'agenticloop generate ${adapter}' to refresh adapter artifacts.`);
+    io.out();
+    io.out(`Run 'agenticloop generate ${adapter}' to refresh adapter artifacts.`);
   }
 
-  process.exitCode = errors.length > 0 ? 1 : 0;
+  return errors.length > 0 ? 1 : 0;
 }
 
-async function cmdSetup(args) {
-  const { opts } = parseArgs(args);
-  warnUnknownOptions(opts, [
-    'target',
-    'adapter',
-    'yes',
-    'nonInteractive',
-    'eventLogging',
-    'agentsGuidance',
-    'noAgentsGuidance',
-  ], 'setup');
-  const target = opts.target ? resolve(opts.target) : process.cwd();
+async function cmdSetup(args, io) {
+  const { opts } = parseCommandArgs('setup', COMMAND_REGISTRY.setup, args);
+  const target = resolveCliTarget(io, opts.target);
   const adapter = Array.isArray(opts.adapter) ? opts.adapter[0] : opts.adapter;
   const nonInteractive = Boolean(opts.yes) || Boolean(opts.nonInteractive);
   const eventLogging = opts.eventLogging;
-  const agentsGuidance = !opts.noAgentsGuidance && opts.agentsGuidance !== false;
-
-  if (eventLogging !== undefined && eventLogging !== 'enabled' && eventLogging !== 'disabled') {
-    console.error(`Invalid --event-logging value '${eventLogging}'. Use enabled or disabled.`);
-    process.exitCode = 1;
-    return;
-  }
+  const agentsGuidance = !opts.noAgentsGuidance && opts.agentsGuidance !== 'off' && opts.agentsGuidance !== false;
 
   if (adapter) {
     const validAdapters = new Set(['opencode', 'codex', 'claude-code', 'copilot', 'cursor', 'all']);
     if (!validAdapters.has(adapter)) {
-      console.error(`Unknown adapter '${adapter}'. Use: opencode, codex, claude-code, copilot, cursor, all`);
-      process.exitCode = 1;
-      return;
+      const suggestion = suggestName(adapter, [...validAdapters]);
+      io.err(suggestion
+        ? `Unknown adapter '${adapter}'. Did you mean '${suggestion}'?`
+        : `Unknown adapter '${adapter}'. Use: opencode, codex, claude-code, copilot, cursor, all`);
+      return EXIT_USAGE;
     }
+  }
+
+  if (nonInteractive && !adapter) {
+    io.err('Non-interactive setup requires --adapter <host>.');
+    return EXIT_USAGE;
   }
 
   const { errors } = await setup({
@@ -1737,120 +1408,111 @@ async function cmdSetup(args) {
     nonInteractive,
     eventLogging,
     agentsGuidance,
+    io,
+    dryRun: Boolean(opts.dryRun),
+    json: Boolean(opts.json),
+    verbose: Boolean(opts.verbose),
   });
 
-  process.exitCode = errors.length > 0 ? 1 : 0;
+  return errors.length > 0 ? 1 : 0;
 }
 
-async function cmdDoctor(args) {
-  const { opts } = parseArgs(args);
-  warnUnknownOptions(opts, ['target'], 'doctor');
-  const target = opts.target ? resolve(opts.target) : process.cwd();
-  printDoctor(target);
+async function cmdDoctor(args, io) {
+  const { opts } = parseCommandArgs('doctor', COMMAND_REGISTRY.doctor, args);
+  const target = resolveCliTarget(io, opts.target);
+  printDoctor(target, io);
+  return 0;
 }
 
-async function cmdStatus(args) {
-  const { opts } = parseArgs(args);
-  warnUnknownOptions(opts, ['target'], 'status');
-  const target = opts.target ? resolve(opts.target) : process.cwd();
-  printAdapterDiscovery(target);
-  console.log('Task state: run "agenticloop task list" to inspect files-backed task records.');
+async function cmdStatus(args, io) {
+  const { opts } = parseCommandArgs('status', COMMAND_REGISTRY.status, args);
+  const target = resolveCliTarget(io, opts.target);
+  printAdapterDiscovery(target, io);
+  io.out('Task state: run "agenticloop task list" to inspect files-backed task records.');
+  return 0;
 }
 
-async function cmdWorktree(args) {
+async function cmdWorktree(args, io) {
   const sub = args[0];
-  if (!sub) {
-    console.error('worktree requires a subcommand: add | guard | list | remove | cleanup | resolve-state | prune');
-    process.exitCode = 1;
-    return;
+  const WORKTREE_SUBCOMMANDS = COMMAND_REGISTRY.worktree.subcommands;
+  if (!sub || !WORKTREE_SUBCOMMANDS[sub]) {
+    const suggestion = sub ? suggestName(sub, Object.keys(WORKTREE_SUBCOMMANDS)) : null;
+    io.err(suggestion
+      ? `worktree: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
+      : 'worktree requires a subcommand: add | guard | list | remove | cleanup | resolve-state | prune');
+    return EXIT_USAGE;
   }
 
   try {
     if (sub === 'add') {
-      const { opts, positional } = parseArgs(args.slice(1));
-      warnUnknownOptions(opts, ['target', 'from'], 'worktree add');
+      const { opts, positional } = parseCommandArgs('worktree add', WORKTREE_SUBCOMMANDS.add, args.slice(1));
       const [taskId, branch] = positional;
       if (!taskId || !branch || positional.length !== 2) {
-        console.error('Usage: agenticloop worktree add <task-id> <branch> [--from <ref>] [--target <dir>]');
-        process.exitCode = 1;
-        return;
+        io.err('Usage: agenticloop worktree add <task-id> <branch> [--from <ref>] [--target <dir>]');
+        return EXIT_USAGE;
       }
-      if (opts.from === true) {
-        console.error('--from requires a ref value');
-        process.exitCode = 1;
-        return;
-      }
-      const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
+      const target = resolveCliTarget(io, opts.target);
       const result = createAgenticLoopWorktree({
         target,
         taskId,
         branch,
         from: opts.from,
       });
-      console.log('Created Agentic Loop worktree:');
-      console.log(`  path: ${result.path}`);
-      console.log(`  branch: ${result.branch}`);
-      console.log(`  from: ${result.from ?? '(existing branch)'}`);
-      console.log(`  git guard: ${result.guard?.ok ? 'configured' : result.guard === null ? 'session environment required' : 'missing'}`);
+      io.out('Created Agentic Loop worktree:');
+      io.out(`  path: ${result.path}`);
+      io.out(`  branch: ${result.branch}`);
+      io.out(`  from: ${result.from ?? '(existing branch)'}`);
+      io.out(`  git guard: ${result.guard?.ok ? 'configured' : result.guard === null ? 'session environment required' : 'missing'}`);
       if (result.ignored) {
-        console.log('  ignored: .agenticloop/worktrees/');
+        io.out('  ignored: .agenticloop/worktrees/');
       }
-      process.exitCode = 0;
-      return;
+      return 0;
     }
 
     if (sub === 'guard') {
-      const { opts, positional } = parseArgs(args.slice(1));
-      warnUnknownOptions(opts, ['target', 'fix', 'all'], 'worktree guard');
+      const { opts, positional } = parseCommandArgs('worktree guard', WORKTREE_SUBCOMMANDS.guard, args.slice(1));
       if (positional.length > 1) {
-        console.error('Usage: agenticloop worktree guard [--fix] [--all|<path>] [--target <dir>]');
-        process.exitCode = 1;
-        return;
+        io.err('Usage: agenticloop worktree guard [--fix] [--all|<path>] [--target <dir>]');
+        return EXIT_USAGE;
       }
-      const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
+      const target = resolveCliTarget(io, opts.target);
       const result = guardAgenticLoopWorktrees({
         target,
         path: positional[0],
         all: Boolean(opts.all),
         fix: Boolean(opts.fix),
       });
-      console.log(formatWorktreeGuardResult(result));
-      process.exitCode = result.ok ? 0 : 1;
-      return;
+      io.out(formatWorktreeGuardResult(result));
+      return result.ok ? 0 : 1;
     }
 
     if (sub === 'list') {
-      const { opts } = parseArgs(args.slice(1));
-      warnUnknownOptions(opts, ['target', 'json'], 'worktree list');
-      const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
+      const { opts } = parseCommandArgs('worktree list', WORKTREE_SUBCOMMANDS.list, args.slice(1));
+      const target = resolveCliTarget(io, opts.target);
       const asJson = Boolean(opts.json);
       const records = listAgenticLoopWorktrees(target);
       if (asJson) {
-        console.log(JSON.stringify(records, null, 2));
+        io.out(JSON.stringify(records, null, 2));
       } else {
-        console.log(formatWorktreeList(records));
+        io.out(formatWorktreeList(records));
       }
-      process.exitCode = 0;
-      return;
+      return 0;
     }
 
     if (sub === 'remove') {
-      const { opts, positional } = parseArgs(args.slice(1));
-      warnUnknownOptions(opts, ['target', 'dryRun', 'yes', 'force', 'json'], 'worktree remove');
+      const { opts, positional } = parseCommandArgs('worktree remove', WORKTREE_SUBCOMMANDS.remove, args.slice(1));
       const identifier = positional[0];
       if (!identifier) {
-        console.error('Usage: agenticloop worktree remove <task-id|path> [--target <dir>] [--dry-run|--yes] [--force] [--json]');
-        process.exitCode = 1;
-        return;
+        io.err('Usage: agenticloop worktree remove <task-id|path> [--target <dir>] [--dry-run|--yes] [--force] [--json]');
+        return EXIT_USAGE;
       }
       const dryRun = Boolean(opts.dryRun);
       const yes = Boolean(opts.yes);
       if (!dryRun && !yes) {
-        console.error("worktree remove requires either --dry-run or --yes");
-        process.exitCode = 1;
-        return;
+        io.err("worktree remove requires either --dry-run or --yes");
+        return EXIT_USAGE;
       }
-      const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
+      const target = resolveCliTarget(io, opts.target);
       const result = removeAgenticLoopWorktree({
         target,
         identifier,
@@ -1859,56 +1521,49 @@ async function cmdWorktree(args) {
         force: Boolean(opts.force),
       });
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        io.out(JSON.stringify(result, null, 2));
       } else {
-        console.log(formatWorktreeRemoveResult(result, { dryRun }));
+        io.out(formatWorktreeRemoveResult(result, { dryRun }));
       }
-      process.exitCode = result.errors.length > 0 ? 1 : 0;
-      return;
+      return result.errors.length > 0 ? 1 : 0;
     }
 
     if (sub === 'cleanup') {
-      const { opts } = parseArgs(args.slice(1));
-      warnUnknownOptions(opts, ['target', 'dryRun', 'yes', 'json'], 'worktree cleanup');
+      const { opts } = parseCommandArgs('worktree cleanup', WORKTREE_SUBCOMMANDS.cleanup, args.slice(1));
       const dryRun = Boolean(opts.dryRun);
       const yes = Boolean(opts.yes);
       if (!dryRun && !yes) {
-        console.error("worktree cleanup requires either --dry-run or --yes");
-        process.exitCode = 1;
-        return;
+        io.err("worktree cleanup requires either --dry-run or --yes");
+        return EXIT_USAGE;
       }
-      const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
+      const target = resolveCliTarget(io, opts.target);
       const result = cleanupAgenticLoopWorktrees({
         target,
         dryRun,
         yes,
       });
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        io.out(JSON.stringify(result, null, 2));
       } else {
-        console.log(formatWorktreeCleanupResult(result));
+        io.out(formatWorktreeCleanupResult(result));
       }
-      process.exitCode = result.errors.length > 0 ? 1 : 0;
-      return;
+      return result.errors.length > 0 ? 1 : 0;
     }
 
     if (sub === 'resolve-state') {
-      const { opts, positional } = parseArgs(args.slice(1));
-      warnUnknownOptions(opts, ['target', 'strategy', 'dryRun', 'yes', 'json'], 'worktree resolve-state');
+      const { opts, positional } = parseCommandArgs('worktree resolve-state', WORKTREE_SUBCOMMANDS['resolve-state'], args.slice(1));
       const identifier = positional[0];
       if (!identifier) {
-        console.error('Usage: agenticloop worktree resolve-state <task-id|path> [--target <dir>] [--strategy <strategy>] [--dry-run|--yes] [--json]');
-        process.exitCode = 1;
-        return;
+        io.err('Usage: agenticloop worktree resolve-state <task-id|path> [--target <dir>] [--strategy <strategy>] [--dry-run|--yes] [--json]');
+        return EXIT_USAGE;
       }
       const dryRun = !Boolean(opts.yes);
       const yes = Boolean(opts.yes);
       if (opts.dryRun && yes) {
-        console.error('worktree resolve-state accepts either --dry-run or --yes, not both');
-        process.exitCode = 1;
-        return;
+        io.err('worktree resolve-state accepts either --dry-run or --yes, not both');
+        return EXIT_USAGE;
       }
-      const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
+      const target = resolveCliTarget(io, opts.target);
       const result = resolveAgenticLoopStateConflicts({
         target,
         identifier,
@@ -1917,51 +1572,47 @@ async function cmdWorktree(args) {
         yes,
       });
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        io.out(JSON.stringify(result, null, 2));
       } else {
-        console.log(formatResolveStateResult(result));
+        io.out(formatResolveStateResult(result));
       }
-      process.exitCode = result.errors.length > 0 ? 1 : 0;
-      return;
+      return result.errors.length > 0 ? 1 : 0;
     }
 
     if (sub === 'prune') {
-      const { opts } = parseArgs(args.slice(1));
-      warnUnknownOptions(opts, ['target', 'dryRun', 'yes', 'json'], 'worktree prune');
+      const { opts } = parseCommandArgs('worktree prune', WORKTREE_SUBCOMMANDS.prune, args.slice(1));
       const dryRun = Boolean(opts.dryRun);
       const yes = Boolean(opts.yes);
       if (!dryRun && !yes) {
-        console.error("worktree prune requires either --dry-run or --yes");
-        process.exitCode = 1;
-        return;
+        io.err("worktree prune requires either --dry-run or --yes");
+        return EXIT_USAGE;
       }
-      const target = opts.target && opts.target !== true ? resolve(opts.target) : process.cwd();
+      const target = resolveCliTarget(io, opts.target);
       const result = pruneAgenticLoopWorktrees({
         target,
         dryRun,
         yes,
       });
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        io.out(JSON.stringify(result, null, 2));
       } else {
-        console.log(formatWorktreePruneResult(result));
+        io.out(formatWorktreePruneResult(result));
       }
-      process.exitCode = result.errors.length > 0 ? 1 : 0;
-      return;
+      return result.errors.length > 0 ? 1 : 0;
     }
 
-    console.error(`Unknown worktree subcommand: ${sub}`);
-    process.exitCode = 1;
+    io.err(`Unknown worktree subcommand: ${sub}`);
+    return EXIT_USAGE;
   } catch (error) {
-    console.error(error.message);
-    process.exitCode = 1;
+    if (error instanceof CliUsageError) throw error;
+    io.err(error.message);
+    return 1;
   }
 }
 
-async function cmdBootstrapLabels(args) {
-  const { opts } = parseArgs(args);
-  warnUnknownOptions(opts, ['target', 'repo', 'dryRun', 'group', 'taskId', 'force'], 'bootstrap-labels');
-  const target = opts.target ? resolve(opts.target) : process.cwd();
+async function cmdBootstrapLabels(args, io) {
+  const { opts } = parseCommandArgs('bootstrap-labels', COMMAND_REGISTRY['bootstrap-labels'], args);
+  const target = resolveCliTarget(io, opts.target);
   const projectMap = loadProjectMap(target)?.config ?? null;
 
   let alConfig = null;
@@ -1970,9 +1621,8 @@ async function cmdBootstrapLabels(args) {
     try {
       alConfig = loadAgenticLoopConfig(alCfgPath);
     } catch (e) {
-      console.error(`Failed to load agenticloop.json: ${e.message}`);
-      process.exitCode = 1;
-      return;
+      io.err(`Failed to load agenticloop.json: ${e.message}`);
+      return 1;
     }
   }
 
@@ -1980,21 +1630,20 @@ async function cmdBootstrapLabels(args) {
   // it accidentally against a files-backed project, where it would create
   // GitHub labels the workflow never uses.
   const backendResolution = resolveTaskBackend(target);
-  for (const warning of backendResolution.warnings) console.warn(`  WARN: ${warning}`);
+  for (const warning of backendResolution.warnings) io.warn(`  WARN: ${warning}`);
   if (backendResolution.backend !== 'github' && !opts.force) {
-    console.error(
+    io.err(
       `Active task backend is '${backendResolution.backend}', not 'github'. ` +
       `bootstrap-labels creates GitHub labels and is only used by the github backend.\n` +
       `Set task_backend: github in .agenticloop/project.md, or pass --force to run anyway.`
     );
-    process.exitCode = 1;
-    return;
+    return 1;
   }
 
-  console.log();
-  console.log('agenticloop bootstrap-labels');
-  console.log('='.repeat(50));
-  if (opts.dryRun) console.log('  (dry run - no changes will be made)');
+  io.out();
+  io.out('agenticloop bootstrap-labels');
+  io.out('='.repeat(50));
+  if (opts.dryRun) io.out('  (dry run - no changes will be made)');
 
   const results = bootstrapLabels(alConfig, {
     repo: opts.repo,
@@ -2002,28 +1651,26 @@ async function cmdBootstrapLabels(args) {
     group: opts.group,
     taskId: opts.taskId,
     projectMap,
+    io,
   });
-  if (results.some(result => result.action === 'error')) {
-    process.exitCode = 1;
-  }
-  console.log();
+  const failed = results.some(result => result.action === 'error');
+  io.out();
+  return failed ? 1 : 0;
 }
 
-function loadAlConfigOrExit(target, hint = '') {
+function loadAlConfigOrNull(target, hint = '', io) {
   const alCfgPath = join(target, 'agenticloop.json');
   if (!existsSync(alCfgPath)) {
     const msg = hint
       ? hint
       : `agenticloop.json not found. Run agenticloop init --adapter <host> first to create advanced adapter config.`;
-    console.error(msg);
-    process.exitCode = 1;
+    io.err(msg);
     return null;
   }
   try {
     return loadAgenticLoopConfig(alCfgPath);
   } catch (e) {
-    console.error(`Failed to parse agenticloop.json: ${e.message}`);
-    process.exitCode = 1;
+    io.err(`Failed to parse agenticloop.json: ${e.message}`);
     return null;
   }
 }
@@ -2035,33 +1682,65 @@ function resolveOutputDir(opts, target) {
   return target;
 }
 
-async function cmdGenerate(subArgs) {
+async function cmdGenerate(subArgs, io) {
   const sub = subArgs[0];
-  if (!sub) {
-    console.error('generate requires a host target: opencode | codex | claude-code | copilot | cursor | all');
-    process.exitCode = 1;
-    return;
+  const generateSpec = sub ? COMMAND_REGISTRY.generate.subcommands[sub] : null;
+  if (!generateSpec) {
+    const suggestion = sub ? suggestName(sub, Object.keys(COMMAND_REGISTRY.generate.subcommands)) : null;
+    io.err(suggestion
+      ? `generate: unknown host '${sub}'. Did you mean '${suggestion}'?`
+      : 'generate requires a host target: opencode | codex | claude-code | copilot | cursor | all');
+    return EXIT_USAGE;
   }
-  const { opts } = parseArgs(subArgs.slice(1));
-  warnUnknownOptions(opts, ['target', 'outputDir', 'output', 'forceGenerated'], `generate ${sub}`);
-  const target = opts.target ? resolve(opts.target) : process.cwd();
+  const { opts } = parseCommandArgs(`generate ${sub}`, generateSpec, subArgs.slice(1));
+  const target = resolveCliTarget(io, opts.target);
 
-  const alConfig = loadAlConfigOrExit(target);
-  if (!alConfig) return;
-  await generateAdapterTarget(sub, { opts, target, alConfig, preserveExistingModels: true });
+  const alConfig = loadAlConfigOrNull(target, '', io);
+  if (!alConfig) return 1;
+  return await generateAdapterTarget(sub, { opts, target, alConfig, preserveExistingModels: true }, io);
 }
 
 // --- entry ------------------------------------------------------------------
 
+const COMMAND_HANDLERS = {
+  init: cmdInit,
+  setup: cmdSetup,
+  update: cmdUpdate,
+  remove: cmdRemove,
+  guidance: cmdGuidance,
+  validate: cmdValidate,
+  'github-preflight': cmdGithubPreflight,
+  'github-review-audit': cmdGithubReviewAudit,
+  'github-ready': cmdGithubReady,
+  doctor: cmdDoctor,
+  status: cmdStatus,
+  worktree: cmdWorktree,
+  'bootstrap-labels': cmdBootstrapLabels,
+  generate: cmdGenerate,
+};
+
+function printHelpFor(path, io) {
+  const text = renderCommandHelp(path);
+  if (text === null) {
+    io.out(renderFullHelp());
+    return;
+  }
+  io.out(text);
+  if (path === 'event-logging') {
+    io.out();
+    io.out('  event_type is a positional — one of:');
+    for (const t of VALID_EVENT_TYPES) io.out(`    ${t}`);
+  }
+}
+
 /**
- * Route a parsed argv to the matching command handler and return a numeric exit
- * code. Importing this module no longer executes anything; the binary calls
- * `runCli` (src/cli-main.js), which delegates here with an injected io context.
+ * Route a parsed argv to the matching command handler and return a numeric
+ * exit code. Every command runs in-process through the injected-io contract:
+ * handlers receive `io` and return numeric exit codes; no handler touches
+ * global `process.exitCode`, raw console, or a subprocess bridge.
  *
- * Commands already migrated to the injectable-io contract (task, event) return
- * their own exit code and never touch global `process.exitCode`. Remaining
- * legacy handlers still communicate via `process.exitCode`; `dispatchLegacy`
- * snapshots and restores it so a call never leaves global state mutated.
+ * Exit statuses: 0 success/help/version/cancelled, 1 operational failure,
+ * 2 invalid CLI usage (CliUsageError), 130 interruption (CliAbortError).
  *
  * @param {string[]} argv  Arguments after the node/bin prefix.
  * @param {ReturnType<import('./cli-io.js').createIo>} [io]
@@ -2069,94 +1748,89 @@ async function cmdGenerate(subArgs) {
  */
 export async function dispatch(argv, io = createIo()) {
   const command = argv[0];
-  const rest = argv.slice(1);
 
-  switch (command) {
+  if (command === undefined) {
+    io.out(renderFirstUse());
+    return 0;
+  }
+
+  if (command === '--version' || command === 'version') {
+    io.out(`agenticloop ${packageVersion()}`);
+    return 0;
+  }
+
+  if (command === '--help' || command === '-h' || command === 'help') {
+    const target = command === 'help' ? argv[1] : argv[1];
+    if (!target) {
+      io.out(renderFullHelp());
+      return 0;
+    }
+    const canonical = resolveCommandName(target);
+    if (!canonical) {
+      const suggestion = suggestName(target, allCommandNames());
+      throw new CliUsageError(
+        suggestion
+          ? `Unknown command: ${target}. Did you mean '${suggestion}'?`
+          : `Unknown command: ${target}.`,
+        { hint: 'Run "agenticloop help" for all commands.' }
+      );
+    }
+    const sub = argv[2];
+    const path = sub && COMMAND_REGISTRY[canonical].subcommands?.[sub]
+      ? `${canonical} ${sub}`
+      : canonical;
+    printHelpFor(path, io);
+    return 0;
+  }
+
+  const canonical = resolveCommandName(command);
+  if (!canonical) {
+    const suggestion = suggestName(command, allCommandNames());
+    throw new CliUsageError(
+      suggestion
+        ? `Unknown command: ${command}. Did you mean '${suggestion}'?`
+        : `Unknown command: ${command}.`,
+      { hint: 'Run "agenticloop help" for all commands.' }
+    );
+  }
+
+  const rest = argv.slice(1);
+  const spec = COMMAND_REGISTRY[canonical];
+
+  // Command-local and subcommand-local help is safe: it never reaches a
+  // handler and therefore can never mutate a target.
+  if (findHelpRequest(rest)) {
+    const sub = spec.subcommands && rest[0] && spec.subcommands[rest[0]] ? rest[0] : null;
+    printHelpFor(sub ? `${canonical} ${sub}` : canonical, io);
+    return 0;
+  }
+
+  switch (canonical) {
     case 'task':
       return await cmdTask(rest, io);
     case 'audit':
       return await cmdAudit(rest, io);
     case 'event-logging':
-      return await cmdEvent(rest, 'event-logging', io);
-    case 'event':
-      return await cmdEvent(rest, 'event', io);
-    case undefined:
-    case '--help':
-    case '-h':
-    case 'help':
-      usage(io);
-      return 0;
+      return await cmdEvent(rest, command === 'event' ? 'event' : 'event-logging', io);
+    case 'configure':
+      if (rest[0] === 'models') {
+        return await cmdConfigureModels(rest.slice(1), io);
+      }
+      throw new CliUsageError(
+        rest[0]
+          ? `Unknown configure subcommand: ${rest[0]}`
+          : 'configure requires a subcommand: models',
+        { hint: 'Run "agenticloop help configure" for usage.' }
+      );
     default:
-      return await dispatchLegacy(command, rest);
+      return await COMMAND_HANDLERS[canonical](rest, io);
   }
 }
 
-async function dispatchLegacy(command, rest) {
-  const previousExitCode = process.exitCode;
-  process.exitCode = 0;
-  try {
-    switch (command) {
-      case 'init':
-        await cmdInit(rest);
-        break;
-      case 'setup':
-        await cmdSetup(rest);
-        break;
-      case 'update':
-        await cmdUpdate(rest);
-        break;
-      case 'upgrade':
-        await cmdUpdate(rest);
-        break;
-      case 'remove':
-        await cmdRemove(rest);
-        break;
-      case 'guidance':
-        await cmdGuidance(rest);
-        break;
-      case 'validate':
-        await cmdValidate(rest);
-        break;
-      case 'github-preflight':
-        await cmdGithubPreflight(rest);
-        break;
-      case 'github-review-audit':
-        await cmdGithubReviewAudit(rest);
-        break;
-      case 'github-ready':
-        await cmdGithubReady(rest);
-        break;
-      case 'doctor':
-        await cmdDoctor(rest);
-        break;
-      case 'worktree':
-        await cmdWorktree(rest);
-        break;
-      case 'configure':
-        if (rest[0] === 'models') {
-          await cmdConfigureModels(rest.slice(1));
-        } else {
-          console.error(`Unknown configure subcommand: ${rest[0]}`);
-          usage();
-          process.exitCode = 1;
-        }
-        break;
-      case 'status':
-        await cmdStatus(rest);
-        break;
-      case 'bootstrap-labels':
-        await cmdBootstrapLabels(rest);
-        break;
-      case 'generate':
-        await cmdGenerate(rest);
-        break;
-      default:
-        console.error(`Unknown command: ${command}`);
-        usage();
-        process.exitCode = 1;
-    }
-    return process.exitCode ?? 0;
-  } finally {
-    process.exitCode = previousExitCode;
+function allCommandNames() {
+  const names = [...Object.keys(COMMAND_REGISTRY)];
+  for (const spec of Object.values(COMMAND_REGISTRY)) {
+    names.push(...(spec.aliases ?? []));
   }
+  return names;
 }

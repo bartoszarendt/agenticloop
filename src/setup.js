@@ -1,56 +1,55 @@
 /**
  * agenticloop setup - guided onboarding for new target projects.
  *
- * Resumable, safe to rerun. Calls init internally when needed.
- * Writes only confirmed values. Prints what will change before writing.
+ * Flow: Detect -> Review -> Choose -> Plan -> Apply -> Verify.
+ *
+ * Detection and model discovery are read-only. No file is created or changed
+ * before the final apply confirmation. Setup always composes the idempotent
+ * init plan (repair-aware for empty, current, legacy, partial, and
+ * inverse-partial targets), renders one complete plan, asks once, applies
+ * through the generic lifecycle transaction, and offers validation.
+ * Resumable and safe to rerun: a second run produces zero mutations.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { init } from './init.js';
+import { createIo } from './cli-io.js';
+import {
+  applyLifecyclePlan,
+  formatPartialApplyDiagnostics,
+  lifecyclePlanBlockers,
+  lifecyclePlanCounts,
+  lifecyclePlanToJson,
+  renderLifecyclePlan,
+} from './lifecycle-plan.js';
+import { atomicWriteFile } from './fs-mutation-kernel.js';
+import { planSetup } from './setup-plan.js';
+import { initExecHandler } from './init.js';
 import { detectSetupState, formatSetupChecklist, nextStepsFromState } from './setup-state.js';
 import { detectProjectState } from './project-detection.js';
 import { DEVELOPMENT_STAGES, PROJECT_MAP_DEFAULTS } from './project-map.js';
 import { loadAgenticLoopConfig } from './json.js';
 import {
-  configureModels,
-  createPrompts,
   promptModelSettingsInteractive,
   validateHost,
 } from './configure-models.js';
 import { parseFrontmatter } from './frontmatter.js';
-import { applyGuidance, checkGuidance } from './guidance.js';
+import { checkGuidance, executeGuidanceLifecycleAction, loadGuidanceAlConfig } from './guidance.js';
 import {
   PROJECT_MAP_RELATIVE_PATH,
+  CONFIG_RELATIVE_PATH,
+  bundledToolkitPath,
   hasCurrentLayout,
 } from './layout.js';
 import { runValidation } from './validate-runner.js';
 
 const VALID_ADAPTER_HOSTS = ['opencode', 'codex', 'claude-code', 'copilot', 'cursor'];
-const ADAPTER_MODE_CHOICES = [
-  { index: 1, label: 'Files only (no host adapter)', value: null, action: 'files-only' },
-  { index: 2, label: 'Select a host adapter', value: null, action: 'select' },
-  { index: 3, label: 'All supported hosts', value: 'all', action: 'all' },
-  { index: 4, label: 'Skip adapter setup', value: null, action: 'skip' },
-];
 const DEVELOPMENT_STAGE_DESCRIPTIONS = {
   greenfield: 'establish a coherent foundation',
   expansion: 'grow capability without fragmentation',
   stabilization: 'converge and harden behavior',
   maintenance: 'preserve compatibility and operational safety',
 };
-
-function formatAdapterModeChoices(detectedHosts) {
-  const lines = [];
-  for (const choice of ADAPTER_MODE_CHOICES) {
-    let label = choice.label;
-    if (choice.action === 'select' && detectedHosts.length > 0) {
-      label += ` (detected: ${detectedHosts.join(', ')})`;
-    }
-    lines.push(`  ${choice.index}. ${label}`);
-  }
-  return lines.join('\n');
-}
 
 function formatHostChoices(detectedHosts) {
   const lines = [];
@@ -242,13 +241,51 @@ async function promptPositiveInteger(prompts, write, label, currentValue) {
   }
 }
 
-function writeProjectMapUpdate(target, values, write, description = 'human-confirmed profile values') {
-  const projectMapPath = join(target, PROJECT_MAP_RELATIVE_PATH);
-  if (!existsSync(projectMapPath)) return false;
-  const existing = readFileSync(projectMapPath, 'utf-8');
-  writeFileSync(projectMapPath, mergeProjectMapFrontmatter(existing, values), 'utf-8');
-  write(`\nUpdated .agenticloop/project.md with ${description}.`);
-  return true;
+/**
+ * Host integration choice. "Files only" and "Skip adapter setup" are merged
+ * into one explicit "No host integration" choice; invalid input explains the
+ * valid choices and reprompts; blank input takes the displayed default.
+ */
+async function promptAdapterMode(prompts, write, detectedHosts) {
+  const choices = [];
+  if (detectedHosts.length > 0) {
+    choices.push({ value: detectedHosts.length === 1 ? detectedHosts[0] : 'all', label: `${detectedHosts.join(', ')} (detected)` });
+  }
+  choices.push({ value: 'select', label: 'Another host' });
+  if (detectedHosts.length === 0) {
+    choices.push({ value: 'all', label: 'All supported hosts' });
+  }
+  choices.push({ value: null, label: 'No host integration' });
+  // Explicit displayed default: the detected host when one exists, otherwise
+  // the safe no-integration choice (never a silent adapter branch).
+  const defaultChoice = detectedHosts.length > 0 ? 1 : choices.length;
+
+  const menu = choices.map((choice, index) => `  ${index + 1}. ${choice.label}`).join('\n');
+  while (true) {
+    const answer = (await prompts.ask(`  Host integration:\n${menu}\n  Choice [${defaultChoice}]: `)).trim();
+    if (!answer) {
+      return choices[defaultChoice - 1].value;
+    }
+    const num = parseInt(answer, 10);
+    if (Number.isInteger(num) && num >= 1 && num <= choices.length) {
+      const selected = choices[num - 1].value;
+      if (selected !== 'select') return selected;
+      write('\nSelect host adapter:');
+      write(formatHostChoices(detectedHosts));
+      while (true) {
+        const hostAnswer = (await prompts.ask('  Choice: ')).trim();
+        const hostNum = parseInt(hostAnswer, 10);
+        if (Number.isInteger(hostNum) && hostNum >= 1 && hostNum <= VALID_ADAPTER_HOSTS.length) {
+          return VALID_ADAPTER_HOSTS[hostNum - 1];
+        }
+        if (VALID_ADAPTER_HOSTS.includes(hostAnswer)) {
+          return hostAnswer;
+        }
+        write(`  Invalid host '${hostAnswer}'. Enter 1-${VALID_ADAPTER_HOSTS.length} or one of: ${VALID_ADAPTER_HOSTS.join(', ')}.`);
+      }
+    }
+    write(`  Invalid choice '${answer}'. Enter 1-${choices.length} (default: ${defaultChoice}).`);
+  }
 }
 
 function mergeProjectMapFrontmatter(existingContent, newValues) {
@@ -262,6 +299,55 @@ function mergeProjectMapFrontmatter(existingContent, newValues) {
   return buildProjectMapFrontmatter(merged) + '\n' + body;
 }
 
+/** Execute lifecycle exec descriptors owned by setup. */
+function setupExecHandler(action, target) {
+  if (action.exec?.type === 'rename') {
+    return initExecHandler(action, target);
+  }
+  if (action.exec?.type === 'project-map') {
+    const projectMapPath = join(target, PROJECT_MAP_RELATIVE_PATH);
+    if (!existsSync(projectMapPath)) {
+      return {
+        ok: false,
+        rolledBack: true,
+        errors: ['.agenticloop/project.md not found. Run agenticloop init first.'],
+      };
+    }
+    try {
+      const existing = readFileSync(projectMapPath, 'utf-8');
+      atomicWriteFile(projectMapPath, mergeProjectMapFrontmatter(existing, action.exec.values));
+      return { ok: true, changed: true, display: action.display };
+    } catch (error) {
+      return {
+        ok: false,
+        rolledBack: true,
+        errors: [`${PROJECT_MAP_RELATIVE_PATH}: ${error.message}`],
+      };
+    }
+  }
+  if (action.exec?.type === 'guidance') {
+    return executeGuidanceLifecycleAction(action, target);
+  }
+  return {
+    ok: false,
+    rolledBack: true,
+    errors: [`setup cannot execute '${action.exec?.type}' for ${action.path}`],
+  };
+}
+
+function loadBundledCanonicalConfig() {
+  try {
+    return loadAgenticLoopConfig(bundledToolkitPath(CONFIG_RELATIVE_PATH));
+  } catch {
+    return null;
+  }
+}
+
+function stepHeader(write, step, label) {
+  write('');
+  write(`  ${step}/6 ${label}`);
+}
+
 /**
  * Run guided setup.
  *
@@ -270,9 +356,13 @@ function mergeProjectMapFrontmatter(existingContent, newValues) {
  * @param {string} [options.adapter]  Preselected adapter host.
  * @param {boolean} [options.nonInteractive=false]  Fail if interaction needed.
  * @param {'disabled'|'enabled'} [options.eventLogging]  Explicit event-logging choice.
- * @param {NodeJS.ReadableStream} [options.input]
- * @param {NodeJS.WritableStream} [options.output]
- * @returns {Promise<{errors: string[], warnings: string[]}>}
+ * @param {object} [options.io]  Injected I/O context (prompts, capabilities, signal).
+ * @param {NodeJS.ReadableStream} [options.input]  Legacy alias folded into io.
+ * @param {NodeJS.WritableStream} [options.output]  Legacy alias folded into io.
+ * @param {boolean} [options.dryRun=false]  Render the plan; perform zero writes.
+ * @param {boolean} [options.json=false]  Non-interactive versioned JSON plan on stdout.
+ * @param {boolean} [options.verbose=false]  Show individual paths and evidence.
+ * @returns {Promise<{errors: string[], warnings: string[], plan?: object}>}
  */
 export async function setup(options) {
   const {
@@ -281,83 +371,140 @@ export async function setup(options) {
     nonInteractive = false,
     eventLogging: preselectedEventLogging,
     agentsGuidance = true,
-    input = process.stdin,
-    output = process.stdout,
+    io: injectedIo = null,
+    input = null,
+    output = null,
+    dryRun = false,
+    json = false,
+    verbose = false,
   } = options;
 
+  const io = injectedIo ?? createIo({
+    stdin: input ?? undefined,
+    stdout: output ?? undefined,
+  });
   const errors = [];
   const warnings = [];
-  const write = (msg) => output.write(msg + '\n');
+
+  // --json is a machine-readable plan contract: non-interactive, zero writes,
+  // and stdout carries exactly one versioned document. All human-readable
+  // progress and diagnostics route to stderr in JSON mode.
+  const jsonMode = Boolean(json);
+  const effectiveDryRun = dryRun || jsonMode;
+  const effectiveNonInteractive = nonInteractive || jsonMode;
+  const write = jsonMode ? (msg) => io.err(msg) : (msg) => io.out(msg);
+
   if (preselectedEventLogging !== undefined && !isValidEventLogging(preselectedEventLogging)) {
     errors.push(
       `Invalid --event-logging value '${preselectedEventLogging}'. Use enabled or disabled.`
     );
     return { errors, warnings };
   }
+
   // Capture this before setup scaffolds anything. A repeat setup must not turn
   // an installed target that opted out into a guidance-enrolled target.
   const installationExisted = hasCurrentLayout(target) ||
     existsSync(join(target, PROJECT_MAP_RELATIVE_PATH)) ||
     existsSync(join(target, '.agenticloop', 'generated-artifacts.json'));
 
-  if (nonInteractive && !preselectedAdapter) {
+  if (effectiveNonInteractive && !preselectedAdapter) {
     errors.push('Non-interactive setup requires --adapter <host>.');
     return { errors, warnings };
   }
 
-  // No TTY check: piped input is allowed for interactive setup
-  // Only warn if stdin is truly disconnected (no pipe and no TTY)
-
-  // Step 1: Ensure toolkit is scaffolded (no adapter artifacts yet)
-  if (!hasCurrentLayout(target)) {
-    write('\nScaffolding Agentic Loop toolkit...');
-    const initResult = await init({ target });
-    if (initResult.errors.length > 0) {
-      errors.push(...initResult.errors);
-      return { errors, warnings };
-    }
-  }
-
-  // Step 2: Detect project state
-  const detection = detectProjectState(target);
-
-  write('\n' + '='.repeat(50));
-  write('  agenticloop setup');
-  write('='.repeat(50));
-
-  // Step 3: Show detected state
-  const docLines = formatDocumentDetection(detection.documents);
-  if (docLines.length > 0) {
-    write('\nDetected source documents:');
-    for (const line of docLines) write(line);
-  }
-
-  write(`\nGrouping: ${detection.grouping.groupingProfile} (${detection.grouping.evidence})`);
-  write(`Task ID: ${detection.taskId.taskIdPattern} (${detection.taskId.evidence})`);
-  write(`Backend: ${detection.backend.backend} (confidence: ${detection.backend.confidence})`);
-  if (detection.backend.evidence.length > 0) {
-    for (const ev of detection.backend.evidence) write(`  - ${ev}`);
-  }
-
-  const stageProposalLabel = detection.stage.developmentStage ?? 'selection required';
-  write(`\nDevelopment stage proposal: ${stageProposalLabel} (confidence: ${detection.stage.confidence})`);
-  write(`  ${detection.stage.rationale}`);
-  for (const evidence of detection.stage.evidence) write(`  - ${evidence}`);
-  if (detection.stage.conflicts.length > 0) {
-    write(`  Conflicting stage evidence: ${detection.stage.conflicts.join(', ')}`);
-  }
-
-  if (detection.isConfirmed && detection.hasConfirmedDevelopmentStage) {
-    write('\nProject map is already confirmed.');
-  } else if (detection.isConfirmed) {
-    write('\nProject map is confirmed but needs a human-confirmed development-stage migration.');
-  }
-
-  // Step 4: Confirm project map
-  const prompts = createPrompts(input, output);
+  const prompts = effectiveNonInteractive ? null : io.createPrompts();
 
   try {
-    if ((!detection.isConfirmed || !detection.hasConfirmedDevelopmentStage) && !nonInteractive) {
+    io.throwIfAborted();
+
+    // Step 1: Detect (read-only).
+    stepHeader(write, 1, 'Detect');
+    const detection = detectProjectState(target);
+    const detectedDocuments = formatDocumentDetection(detection.documents)
+      .map(line => line.trim().replace(/^(\w+): /, '$1: '));
+    const stageLabel = detection.stage.developmentStage ?? 'selection required';
+    write(`  Stage       ${stageLabel} (${detection.stage.confidence} confidence)`);
+    write(`  Backend     ${detection.backend.backend}`);
+    if (detectedDocuments.length > 0) {
+      write(`  Documents   ${detectedDocuments.map(line => line.split(':').slice(1).join(':').trim().replace(/  .*$/, '')).join(', ')}`);
+    }
+    if (verbose) {
+      const docLines = formatDocumentDetection(detection.documents);
+      for (const line of docLines) write(line);
+      write(`  Grouping: ${detection.grouping.groupingProfile} (${detection.grouping.evidence})`);
+      write(`  Task ID: ${detection.taskId.taskIdPattern} (${detection.taskId.evidence})`);
+      for (const ev of detection.backend.evidence) write(`  - ${ev}`);
+      write(`  ${detection.stage.rationale}`);
+      for (const evidence of detection.stage.evidence) write(`  - ${evidence}`);
+      if (detection.stage.conflicts.length > 0) {
+        write(`  Conflicting stage evidence: ${detection.stage.conflicts.join(', ')}`);
+      }
+    }
+
+    // Step 2: Review (collect human-confirmed profile values; no writes).
+    stepHeader(write, 2, 'Review');
+    let profileValues = null;
+    let profileReason = 'human-confirmed profile values';
+
+    if (detection.isConfirmed && detection.hasConfirmedDevelopmentStage) {
+      write('  Project map is already confirmed.');
+      if (!effectiveNonInteractive) {
+        const updateProfile = (await prompts.ask(
+          '  Update project profile (including development stage)? [y/N]: '
+        )).trim().toLowerCase();
+        if (updateProfile === 'yes' || updateProfile === 'y') {
+          const updateValues = {};
+          const currentStage = detection.existingConfig.development_stage;
+          const stageResult = await promptValidStage(prompts, write, currentStage);
+          const lanesResult = stageResult.cancelled
+            ? { cancelled: true }
+            : await promptPositiveInteger(
+                prompts,
+                write,
+                'Maximum implementation lanes',
+                detection.existingConfig.max_parallel_implementation_lanes ??
+                  PROJECT_MAP_DEFAULTS.max_parallel_implementation_lanes
+              );
+
+          if (stageResult.cancelled || lanesResult.cancelled) {
+            write('  Profile update cancelled; continuing setup without profile changes.');
+          } else {
+            updateValues.development_stage = stageResult.value;
+            updateValues.max_parallel_implementation_lanes = lanesResult.value;
+
+            const backendResult = await promptTaskBackend(
+              prompts,
+              write,
+              detection.existingConfig.task_backend ?? 'files'
+            );
+            updateValues.task_backend = backendResult.value;
+
+            const currentRationale = detection.existingRaw?.development_stage_rationale ?? '';
+            const rationaleAnswer = (await prompts.ask(`  Development stage rationale (${currentRationale || 'optional'}): `)).trim();
+            if (rationaleAnswer) updateValues.development_stage_rationale = rationaleAnswer;
+            const currentRevisit = detection.existingRaw?.development_stage_revisit_when ?? '';
+            const revisitAnswer = (await prompts.ask(`  Development stage revisit trigger (${currentRevisit || 'optional'}): `)).trim();
+            if (revisitAnswer) updateValues.development_stage_revisit_when = revisitAnswer;
+
+            printProjectMapValues(write, 'Proposed profile update values:', updateValues);
+            const confirmUpdate = (await prompts.ask('\nConfirm project profile update? (yes/no): ')).trim().toLowerCase();
+            if (confirmUpdate !== 'yes' && confirmUpdate !== 'y') {
+              write('  Profile update cancelled; continuing setup without profile changes.');
+            } else {
+              profileValues = updateValues;
+              profileReason = 'updated profile values';
+            }
+          }
+        }
+      }
+    } else if (effectiveNonInteractive) {
+      errors.push('Non-interactive setup cannot proceed without a human-confirmed development stage. Run agenticloop setup interactively first.');
+      if (!jsonMode) {
+        write('\nProject map is unconfirmed or has no human-confirmed development stage. Interactive confirmation required.');
+      }
+      if (!jsonMode) return { errors, warnings };
+      // In JSON mode the blocker rides in the plan document below.
+    } else {
       const stageMigration = detection.isConfirmed;
       const confirmValues = stageMigration
         ? {
@@ -464,252 +611,170 @@ export async function setup(options) {
         }
       }
 
-      if (!writeProjectMapUpdate(target, confirmValues, write)) {
-        errors.push('.agenticloop/project.md not found. Run agenticloop init first.');
-        return { errors, warnings };
-      }
-    } else if (detection.isConfirmed && !nonInteractive) {
-      const updateProfile = (await prompts.ask(
-        '\nUpdate project profile (including development stage)? (yes/no): '
-      )).trim().toLowerCase();
-      if (updateProfile === 'yes' || updateProfile === 'y') {
-        const updateValues = {};
-        const currentStage = detection.existingConfig.development_stage;
-        const stageResult = await promptValidStage(prompts, write, currentStage);
-        const lanesResult = stageResult.cancelled
-          ? { cancelled: true }
-          : await promptPositiveInteger(
-              prompts,
-              write,
-              'Maximum implementation lanes',
-              detection.existingConfig.max_parallel_implementation_lanes ??
-                PROJECT_MAP_DEFAULTS.max_parallel_implementation_lanes
-            );
-
-        if (stageResult.cancelled || lanesResult.cancelled) {
-          write('Profile update cancelled; continuing setup without profile changes.');
-        } else {
-          updateValues.development_stage = stageResult.value;
-          updateValues.max_parallel_implementation_lanes = lanesResult.value;
-
-          const backendResult = await promptTaskBackend(
-            prompts,
-            write,
-            detection.existingConfig.task_backend ?? 'files'
-          );
-          updateValues.task_backend = backendResult.value;
-
-          const currentRationale = detection.existingRaw?.development_stage_rationale ?? '';
-          const rationaleAnswer = (await prompts.ask(`  Development stage rationale (${currentRationale || 'optional'}): `)).trim();
-          if (rationaleAnswer) updateValues.development_stage_rationale = rationaleAnswer;
-          const currentRevisit = detection.existingRaw?.development_stage_revisit_when ?? '';
-          const revisitAnswer = (await prompts.ask(`  Development stage revisit trigger (${currentRevisit || 'optional'}): `)).trim();
-          if (revisitAnswer) updateValues.development_stage_revisit_when = revisitAnswer;
-
-          printProjectMapValues(write, 'Proposed profile update values:', updateValues);
-          const confirmUpdate = (await prompts.ask('\nConfirm project profile update? (yes/no): ')).trim().toLowerCase();
-          if (confirmUpdate !== 'yes' && confirmUpdate !== 'y') {
-            write('Profile update cancelled; continuing setup without profile changes.');
-          } else if (!writeProjectMapUpdate(target, updateValues, write)) {
-            errors.push('.agenticloop/project.md not found. Run agenticloop init first.');
-            return { errors, warnings };
-          }
-        }
-      }
-    } else if ((!detection.isConfirmed || !detection.hasConfirmedDevelopmentStage) && nonInteractive) {
-      write('\nProject map is unconfirmed or has no human-confirmed development stage. Interactive confirmation required.');
-      errors.push('Non-interactive setup cannot proceed without a human-confirmed development stage. Run agenticloop setup interactively first.');
-      return { errors, warnings };
+      profileValues = confirmValues;
+      profileReason = stageMigration ? 'development-stage migration values' : 'human-confirmed profile values';
     }
 
-    // Step 5: Event logging is a separate local operational choice. It is
-    // never inferred from the task backend, repository host, or existing logs.
+    io.throwIfAborted();
+
+    // Step 3: Choose (event logging, host integration, models; no writes).
+    stepHeader(write, 3, 'Choose');
     const currentEventLogging = isValidEventLogging(detection.existingConfig?.event_logging)
       ? detection.existingConfig.event_logging
       : PROJECT_MAP_DEFAULTS.event_logging;
     const selectedEventLogging = preselectedEventLogging ?? (
-      nonInteractive
+      effectiveNonInteractive
         ? currentEventLogging
         : await promptEventLogging(prompts, write, currentEventLogging)
     );
-    const rawEventLogging = detection.existingRaw?.event_logging;
 
-    if (selectedEventLogging !== rawEventLogging) {
-      if (!writeProjectMapUpdate(
-        target,
-        { event_logging: selectedEventLogging },
-        write,
-        `event_logging: ${selectedEventLogging}`
-      )) {
-        errors.push('.agenticloop/project.md not found. Run agenticloop init first.');
-        return { errors, warnings };
-      }
-    } else if (!nonInteractive) {
-      write(`  Event logging remains ${selectedEventLogging}.`);
-    }
-
-    // Step 6: Adapter selection
     let selectedAdapter = preselectedAdapter ?? null;
-
-    if (!selectedAdapter && !nonInteractive) {
+    if (!selectedAdapter && !effectiveNonInteractive) {
       const state = detectSetupState(target);
       const detectedHosts = Object.entries(state.adapters)
         .filter(([, s]) => s.hasArtifacts)
         .map(([host]) => host);
-
-      write('\nAdapter setup:');
-      write(formatAdapterModeChoices(detectedHosts));
-      const adapterAnswer = (await prompts.ask('  Choice: ')).trim();
-      const adapterNum = parseInt(adapterAnswer, 10);
-
-      if (adapterNum === 1) {
-        selectedAdapter = null;
-        write('  Files-only mode selected. No adapter artifacts will be generated.');
-      } else if (adapterNum === 2) {
-        write('\nSelect host adapter:');
-        write(formatHostChoices(detectedHosts));
-        const hostAnswer = (await prompts.ask('  Choice: ')).trim();
-        const hostNum = parseInt(hostAnswer, 10);
-        if (hostNum >= 1 && hostNum <= VALID_ADAPTER_HOSTS.length) {
-          selectedAdapter = VALID_ADAPTER_HOSTS[hostNum - 1];
-        } else if (VALID_ADAPTER_HOSTS.includes(hostAnswer)) {
-          selectedAdapter = hostAnswer;
-        } else {
-          write('  Invalid choice. Skipping adapter setup.');
-        }
-      } else if (adapterNum === 3) {
-        selectedAdapter = 'all';
-      } else {
-        selectedAdapter = null;
-      }
+      selectedAdapter = await promptAdapterMode(prompts, write, detectedHosts);
     }
 
-    // Step 7: Ensure agenticloop.json exists for adapter setup (no artifacts yet).
-    // An existing agenticloop.json is reconciled non-destructively against the
-    // current canonical roles (for example, adding a missing auditor slot).
+    const modelMutationsByHost = {};
     if (selectedAdapter) {
-      const agenticloopJsonPath = join(target, 'agenticloop.json');
-      if (!existsSync(agenticloopJsonPath)) {
-        write(`\nCreating agenticloop.json for adapter: ${selectedAdapter}`);
-      }
-      const { ensureAdapterConfig } = await import('./setup-generate.js');
-      const cfgError = ensureAdapterConfig(target, selectedAdapter);
-      if (cfgError) {
-        errors.push(cfgError);
-        return { errors, warnings };
-      }
-
-      // Step 8: Model configuration
-      const alConfig = loadAlConfig(target);
-      if (alConfig) {
-        const roles = Object.keys(alConfig.roles ?? {});
-        const hosts = selectedAdapter === 'all' ? VALID_ADAPTER_HOSTS : [selectedAdapter];
-
-        for (const host of hosts) {
-          const hostError = validateHost(host);
-          if (hostError) {
-            errors.push(hostError);
-            continue;
-          }
-
-          const currentSettings = alConfig.adapters?.[host]?.roleSettings ?? {};
-
-          write(`\nConfiguring models for ${host}:`);
-
-          if (nonInteractive) {
-            write('  Skipping model configuration in non-interactive mode.');
-            write(`  Use: agenticloop configure models --adapter ${host} --role <role> --model <id>`);
-            continue;
-          }
-
-          const { mutations, cancelled } = await promptModelSettingsInteractive(
-            roles, host, prompts, currentSettings, { discoverModels: true }
-          );
-
-          if (cancelled) {
-            write('  Model configuration cancelled.');
-            continue;
-          }
-
-          if (mutations.length === 0) {
-            write('  No model settings provided.');
-            continue;
-          }
-
-          const cfgResult = configureModels(target, { adapter: host, mutations });
-          for (const w of cfgResult.warnings) {
-            write(`  WARN: ${w}`);
-            warnings.push(w);
-          }
-          for (const e of cfgResult.errors) {
-            write(`  ERROR: ${e}`);
-            errors.push(e);
-          }
-          for (const u of cfgResult.updated) write(`  updated: ${u}`);
+      const hosts = selectedAdapter === 'all' ? VALID_ADAPTER_HOSTS : [selectedAdapter];
+      for (const host of hosts) {
+        const hostError = validateHost(host);
+        if (hostError) {
+          errors.push(hostError);
+          continue;
         }
-
-        // Step 9: Generate adapter artifacts
-        if (errors.length === 0) {
-          write('\nGenerating adapter artifacts...');
-          const { generateAdapters } = await import('./setup-generate.js');
-          const genResult = await generateAdapters(target, selectedAdapter);
-          for (const e of genResult.errors) {
-            write(`  ERROR: ${e}`);
-            errors.push(e);
-          }
-          for (const f of genResult.files) write(`  generated: ${f}`);
+        if (effectiveNonInteractive) {
+          write(`  Skipping model configuration for ${host} in non-interactive mode.`);
+          write(`  Use: agenticloop configure models --adapter ${host} --role <role> --model <id>`);
+          continue;
         }
+        const rolesSource = loadGuidanceAlConfig(target).config ?? loadBundledCanonicalConfig();
+        const roles = Object.keys(rolesSource?.roles ?? {});
+        const currentSettings = rolesSource?.adapters?.[host]?.roleSettings ?? {};
+        write(`\nConfiguring models for ${host}:`);
+        const { mutations, cancelled } = await promptModelSettingsInteractive(
+          roles,
+          host, prompts, currentSettings, { discoverModels: true }
+        );
+        if (cancelled) {
+          write('  Model configuration cancelled.');
+          continue;
+        }
+        if (mutations.length === 0) {
+          write('  No model settings provided.');
+          continue;
+        }
+        modelMutationsByHost[host] = mutations;
       }
     }
 
-    // Step 9b: New installations receive guidance by default. Repeated setup
-    // only refreshes a block that is already manifest-owned.
-    if (agentsGuidance) {
-      const configResult = loadGuidanceConfig(target);
-      if (configResult.error) {
-        write(`\nActivation guidance: ${configResult.error}`);
-        errors.push(configResult.error);
+    io.throwIfAborted();
+
+    // Step 4: Plan (compose the repair-aware plan; preflight before any write).
+    stepHeader(write, 4, 'Plan');
+    const guidanceConfig = loadGuidanceAlConfig(target);
+    const guidanceEnrollable = agentsGuidance && !guidanceConfig.error &&
+      checkGuidance(target, { alConfig: guidanceConfig.config }).owned === true;
+    const plan = planSetup({
+      target,
+      adapter: selectedAdapter,
+      profileValues,
+      profileReason,
+      eventLogging: selectedEventLogging,
+      modelMutationsByHost,
+      agentsGuidance,
+      installationExisted,
+      guidanceEnrollable,
+    });
+    const planBlockers = lifecyclePlanBlockers(plan);
+    if (errors.length > 0 && jsonMode) {
+      plan.blockers.unshift(...errors);
+    }
+
+    if (effectiveDryRun) {
+      if (jsonMode) {
+        io.out(lifecyclePlanToJson(plan));
       } else {
-        const priorGuidance = checkGuidance(target, { alConfig: configResult.config });
-        if (!installationExisted || priorGuidance.owned === true) {
-          const guidance = applyGuidance(target, {
-            alConfig: configResult.config,
-            refreshOnly: installationExisted,
-          });
-          if (guidance.changed) {
-            write(`\nActivation guidance: ${guidance.action} in ${guidance.relPath}.`);
-          } else if (guidance.status === 'current') {
-            write(`\nActivation guidance: current in ${guidance.relPath}.`);
-          } else if (!guidance.ok) {
-            write(`\nActivation guidance: ${guidance.message}`);
-            errors.push(guidance.message);
-          }
-          for (const warning of guidance.warnings) {
-            write(`  WARN: ${warning}`);
-            warnings.push(warning);
-          }
-        }
+        for (const line of renderLifecyclePlan(plan, { verbose, dryRun: true })) write(line);
+        for (const warning of plan.warnings) io.warn(`  WARN: ${warning}`);
+      }
+      return {
+        errors: planBlockers.length > 0 || errors.length > 0 ? [...errors, ...planBlockers] : [],
+        warnings,
+        plan,
+      };
+    }
+
+    for (const line of renderLifecyclePlan(plan, { verbose })) write(line);
+    for (const warning of plan.warnings) io.warn(`  WARN: ${warning}`);
+
+    if (errors.length > 0) {
+      for (const error of errors) io.err(`  ERROR: ${error}`);
+      return { errors, warnings, plan };
+    }
+    if (planBlockers.length > 0) {
+      for (const blocker of planBlockers) io.err(`  ${blocker}`);
+      errors.push(...planBlockers);
+      return { errors, warnings, plan };
+    }
+
+    // Step 5: Apply (one confirmation before the first mutation).
+    stepHeader(write, 5, 'Apply');
+    if (!effectiveNonInteractive) {
+      const applyAnswer = (await prompts.ask('  Apply this plan? [y/N]: ')).trim().toLowerCase();
+      if (applyAnswer !== 'y' && applyAnswer !== 'yes') {
+        write('  Setup cancelled before apply; no files were changed.');
+        return { errors, warnings, plan };
       }
     }
 
-    // Step 10: Final status
+    io.throwIfAborted();
+    const applied = applyLifecyclePlan(target, plan, { execHandler: setupExecHandler });
+    warnings.push(...applied.warnings);
+    const counts = lifecyclePlanCounts(plan);
+    if (verbose) {
+      for (const entry of applied.merged) write(`  merged:   ${entry}`);
+      for (const entry of applied.removed) write(`  removed:  ${entry}`);
+      for (const entry of applied.created) write(`  created:  ${entry}`);
+      for (const entry of applied.adapterFiles) write(`  generated: ${entry}`);
+      for (const entry of applied.skipped) write(`  skipped (exists): ${entry}`);
+    } else {
+      write(`  Created  ${counts.create + counts.adapter}`);
+      write(`  Updated  ${counts.update + counts.merge}`);
+      write(`  Kept     ${counts.skip}`);
+    }
+    for (const warning of applied.warnings) io.warn(`  WARN: ${warning}`);
+    for (const rollbackError of applied.rollbackErrors) io.err(`  ROLLBACK ERROR: ${rollbackError}`);
+
+    if (!applied.ok) {
+      for (const error of applied.errors) io.err(`  ERROR: ${error}`);
+      for (const line of formatPartialApplyDiagnostics(applied)) io.err(line);
+      errors.push(...applied.errors);
+      return { errors, warnings, plan };
+    }
+
+    // Step 6: Verify.
+    stepHeader(write, 6, 'Verify');
     const finalState = detectSetupState(target, { includeValidation: true });
-    write('\n' + formatSetupChecklist(finalState));
+    write(formatSetupChecklist(finalState));
 
     const steps = nextStepsFromState(finalState);
 
     if (finalState.setupComplete && errors.length === 0) {
       write('\nSetup complete.');
 
-      const shouldPromptValidation = !nonInteractive &&
+      const shouldPromptValidation = !effectiveNonInteractive &&
         steps.length > 0 &&
         steps.some(s => s.includes('validate'));
 
       if (shouldPromptValidation) {
-        const runNow = (await prompts.ask('Run validation now? (yes/no): ')).trim().toLowerCase();
+        const runNow = (await prompts.ask('Run validation now? [y/N]: ')).trim().toLowerCase();
         if (runNow === 'y' || runNow === 'yes') {
           write('');
-          const valResult = runValidation(target, { output });
+          const valResult = runValidation(target, { output: io.stdout });
           if (valResult.totalErrors === 0) {
             write('Validation passed.');
             if (valResult.totalWarnings > 0) {
@@ -735,23 +800,10 @@ export async function setup(options) {
     }
 
     write('');
+    return { errors, warnings, plan };
   } finally {
-    prompts.close();
-  }
-
-  return { errors, warnings };
-}
-
-function loadGuidanceConfig(target) {
-  const cfgPath = join(target, 'agenticloop.json');
-  if (!existsSync(cfgPath)) return { config: null, error: null };
-  try {
-    return { config: loadAgenticLoopConfig(cfgPath), error: null };
-  } catch (error) {
-    return { config: null, error: `agenticloop.json is malformed: ${error.message}` };
+    prompts?.close();
   }
 }
 
-function loadAlConfig(target) {
-  return loadGuidanceConfig(target).config;
-}
+export { planSetup };

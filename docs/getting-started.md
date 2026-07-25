@@ -14,8 +14,13 @@ into the GitHub task backend on their own.
 Run in an existing project directory:
 
 ```text
-npx agenticloop init
+npx agenticloop setup
 ```
+
+Setup is the recommended one-command onboarding path. It detects the project,
+collects your decisions, shows one complete plan, and asks before the first
+mutation. It scaffolds a fresh target or repairs a partial one, and it is
+idempotent: running it twice changes nothing the second time.
 
 This creates:
 
@@ -28,7 +33,8 @@ agenticloop/                   toolkit-owned canonical source
 .agenticloop/tmp/              gitignored scratch directory
 ```
 
-No adapter config file is created. No GitHub setup is needed.
+No adapter config file is created unless you choose host integration. No
+GitHub setup is needed.
 
 `agenticloop/` is toolkit-owned source refreshed by `agenticloop update`.
 `.agenticloop/` is target-owned state. Host-native output such as `.opencode/`
@@ -46,17 +52,32 @@ constrain future work.
 
 ## Guided Setup
 
-For a guided onboarding experience that walks through project detection,
-adapter selection, and model configuration:
+`npx agenticloop setup` follows six steps: **Detect, Review, Choose, Plan,
+Apply, Verify**. Detection and model discovery are read-only; nothing is
+written before the final apply confirmation. Setup detects your project state,
+confirms the project map, lets you choose whether to enable local event
+logging, select a host adapter (or explicitly no host integration), configure
+role models, and generate artifacts in one pass. It is resumable, safe to
+rerun, and repairs missing scaffold state in partial installations without
+overwriting target-owned content.
+
+Preview the exact plan without writing anything:
 
 ```text
-npx agenticloop setup
+npx agenticloop setup --dry-run
 ```
 
-Setup detects your project state, confirms the project map, lets you choose
-whether to enable local event logging, select a host adapter, configure role
-models, and generate artifacts in one pass. It is resumable and safe to
-rerun.
+Non-interactive automation uses `--non-interactive` (preferred) or `--yes`
+(compatibility alias) with an explicit adapter:
+
+```text
+npx agenticloop setup --adapter opencode --non-interactive
+```
+
+Neither spelling confirms a missing human-controlled project profile; a fresh
+non-interactive setup against an unconfirmed project map fails closed. For the
+machine-readable plan contract and exit statuses, see
+[docs/cli-reference.md](./cli-reference.md).
 
 To check onboarding progress without changing files:
 
@@ -64,7 +85,8 @@ To check onboarding progress without changing files:
 npx agenticloop doctor
 ```
 
-For host-native adapter setup without the guided flow, run:
+For host-native adapter setup without the guided flow (advanced/manual path),
+run:
 
 ```text
 npx agenticloop init --adapter opencode
@@ -189,8 +211,9 @@ Use this when starting a project from scratch or when the target project does
 not yet have its own `AGENTS.md`, `IMPLEMENTATION_PLAN.md`, or architecture
 docs.
 
-Run `npx agenticloop init`. The generated `.agenticloop/project.md` starts with
-`setup_status: unconfirmed` and `development_stage: unconfirmed`.
+Run `npx agenticloop setup`. The scaffolded `.agenticloop/project.md` starts with
+`setup_status: unconfirmed` and `development_stage: unconfirmed`; guided setup
+walks you through confirming both before it writes them.
 
 Before the first non-trivial task, either:
 
@@ -212,7 +235,7 @@ Use this when the target project already has `AGENTS.md`,
 Agentic Loop adds its process files beside the existing docs without
 overwriting them.
 
-Run `npx agenticloop init` in the target project root. Init skips existing
+Run `npx agenticloop setup` in the target project root. Setup skips existing
 protected docs and adds only Agentic Loop-owned assets.
 
 If source document names are non-standard, or if the repo may already have a
@@ -398,20 +421,20 @@ older targets and should be removed when `.agenticloop/project.md` exists.
 
 ## First Run
 
-1. Run `npx agenticloop init` to scaffold the toolkit.
-2. Run `npx agenticloop setup` for guided onboarding: project detection,
+1. Run `npx agenticloop setup` for guided onboarding: project detection,
    confirmation, adapter selection, model configuration, and artifact generation.
-   Setup requires explicit "yes" confirmation before writing project map values.
-3. Run `npx agenticloop doctor` to inspect setup state without changing files.
-4. If source document names are non-standard, the setup flow detects and proposes
+   Setup shows one complete plan and requires explicit confirmation before the
+   first mutation.
+2. Run `npx agenticloop doctor` to inspect setup state without changing files.
+3. If source document names are non-standard, the setup flow detects and proposes
    overrides; you can also edit `.agenticloop/project.md` directly.
-5. If the repo has durable GitHub evidence (remote, workflows, issue templates),
+4. If the repo has durable GitHub evidence (remote, workflows, issue templates),
    setup shows it as informational evidence only; the files backend stays the
    default. Select GitHub explicitly in the numbered backend prompt if the
    project wants GitHub coordination.
-6. If using GitHub, set `task_backend: github` in `.agenticloop/project.md` and run `npx agenticloop bootstrap-labels`.
-7. Run `npx agenticloop validate` to verify the setup.
-8. Start the host agent. For OpenCode, run
+5. If using GitHub, set `task_backend: github` in `.agenticloop/project.md` and run `npx agenticloop bootstrap-labels`.
+6. Run `npx agenticloop validate` to verify the setup.
+7. Start the host agent. For OpenCode, run
    `/agenticloop [task-id or task description]`. For Codex, run
    `$agenticloop [task-id or task description]`; `/skills` can also select
    `Agentic Loop`, but Codex does not use a repo-local `/agenticloop` slash

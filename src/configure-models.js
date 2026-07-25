@@ -464,7 +464,43 @@ export function configureModels(targetDir, options) {
       preserved.push(...result.kept);
     }
   } else {
-    for (const mutation of options.mutations ?? []) {
+    const applied = applyModelMutations(config, host, options.mutations ?? []);
+    warnings.push(...applied.warnings);
+    updated.push(...applied.updated);
+    preserved.push(...applied.preserved);
+  }
+
+  if (errors.length === 0 && updated.length > 0) {
+    try {
+      writeFileSync(cfgPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+    } catch (e) {
+      errors.push(`Failed to write agenticloop.json: ${e.message}`);
+    }
+  }
+
+  return { errors, warnings, updated, preserved };
+}
+
+/**
+ * Apply role model mutations to an in-memory agenticloop.json object.
+ * Pure: mutates `config` but performs no I/O, so lifecycle planners can
+ * compute deterministic post-mutation config content without writing.
+ *
+ * @param {Record<string, any>} config
+ * @param {string} host
+ * @param {Array<{role: string, model?: string, reasoningEffort?: string, clearReasoningEffort?: boolean}>} mutations
+ * @returns {{ warnings: string[], updated: string[], preserved: string[] }}
+ */
+export function applyModelMutations(config, host, mutations) {
+  const warnings = [];
+  const updated = [];
+  const preserved = [];
+
+  config.adapters = config.adapters ?? {};
+  config.adapters[host] = config.adapters[host] ?? {};
+  config.adapters[host].roleSettings = config.adapters[host].roleSettings ?? {};
+
+  for (const mutation of mutations ?? []) {
       const { role, model, reasoningEffort, clearReasoningEffort } = mutation;
       if (!role) {
         warnings.push('Skipping model setting with no role');
@@ -509,18 +545,9 @@ export function configureModels(targetDir, options) {
         config.adapters[host].roleSettings[role].reasoningEffort = reasoningEffort;
         updated.push(`adapters.${host}.roleSettings.${role}.reasoningEffort`);
       }
-    }
   }
 
-  if (errors.length === 0 && updated.length > 0) {
-    try {
-      writeFileSync(cfgPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
-    } catch (e) {
-      errors.push(`Failed to write agenticloop.json: ${e.message}`);
-    }
-  }
-
-  return { errors, warnings, updated, preserved };
+  return { warnings, updated, preserved };
 }
 
 /**

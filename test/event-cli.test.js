@@ -387,8 +387,8 @@ describe('event CLI', () => {
     const target = makeTarget('invalid-event-type');
     const result = await run(['event', 'not.real', '--target', target, '--summary', 'Bad event']);
 
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /event_type must be one of/);
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /unknown event type or subcommand 'not\.real'/);
   });
 
   it('rejects privacy-blocked data payloads', async () => {

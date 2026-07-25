@@ -1,8 +1,17 @@
 /** Transactional execution of adapter output plans. */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, relative, resolve, sep } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
+import {
+  assertSafeRelativePath as norm,
+  atomicWriteFile as atomicWrite,
+  isUnderRoot,
+  missingAncestorDirectories,
+  removeEmptyDirectory,
+  removeEmptyParents as emptyParents,
+  rollbackSnapshots as rollback,
+  snapshotPaths as snapshot,
+} from './fs-mutation-kernel.js';
 import {
   createFileEntry,
   createGitignoreEntry,
@@ -20,14 +29,6 @@ import {
 } from './generated-artifacts.js';
 
 const SHARED_CONFIG_FILES = new Set(['.claude/settings.json', '.claude/settings.local.json', '.agents/plugins/marketplace.json']);
-
-function norm(value) {
-  if (typeof value !== 'string') throw new Error('planned path must be a string');
-  if (value.includes('\\') || value.includes('\0') || value.startsWith('/') || /^[a-zA-Z]:/.test(value) || value.split('/').some(part => !part || part === '.' || part === '..')) {
-    throw new Error(`unsafe planned path: ${value}`);
-  }
-  return value;
-}
 
 function outputPath(targetRoot, plan, relPath) {
   return resolveManagedPath(targetRoot, plan.outputRoot, norm(relPath));
@@ -337,53 +338,8 @@ function appendGitignore(path, action, priorManifest, outputRoot) {
   return { content: `${original}${separator}${line}${lineEnding}`, lineAdded: true, createdFile: !existed, occurrence: matchCount, lineEnding };
 }
 
-function atomicWrite(path, content) {
-  mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try { writeFileSync(temporary, content); renameSync(temporary, path); } finally { if (existsSync(temporary)) rmSync(temporary, { force: true }); }
-}
-
-function snapshot(paths) {
-  return [...paths].map(path => ({ path, existed: existsSync(path), bytes: existsSync(path) ? readFileSync(path) : null }));
-}
-function removeEmptyDirectory(path) {
-  if (!existsSync(path) || !statSync(path).isDirectory() || readdirSync(path).length !== 0) return false;
-  rmdirSync(path);
-  return true;
-}
-function rollback(snapshots) {
-  const errors = [];
-  for (const item of [...snapshots].reverse()) try {
-    if (item.existed) atomicWrite(item.path, item.bytes);
-    else if (existsSync(item.path)) rmSync(item.path, { force: true });
-  } catch (error) { errors.push(`${item.path}: ${error.message}`); }
-  return errors;
-}
-function emptyParents(target, paths) {
-  for (const path of paths) {
-    let current = dirname(path);
-    while (current !== target && current.startsWith(target + sep) && removeEmptyDirectory(current)) current = dirname(current);
-  }
-}
-
-function missingAncestorDirectories(targetRoot, paths) {
-  const missing = new Set();
-  for (const path of paths) {
-    let current = dirname(path);
-    while (current !== targetRoot && current.startsWith(targetRoot + sep)) {
-      if (!existsSync(current)) missing.add(current);
-      current = dirname(current);
-    }
-  }
-  return [...missing].sort((left, right) => right.length - left.length);
-}
-
 function entryKey(adapter, outputRoot, relPath, kind) {
-  return [adapter, outputRoot, relPath, kind].join('\u0000');
-}
-
-function isUnderRoot(relPath, root) {
-  return relPath === root || relPath.startsWith(`${root}/`);
+  return [adapter, outputRoot, relPath, kind].join(' ');
 }
 
 const FORBIDDEN_GENERATION_ROOTS = ['.github/workflows'];
@@ -566,7 +522,7 @@ export function executeGenerationPlan(targetRoot, plan, options = {}) {
     // Walk each created dir tree deepest-first and remove empty ancestors.
     for (const dir of createdDirs) try { removeEmptyDirectory(dir); } catch (dirError) { rollbackErrors.push(`dir rollback ${dir}: ${dirError.message}`); }
     try { if (manifestSnapshot) atomicWrite(manifestPath, manifestSnapshot); else if (existsSync(manifestPath)) rmSync(manifestPath, { force: true }); } catch (manifestError) { rollbackErrors.push(`manifest: ${manifestError.message}`); }
-    return { ok: false, errors: [error.message, ...rollbackErrors], writtenFiles: [], adapters: plan.adapters };
+    return { ok: false, errors: [error.message, ...rollbackErrors], rollbackErrors, writtenFiles: [], adapters: plan.adapters };
   }
 }
 

@@ -1,75 +1,67 @@
 /**
  * Importable CLI execution API.
  *
- * `runCli` executes a single agenticloop command and returns its numeric exit
- * code without mutating global process state. Commands that implement the
- * injectable-io contract run in-process. Transitional legacy commands run in
- * an isolated child process, which preserves the same cwd/env/output contract
- * without exposing their internal `process.exitCode` and `console` usage to the
- * caller. The thin binary (`bin/agenticloop.js`) is the only public entrypoint
- * that assigns the returned code to `process.exitCode`.
+ * `runCli` executes a single agenticloop command in-process and returns its
+ * numeric exit code without mutating global process state. Every command runs
+ * through the injected-I/O contract: handlers receive an `io` context
+ * (stdin/stdout/stderr, cwd, env, AbortSignal, prompt factory, and TTY/CI/
+ * color capabilities) and return numeric exit codes. The thin binary
+ * (`bin/agenticloop.js`) is the only entrypoint that assigns the returned code
+ * to `process.exitCode`.
+ *
+ * Exit statuses:
+ *   0    success, safe no-op, displayed help/version, or cancellation before apply
+ *   1    operational, configuration, validation, or apply failure
+ *   2    invalid command-line usage (CliUsageError)
+ *   130  user interruption propagated through the cancellation contract
  *
  * Importing this module (or `./cli.js`) does not execute any command, so tests
  * can drive commands in-process.
  */
 
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-
-import { createIo } from './cli-io.js';
+import {
+  createIo,
+  CliAbortError,
+  CliUsageError,
+  EXIT_FAILURE,
+  EXIT_INTERRUPTED,
+  EXIT_USAGE,
+} from './cli-io.js';
 import { dispatch } from './cli.js';
-
-const BIN = fileURLToPath(new URL('../bin/agenticloop.js', import.meta.url));
-const IN_PROCESS_COMMANDS = new Set([
-  undefined,
-  '--help',
-  '-h',
-  'help',
-  'task',
-  'audit',
-  'event',
-  'event-logging',
-]);
-
-function runLegacySubprocess(argv, io) {
-  return new Promise((resolvePromise) => {
-    const child = spawn(process.execPath, [BIN, ...argv], {
-      cwd: io.cwd,
-      env: io.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
-
-    child.stdout.on('data', chunk => io.stdout.write(chunk));
-    child.stderr.on('data', chunk => io.stderr.write(chunk));
-    child.on('error', error => {
-      io.err(`Failed to start agenticloop CLI: ${error.message}`);
-      resolvePromise(1);
-    });
-    child.on('close', (code, signal) => {
-      if (signal) {
-        io.err(`agenticloop CLI terminated by signal ${signal}`);
-        resolvePromise(1);
-        return;
-      }
-      resolvePromise(code ?? 1);
-    });
-  });
-}
 
 /**
  * @param {string[]} argv  Arguments after the node/bin prefix (e.g. process.argv.slice(2)).
  * @param {object} [options]
- * @param {string} [options.cwd]     Working directory for relative target resolution.
+ * @param {string} [options.cwd]       Working directory for relative target resolution.
  * @param {NodeJS.ProcessEnv} [options.env]  Environment for env-sensitive behavior.
+ * @param {NodeJS.ReadableStream} [options.stdin]
  * @param {NodeJS.WritableStream} [options.stdout]
  * @param {NodeJS.WritableStream} [options.stderr]
+ * @param {AbortSignal} [options.signal]  Cancellation propagated to prompts/planning/apply.
+ * @param {boolean} [options.isTTY]     Override stdout TTY capability.
+ * @param {boolean} [options.ci]        Override CI detection.
+ * @param {boolean} [options.color]     Override color capability.
+ * @param {Function} [options.promptFactory]  Injectable prompt factory for tests.
  * @returns {Promise<number>} exit code
  */
 export async function runCli(argv, options = {}) {
   const io = createIo(options);
-  if (!IN_PROCESS_COMMANDS.has(argv[0]) && options.legacyInProcess !== true) {
-    return await runLegacySubprocess(argv, io);
+  try {
+    io.throwIfAborted();
+    return await dispatch(argv, io);
+  } catch (error) {
+    if (error instanceof CliUsageError) {
+      io.err(error.message);
+      if (error.hint) io.err(error.hint);
+      return EXIT_USAGE;
+    }
+    if (error instanceof CliAbortError || error?.name === 'AbortError') {
+      io.err('Interrupted.');
+      return EXIT_INTERRUPTED;
+    }
+    io.err(error?.stack ?? String(error));
+    return EXIT_FAILURE;
   }
-  return await dispatch(argv, io);
 }
+
+export { EXIT_FAILURE, EXIT_INTERRUPTED, EXIT_USAGE };

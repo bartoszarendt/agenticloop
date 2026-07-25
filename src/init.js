@@ -16,348 +16,57 @@
  *   AGENTS.md, IMPLEMENTATION_PLAN.md, ARCHITECTURE*.md, README.md,
  *   .agenticloop/project.md (target-owned; never overwritten by refreshes)
  *
- * Skips (and reports) existing Agentic Loop-owned assets unless refreshAssets is true.
- * Appends .agenticloop/tmp/ to .gitignore without disturbing existing content.
+ * init is one composed plan/apply path: `planInit` (src/init-plan.js) computes
+ * the idempotent lifecycle plan without writes, and `applyLifecyclePlan`
+ * executes it through the generic filesystem mutation kernel. `--dry-run`
+ * renders the exact plan with zero writes; the default human output is a
+ * concise summary, with per-path detail behind `verbose`.
  */
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { createIo } from './cli-io.js';
 import {
-  appendFileSync,
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { generateClaudeCodeArtifacts } from './adapters/claude-code.js';
-import { generateCodexArtifacts } from './adapters/codex.js';
-import { generateCopilotArtifacts } from './adapters/copilot.js';
-import { generateCursorArtifacts } from './adapters/cursor.js';
-import { generateOpencodeArtifacts } from './adapters/opencode.js';
-import { generateAdapterArtifacts } from './adapter-generation.js';
-import { loadAgenticLoopConfig, loadJsonFile } from './json.js';
-import { ensureAdapterRoleSettings, getDefaultRoleSettings } from './adapter-role-defaults.js';
-import {
-  CONFIG_RELATIVE_PATH,
-  INSTALLED_TOOLKIT_ROOT_DIRECTORY,
-  MEMORY_SCAFFOLD_RELATIVE_PATH,
-  PACKAGE_SOURCE_RELATIVE_PATHS,
-  SCRATCH_DIRECTORY_RELATIVE_PATH,
-  SCRATCH_GITIGNORE_PATTERNS,
-  WORKTREES_DIRECTORY_RELATIVE_PATH,
-  WORKTREES_GITIGNORE_PATTERNS,
-  TARGET_STATE_DIRECTORY,
-  TARGET_CONFIG_TEMPLATE_RELATIVE_PATH,
-  TOOLKIT_SOURCE_RELATIVE_PATHS,
-  bundledToolkitPath,
-  isPackageSourceRepositoryRoot,
-} from './layout.js';
-import { migrateLegacyCanonicalAssets, migrateV2TargetConfig } from './layout-migration.js';
+  applyLifecyclePlan,
+  formatPartialApplyDiagnostics,
+  lifecyclePlanCounts,
+  lifecyclePlanToJson,
+  renderLifecyclePlan,
+} from './lifecycle-plan.js';
+import { planInit } from './init-plan.js';
 import { detectSetupState, nextStepsFromState } from './setup-state.js';
+import { executeGuidanceLifecycleAction } from './guidance.js';
+import { executeRenameMutation } from './fs-mutation-kernel.js';
 
-const TARGET_CFG_TEMPLATE = bundledToolkitPath(TARGET_CONFIG_TEMPLATE_RELATIVE_PATH);
-const MEMORY_SCAFFOLD = bundledToolkitPath(MEMORY_SCAFFOLD_RELATIVE_PATH);
+const IMPLEMENTED_ADAPTERS = ['opencode', 'codex', 'claude-code', 'copilot', 'cursor', 'all'];
 
-const PROTECTED_DOCS = ['AGENTS.md', 'IMPLEMENTATION_PLAN.md', 'README.md'];
-const IMPLEMENTED_ADAPTERS = ['opencode', 'codex', 'claude-code', 'copilot', 'cursor'];
-
-function normalizedPath(path) {
-  const normalized = resolve(path).replace(/[\\/]+$/, '');
-  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+function emptyResult() {
+  return { created: [], skipped: [], warnings: [], errors: [], migrated: [], removed: [] };
 }
 
-function samePath(left, right) {
-  return normalizedPath(left) === normalizedPath(right);
-}
-
-function isProtectedFilename(name) {
-  if (PROTECTED_DOCS.includes(name)) return true;
-  if (/^ARCHITECTURE/i.test(name) && name.endsWith('.md')) return true;
-  return false;
-}
-
-function ensureDir(dir) {
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-    return true;
+/**
+ * Execute lifecycle `exec` descriptors owned by init: legacy canonical-asset
+ * moves. The descriptor was planned from a read-only ownership inspection;
+ * the move preserves rename semantics.
+ */
+export function initExecHandler(action, target) {
+  if (action.exec?.type === 'rename') {
+    const renamed = executeRenameMutation(target, {
+      from: action.exec.from,
+      to: action.exec.to,
+      fromBaseHash: action.exec.fromBaseHash,
+      toBaseHash: action.exec.toBaseHash,
+    });
+    return { ...renamed, display: action.display };
   }
-  return false;
-}
-
-function copyFileConditional(src, dest, refreshAssets, skipped, created, relPath) {
-  if (samePath(src, dest)) {
-    return;
+  if (action.exec?.type === 'guidance') {
+    return executeGuidanceLifecycleAction(action, target);
   }
-  ensureDir(dirname(dest));
-  if (existsSync(dest) && !refreshAssets) {
-    skipped.push(relPath);
-    return;
-  }
-  copyFileSync(src, dest);
-  created.push(relPath);
-}
-
-function copyDirConditional(srcDir, destDir, refreshAssets, skipped, created, relBase) {
-  ensureDir(destDir);
-  for (const entry of readdirSync(srcDir)) {
-    const srcEntry = join(srcDir, entry);
-    const destEntry = join(destDir, entry);
-    const relPath = relBase ? `${relBase}/${entry}` : entry;
-    if (statSync(srcEntry).isDirectory()) {
-      copyDirConditional(srcEntry, destEntry, refreshAssets, skipped, created, relPath);
-    } else {
-      copyFileConditional(srcEntry, destEntry, refreshAssets, skipped, created, relPath);
-    }
-  }
-}
-
-function ensureTargetOwnedFile(src, dest, sourceLabel, relPath, skipped, created, errors) {
-  if (existsSync(dest)) {
-    skipped.push(relPath);
-    return;
-  }
-  if (!existsSync(src)) {
-    errors.push(`Source asset missing from package: ${sourceLabel}`);
-    return;
-  }
-  copyFileSync(src, dest);
-  created.push(relPath);
-}
-
-function targetStatePath(relPath = '') {
-  return relPath ? `${TARGET_STATE_DIRECTORY}/${relPath}` : TARGET_STATE_DIRECTORY;
-}
-
-function parentScaffoldPath(relPath) {
-  const parts = relPath.split('/');
-  parts.pop();
-  return parts.join('/');
-}
-
-function instantiateMemoryScaffoldEntry(srcPath, destPath, relPath, skipped, created, errors) {
-  const sourceLabel = relPath
-    ? `${MEMORY_SCAFFOLD_RELATIVE_PATH}/${relPath}`
-    : MEMORY_SCAFFOLD_RELATIVE_PATH;
-
-  if (!existsSync(srcPath)) {
-    errors.push(`Source asset missing from package: ${sourceLabel}`);
-    return;
-  }
-
-  const stats = statSync(srcPath);
-  if (stats.isDirectory()) {
-    if (relPath) {
-      if (ensureDir(destPath)) {
-        created.push(`${targetStatePath(relPath)}/`);
-      }
-    } else {
-      ensureDir(destPath);
-    }
-
-    for (const entry of readdirSync(srcPath).sort()) {
-      const childRelPath = relPath ? `${relPath}/${entry}` : entry;
-      instantiateMemoryScaffoldEntry(
-        join(srcPath, entry),
-        join(destPath, entry),
-        childRelPath,
-        skipped,
-        created,
-        errors
-      );
-    }
-    return;
-  }
-
-  if (relPath.endsWith('/.gitkeep') || relPath === '.gitkeep') {
-    const parentRelPath = parentScaffoldPath(relPath);
-    if (ensureDir(dirname(destPath)) && parentRelPath) {
-      created.push(`${targetStatePath(parentRelPath)}/`);
-    }
-    return;
-  }
-
-  ensureTargetOwnedFile(
-    srcPath,
-    destPath,
-    sourceLabel,
-    targetStatePath(relPath),
-    skipped,
-    created,
-    errors
-  );
-}
-
-function instantiateMemoryScaffold(target, skipped, created, errors) {
-  instantiateMemoryScaffoldEntry(
-    MEMORY_SCAFFOLD,
-    join(target, TARGET_STATE_DIRECTORY),
-    '',
-    skipped,
-    created,
-    errors
-  );
-}
-
-// Agentic Loop-owned directories that must be gitignored in the target repo:
-// the scratch dir and the per-lane worktrees dir (kept inside the repo root so
-// parallel write lanes stay within the host's workspace sandbox).
-const MANAGED_GITIGNORE_ENTRIES = Object.freeze([
-  { dir: SCRATCH_DIRECTORY_RELATIVE_PATH, patterns: SCRATCH_GITIGNORE_PATTERNS },
-  { dir: WORKTREES_DIRECTORY_RELATIVE_PATH, patterns: WORKTREES_GITIGNORE_PATTERNS },
-]);
-
-function ensureScratchGitignored(targetDir) {
-  const gitignorePath = join(targetDir, '.gitignore');
-  const existed = existsSync(gitignorePath);
-  let content = existed ? readFileSync(gitignorePath, 'utf-8') : '';
-
-  const added = [];
-  for (const { dir, patterns } of MANAGED_GITIGNORE_ENTRIES) {
-    const lines = content.split('\n').map(line => line.trim());
-    if (lines.some(line => patterns.includes(line))) continue;
-    const prefix = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
-    content += `${prefix}${dir}/\n`;
-    added.push(`${dir}/`);
-  }
-
-  if (added.length === 0) return null;
-
-  writeFileSync(gitignorePath, content, 'utf-8');
-  const summary = added.join(', ');
-  return existed
-    ? `.gitignore (${summary} appended)`
-    : `.gitignore (created with ${summary})`;
-}
-
-function selectedAdapterHosts(selectedAdapter) {
-  if (selectedAdapter === 'all') return IMPLEMENTED_ADAPTERS;
-  return [selectedAdapter];
-}
-
-function renderAdapterEntry(host, indent = '    ') {
-  const entry = JSON.stringify({ roleSettings: getDefaultRoleSettings(host) }, null, 2)
-    .replace(/\n/g, `\n${indent}`);
-  return `${indent}"${host}": ${entry}`;
-}
-
-function renderTargetConfigForAdapter(selectedAdapter) {
-  const template = readFileSync(TARGET_CFG_TEMPLATE, 'utf-8');
-  const entries = selectedAdapterHosts(selectedAdapter)
-    .map(host => renderAdapterEntry(host))
-    .join(',\n');
-  const adapterBlockPattern = /  "adapters": \{[\s\S]*?\r?\n  \}\r?\n\}\s*$/;
-  if (!adapterBlockPattern.test(template)) {
-    throw new Error('Could not render selected adapter into target config template');
-  }
-  return template.replace(
-    adapterBlockPattern,
-    `  "adapters": {\n${entries}\n  }\n}\n`
-  );
-}
-
-function selectedAdapterIncludesCodex(selectedAdapter) {
-  return selectedAdapter === 'codex' || selectedAdapter === 'all';
-}
-
-function ensureSelectedCodexDefaults(target, selectedAdapter, errors) {
-  if (!selectedAdapterIncludesCodex(selectedAdapter)) return;
-
-  const targetConfigPath = join(target, 'agenticloop.json');
-  if (!existsSync(targetConfigPath)) return;
-
-  try {
-    const config = loadJsonFile(targetConfigPath);
-    const { added } = ensureAdapterRoleSettings(config, 'codex');
-    if (added.length > 0) {
-      writeFileSync(targetConfigPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
-    }
-  } catch (error) {
-    errors.push(`Cannot apply Codex role defaults: ${error.message}`);
-  }
-}
-
-function pruneUnknownToolkitEntries(srcDir, destDir, removed, relBase) {
-  if (!existsSync(destDir) || samePath(srcDir, destDir)) {
-    return;
-  }
-
-  for (const entry of readdirSync(destDir)) {
-    const srcEntry = join(srcDir, entry);
-    const destEntry = join(destDir, entry);
-    const relPath = `${relBase}/${entry}`;
-
-    if (!existsSync(srcEntry)) {
-      rmSync(destEntry, { recursive: true, force: true });
-      removed.push(relPath);
-      continue;
-    }
-
-    const srcStat = statSync(srcEntry);
-    const destStat = statSync(destEntry);
-    if (srcStat.isDirectory() && destStat.isDirectory()) {
-      pruneUnknownToolkitEntries(srcEntry, destEntry, removed, relPath);
-      continue;
-    }
-
-    if (srcStat.isDirectory() !== destStat.isDirectory() || srcStat.isFile() !== destStat.isFile()) {
-      rmSync(destEntry, { recursive: true, force: true });
-      removed.push(relPath);
-    }
-  }
-}
-
-function pruneToolkitPayloadEntries(targetToolkitRoot, removed) {
-  if (!existsSync(targetToolkitRoot) || !statSync(targetToolkitRoot).isDirectory()) {
-    return;
-  }
-
-  const allowedEntries = new Set(
-    PACKAGE_SOURCE_RELATIVE_PATHS.map(relPath => relPath.split('/')[0]).filter(Boolean)
-  );
-
-  for (const entry of readdirSync(targetToolkitRoot)) {
-    if (allowedEntries.has(entry)) {
-      continue;
-    }
-    rmSync(join(targetToolkitRoot, entry), { recursive: true, force: true });
-    removed.push(`${INSTALLED_TOOLKIT_ROOT_DIRECTORY}/${entry}`);
-  }
-}
-
-function copyToolkitSource(target, refreshAssets, skipped, created, removed, errors) {
-  const targetToolkitRoot = join(target, INSTALLED_TOOLKIT_ROOT_DIRECTORY);
-  if (existsSync(targetToolkitRoot) && !statSync(targetToolkitRoot).isDirectory()) {
-    errors.push(`Cannot scaffold toolkit source: ${INSTALLED_TOOLKIT_ROOT_DIRECTORY} exists and is not a directory`);
-    return;
-  }
-
-  if (refreshAssets) {
-    pruneToolkitPayloadEntries(targetToolkitRoot, removed);
-  }
-
-  for (const installedRelPath of TOOLKIT_SOURCE_RELATIVE_PATHS) {
-    const sourcePath = bundledToolkitPath(installedRelPath);
-    if (!existsSync(sourcePath)) {
-      errors.push(`Source asset missing from package: ${installedRelPath}`);
-      continue;
-    }
-
-    const targetPath = join(target, installedRelPath);
-    const sourceStats = statSync(sourcePath);
-
-    if (refreshAssets && sourceStats.isDirectory()) {
-      pruneUnknownToolkitEntries(sourcePath, targetPath, removed, installedRelPath);
-    }
-
-    if (sourceStats.isDirectory()) {
-      copyDirConditional(sourcePath, targetPath, refreshAssets, skipped, created, installedRelPath);
-    } else {
-      copyFileConditional(sourcePath, targetPath, refreshAssets, skipped, created, installedRelPath);
-    }
-  }
+  return {
+    ok: false,
+    rolledBack: true,
+    errors: [`init cannot execute '${action.exec?.type}' for ${action.path}`],
+  };
 }
 
 /**
@@ -368,7 +77,12 @@ function copyToolkitSource(target, refreshAssets, skipped, created, removed, err
  * @param {boolean} [options.refreshAssets=false] Overwrite existing toolkit-owned assets.
  * @param {boolean} [options.opencode=false] Compatibility alias; equivalent to adapter: 'opencode'.
  * @param {string} [options.adapter] Adapter to generate: opencode | codex | claude-code | copilot | cursor | all.
- * @returns {{ created: string[], skipped: string[], warnings: string[], errors: string[], migrated: string[], removed: string[] }}
+ * @param {object} [options.io] Injected I/O context (defaults to process streams).
+ * @param {boolean} [options.dryRun=false] Compute and render the plan without writing.
+ * @param {boolean} [options.json=false] Render the plan as one JSON document on stdout.
+ * @param {boolean} [options.verbose=false] Print individual planned/applied paths.
+ * @param {boolean} [options.agentsGuidance=true] Plan the AGENTS.md activation-guidance action.
+ * @returns {Promise<{ created: string[], skipped: string[], warnings: string[], errors: string[], migrated: string[], removed: string[], plan?: object }>}
  */
 export async function init(options = {}) {
   const {
@@ -376,158 +90,132 @@ export async function init(options = {}) {
     refreshAssets = false,
     opencode: opencodeAlias = false,
     adapter: adapterOption,
+    io = createIo(),
+    dryRun = false,
+    json = false,
+    verbose = false,
+    agentsGuidance = true,
   } = options;
 
   let selectedAdapter = adapterOption;
   if (opencodeAlias && !selectedAdapter) {
     selectedAdapter = 'opencode';
   }
-  const validAdapters = new Set(['opencode', 'codex', 'claude-code', 'copilot', 'cursor', 'all']);
-  if (selectedAdapter && !validAdapters.has(selectedAdapter)) {
+  if (selectedAdapter && !IMPLEMENTED_ADAPTERS.includes(selectedAdapter)) {
     return {
-      created: [],
-      skipped: [],
-      warnings: [],
+      ...emptyResult(),
       errors: [`Unknown adapter '${selectedAdapter}'. Use: opencode, codex, claude-code, copilot, cursor, all`],
-      migrated: [],
-      removed: [],
     };
   }
 
-  const created = [];
-  const skipped = [];
-  const warnings = [];
-  const errors = [];
-  const migrated = [];
-  const removed = [];
+  const plan = planInit({ target, adapter: selectedAdapter ?? null, refreshAssets, agentsGuidance });
 
-  if (isPackageSourceRepositoryRoot(target)) {
-    const message = `Refusing to mutate the Agentic Loop package source repository at ${target}. Use --target to point at a downstream project directory.`;
-    errors.push(message);
-    console.error(`  ERROR: ${message}`);
-    return { created, skipped, warnings, errors, migrated, removed };
-  }
+  // --json is a machine-readable plan contract: it always implies dry-run so
+  // stdout carries exactly one versioned document and nothing mutates.
+  const effectiveDryRun = dryRun || json;
 
-  for (const doc of PROTECTED_DOCS) {
-    if (existsSync(join(target, doc))) {
-      console.log(`  SKIP (protected): ${doc}`);
-    }
-  }
-
-  const migration = migrateLegacyCanonicalAssets(target);
-  migrated.push(...migration.migrated);
-  created.push(...migration.removed.map(relPath => `${relPath} (removed duplicate legacy root asset)`));
-  warnings.push(...migration.warnings);
-  errors.push(...migration.errors);
-
-  copyToolkitSource(target, refreshAssets, skipped, created, removed, errors);
-
-  if (refreshAssets) {
-    const v2Migration = migrateV2TargetConfig(target);
-    migrated.push(...v2Migration.migrated);
-    warnings.push(...v2Migration.warnings);
-  }
-
-  instantiateMemoryScaffold(target, skipped, created, errors);
-
-  if (selectedAdapter) {
-    const targetConfigPath = join(target, 'agenticloop.json');
-    if (existsSync(targetConfigPath)) {
-      skipped.push('agenticloop.json');
+  if (effectiveDryRun) {
+    if (json) {
+      io.out(lifecyclePlanToJson(plan));
     } else {
-      if (!existsSync(TARGET_CFG_TEMPLATE)) {
-        errors.push(`Source asset missing from package: ${TARGET_CONFIG_TEMPLATE_RELATIVE_PATH}`);
-      } else if (!existsSync(join(target, CONFIG_RELATIVE_PATH))) {
-        errors.push(`Cannot create agenticloop.json: ${CONFIG_RELATIVE_PATH} was not scaffolded`);
-      } else {
-        writeFileSync(targetConfigPath, renderTargetConfigForAdapter(selectedAdapter), 'utf-8');
-        created.push('agenticloop.json');
-      }
+      for (const line of renderLifecyclePlan(plan, { verbose, dryRun: true })) io.out(line);
+      for (const warning of plan.warnings) io.warn(`  WARN: ${warning}`);
     }
-
-    // An explicit Codex selection adopts only missing target-owned fields.
-    ensureSelectedCodexDefaults(target, selectedAdapter, errors);
+    return { ...emptyResult(), plan };
   }
 
-  if (selectedAdapter) {
-    const configPath = join(target, 'agenticloop.json');
-    if (!existsSync(configPath)) {
-      errors.push('Cannot generate adapter output: agenticloop.json not found after init');
-    } else {
-      let alConfig;
-      try {
-        alConfig = loadAgenticLoopConfig(configPath);
-      } catch (error) {
-        errors.push(`Cannot generate adapter output: ${error.message}`);
-        alConfig = null;
-      }
+  const applied = applyLifecyclePlan(target, plan, { execHandler: initExecHandler });
 
-      if (alConfig) {
-        const result = generateAdapterArtifacts({
-          target,
-          alConfig,
-          adapter: selectedAdapter,
-        });
-        if (!result.ok) {
-          errors.push(...result.errors);
-        } else {
-          created.push(...result.files);
-        }
-      }
+  const result = emptyResult();
+  result.created.push(...applied.created, ...applied.updated);
+  result.removed.push(...applied.removed);
+  result.skipped.push(...applied.skipped);
+  result.warnings.push(...applied.warnings);
+  result.errors.push(...applied.errors);
+  for (const action of plan.actions) {
+    if (action.category !== 'legacy') continue;
+    if (action.kind === 'remove' && applied.removed.includes(action.display ?? action.path)) {
+      result.created.push(action.display);
+    }
+    if (action.exec?.type === 'rename' && applied.merged.includes(action.display)) {
+      result.migrated.push(action.display);
     }
   }
-
-  const gitignoreResult = ensureScratchGitignored(target);
-  if (gitignoreResult) {
-    created.push(gitignoreResult);
+  // v2 config migration display routes to migrated for compatibility.
+  for (const entry of applied.updated) {
+    if (entry.startsWith('agenticloop.json: extends rewritten')) {
+      result.migrated.push(entry);
+      result.created.splice(result.created.indexOf(entry), 1);
+    }
   }
+  result.created.push(...applied.adapterFiles);
 
-  console.log();
-  for (const entry of migrated) console.log(`  migrated: ${entry}`);
-  for (const entry of removed) console.log(`  removed:  ${entry}`);
-  for (const entry of created) console.log(`  created:  ${entry}`);
-  for (const entry of skipped) console.log(`  skipped (exists): ${entry}`);
-  for (const warning of warnings) console.warn(`  WARN: ${warning}`);
-  for (const error of errors) console.error(`  ERROR: ${error}`);
+  // Default output is a concise summary; paths require --verbose.
+  const counts = lifecyclePlanCounts(plan);
+  io.out();
+  if (verbose) {
+    for (const entry of result.migrated) io.out(`  migrated: ${entry}`);
+    for (const entry of result.removed) io.out(`  removed:  ${entry}`);
+    for (const entry of result.created) io.out(`  created:  ${entry}`);
+    for (const entry of applied.merged) io.out(`  merged:   ${entry}`);
+    for (const entry of result.skipped) io.out(`  skipped (exists): ${entry}`);
+  } else {
+    io.out('Agentic Loop initialized');
+    io.out(`  Created  ${counts.create + counts.adapter}`);
+    io.out(`  Updated  ${counts.update}`);
+    io.out(`  Skipped  ${counts.skip}`);
+    io.out(`  Blocked  ${plan.blockers.length + counts.blocked}`);
+    // Merge-segment outcomes (guidance, .gitignore) stay visible in the
+    // concise summary; they carry their own descriptive display text.
+    for (const entry of applied.merged) io.out(`  ${entry}`);
+  }
+  for (const warning of result.warnings) io.warn(`  WARN: ${warning}`);
+  for (const error of result.errors) io.err(`  ERROR: ${error}`);
+  for (const rollbackError of applied.rollbackErrors) io.err(`  ROLLBACK ERROR: ${rollbackError}`);
+  for (const line of formatPartialApplyDiagnostics(applied)) io.err(line);
 
-  const refreshableSkipped = skipped.filter(
+  const refreshableSkipped = result.skipped.filter(
     entry =>
       entry !== 'agenticloop.json' &&
       entry !== '.agenticloop/project.md'
   );
-  if (refreshableSkipped.length > 0) {
-    console.log();
-    console.log("  To update existing Agentic Loop-owned assets, run: agenticloop update");
+  if (!json && verbose && refreshableSkipped.length > 0) {
+    io.out();
+    io.out("  To update existing Agentic Loop-owned assets, run: agenticloop update");
   }
 
-  if (errors.length === 0) {
+  if (result.errors.length === 0) {
     const setupState = detectSetupState(target);
     const steps = nextStepsFromState(setupState);
 
-    if (!selectedAdapter && !refreshAssets) {
-      console.log();
-      console.log('  Files backend is ready.');
-      console.log('  Task records go under .agenticloop/tasks/<TASK-ID>.md (e.g. T-001.md).');
-      console.log('  Scratch files belong under .agenticloop/tmp/.');
-      console.log('  Toolkit source is under agenticloop/.');
+    if (!selectedAdapter && !refreshAssets && !json) {
+      io.out();
+      io.out('  Files backend is ready.');
+      io.out('  Task records go under .agenticloop/tasks/<TASK-ID>.md (e.g. T-001.md).');
+      io.out('  Scratch files belong under .agenticloop/tmp/.');
+      io.out('  Toolkit source is under agenticloop/.');
     }
 
-    if (selectedAdapter && selectedAdapter !== 'opencode') {
-      console.log();
-      console.log(`  Adapter output generated for: ${selectedAdapter}`);
+    if (selectedAdapter && selectedAdapter !== 'opencode' && verbose) {
+      io.out();
+      io.out(`  Adapter output generated for: ${selectedAdapter}`);
     }
 
-    if (setupState.setupStatus !== 'confirmed') {
-      console.log();
-      console.log('  Project setup: needed.');
-      console.log('  Next: npx agenticloop setup');
-    } else if (steps.length > 0) {
-      console.log();
-      console.log('  Next:');
-      for (const step of steps) console.log(`    ${step}`);
+    if (!json) {
+      if (setupState.setupStatus !== 'confirmed') {
+        io.out();
+        io.out('  Project setup: needed.');
+        io.out('  Next: npx agenticloop setup');
+      } else if (steps.length > 0) {
+        io.out();
+        io.out('  Next:');
+        for (const step of steps) io.out(`    ${step}`);
+      }
     }
   }
-  console.log();
+  io.out();
 
-  return { created, skipped, warnings, errors, migrated, removed };
+  return { ...result, plan };
 }
+
+export { planInit };

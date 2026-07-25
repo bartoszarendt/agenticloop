@@ -13,6 +13,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { createIo } from './cli-io.js';
 import {
   applyTemplate,
   DEFAULT_GROUP_LABEL_TEMPLATES,
@@ -25,18 +26,18 @@ function defaultCommandRunner(command, args, options = {}) {
   return spawnSync(command, args, { encoding: 'utf-8', ...options });
 }
 
-function ghLabelCreate(name, description, color, repo, dryRun, commandRunner) {
+function ghLabelCreate(name, description, color, repo, dryRun, commandRunner, io) {
   const args = ['label', 'create', name, '--description', description, '--color', color];
   if (repo) args.push('--repo', repo);
 
   if (dryRun) {
-    console.log(`  [dry-run] gh ${args.join(' ')}`);
+    io.out(`  [dry-run] gh ${args.join(' ')}`);
     return { action: 'dry-run' };
   }
 
   const result = commandRunner('gh', args, { encoding: 'utf-8' });
   if (result.status === 0) {
-    console.log(`  created: ${name}`);
+    io.out(`  created: ${name}`);
     return { action: 'created' };
   }
 
@@ -49,11 +50,11 @@ function ghLabelCreate(name, description, color, repo, dryRun, commandRunner) {
     combined.includes('already_exists') ||
     combined.includes('name has already been taken')
   ) {
-    console.log(`  existing: ${name}`);
+    io.out(`  existing: ${name}`);
     return { action: 'existing' };
   }
 
-  console.error(`  ERROR creating '${name}': ${stderr || stdout || launchError || `exit ${result.status}`}`);
+  io.err(`  ERROR creating '${name}': ${stderr || stdout || launchError || `exit ${result.status}`}`);
   return { action: 'error', error: stderr || stdout || launchError };
 }
 
@@ -80,6 +81,7 @@ function resolveGroupingConfig(config, projectMap) {
  * @param {string}  [options.group]    Group ID to create a grouping label for.
  * @param {string}  [options.taskId]   Task ID to create a task:<id> label for.
  * @param {object}  [options.projectMap] Resolved .agenticloop/project.md config.
+ * @param {object}  [options.io]         Injected I/O context (defaults to process streams).
  * @returns {{ label: string, action: string }[]}
  */
 export function bootstrapLabels(config, options = {}) {
@@ -90,6 +92,7 @@ export function bootstrapLabels(config, options = {}) {
     taskId,
     projectMap = null,
     commandRunner = defaultCommandRunner,
+    io = createIo(),
   } = options;
   const githubConfig = config?.backends?.github ?? {};
   const labelNames = resolveGithubLabelNames(config);
@@ -121,7 +124,7 @@ export function bootstrapLabels(config, options = {}) {
 
   const results = [];
   for (const label of labels) {
-    const outcome = ghLabelCreate(label.name, label.description, label.color, repo, dryRun, commandRunner);
+    const outcome = ghLabelCreate(label.name, label.description, label.color, repo, dryRun, commandRunner, io);
     results.push({ label: label.name, ...outcome });
   }
   return results;

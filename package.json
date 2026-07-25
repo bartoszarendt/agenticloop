@@ -59,6 +59,7 @@
     "agenticloop.template.json",
     "manifest.json",
     "docs/getting-started.md",
+    "docs/cli-reference.md",
     "docs/downstream-adoption.md",
     "docs/host-adapters.md",
     "docs/opencode-setup.md",

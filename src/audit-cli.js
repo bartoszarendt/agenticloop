@@ -19,8 +19,8 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { parseArgs, warnUnknownOptions } from './cli-args.js';
-import { createIo } from './cli-io.js';
+import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.js';
+import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
 import { parseFrontmatter } from './frontmatter.js';
 import {
   applyAuditHumanResolution,
@@ -183,47 +183,50 @@ function printStatus(payload, io) {
  */
 export async function cmdAudit(args, io = createIo()) {
   const sub = args[0];
-  const { opts, positional } = parseArgs(args.slice(1));
-  const target = opts.target && opts.target !== true ? resolve(io.cwd, opts.target) : io.cwd;
+  const AUDIT_SUBCOMMANDS = COMMAND_REGISTRY.audit.subcommands;
+  if (!sub || !AUDIT_SUBCOMMANDS[sub]) {
+    const suggestion = sub ? suggestName(sub, Object.keys(AUDIT_SUBCOMMANDS)) : null;
+    io.err(suggestion
+      ? `audit: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
+      : 'audit requires a subcommand: new, baseline, report, status, gate, lint, override, resolve.');
+    io.err('Run "agenticloop help audit" for usage.');
+    return EXIT_USAGE;
+  }
+  const { opts, positional } = parseCommandArgs(`audit ${sub}`, AUDIT_SUBCOMMANDS[sub], args.slice(1));
+  const target = resolveCliTarget(io, opts.target);
 
   try {
     if (sub === 'new') {
-      warnUnknownOptions(
-        opts,
-        ['target', 'workUnit', 'coveredTasks', 'artifact', 'budget', 'goal', 'completionOracle', 'evidence', 'json'],
-        'audit new',
-        io
-      );
       const workUnit = optionString(opts.workUnit) || positional[0] || '';
       const identity = parseWorkUnitIdentity(workUnit);
       if (!identity.ok) {
         io.err(`audit new requires a canonical --work-unit: ${identity.error}`);
-        return 1;
+        return EXIT_USAGE;
       }
       const coveredTasks = normalizeCoveredTasks(splitList(opts.coveredTasks));
       if (coveredTasks.length === 0) {
         io.err('audit new requires --covered-tasks <T-001,T-002> naming the exact audit boundary');
-        return 1;
+        return EXIT_USAGE;
       }
       const artifact = optionString(opts.artifact);
       if (!artifact) {
         io.err('audit new requires --artifact <commit:sha> naming the exact frozen candidate');
-        return 1;
+        return EXIT_USAGE;
       }
       const goal = optionString(opts.goal);
       const completionOracle = optionString(opts.completionOracle);
       const evidence = optionString(opts.evidence);
       if (!goal) {
         io.err('audit new requires --goal <text> defining the work-unit outcome');
-        return 1;
+        return EXIT_USAGE;
       }
       if (!completionOracle) {
         io.err('audit new requires --completion-oracle <text> defining observable completion');
-        return 1;
+        return EXIT_USAGE;
       }
       if (!evidence) {
         io.err('audit new requires --evidence <text> bound to the frozen candidate');
-        return 1;
+        return EXIT_USAGE;
       }
       const existing = listAuditRecordFiles(target);
       const duplicate = existing.find(entry => parseAuditRecord(entry.content).workUnit === identity.canonical);
@@ -235,7 +238,7 @@ export async function cmdAudit(args, io = createIo()) {
       const budget = budgetRaw ? Number(budgetRaw) : DEFAULT_AUDIT_BUDGET;
       if (!Number.isInteger(budget) || budget <= 0) {
         io.err('audit new --budget must be a positive integer');
-        return 1;
+        return EXIT_USAGE;
       }
       const auditId = nextAuditId(existing.map(entry => entry.auditId));
       const content = createAuditRecordContent({
@@ -255,23 +258,26 @@ export async function cmdAudit(args, io = createIo()) {
     }
 
     if (sub === 'baseline') {
-      warnUnknownOptions(opts, ['target', 'artifact', 'coveredTasks', 'evidence', 'json'], 'audit baseline', io);
       const selector = positional[0];
-      const entry = selector ? findAuditRecord(target, selector) : null;
+      if (!selector) {
+        io.err('audit baseline requires an <audit-id|work-unit> selector');
+        return EXIT_USAGE;
+      }
+      const entry = findAuditRecord(target, selector);
       if (!entry) {
-        io.err(`Audit record not found: ${selector ?? '(missing selector)'}`);
+        io.err(`Audit record not found: ${selector}`);
         return 1;
       }
       const artifact = optionString(opts.artifact);
       const coveredTasks = splitList(opts.coveredTasks);
       if (!artifact && coveredTasks.length === 0) {
         io.err('audit baseline requires --artifact and/or --covered-tasks');
-        return 1;
+        return EXIT_USAGE;
       }
       const evidence = optionString(opts.evidence);
       if (!evidence) {
         io.err('audit baseline requires --evidence <text> bound to the refreshed candidate');
-        return 1;
+        return EXIT_USAGE;
       }
       const updated = updateAuditBaseline(entry.content, {
         candidateArtifact: artifact,
@@ -292,23 +298,21 @@ export async function cmdAudit(args, io = createIo()) {
     }
 
     if (sub === 'report') {
-      warnUnknownOptions(
-        opts,
-        ['target', 'verdict', 'invocationMode', 'invocationRef', 'artifact', 'assessment', 'evidence', 'findingJson', 'json'],
-        'audit report',
-        io
-      );
       const selector = positional[0];
-      const entry = selector ? findAuditRecord(target, selector) : null;
+      if (!selector) {
+        io.err('audit report requires an <audit-id|work-unit> selector');
+        return EXIT_USAGE;
+      }
+      const entry = findAuditRecord(target, selector);
       if (!entry) {
-        io.err(`Audit record not found: ${selector ?? '(missing selector)'}`);
+        io.err(`Audit record not found: ${selector}`);
         return 1;
       }
       const parseErrors = [];
       const findings = parseFindingsOption(opts.findingJson, parseErrors);
       if (parseErrors.length > 0) {
         for (const error of parseErrors) io.err(error);
-        return 1;
+        return EXIT_USAGE;
       }
       const result = appendAuditReport(entry.content, {
         verdict: optionString(opts.verdict),
@@ -343,18 +347,17 @@ export async function cmdAudit(args, io = createIo()) {
     }
 
     if (sub === 'gate') {
-      warnUnknownOptions(opts, ['target', 'json'], 'audit gate', io);
       const selector = positional[0];
       if (!selector) {
         io.err('audit gate requires a work-unit identity or audit id');
-        return 1;
+        return EXIT_USAGE;
       }
       const selected = findAuditRecord(target, selector);
       const workUnit = selected?.record?.workUnit || selector;
       const identity = parseWorkUnitIdentity(workUnit);
       if (!identity.ok) {
         io.err(`audit gate requires a canonical work-unit identity or existing audit id: ${identity.error}`);
-        return 1;
+        return EXIT_USAGE;
       }
       const config = projectConfig(target);
       const validation = auditValidationOptions(target, config);
@@ -381,7 +384,6 @@ export async function cmdAudit(args, io = createIo()) {
     }
 
     if (sub === 'status') {
-      warnUnknownOptions(opts, ['target', 'json'], 'audit status', io);
       const selector = positional[0];
       if (selector) {
         const entry = findAuditRecord(target, selector);
@@ -409,7 +411,6 @@ export async function cmdAudit(args, io = createIo()) {
     }
 
     if (sub === 'lint') {
-      warnUnknownOptions(opts, ['target', 'json'], 'audit lint', io);
       const selector = positional[0];
       const config = projectConfig(target);
       const options = auditValidationOptions(target, config);
@@ -437,11 +438,14 @@ export async function cmdAudit(args, io = createIo()) {
     }
 
     if (sub === 'override') {
-      warnUnknownOptions(opts, ['target', 'budget', 'authority', 'note', 'json'], 'audit override', io);
       const selector = positional[0];
-      const entry = selector ? findAuditRecord(target, selector) : null;
+      if (!selector) {
+        io.err('audit override requires an <audit-id|work-unit> selector');
+        return EXIT_USAGE;
+      }
+      const entry = findAuditRecord(target, selector);
       if (!entry) {
-        io.err(`Audit record not found: ${selector ?? '(missing selector)'}`);
+        io.err(`Audit record not found: ${selector}`);
         return 1;
       }
       const budgetRaw = optionString(opts.budget);
@@ -468,11 +472,14 @@ export async function cmdAudit(args, io = createIo()) {
     }
 
     if (sub === 'resolve') {
-      warnUnknownOptions(opts, ['target', 'authority', 'note', 'json'], 'audit resolve', io);
       const selector = positional[0];
-      const entry = selector ? findAuditRecord(target, selector) : null;
+      if (!selector) {
+        io.err('audit resolve requires an <audit-id|work-unit> selector');
+        return EXIT_USAGE;
+      }
+      const entry = findAuditRecord(target, selector);
       if (!entry) {
-        io.err(`Audit record not found: ${selector ?? '(missing selector)'}`);
+        io.err(`Audit record not found: ${selector}`);
         return 1;
       }
       const result = applyAuditHumanResolution(entry.content, {
@@ -497,9 +504,10 @@ export async function cmdAudit(args, io = createIo()) {
       return 0;
     }
 
-    io.err('Unknown audit subcommand. Expected: new, baseline, report, status, gate, lint, override, resolve.');
-    return 1;
+    io.err(`Unknown audit subcommand '${sub}'. Expected: new, baseline, report, status, gate, lint, override, resolve.`);
+    return EXIT_USAGE;
   } catch (error) {
+    if (error instanceof CliUsageError) throw error;
     io.err(error.message);
     return 1;
   }

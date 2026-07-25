@@ -47,6 +47,27 @@ export function deepMerge(base, override) {
  */
 export function loadAgenticLoopConfig(filePath, visited = new Set()) {
   const absPath = isAbsolute(filePath) ? filePath : resolve(filePath);
+  let text;
+  try {
+    text = readFileSync(absPath, 'utf-8');
+  } catch (/** @type {any} */ error) {
+    throw new Error(`Failed to load config at ${absPath}: ${error.message}`);
+  }
+  return loadAgenticLoopConfigFromText(text, absPath, visited);
+}
+
+/**
+ * Parse and extends-resolve an agenticloop.json document held in memory.
+ * `referencePath` anchors relative `extends` resolution and error messages;
+ * it does not need to exist on disk (used by no-write lifecycle planners).
+ *
+ * @param {string} text
+ * @param {string} referencePath
+ * @param {Set<string>} [visited]
+ * @returns {Record<string, unknown>}
+ */
+export function loadAgenticLoopConfigFromText(text, referencePath, visited = new Set()) {
+  const absPath = isAbsolute(referencePath) ? referencePath : resolve(referencePath);
   if (visited.has(absPath)) {
     throw new Error(`Circular extends chain detected at ${absPath}`);
   }
@@ -55,7 +76,7 @@ export function loadAgenticLoopConfig(filePath, visited = new Set()) {
   /** @type {Record<string, unknown>} */
   let config;
   try {
-    config = /** @type {Record<string, unknown>} */ (loadJsonFile(absPath));
+    config = /** @type {Record<string, unknown>} */ (parseJson(text));
   } catch (/** @type {any} */ error) {
     throw new Error(`Failed to load config at ${absPath}: ${error.message}`);
   }

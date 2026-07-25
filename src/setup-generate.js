@@ -1,14 +1,14 @@
 /**
- * Adapter artifact generation for setup flow.
+ * Adapter config reconciliation helpers.
  *
- * Generates artifacts after all choices are confirmed, avoiding
- * the generate-then-regenerate behavior of init --setup.
+ * Guided setup plans adapter config and generation through the pure lifecycle
+ * planners (src/setup-plan.js); this module retains the shared non-destructive
+ * agenticloop.json reconciliation used by update and direct-init flows.
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadAgenticLoopConfig, loadJsonFile } from './json.js';
-import { generateAdapterArtifacts } from './adapter-generation.js';
 import {
   ensureAdapterRoleSettings,
   getDefaultRoleSettings,
@@ -111,37 +111,4 @@ export function ensureAdapterConfig(target, adapter) {
   }
   writeFileSync(targetConfigPath, renderTargetConfigForAdapter(adapter), 'utf-8');
   return null;
-}
-
-/**
- * Generate adapter artifacts for the selected adapter(s) through the
- * transactional generation service.
- *
- * @param {string} target  Target directory.
- * @param {string} adapter  Adapter host or 'all'.
- * @returns {{files: string[], errors: string[]}}
- */
-export async function generateAdapters(target, adapter) {
-  const cfgPath = join(target, 'agenticloop.json');
-  if (!existsSync(cfgPath)) {
-    return { files: [], errors: ['agenticloop.json not found; cannot generate adapter artifacts.'] };
-  }
-
-  let alConfig;
-  try {
-    alConfig = loadAgenticLoopConfig(cfgPath);
-  } catch (e) {
-    return { files: [], errors: [`Failed to parse agenticloop.json: ${e.message}`] };
-  }
-
-  const result = generateAdapterArtifacts({
-    target,
-    alConfig,
-    adapter,
-  });
-
-  return {
-    files: result.ok ? result.files : [],
-    errors: result.errors,
-  };
 }

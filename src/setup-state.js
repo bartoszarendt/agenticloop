@@ -266,12 +266,12 @@ export function nextStepsFromState(state) {
   const steps = [];
 
   if (!state.toolkitInstalled) {
-    steps.push('npx agenticloop init');
+    steps.push('npx agenticloop setup');
     return steps;
   }
 
   if (!state.projectMapExists) {
-    steps.push('npx agenticloop init');
+    steps.push('npx agenticloop setup');
     return steps;
   }
 

@@ -24,6 +24,7 @@ import { resolveRoleModel } from './adapters/shared.js';
 import { generatedCopilotArtifactsPresent } from './adapters/copilot.js';
 import { generatedCursorArtifactsPresent } from './adapters/cursor.js';
 import { detectSetupState, formatSetupChecklist, nextStepsFromState } from './setup-state.js';
+import { createIo } from './cli-io.js';
 import { formatGitGuardDoctor } from './worktree.js';
 
 function hasModelSettings(adapterCfg, roles) {
@@ -127,7 +128,7 @@ export function adapterDiscoverySummary(repoRoot) {
   if (!existsSync(cfgPath)) {
     return {
       adapters: [],
-      nextSteps: ['Run "agenticloop init" to scaffold Agentic Loop in this directory.'],
+      nextSteps: ['Run "agenticloop setup" to scaffold and configure Agentic Loop in this directory (advanced: "agenticloop init" for a files-only scaffold).'],
     };
   }
 
@@ -225,7 +226,7 @@ export function adapterDiscoverySummary(repoRoot) {
   ];
 
   if (adapters.length === 0) {
-    nextSteps.push('No adapters configured. Add adapters.<host> to agenticloop.json or run "agenticloop init --adapter <host>".');
+    nextSteps.push('No adapters configured. Run "agenticloop setup --adapter <host>" for guided host integration, or "agenticloop init --adapter <host>" for the direct scaffold.');
   }
 
   if (nextSteps.length === 0) {
@@ -248,32 +249,32 @@ export function adapterDiscoverySummary(repoRoot) {
  *
  * @param {string} repoRoot
  */
-export function printAdapterDiscovery(repoRoot) {
+export function printAdapterDiscovery(repoRoot, io = createIo()) {
   const { adapters, nextSteps } = adapterDiscoverySummary(repoRoot);
 
-  console.log();
-  console.log('agenticloop adapter discovery');
-  console.log('='.repeat(50));
+  io.out();
+  io.out('agenticloop adapter discovery');
+  io.out('='.repeat(50));
 
   if (adapters.length === 0) {
-    console.log('  No adapters configured.');
+    io.out('  No adapters configured.');
   } else {
     for (const a of adapters) {
       const present = a.present.length > 0 ? a.present.join(', ') : '(none)';
       const missing = a.missingModelRoles.length > 0 ? `missing models: ${a.missingModelRoles.join(', ')}` : 'models configured';
       const flag = a.required ? ' [required]' : '';
-      console.log(`  ${a.host}: ${a.status}${flag}`);
-      console.log(`    artifacts: ${present}`);
-      console.log(`    ${missing}`);
+      io.out(`  ${a.host}: ${a.status}${flag}`);
+      io.out(`    artifacts: ${present}`);
+      io.out(`    ${missing}`);
     }
   }
 
-  console.log();
-  console.log('Next steps:');
+  io.out();
+  io.out('Next steps:');
   for (const step of nextSteps) {
-    console.log(`  - ${step}`);
+    io.out(`  - ${step}`);
   }
-  console.log();
+  io.out();
 }
 
 /**
@@ -282,45 +283,45 @@ export function printAdapterDiscovery(repoRoot) {
  *
  * @param {string} repoRoot
  */
-export function printDoctor(repoRoot) {
+export function printDoctor(repoRoot, io = createIo()) {
   const state = detectSetupState(repoRoot, { includeValidation: true });
 
-  console.log();
-  console.log('agenticloop doctor');
-  console.log('='.repeat(50));
-  console.log();
-  console.log(formatSetupChecklist(state));
+  io.out();
+  io.out('agenticloop doctor');
+  io.out('='.repeat(50));
+  io.out();
+  io.out(formatSetupChecklist(state));
 
   if (state.validationIssues && state.validationIssues.length > 0) {
-    console.log();
-    console.log('Issues:');
+    io.out();
+    io.out('Issues:');
     for (const issue of state.validationIssues) {
-      console.log(`  - ${issue}`);
+      io.out(`  - ${issue}`);
     }
   }
 
   const { adapters: adapterSummary, nextSteps: adapterSteps } = adapterDiscoverySummary(repoRoot);
   if (adapterSummary.length > 0) {
-    console.log();
-    console.log('Adapters:');
+    io.out();
+    io.out('Adapters:');
     for (const a of adapterSummary) {
       const present = a.present.length > 0 ? a.present.join(', ') : '(none)';
       const missing = a.missingModelRoles.length > 0 ? `missing models: ${a.missingModelRoles.join(', ')}` : 'models configured';
       const flag = a.required ? ' [required]' : '';
-      console.log(`  ${a.host}: ${a.status}${flag}`);
-      console.log(`    artifacts: ${present}`);
-      console.log(`    ${missing}`);
+      io.out(`  ${a.host}: ${a.status}${flag}`);
+      io.out(`    artifacts: ${present}`);
+      io.out(`    ${missing}`);
     }
   }
 
-  console.log();
-  console.log(formatGitGuardDoctor(repoRoot));
+  io.out();
+  io.out(formatGitGuardDoctor(repoRoot));
 
   const steps = nextStepsFromState(state);
-  console.log();
-  console.log('Next steps:');
+  io.out();
+  io.out('Next steps:');
   for (const step of steps) {
-    console.log(`  - ${step}`);
+    io.out(`  - ${step}`);
   }
-  console.log();
+  io.out();
 }

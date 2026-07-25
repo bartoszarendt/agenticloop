@@ -121,11 +121,11 @@ describe('guidance lifecycle', () => {
   it('fresh setup enrolls by default while repeat setup does not re-enroll after removal', () => {
     const dir = target();
     writeFileSync(join(dir, 'AGENTS.md'), '# Rules\n');
-    let r = run(['setup', '--target', dir], { input: 'yes\n4\n' });
+    let r = run(['setup', '--target', dir], { input: 'yes\n\n\ny\n' });
     assert.equal(r.status, 0, r.stderr);
     assert.ok(hasBlock(dir));
     run(['guidance', 'remove', '--target', dir]);
-    r = run(['setup', '--target', dir], { input: '4\n' });
+    r = run(['setup', '--target', dir], { input: 'no\n\n\ny\n' });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(hasBlock(dir), false);
   });
@@ -133,7 +133,7 @@ describe('guidance lifecycle', () => {
   it('fresh setup honors --no-agents-guidance', () => {
     const dir = target();
     writeFileSync(join(dir, 'AGENTS.md'), '# Rules\n');
-    const r = run(['setup', '--target', dir, '--no-agents-guidance'], { input: 'yes\n4\n' });
+    const r = run(['setup', '--target', dir, '--no-agents-guidance'], { input: 'yes\n\n\ny\n' });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(hasBlock(dir), false);
   });
@@ -142,7 +142,7 @@ describe('guidance lifecycle', () => {
     const dir = target();
     writeFileSync(join(dir, 'RULES.md'), '# Rules\n');
     configuredRules(dir);
-    const r = run(['setup', '--target', dir], { input: 'yes\n4\n' });
+    const r = run(['setup', '--target', dir], { input: 'yes\n\n\ny\n' });
     assert.equal(r.status, 0, r.stderr);
     assert.ok(hasBlock(dir, 'RULES.md'));
     assert.equal(existsSync(join(dir, 'AGENTS.md')), false);
