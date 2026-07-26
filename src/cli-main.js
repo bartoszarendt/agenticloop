@@ -42,6 +42,7 @@ import { dispatch } from './cli.js';
  * @param {boolean} [options.ci]        Override CI detection.
  * @param {boolean} [options.color]     Override color capability.
  * @param {Function} [options.promptFactory]  Injectable prompt factory for tests.
+ * @param {Function} [options.ghCommandRunner]  Injectable read-only GitHub command runner for tests.
  * @returns {Promise<number>} exit code
  */
 export async function runCli(argv, options = {}) {

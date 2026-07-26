@@ -112,6 +112,12 @@ import { runGitHubReviewAudit, GitHubReviewAuditError } from './github-review-au
 import { runGitHubReady, formatGitHubReadyReport, GitHubReadyError } from './github-ready.js';
 import { evaluatePreparationInput } from './preparation-input.js';
 import { renderPrBodyScaffold, lintPrBody } from './pr-body.js';
+import {
+  createPrBodySnapshot,
+  materializeReferenceInventories,
+  normalizePrBodySnapshot,
+} from './pr-body-context.js';
+import { atomicWriteFile } from './fs-mutation-kernel.js';
 import { evaluateTaskReadiness } from './task-readiness.js';
 import { evaluateCommitAttribution } from './commit-attribution.js';
 import { planGitHubCheckpointRepair, renderGitHubCheckpoint } from './github-checkpoint.js';
@@ -924,75 +930,489 @@ function commandFailure(command, error, category = 'operational_error') {
   };
 }
 
+// --- PR-body scoped failure, merge, and rendering helpers ------------------
+// These helpers are deliberately PR-body-scoped: shared commandFailure() and
+// printGateResult() keep their existing behavior for every other consumer.
+
+function prBodyDiagnostic(message, nextAction, category, owner = 'engineer') {
+  return { message, category, owner, nextAction };
+}
+
+/** PR-body-scoped failure envelope with explicit evaluated-state fields. */
+function prBodyFailure(command, diagnostics, { nextCommand = null, contextMode = null, provenance = {} } = {}) {
+  const list = Array.isArray(diagnostics) ? diagnostics : [diagnostics];
+  const categories = [];
+  for (const item of list) {
+    if (item?.category && !categories.includes(item.category)) categories.push(item.category);
+  }
+  return {
+    schemaVersion: 1,
+    command,
+    ok: false,
+    contextMode,
+    ...provenance,
+    inputComplete: false,
+    bodyLintEvaluated: false,
+    gateEvaluated: false,
+    lintReady: false,
+    gatePassed: false,
+    publicationReady: false,
+    errors: list.map(item => item.message),
+    warnings: [],
+    diagnostics: list,
+    warningDiagnostics: [],
+    failureCategories: categories,
+    firstSafeRepair: list[0]?.nextAction ?? null,
+    nextCommand,
+  };
+}
+
+/** Human renderer for PR-body results: context identity/mode, evaluated state, owner routing, first repair, and next command. */
+function printPrBodyResult(command, result, asJson, io, exitCode = null) {
+  const status = exitCode ?? ((result.publicationReady ?? result.ok) ? 0 : 1);
+  if (asJson) {
+    io.out(JSON.stringify(result));
+    return status;
+  }
+  io.out();
+  io.out(`agenticloop ${command}`);
+  io.out('='.repeat(50));
+  if (result.contextMode) io.out(`  context mode: ${result.contextMode}`);
+  if (result.repository) io.out(`  repository: ${result.repository}`);
+  if (result.pr) io.out(`  PR: #${result.pr}`);
+  if (result.issue) io.out(`  issue: #${result.issue}`);
+  if (result.headRefOid) io.out(`  head: ${result.headRefOid}`);
+  if (result.baseRefOid) io.out(`  base: ${result.baseRefOid}`);
+  if (result.mode) io.out(`  evaluation mode: ${result.mode}`);
+  if (result.capturedAt) io.out(`  context captured at: ${result.capturedAt}`);
+  io.out(`  input complete: ${result.inputComplete === false ? 'no' : 'yes'}`);
+  io.out(`  body lint evaluated: ${result.bodyLintEvaluated ? 'yes' : 'no'}`);
+  io.out(`  gate evaluated: ${result.gateEvaluated ? 'yes' : 'no'}`);
+  io.out(`  lint ready: ${result.lintReady ? 'yes' : 'no'}`);
+  io.out(`  gate passed: ${result.gatePassed ? 'yes' : 'no'}`);
+  if (result.publicationReady) {
+    if (result.contextMode === 'snapshot') {
+      io.out('  status: publication-ready against the captured snapshot context; a subsequent body write still requires github-preflight');
+    } else if (result.contextMode === 'legacy') {
+      io.out('  status: publication-ready against the supplied legacy serialized context; live state was not checked, so publication still requires github-preflight');
+    } else {
+      io.out('  status: publication-ready against the live context head; publish explicitly, then run github-preflight');
+    }
+  } else {
+    io.out('  status: FAILED');
+  }
+  for (const item of result.warningDiagnostics ?? []) {
+    io.warn(`  WARN [${item.category ?? 'other'} -> ${item.owner ?? 'maintainer'}]: ${item.message}`);
+  }
+  for (const warning of result.warnings ?? []) {
+    if (!(result.warningDiagnostics ?? []).some(item => item.message === warning)) io.warn(`  WARN: ${warning}`);
+  }
+  for (const item of result.diagnostics ?? []) {
+    io.err(`  ERROR [${item.category ?? 'other'} -> ${item.owner ?? 'maintainer'}]: ${item.message}`);
+  }
+  if (result.firstSafeRepair) io.out(`  first safe repair: ${result.firstSafeRepair}`);
+  if (result.nextCommand) io.out(`  next command: ${result.nextCommand}`);
+  io.out();
+  return status;
+}
+
+function prBodyStructuralContext(input) {
+  const events = Array.isArray(input?.reviewHistory?.events) ? input.reviewHistory.events : [];
+  const priorOutcome = [...events].reverse().find(event => event?.type === 'outcome' && event?.status === 'needs_revision' && Array.isArray(event.findingIds) && !event.legacyMissingFindingIds);
+  return {
+    requiredChecks: parseRequiredChecks(input?.issueData?.body),
+    currentHead: input?.prData?.headRefOid,
+    statusChecks: input?.prData?.statusCheckRollup ?? [],
+    priorFindingIds: priorOutcome?.findingIds ?? [],
+  };
+}
+
+const PR_BODY_DEPRECATION = "pr-body lint --input <evaluation-input.json> is deprecated; use 'pr-body lint --pr <n> --body-file <path>' against live context or 'pr-body lint --snapshot <path> --body-file <path>' offline";
+
+function prBodyCommandArg(value) {
+  const text = String(value);
+  if (/^<[^>]+>$/.test(text) || /^[A-Za-z0-9_./:@+=,-]+$/.test(text)) return text;
+  return `"${text.replaceAll('"', '\\"')}"`;
+}
+
+function prBodyLintCommand(contextMode, pr, bodyFile, snapshotFile = null) {
+  if (contextMode === 'snapshot') {
+    return `npx agenticloop pr-body lint --snapshot ${prBodyCommandArg(snapshotFile)} --body-file ${prBodyCommandArg(bodyFile)}`;
+  }
+  return `npx agenticloop pr-body lint --pr ${prBodyCommandArg(pr)} --body-file ${prBodyCommandArg(bodyFile)}`;
+}
+
+function prBodyRepairNeedsFreshContext({ contextMode, inputComplete, firstSafeRepair, diagnostics }) {
+  if (!inputComplete) return true;
+  if (/\b(?:re-scaffold|regenerate (?:the )?(?:snapshot|evaluation context|context))\b/i.test(String(firstSafeRepair ?? ''))) {
+    return true;
+  }
+  const first = diagnostics?.[0];
+  return contextMode === 'snapshot' && first?.owner && first.owner !== 'engineer';
+}
+
+/**
+ * Merge structural body lint with the semantic gate into one truthful envelope.
+ * Context completeness outranks body repair: an incomplete input never
+ * masquerades as an evaluated semantic gate. Errors, warnings, warning
+ * diagnostics, categories, and ownership are stable unions of both phases.
+ */
+function mergePrBodyLintResult({
+  structural,
+  gate,
+  contextMode,
+  provenance = {},
+  deprecated = false,
+  lintCommand = null,
+  scaffoldCommand = null,
+}) {
+  const inputComplete = gate.inputComplete !== false;
+  const contextDiagnostics = Array.isArray(gate.diagnostics) ? gate.diagnostics : [];
+  const diagnostics = inputComplete
+    ? [...structural.diagnostics, ...contextDiagnostics]
+    : [...contextDiagnostics, ...structural.diagnostics];
+  const contextErrors = Array.isArray(gate.errors) ? gate.errors : [];
+  const errors = inputComplete
+    ? [...structural.errors, ...contextErrors]
+    : [...contextErrors, ...structural.errors];
+  const warningDiagnostics = [
+    ...(structural.warnings ?? []).map(message => prBodyDiagnostic(message, 'address the structural warning before publication', 'pr_body')),
+    ...(gate.warningDiagnostics ?? []),
+  ];
+  const warnings = [...(structural.warnings ?? []), ...(gate.warnings ?? [])];
+  if (deprecated) {
+    warnings.push(PR_BODY_DEPRECATION);
+    warningDiagnostics.push(prBodyDiagnostic(PR_BODY_DEPRECATION, 'switch to --pr/--body-file or --snapshot/--body-file; --input removal requires a separately approved breaking release', 'deprecation'));
+  }
+  const failureCategories = [];
+  for (const item of diagnostics) {
+    if (item?.category && !failureCategories.includes(item.category)) failureCategories.push(item.category);
+  }
+  for (const entry of gate.failureCategories ?? []) {
+    const category = typeof entry === 'string' ? entry : entry?.category;
+    if (!category) continue;
+    if (!failureCategories.includes(category)) failureCategories.push(category);
+  }
+  const lintReady = Boolean(structural.lintReady);
+  const gateEvaluated = inputComplete;
+  const gatePassed = gateEvaluated && Boolean(gate.ok);
+  const publicationReady = lintReady && gatePassed;
+  const firstSafeRepair = publicationReady
+    ? null
+    : (!inputComplete
+      ? (gate.firstSafeRepair ?? 'regenerate the evaluation context before rerunning pr-body lint')
+      : (!lintReady ? structural.firstSafeRepair : (gate.firstSafeRepair ?? null)));
+  const nextCommand = publicationReady
+    ? null
+    : (prBodyRepairNeedsFreshContext({ contextMode, inputComplete, firstSafeRepair, diagnostics })
+      ? scaffoldCommand
+      : lintCommand);
+  return {
+    ...gate,
+    schemaVersion: 1,
+    ok: publicationReady,
+    contextMode,
+    ...provenance,
+    inputComplete,
+    bodyLintEvaluated: true,
+    gateEvaluated,
+    scaffolded: structural.scaffolded,
+    lintReady,
+    gatePassed,
+    publicationReady,
+    errors,
+    warnings,
+    diagnostics,
+    warningDiagnostics,
+    failureCategories,
+    firstSafeRepair,
+    nextCommand,
+  };
+}
+
+function prBodyScaffoldCommand(pr, bodyFile, snapshotFile = null) {
+  const base = `npx agenticloop pr-body scaffold --pr ${prBodyCommandArg(pr)} --output ${prBodyCommandArg(bodyFile)}`;
+  return snapshotFile ? `${base} --snapshot-output ${prBodyCommandArg(snapshotFile)}` : base;
+}
+
+function prBodyLintFailureUsage(command, message, asJson, io) {
+  return printPrBodyResult(command, prBodyFailure(command, prBodyDiagnostic(message, 'choose exactly one context mode and rerun', 'usage'), {}), asJson, io, EXIT_USAGE);
+}
+
+function readPrBodyFile(io, pathOption, label, nextCommand) {
+  const fullPath = resolveCliTarget(io, pathOption);
+  try {
+    return { ok: true, body: readFileSync(fullPath, 'utf8'), fullPath };
+  } catch {
+    return {
+      ok: false,
+      failure: prBodyFailure('pr-body lint', prBodyDiagnostic(
+        `cannot read ${label} '${pathOption}'`,
+        'create the file or correct the path before rerunning pr-body lint',
+        'local_file',
+      ), { nextCommand }),
+    };
+  }
+}
+
+async function cmdPrBodyLint(opts, io, asJson) {
+  const command = 'pr-body lint';
+  const modes = [opts.pr ? 'live' : null, opts.snapshot ? 'snapshot' : null, opts.input ? 'legacy' : null].filter(Boolean);
+  if (opts.input && (opts.pr || opts.snapshot || opts.bodyFile || opts.issue || opts.repo)) {
+    return prBodyLintFailureUsage(command, 'pr-body lint --input cannot be combined with --pr, --snapshot, --body-file, --issue, or --repo', asJson, io);
+  }
+  if (opts.pr && opts.snapshot) {
+    return prBodyLintFailureUsage(command, 'pr-body lint --pr (live) and --snapshot (offline) are mutually exclusive', asJson, io);
+  }
+  if (opts.snapshot && (opts.issue || opts.repo)) {
+    return prBodyLintFailureUsage(command, 'pr-body lint --issue and --repo are live-mode options and cannot be combined with --snapshot', asJson, io);
+  }
+  if (modes.length === 0) {
+    if (opts.bodyFile) return prBodyLintFailureUsage(command, 'pr-body lint --body-file requires a context mode: --pr <n> (live) or --snapshot <path> (offline)', asJson, io);
+    return prBodyLintFailureUsage(command, 'pr-body lint requires one context mode: --pr <n> --body-file <path>, --snapshot <path> --body-file <path>, or --input <evaluation-input.json>', asJson, io);
+  }
+  if ((opts.pr || opts.snapshot) && !opts.bodyFile) {
+    return prBodyLintFailureUsage(command, `pr-body lint ${opts.pr ? `--pr ${opts.pr}` : `--snapshot ${opts.snapshot}`} requires --body-file <path> for the candidate PR body`, asJson, io);
+  }
+
+  if (opts.input) {
+    // Legacy compatibility mode: unchanged serialized preparation-input JSON
+    // semantics plus a structured deprecation diagnostic. Markdown is never
+    // silently reinterpreted; it receives a targeted format error.
+    const read = readPrBodyFile(io, opts.input, 'preparation-input file', null);
+    if (!read.ok) return printPrBodyResult(command, read.failure, asJson, io);
+    let parsed;
+    try {
+      parsed = JSON.parse(read.body);
+    } catch (error) {
+      const trimmed = read.body.trimStart();
+      const looksJson = trimmed.startsWith('{') || trimmed.startsWith('[');
+      const failure = looksJson
+        ? prBodyFailure(command, prBodyDiagnostic(
+          `pr-body lint --input file '${opts.input}' is not valid JSON: ${error.message}`,
+          'repair the JSON or regenerate the context with pr-body scaffold --snapshot-output',
+          'input_format',
+        ), { contextMode: 'legacy' })
+        : prBodyFailure(command, prBodyDiagnostic(
+          `pr-body lint --input expects a serialized preparation-input JSON document, but '${opts.input}' is Markdown (a PR-body draft); the candidate body is a --body-file input, not --input`,
+          'rerun with an explicit mode: npx agenticloop pr-body lint --pr <n> --body-file <path> or npx agenticloop pr-body lint --snapshot <path> --body-file <path>',
+          'input_format',
+        ), { contextMode: 'legacy' });
+      return printPrBodyResult(command, failure, asJson, io);
+    }
+    const structural = lintPrBody(parsed?.prData?.body ?? '', prBodyStructuralContext(parsed));
+    const gate = evaluatePreparationInput(parsed, evaluatePreflight);
+    const merged = mergePrBodyLintResult({
+      structural,
+      gate,
+      contextMode: 'legacy',
+      provenance: {
+        pr: parsed?.prData?.number ?? null,
+        issue: parsed?.issueData?.number ?? null,
+        headRefOid: parsed?.prData?.headRefOid ?? null,
+        baseRefOid: parsed?.prData?.baseRefOid ?? null,
+        mode: parsed?.mode ?? null,
+      },
+      deprecated: true,
+    });
+    return printPrBodyResult(command, merged, asJson, io);
+  }
+
+  // Live and snapshot modes both read the local candidate body first so a
+  // missing file fails before any network access.
+  const read = readPrBodyFile(io, opts.bodyFile, 'body file', prBodyScaffoldCommand(opts.pr ?? '<n>', opts.bodyFile, opts.snapshot ?? null));
+  if (!read.ok) return printPrBodyResult(command, read.failure, asJson, io);
+  const body = read.body;
+
+  if (opts.snapshot) {
+    // Offline mode: zero network access; the CLI-authored snapshot carries the
+    // complete provenance-bearing context and materialized reference
+    // inventories. The nested remote prData.body is context-only and is always
+    // replaced by --body-file.
+    const snapshotRead = readPrBodyFile(io, opts.snapshot, 'snapshot file', prBodyScaffoldCommand('<n>', opts.bodyFile, opts.snapshot));
+    if (!snapshotRead.ok) return printPrBodyResult(command, snapshotRead.failure, asJson, io);
+    let parsedSnapshot;
+    try {
+      parsedSnapshot = JSON.parse(snapshotRead.body);
+    } catch (error) {
+      return printPrBodyResult(command, prBodyFailure(command, prBodyDiagnostic(
+        `snapshot file '${opts.snapshot}' is not valid JSON: ${error.message}`,
+        'regenerate the snapshot with pr-body scaffold --snapshot-output',
+        'input_format',
+      ), { contextMode: 'snapshot' }), asJson, io);
+    }
+    const snapshot = normalizePrBodySnapshot(parsedSnapshot);
+    if (!snapshot.ok) {
+      return printPrBodyResult(command, prBodyFailure(command, snapshot.errors, {
+        contextMode: 'snapshot',
+        provenance: { pr: parsedSnapshot?.pr ?? null, issue: parsedSnapshot?.issue ?? null, headRefOid: parsedSnapshot?.head ?? null, baseRefOid: parsedSnapshot?.base ?? null },
+        nextCommand: prBodyScaffoldCommand(opts.pr ?? parsedSnapshot?.pr ?? '<n>', opts.bodyFile, opts.snapshot),
+      }), asJson, io);
+    }
+    const provenance = snapshot.value.provenance;
+    const input = { ...snapshot.value.input, prData: { ...snapshot.value.input.prData, body }, mode: 'review' };
+    const structural = lintPrBody(body, prBodyStructuralContext(input));
+    const gate = evaluatePreparationInput(input, evaluatePreflight);
+    const merged = mergePrBodyLintResult({
+      structural,
+      gate,
+      contextMode: 'snapshot',
+      provenance: {
+        repository: provenance.repository,
+        pr: provenance.pr,
+        issue: provenance.issue,
+        headRefOid: provenance.head,
+        baseRefOid: provenance.base,
+        mode: 'review',
+        capturedAt: provenance.capturedAt,
+      },
+      lintCommand: prBodyLintCommand('snapshot', provenance.pr, opts.bodyFile, opts.snapshot),
+      scaffoldCommand: prBodyScaffoldCommand(provenance.pr, opts.bodyFile, opts.snapshot),
+    });
+    return printPrBodyResult(command, merged, asJson, io);
+  }
+
+  // Live mode: load current GitHub context read-only, replace only the
+  // in-memory candidate body, inject the live task/decision reference
+  // resolvers, and run the shared evaluator. Never mutates GitHub.
+  let loaded;
+  try {
+    loaded = loadPreflightInput({
+      pr: opts.pr,
+      issue: opts.issue,
+      repo: opts.repo,
+      target: io.cwd,
+      includeBasePaths: true,
+      commandRunner: io.ghCommandRunner ?? defaultGhCommandRunner,
+    });
+  } catch (error) {
+    if (error instanceof PreflightError) {
+      return printPrBodyResult(command, prBodyFailure(command, prBodyDiagnostic(
+        `pr-body lint could not load live GitHub context: ${error.message}`,
+        'correct the GitHub access or dependency problem and rerun, or use --snapshot <path> --body-file <path> offline',
+        'operational_error',
+        'human_authority',
+      ), { contextMode: 'live' }), asJson, io);
+    }
+    throw error;
+  }
+  const liveInput = { ...loaded.input, prData: { ...loaded.input.prData, body }, mode: 'review' };
+  const structural = lintPrBody(body, prBodyStructuralContext(liveInput));
+  const gate = evaluatePreparationInput(liveInput, evaluatePreflight, { referenceResolvers: loaded.referenceResolvers });
+  const merged = mergePrBodyLintResult({
+    structural,
+    gate,
+    contextMode: 'live',
+      provenance: {
+      repository: loaded.repo ?? opts.repo ?? null,
+      pr: liveInput.prData.number,
+      issue: liveInput.issueData.number,
+      headRefOid: liveInput.prData.headRefOid,
+      baseRefOid: liveInput.prData.baseRefOid,
+      mode: 'review',
+      },
+    lintCommand: prBodyLintCommand('live', opts.pr, opts.bodyFile),
+    scaffoldCommand: prBodyScaffoldCommand(opts.pr, opts.bodyFile),
+  });
+  return printPrBodyResult(command, merged, asJson, io);
+}
+
+async function cmdPrBodyScaffold(opts, io, asJson) {
+  const command = 'pr-body scaffold';
+  try {
+    if (!opts.pr) return printPrBodyResult(command, prBodyFailure(command, prBodyDiagnostic('pr-body scaffold requires --pr <number>', 'pass --pr <number>', 'usage'), {}), asJson, io, EXIT_USAGE);
+    const loaded = loadPreflightInput({
+      pr: opts.pr,
+      issue: opts.issue,
+      repo: opts.repo,
+      target: io.cwd,
+      includeBasePaths: true,
+      commandRunner: io.ghCommandRunner ?? defaultGhCommandRunner,
+    });
+    const evaluation = evaluatePreparationInput(loaded.input, evaluatePreflight, { referenceResolvers: loaded.referenceResolvers });
+    const requiredChecks = evaluation.requiredChecks ?? parseRequiredChecks(loaded.input.issueData?.body);
+    const body = renderPrBodyScaffold({ ...loaded.input, requiredChecks });
+    const outputPath = opts.output ? resolveCliTarget(io, opts.output) : null;
+    const snapshotPath = opts.snapshotOutput ? resolveCliTarget(io, opts.snapshotOutput) : null;
+    let snapshotContent = null;
+    if (snapshotPath) {
+      try {
+        const inventories = materializeReferenceInventories(io.cwd);
+        const snapshotInput = {
+          ...loaded.input,
+          mode: 'review',
+          references: { decisionIds: inventories.decisionIds, taskIds: inventories.taskIds },
+        };
+        const snapshot = createPrBodySnapshot({ input: snapshotInput, repository: loaded.repo ?? opts.repo ?? null });
+        snapshotContent = JSON.stringify(snapshot, null, 2) + '\n';
+      } catch (error) {
+        return printPrBodyResult(command, prBodyFailure(command, prBodyDiagnostic(
+          `pr-body scaffold could not prepare snapshot context: ${error.message}`,
+          'repair or reduce the configured task/decision inventory, then rerun pr-body scaffold; use live pr-body lint when an offline snapshot cannot be bounded',
+          'snapshot_context',
+        ), { contextMode: 'live' }), asJson, io);
+      }
+    }
+    try {
+      if (outputPath) atomicWriteFile(outputPath, body);
+      if (snapshotPath) atomicWriteFile(snapshotPath, snapshotContent);
+    } catch (error) {
+      return printPrBodyResult(command, prBodyFailure(command, prBodyDiagnostic(
+        `pr-body scaffold could not write local output: ${error.message}`,
+        'correct the output path and rerun pr-body scaffold',
+        'local_file',
+      ), {}), asJson, io);
+    }
+    // Exit 0 means the scaffold was generated successfully. The scaffold is
+    // intentionally incomplete: it is not lint ready and has not passed any
+    // gate, and the output must say so rather than print "passed".
+    const nextCommand = opts.output ? prBodyLintCommand('live', opts.pr, opts.output) : null;
+    const offlineCommand = (opts.output && opts.snapshotOutput)
+      ? prBodyLintCommand('snapshot', opts.pr, opts.output, opts.snapshotOutput)
+      : null;
+    const result = {
+      schemaVersion: 1, ok: true, errors: [], warnings: evaluation.warnings ?? [], diagnostics: [], warningDiagnostics: evaluation.warningDiagnostics ?? [],
+      generated: true, contextMode: 'live', inputComplete: evaluation.inputComplete !== false,
+      bodyLintEvaluated: false, gateEvaluated: false, lintReady: false, gatePassed: false, publicationReady: false,
+      repository: loaded.repo ?? opts.repo ?? null,
+      pr: loaded.input.prData.number, issue: loaded.input.issueData.number,
+      headRefOid: loaded.input.prData.headRefOid, baseRefOid: loaded.input.prData.baseRefOid,
+      output: outputPath, snapshotOutput: snapshotPath, body,
+      failureCategories: [],
+      firstSafeRepair: 'replace every REPLACE placeholder and rerun pr-body lint before any GitHub write',
+      nextCommand,
+    };
+    if (asJson) return printPrBodyResult(command, result, true, io, 0);
+    if (!outputPath) io.out(body);
+    else io.out(`Scaffold written to ${result.output}`);
+    if (snapshotPath) io.out(`Snapshot written to ${snapshotPath}`);
+    io.out('Scaffold generated; it is intentionally incomplete and NOT publication-ready (lint not run, gate not passed).');
+    io.out(`First safe repair: ${result.firstSafeRepair}`);
+    if (nextCommand) io.out(`Next command: ${nextCommand}`);
+    if (offlineCommand) io.out(`Offline lint: ${offlineCommand}`);
+    return 0;
+  } catch (error) {
+    if (error instanceof CliUsageError) return asJson ? printPrBodyResult(command, prBodyFailure(command, prBodyDiagnostic(error.message, 'correct the command usage and rerun', 'usage'), {}), true, io, EXIT_USAGE) : Promise.reject(error);
+    if (error instanceof PreflightError) {
+      return printPrBodyResult(command, prBodyFailure(command, prBodyDiagnostic(
+        `pr-body scaffold could not load live GitHub context: ${error.message}`,
+        'correct the GitHub access or dependency problem and rerun',
+        'operational_error',
+        'human_authority',
+      ), {}), asJson, io);
+    }
+    throw error;
+  }
+}
+
 async function cmdPrBody(args, io) {
   const sub = args[0];
   const spec = sub && COMMAND_REGISTRY['pr-body'].subcommands[sub];
   if (!spec) throw new CliUsageError('pr-body requires a subcommand: scaffold | lint');
   const { opts } = parseCommandArgs(`pr-body ${sub}`, spec, args.slice(1));
   const asJson = Boolean(opts.json);
-  if (sub === 'lint') {
-    try {
-      if (!opts.input) return printGateResult('pr-body lint', commandFailure('pr-body lint', new CliUsageError('pr-body lint requires --input <evaluation-input.json>'), 'usage'), asJson, io, EXIT_USAGE);
-      const parsed = JSON.parse(readFileSync(resolveCliTarget(io, opts.input), 'utf8'));
-      const historyEvents = Array.isArray(parsed?.reviewHistory?.events) ? parsed.reviewHistory.events : [];
-      const priorOutcome = [...historyEvents].reverse().find(event => event?.type === 'outcome' && event?.status === 'needs_revision' && Array.isArray(event.findingIds) && !event.legacyMissingFindingIds);
-      const structural = lintPrBody(parsed?.prData?.body ?? '', {
-        requiredChecks: parseRequiredChecks(parsed?.issueData?.body),
-        currentHead: parsed?.prData?.headRefOid,
-        statusChecks: parsed?.prData?.statusCheckRollup ?? [],
-        priorFindingIds: priorOutcome?.findingIds ?? [],
-      });
-      const result = evaluatePreparationInput(parsed, evaluatePreflight);
-      // Command execution success, structural lint readiness, and gate success
-      // are deliberately separate results: a scaffold containing a canonical
-      // placeholder can never be lint ready, and a lint-ready body still must
-      // pass the semantic gate.
-      const gatePassed = Boolean(result.ok);
-      const lintReady = structural.lintReady;
-      const merged = {
-        ...result,
-        scaffolded: structural.scaffolded,
-        lintReady,
-        gatePassed,
-        publicationReady: lintReady && gatePassed,
-        ok: lintReady && gatePassed,
-        errors: [...structural.errors, ...(result.errors ?? [])],
-        diagnostics: [...structural.diagnostics, ...(result.diagnostics ?? [])],
-        firstSafeRepair: !lintReady ? structural.firstSafeRepair : (result.firstSafeRepair ?? null),
-      };
-      return printGateResult('pr-body lint', merged, asJson, io);
-    } catch (error) {
-      if (error instanceof CliUsageError) return asJson ? printGateResult('pr-body lint', commandFailure('pr-body lint', error, 'usage'), true, io) : Promise.reject(error);
-      return printGateResult('pr-body lint', commandFailure('pr-body lint', error), asJson, io);
-    }
-  }
-  try {
-    if (!opts.pr) return printGateResult('pr-body scaffold', commandFailure('pr-body scaffold', new CliUsageError('pr-body scaffold requires --pr <number>'), 'usage'), asJson, io, EXIT_USAGE);
-    const loaded = loadPreflightInput({ pr: opts.pr, issue: opts.issue, repo: opts.repo, target: io.cwd, includeBasePaths: true });
-    const evaluation = evaluatePreparationInput(loaded.input, evaluatePreflight, { referenceResolvers: loaded.referenceResolvers });
-    const requiredChecks = evaluation.requiredChecks ?? parseRequiredChecks(loaded.input.issueData?.body);
-    const body = renderPrBodyScaffold({ ...loaded.input, requiredChecks });
-    if (opts.output) writeFileSync(resolveCliTarget(io, opts.output), body, 'utf8');
-    // Exit 0 means the scaffold was generated successfully. The scaffold is
-    // intentionally incomplete: it is not lint ready and has not passed any
-    // gate, and the output must say so rather than print "passed".
-    const result = {
-      schemaVersion: 1, ok: true, errors: [], warnings: evaluation.warnings ?? [], diagnostics: [],
-      generated: true, lintReady: false, gatePassed: false, publicationReady: false,
-      pr: loaded.input.prData.number, issue: loaded.input.issueData.number, headRefOid: loaded.input.prData.headRefOid,
-      output: opts.output ? resolveCliTarget(io, opts.output) : null, body,
-      firstSafeRepair: 'replace every REPLACE placeholder and rerun pr-body lint before any GitHub write',
-    };
-    if (asJson) return printGateResult('pr-body scaffold', result, true, io);
-    if (!opts.output) io.out(body);
-    else io.out(`Scaffold written to ${result.output}`);
-    io.out('Scaffold generated; it is intentionally incomplete and NOT publication-ready (lint not run, gate not passed).');
-    io.out(`First safe repair: ${result.firstSafeRepair}`);
-    return 0;
-  } catch (error) {
-    if (error instanceof CliUsageError) return asJson ? printGateResult('pr-body scaffold', commandFailure('pr-body scaffold', error, 'usage'), true, io) : Promise.reject(error);
-    return printGateResult('pr-body scaffold', commandFailure('pr-body scaffold', error), asJson, io);
-  }
+  if (sub === 'lint') return cmdPrBodyLint(opts, io, asJson);
+  return cmdPrBodyScaffold(opts, io, asJson);
 }
 
 function readBasePaths(base, basePaths, target) {

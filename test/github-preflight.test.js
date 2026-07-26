@@ -30,6 +30,8 @@ import {
   evaluatePreflight,
   parseAttemptBudget,
   parseReviewBudget,
+  PREFLIGHT_DIAGNOSTIC_CATEGORIES,
+  PREFLIGHT_DIAGNOSTIC_OWNERS,
   runPreflight,
   PreflightError,
 } from '../src/github-preflight.js';
@@ -1757,6 +1759,13 @@ describe('attribution validation', () => {
 });
 
 describe('structured failure categories', () => {
+  it('has an intentional owner route for every canonical category', () => {
+    assert.deepEqual(
+      [...Object.keys(PREFLIGHT_DIAGNOSTIC_OWNERS)].sort(),
+      [...PREFLIGHT_DIAGNOSTIC_CATEGORIES].sort(),
+    );
+  });
+
   it('returns categorized errors on failure', () => {
     const result = evaluatePreflight({
       prData: {

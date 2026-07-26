@@ -38,7 +38,7 @@ All commands:
 | `github-preflight` | Pre-review evidence gate for a GitHub PR |
 | `github-review-audit` | Artifact-bound review provenance for a PR |
 | `github-ready` | Read-only merge-readiness verdict |
-| `pr-body scaffold` / `pr-body lint` | Render a canonical body or fully lint a serialized preparation input offline |
+| `pr-body scaffold` / `pr-body lint` | Scaffold a canonical body (plus optional offline context snapshot) and lint a local candidate body against live or snapshotted context |
 | `task-readiness` | Read-only explicit base-tree, path-intent, and dependency readiness check |
 | `commit-attribution check` | Read-only Engineer trailer check with repair guidance only |
 | `github-checkpoint render` / `repair-plan` | Render a checkpoint or one bounded append-only repair carrier without posting |
@@ -169,19 +169,65 @@ pr-body scaffold/lint -> github-preflight -> github-review-prepare
 -> Maintainer review -> github-review-audit -> github-ready
 ```
 
-`pr-body scaffold --pr <n> [--output <path>]` reads current GitHub state and
-renders a deliberately incomplete local body. Exit 0 means the scaffold was
-generated successfully; the result is `generated: true` with `lintReady: false`
-and `gatePassed: false`, so it is never reported as publication-ready. Replace
-every `REPLACE` field and run `pr-body lint --input <evaluation-input.json>`
-before publishing. Lint never contacts GitHub and rejects an incomplete input
-category instead of silently skipping evidence, history, attribution, status,
-base-tree, or reference checks. Lint is structural, not a placeholder grep: it
-validates the required sections, the exact current-head marker and
+`pr-body scaffold --pr <n> [--output <path>] [--snapshot-output <path>]` reads
+current GitHub state read-only and renders a deliberately incomplete local
+body. Run it only after the final implementation push and required checks: the
+captured head and context are exact, and a later push invalidates the authoring
+packet (rerun the checks and re-scaffold/revalidate rather than refreshing
+markers). Both outputs are written atomically and missing parent directories
+are created. Exit 0 means the scaffold was generated successfully; the result
+is `generated: true` with `lintReady: false` and `gatePassed: false`, so it is
+never reported as publication-ready. Output reports both written paths and the
+exact next lint command.
+
+Replace every `REPLACE` field in the Markdown draft, then lint the local body
+before publishing through one of three mutually exclusive modes:
+
+- Live (primary): `pr-body lint --pr <n> --body-file <path>` loads the same
+  live read-only context as preflight, replaces only the in-memory candidate
+  body with the local file, injects the live task/decision reference resolvers,
+  and never writes GitHub.
+- Offline: `pr-body lint --snapshot <path> --body-file <path>` performs zero
+  network access against a CLI-authored
+  `agenticloop.pr-body-context` snapshot (`snapshotSchemaVersion: 1`, capture
+  time, repository, PR, issue, head, base, fixed review mode, the complete
+  nested preparation input, and materialized task/decision reference
+  inventories). Snapshot kind, version, provenance, and internal identity are
+  validated; the nested remote `prData.body` is context-only and is always
+  replaced by `--body-file`. Snapshot success is bound to the complete captured
+  context, not to later live state.
+- Compatibility (deprecated): `pr-body lint --input <evaluation-input.json>`
+  retains its serialized preparation-input JSON semantics, emits a deprecation
+  diagnostic in human output, `warnings`, and `warningDiagnostics`, and rejects
+  Markdown with a targeted Engineer-owned error. It never checks live state and
+  cannot be combined with `--pr`, `--snapshot`, `--body-file`, `--issue`, or
+  `--repo`. The live-only `--issue` and `--repo` options are also rejected with
+  `--snapshot`.
+
+Live and snapshot lint fix evaluation `mode: review` and share the same
+evaluator, so equivalent context and body produce equivalent results. Lint
+rejects an incomplete input category instead of silently skipping evidence,
+history, attribution, status, base-tree, or reference checks, and incomplete
+context is reported as `inputComplete: false` with `gateEvaluated: false`
+rather than as a failed semantic gate. Lint is structural, not a placeholder
+grep: it validates the required sections, the exact current-head marker and
 implementation artifact, every required check with an allowed kind/source and a
 final verdict, substantive structured observation evidence, current resolution
-entries, and the final Engineer attribution. It reports `lintReady`,
-`gatePassed`, and `publicationReady` separately.
+entries, and the final Engineer attribution. Results report `contextMode`
+(`live`, `snapshot`, or `legacy`), repository/PR/issue/head/base provenance,
+`inputComplete`, `bodyLintEvaluated`, `gateEvaluated`, `lintReady`,
+  `gatePassed`, and `publicationReady`, plus merged errors, warnings,
+  diagnostics, error-only failure categories, owner routing, first safe repair,
+  and an exact repair-aligned PR-body-scoped `nextCommand` when one is
+  mechanically known. Conflicting or missing mode options exit `2`; missing
+  files, malformed JSON, wrong snapshot kind/version, provenance mismatches,
+  incomplete input, stale evidence, and failed lint/gates exit `1`; a
+  publication-ready lint exits `0`.
+
+After a publication-ready lint, publish explicitly (for example
+`gh pr edit <n> --body-file <path>`), then run live `github-preflight` and
+`github-review-prepare`. `github-review-prepare` evaluates published live
+state; it is never the unpublished-draft linter.
 
 Required-check task policy is validated before either PR-body or status-check
 satisfaction. Invalid kinds or sources, command proofs without an exact
@@ -260,6 +306,7 @@ see `CHANGELOG.md`.
 | `event` | Alias for `event-logging` |
 | `init --opencode` | Alias for `init --adapter opencode` |
 | `init --setup` | **Deprecated**; use `agenticloop setup --adapter <host>`. Behavior unchanged during the deprecation window |
+| `pr-body lint --input <evaluation-input.json>` | **Deprecated** compatibility mode for complete serialized preparation input. Use `pr-body lint --pr <n> --body-file <path>` live or `pr-body lint --snapshot <path> --body-file <path>` offline; removal requires a separately approved breaking release |
 | `init --update-assets` | Removed; use `agenticloop update` |
 | `--no-agents-guidance` | Opt out of the activation-guidance block (literal option on init/setup) |
 

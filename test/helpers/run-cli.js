@@ -39,6 +39,7 @@ class MemoryStream {
  * @param {boolean} [options.ci]
  * @param {boolean} [options.color]
  * @param {Function} [options.promptFactory]
+ * @param {Function} [options.ghCommandRunner]  Injectable read-only GitHub command runner.
  * @returns {Promise<{ status: number, stdout: string, stderr: string }>}
  */
 export async function runCliInProcess(argv, options = {}) {
@@ -56,6 +57,7 @@ export async function runCliInProcess(argv, options = {}) {
     ci: options.ci,
     color: options.color,
     promptFactory: options.promptFactory,
+    ghCommandRunner: options.ghCommandRunner,
   });
   return {
     status,

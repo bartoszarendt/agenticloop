@@ -11,6 +11,8 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -19,7 +21,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, delimiter } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +64,89 @@ after(() => {
 
 function runPacked(args, options = {}) {
   return spawnSync(process.execPath, [packedBin, ...args], { encoding: 'utf-8', ...options });
+}
+
+/**
+ * Read-only fake `gh` responder shared by the PATH shim. It runs either as the
+ * shim's main script (POSIX) or as a NODE_OPTIONS preload inside a renamed
+ * node binary (Windows, where spawnSync cannot execute .cmd shims).
+ */
+const FAKE_GH_RESPONDER = `
+const fs = require('fs');
+const path = require('path');
+const isMain = require.main === module;
+const isGhBinary = /gh(\\.exe)?$/i.test(path.basename(process.execPath));
+if (isMain || isGhBinary) {
+  const args = process.argv.slice(isMain ? 2 : 1);
+  if (!isMain && args.length > 0 && path.isAbsolute(args[0])) args[0] = path.basename(args[0]);
+  if (process.env.FAKE_GH_LOG) fs.appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify(args) + '\\n');
+  const fx = JSON.parse(fs.readFileSync(process.env.FAKE_GH_FIXTURE, 'utf8'));
+  const out = value => { process.stdout.write(JSON.stringify(value)); process.exit(0); };
+  const fail = message => { process.stderr.write(message); process.exit(1); };
+  if (args[0] === 'pr' && args[1] === 'view') out(fx.prData);
+  if (args[0] === 'issue' && args[1] === 'view') out(fx.issueData);
+  if (args[0] === 'repo' && args[1] === 'view') out({ nameWithOwner: fx.repo });
+  if (args[0] === 'api') {
+    if (args[1] === 'user') out(fx.account);
+    const endpoint = args.find(item => typeof item === 'string' && item.startsWith('repos/')) || '';
+    if (endpoint.includes('/issues/') && endpoint.includes('/comments')) {
+      const number = Number((endpoint.match(/issues\\/(\\d+)\\/comments/) || [])[1]);
+      out([number === fx.issueData.number ? fx.issueComments : []]);
+    }
+    if (endpoint.includes('/pulls/') && endpoint.includes('/reviews')) out([[]]);
+    if (endpoint.includes('/git/trees/')) out({ tree: fx.baseTree || [], truncated: false });
+    fail('unexpected endpoint ' + endpoint);
+  }
+  fail('unexpected gh command: ' + args.join(' '));
+}
+`;
+
+/** Install a PATH-shimmed read-only fake `gh` and return the env additions. */
+function installFakeGh(tmpBase, fixture) {
+  const shimRoot = mkdtempSync(join(tmpBase, 'fake gh-'));
+  const fakeBin = join(shimRoot, 'bin');
+  mkdirSync(fakeBin, { recursive: true });
+  const fixturePath = join(shimRoot, 'fixture.json');
+  writeFileSync(fixturePath, JSON.stringify(fixture), 'utf8');
+  const logPath = join(shimRoot, 'invocations.log');
+  const env = {
+    ...process.env,
+    FAKE_GH_FIXTURE: fixturePath,
+    FAKE_GH_LOG: logPath,
+  };
+  if (process.platform === 'win32') {
+    copyFileSync(process.execPath, join(fakeBin, 'gh.exe'));
+    const preload = join(shimRoot, 'fake-gh.cjs');
+    writeFileSync(preload, FAKE_GH_RESPONDER, 'utf8');
+    const preloadOption = preload.replace(/\\/g, '/').replaceAll('"', '\\"');
+    env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --require="${preloadOption}"`.trim();
+  } else {
+    const responder = join(shimRoot, 'fake-gh.cjs');
+    writeFileSync(responder, FAKE_GH_RESPONDER, 'utf8');
+    const script = join(fakeBin, 'gh');
+    writeFileSync(script, `#!/bin/sh\nexec "${process.execPath}" "${responder}" "$@"\n`, 'utf8');
+    chmodSync(script, 0o755);
+  }
+  env.PATH = `${fakeBin}${delimiter}${process.env.PATH ?? ''}`;
+  return { env, logPath };
+}
+
+function readGhInvocations(logPath) {
+  if (!existsSync(logPath)) return [];
+  return readFileSync(logPath, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
+}
+
+function assertReadOnlyGhInvocations(invocations) {
+  const allowedVerbs = new Set(['pr view', 'issue view', 'repo view']);
+  const writeApiFlags = new Set(['--method', '-X', '--input', '--field', '-F', '--raw-field', '-f']);
+  for (const args of invocations) {
+    const verb = `${args[0] ?? ''} ${args[1] ?? ''}`;
+    if (args[0] === 'api') {
+      assert.ok(!args.some(arg => writeApiFlags.has(arg)), `GitHub API write option invoked: gh ${args.join(' ')}`);
+      continue;
+    }
+    assert.ok(allowedVerbs.has(verb), `non-read GitHub command invoked: gh ${args.join(' ')}`);
+  }
 }
 
 describe('packed package smoke tests', () => {
@@ -169,6 +254,91 @@ describe('packed package smoke tests', () => {
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.lintReady, false);
     assert.match(parsed.errors.join('\n'), /placeholder/i);
+  });
+
+  it('completes the scaffold-edit-lint workflow from the installed tarball with a PATH-shimmed fake gh', { timeout: 120000 }, () => {
+    const HEAD_SHA = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0';
+    const BASE_SHA = 'b'.repeat(40);
+    const fixture = {
+      prData: {
+        number: 7,
+        body: 'stale remote draft that was never updated',
+        baseRefOid: BASE_SHA,
+        headRefOid: HEAD_SHA,
+        files: [],
+        closingIssuesReferences: [{ number: 3 }],
+        statusCheckRollup: [],
+        commits: [{ oid: HEAD_SHA, message: 'implement T-007\n\nTask: T-007\nAgent: engineer' }],
+        comments: [],
+        reviews: [],
+      },
+      issueData: {
+        number: 3,
+        title: 'T-007 sample',
+        body: '---\ntask_id: T-007\n---\n# T-007 Sample\n\n## Required Checks\n- [RC-1] `npm test`\n',
+        comments: [],
+      },
+      issueComments: [],
+      repo: 'octo/repo',
+      account: { login: 'loop-bot', type: 'User' },
+    };
+    const target = mkdtempSync(join(tmpBase, 'pr-body-flow-'));
+    const { env, logPath } = installFakeGh(tmpBase, fixture);
+
+    // 1. Scaffold the body and the context snapshot through the fake gh.
+    const scaffold = runPacked(
+      ['pr-body', 'scaffold', '--pr', '7', '--output', 'body.md', '--snapshot-output', 'ctx.snapshot.json', '--json'],
+      { cwd: target, env },
+    );
+    assert.equal(scaffold.status, 0, scaffold.stderr + scaffold.stdout);
+    const scaffoldResult = JSON.parse(scaffold.stdout);
+    assert.equal(scaffoldResult.nextCommand, 'npx agenticloop pr-body lint --pr 7 --body-file body.md');
+    const bodyPath = join(target, 'body.md');
+    const snapshotPath = join(target, 'ctx.snapshot.json');
+    assert.ok(existsSync(bodyPath));
+    assert.ok(existsSync(snapshotPath));
+    const snapshot = JSON.parse(readFileSync(snapshotPath, 'utf8'));
+    assert.equal(snapshot.kind, 'agenticloop.pr-body-context');
+    assert.equal(snapshot.snapshotSchemaVersion, 1);
+    assert.equal(snapshot.head, HEAD_SHA);
+    assert.equal(snapshot.repository, 'octo/repo');
+
+    // 2. The scaffolded placeholder body fails offline lint without any gh on PATH.
+    const plainEnv = { ...process.env };
+    delete plainEnv.NODE_OPTIONS;
+    const placeholder = runPacked(['pr-body', 'lint', '--snapshot', 'ctx.snapshot.json', '--body-file', 'body.md', '--json'], { cwd: target, env: plainEnv });
+    assert.equal(placeholder.status, 1, placeholder.stderr);
+    assert.match(JSON.parse(placeholder.stdout).errors.join('\n'), /placeholder/i);
+
+    // 3. Engineer edits the Markdown draft locally.
+    writeFileSync(bodyPath, [
+      '## Scope Completed', 'Completed the scoped change.', '',
+      '## Artifacts', `Current implementation artifact: commit:${HEAD_SHA}`, '',
+      '## Evidence', `Current PR head: ${HEAD_SHA}`, '',
+      '- Required check: [RC-1] `npm test`', '  Verdict: passed', '  Evidence: 47 tests passed (exit 0)', '',
+      '## Deviations', 'None.', '', '## Known Gaps', 'None.', '', '## Follow-Ups', 'None.', '',
+      '[[agent: engineer]]',
+    ].join('\n'), 'utf8');
+
+    // 4. Offline snapshot lint passes with zero network access (no shim on PATH).
+    const offline = runPacked(['pr-body', 'lint', '--snapshot', 'ctx.snapshot.json', '--body-file', 'body.md', '--json'], { cwd: target, env: plainEnv });
+    assert.equal(offline.status, 0, offline.stderr + offline.stdout);
+    const offlineResult = JSON.parse(offline.stdout);
+    assert.equal(offlineResult.contextMode, 'snapshot');
+    assert.equal(offlineResult.publicationReady, true);
+
+    // 5. Live-context lint evaluates the local draft, not the stale remote body.
+    const live = runPacked(['pr-body', 'lint', '--pr', '7', '--body-file', 'body.md', '--json'], { cwd: target, env });
+    assert.equal(live.status, 0, live.stderr + live.stdout);
+    const liveResult = JSON.parse(live.stdout);
+    assert.equal(liveResult.contextMode, 'live');
+    assert.equal(liveResult.publicationReady, true);
+    assert.equal(liveResult.headRefOid, HEAD_SHA);
+
+    // 6. Every fake-gh invocation was read-only; no write command ran.
+    const invocations = readGhInvocations(logPath);
+    assert.ok(invocations.length > 0, 'live modes must read GitHub context through gh');
+    assertReadOnlyGhInvocations(invocations);
   });
 
   it('ships docs/cli-reference.md', () => {

@@ -174,24 +174,65 @@ export const COMMAND_REGISTRY = {
     ],
   },
   'pr-body': {
-    summary: 'Scaffold a canonical PR body or lint a complete preparation input offline.',
+    summary: 'Scaffold a canonical PR body and lint a local candidate body against live or snapshotted evaluation context.',
     usage: 'agenticloop pr-body <scaffold|lint> [options]',
+    details: [
+      'Closed-loop authoring workflow (read-only with respect to GitHub):',
+      '  1. finish the implementation, push, and run the required final checks;',
+      '  2. npx agenticloop pr-body scaffold --pr <n> --output <body.md> [--snapshot-output <context.snapshot.json>]',
+      '  3. edit the Markdown body (replace every REPLACE placeholder);',
+      '  4. npx agenticloop pr-body lint --pr <n> --body-file <body.md>            (live context)',
+      '     npx agenticloop pr-body lint --snapshot <context.snapshot.json> --body-file <body.md>   (offline)',
+      '  5. publish explicitly (gh pr edit <n> --body-file <body.md>), then run github-preflight and github-review-prepare.',
+      'Compatibility only: pr-body lint --input <evaluation-input.json> reads a complete legacy serialized input, is deprecated, and never checks live state.',
+      'Lint modes are mutually exclusive. --issue and --repo belong to live --pr mode only; snapshot mode performs zero network access.',
+      'Lint results expose contextMode (live|snapshot|legacy), repository/PR/issue/head/base provenance, evaluated-state flags, and an exact repair-aligned next command.',
+      'Exit statuses: 0 successful scaffold or publication-ready lint; 1 file/format/context/lint/gate failure; 2 invalid option shape.',
+      'github-review-prepare evaluates published live state only; it is never the unpublished-draft linter.',
+    ],
     subcommands: {
       scaffold: {
-        summary: 'Read GitHub data and render a local PR-body scaffold without writing GitHub.',
-        usage: 'agenticloop pr-body scaffold --pr <number> [--issue <number>] [--repo <owner/name>] [--output <path>] [--json]',
+        summary: 'Read GitHub data and render a local PR-body scaffold (and optional context snapshot) without writing GitHub.',
+        usage: 'agenticloop pr-body scaffold --pr <number> [--issue <number>] [--repo <owner/name>] [--output <path>] [--snapshot-output <path>] [--json]',
         options: [
           opt('pr', 'string', 'Pull request number. Required.'),
           opt('issue', 'string', 'Linked task issue number override.'),
           opt('repo', 'string', 'Target repository.'),
           opt('output', 'string', 'Optional local output path; stdout when omitted.'),
+          opt('snapshot-output', 'string', 'Optional offline context snapshot path; serializes the complete loaded evaluation context with materialized task/decision inventories.', { valueName: 'path' }),
           jsonOption,
+        ],
+        details: [
+          'Run scaffold only after the final implementation push and required checks: the captured head and context are exact.',
+          'Both --output and --snapshot-output are written atomically; missing parent directories are created.',
+          'The scaffold is intentionally incomplete. Output reports the exact next lint command:',
+          '  npx agenticloop pr-body lint --pr <n> --body-file <path>',
+          '  npx agenticloop pr-body lint --snapshot <path> --body-file <path>',
+          'A push after scaffolding invalidates the authoring packet: rerun required checks and re-scaffold/revalidate against the new head.',
+          'After an explicit publish (gh pr edit <n> --body-file <path>), run npx agenticloop github-preflight --pr <n> and then npx agenticloop github-review-prepare --pr <n>.',
+          'Exit statuses: 0 scaffold written; 1 GitHub context load failure; 2 invalid usage.',
         ],
       },
       lint: {
-        summary: 'Evaluate a complete serialized preparation input with no GitHub access.',
-        usage: 'agenticloop pr-body lint --input <evaluation-input.json> [--json]',
-        options: [opt('input', 'string', 'Complete serialized preparation-input JSON document. Required.'), jsonOption],
+        summary: 'Lint a local candidate PR-body Markdown file against live context (--pr) or a CLI-authored snapshot (--snapshot); never writes GitHub.',
+        usage: 'agenticloop pr-body lint (--pr <number> [--issue <number>] [--repo <owner/name>] | --snapshot <path>) --body-file <path> [--json]',
+        options: [
+          opt('pr', 'string', 'Live mode: pull request number supplying the evaluation context. Requires --body-file.'),
+          opt('issue', 'string', 'Linked task issue number override (live mode).'),
+          opt('repo', 'string', 'Target repository (live mode).'),
+          opt('body-file', 'string', 'Candidate PR-body Markdown file. Required for --pr and --snapshot modes.', { valueName: 'path' }),
+          opt('snapshot', 'string', 'Offline mode: CLI-authored agenticloop.pr-body-context snapshot from scaffold --snapshot-output. Requires --body-file; performs zero network access.', { valueName: 'path' }),
+          opt('input', 'string', 'Deprecated compatibility mode: complete serialized preparation-input JSON document (body read from prData.body). Cannot be combined with --pr, --snapshot, --body-file, --issue, or --repo.', { valueName: 'path' }),
+          jsonOption,
+        ],
+        details: [
+          'Modes are mutually exclusive. Live and snapshot lint replace only the in-memory candidate body with --body-file, fix evaluation mode to review, and run the shared preparation evaluator.',
+          '--issue and --repo are valid only with live --pr mode; they are rejected with --snapshot and deprecated --input.',
+          'Live mode loads current GitHub context read-only and injects live task/decision reference resolvers. Snapshot mode performs no network access and uses the materialized inventories captured by scaffold.',
+          'Results report contextMode (live|snapshot|legacy), repository/PR/issue/head/base provenance, inputComplete, bodyLintEvaluated, gateEvaluated, lintReady, gatePassed, and publicationReady. Incomplete context is never an evaluated gate.',
+          'Snapshot readiness is bound to the complete captured context; publish explicitly (gh pr edit <n> --body-file <path>), then run npx agenticloop github-preflight --pr <n>.',
+          'Exit statuses: 0 publication-ready lint; 1 file/format/completeness/lint/gate failure; 2 invalid option shape.',
+        ],
       },
     },
   },
@@ -783,6 +824,10 @@ export function renderCommandHelp(commandPath) {
     lines.push('');
     lines.push(`Options (${label}):`);
     lines.push(formatOptionsBlock(leaf.options));
+  }
+  if (leaf.details?.length > 0) {
+    lines.push('');
+    for (const line of leaf.details) lines.push(line);
   }
   if (commandName === 'event-logging' && !sub) {
     lines.push('');

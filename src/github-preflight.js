@@ -1089,24 +1089,28 @@ export function validateAttribution(prBody, headCommitMessage, issueData) {
  * @param {Array<string|{ message: string, category?: string }>} errors
  * @returns {{ category: string, errors: string[] }[]}
  */
+export const PREFLIGHT_DIAGNOSTIC_CATEGORIES = Object.freeze([
+  'head_identity',
+  'summary_shape',
+  'scope_deviations',
+  'task_contract',
+  'path_intent',
+  'generated_paths',
+  'dependencies',
+  'attribution',
+  'evidence',
+  'checks',
+  'task_policy',
+  'review_checkpoint',
+  'revision_resolution',
+  'review_provenance',
+  'other',
+]);
+
 export function categorizePreflightErrors(errors) {
-  const categories = {
-    head_identity: [],
-    summary_shape: [],
-    scope_deviations: [],
-    task_contract: [],
-    path_intent: [],
-    generated_paths: [],
-    dependencies: [],
-    attribution: [],
-    evidence: [],
-    checks: [],
-    task_policy: [],
-    review_checkpoint: [],
-    revision_resolution: [],
-    review_provenance: [],
-    other: [],
-  };
+  const categories = Object.fromEntries(
+    PREFLIGHT_DIAGNOSTIC_CATEGORIES.map(category => [category, []])
+  );
 
   for (const error of errors) {
     const errorStr = typeof error === 'string' ? error : error.message;
@@ -1141,6 +1145,33 @@ export function categorizePreflightErrors(errors) {
     .map(([category, errors]) => ({ category, errors }));
 }
 
+export const PREFLIGHT_DIAGNOSTIC_OWNERS = Object.freeze({
+  head_identity: 'engineer',
+  summary_shape: 'engineer',
+  scope_deviations: 'engineer',
+  task_contract: 'maintainer',
+  path_intent: 'maintainer',
+  generated_paths: 'maintainer',
+  dependencies: 'orchestrator',
+  attribution: 'engineer',
+  evidence: 'engineer',
+  // Most check-evidence failures belong to the Engineer. The missing task-owned
+  // Required Checks section is reassigned to the Maintainer below.
+  checks: 'engineer',
+  task_policy: 'maintainer',
+  review_checkpoint: 'maintainer',
+  revision_resolution: 'engineer',
+  review_provenance: 'maintainer',
+  other: 'maintainer',
+});
+
+const UNMAPPED_PREFLIGHT_DIAGNOSTIC_CATEGORIES = PREFLIGHT_DIAGNOSTIC_CATEGORIES.filter(
+  category => !Object.hasOwn(PREFLIGHT_DIAGNOSTIC_OWNERS, category)
+);
+if (UNMAPPED_PREFLIGHT_DIAGNOSTIC_CATEGORIES.length > 0) {
+  throw new Error(`preflight diagnostic categories lack owner routing: ${UNMAPPED_PREFLIGHT_DIAGNOSTIC_CATEGORIES.join(', ')}`);
+}
+
 /**
  * Preserve legacy string arrays while exposing stable repair metadata to
  * `github-preflight --json` consumers.
@@ -1151,12 +1182,20 @@ function normalizePreflightDiagnostics(items) {
   return items.map(item => {
     const message = typeof item === 'string' ? item : item.message;
     const inferredCategory = categorizePreflightErrors([item])[0]?.category ?? 'other';
+    const category = typeof item === 'object' && item.category ? item.category : inferredCategory;
+    const owner = category === 'checks'
+      ? (/has no non-empty '## Required Checks' section/.test(message) ? 'maintainer' : 'engineer')
+      // This fallback is defensive for an externally supplied explicit
+      // category. Canonical categories are exhaustively checked above.
+      : (PREFLIGHT_DIAGNOSTIC_OWNERS[category] ?? 'maintainer');
     /** @type {{ category: string, message: string, owner?: string, nextAction?: string, expectedShape?: string, expectedValues?: string[], requiredFindingIds?: string[] }} */
     const diagnostic = {
-      category: typeof item === 'object' && item.category ? item.category : inferredCategory,
+      category,
       message,
+      owner: typeof item === 'object' && typeof item.owner === 'string'
+        ? item.owner
+        : owner,
     };
-    if (typeof item === 'object' && typeof item.owner === 'string') diagnostic.owner = item.owner;
     if (typeof item === 'object' && typeof item.nextAction === 'string') diagnostic.nextAction = item.nextAction;
     if (typeof item === 'object' && typeof item.expectedShape === 'string') {
       diagnostic.expectedShape = item.expectedShape;
@@ -1797,6 +1836,7 @@ export function loadPreflightInput({
   const requiresPathInventory = includeBasePaths && Boolean(parseScopePatterns(issueData.body)?.patterns?.length);
   const basePaths = requiresPathInventory ? fetchBaseTreePaths(commandRunner, ownerName, prData.baseRefOid) : [];
   return {
+    repo: ownerName,
     input: createPreparationInput({
       prData,
       issueData,

@@ -750,8 +750,21 @@ agent exchanges.
 
 ## Review Preparation And Recovery
 
-Before a first or repaired PR-body write, render `pr-body scaffold` and complete
-the serializable offline `pr-body lint` input. A resolved matrix entry binds the
+Before a first or repaired PR-body write, render `pr-body scaffold --pr <n>
+--output <body.md>` after the final implementation push and required checks
+(optionally with `--snapshot-output <context.snapshot.json>`), replace every
+`REPLACE` placeholder in the Markdown draft, and lint the local body with
+`pr-body lint --pr <n> --body-file <body.md>` (live read-only context) or
+`pr-body lint --snapshot <context.snapshot.json> --body-file <body.md>`
+(offline, zero network access). The Engineer edits Markdown only; the CLI owns
+the versioned `agenticloop.pr-body-context` snapshot with materialized
+task/decision inventories, so preparation-input JSON is never hand-authored
+(the legacy `pr-body lint --input <evaluation-input.json>` path is deprecated
+but unchanged). Publication is an explicit user-controlled body write, followed
+by live `github-preflight`; `github-review-prepare` runs only after that and
+evaluates published live state, never an unpublished local draft. A push after
+scaffolding invalidates the packet: rerun the required checks and
+re-scaffold/revalidate against the new head. A resolved matrix entry binds the
 current head with its structured `[ref: commit:<full-sha>]`; `sha:<full-sha>` and
 a bare full SHA are accepted on input, while a legacy prose-only exact current
 SHA receives a migration diagnostic. The current matrix contains exactly the

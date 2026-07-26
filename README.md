@@ -7,7 +7,7 @@ AI coding agents are useful, but they are unreliable at sustained software work.
 Agentic Loop adds that layer. It installs as a lightweight, removable overlay in an existing project and never rewrites your target-owned documents: your `README.md`, implementation plan, and architecture docs stay untouched. (The one clearly marked, removable exception is described in [Repository-rules activation guidance](#repository-rules-activation-guidance).) It gives agents the scaffolding they need to stay in scope, produce evidence, and respect review gates.
 
 ![Version: 0.3.1](https://img.shields.io/badge/version-0.3.1-blue)
-![Node.js >=20](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
+![Node.js >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 <!-- Enable after the first public npm publish:
@@ -153,7 +153,7 @@ An implementation plan in the repository is all it needs: bare activation finds 
 
 ### Requirements
 
-- Node.js `>=20`
+- Node.js `>=22`
 - An AI coding agent host that can read project files
 - OpenCode or Claude Code for the most validated path today
 
@@ -561,7 +561,7 @@ Validate toolkit assets:
 npx agenticloop validate
 ```
 
-The CLI is written in JavaScript as ES modules and targets Node.js `>=20`.
+The CLI is written in JavaScript as ES modules and targets Node.js `>=22`.
 
 ## Contributing
 

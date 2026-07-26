@@ -3,6 +3,34 @@
 ## Unreleased
 
 ### Added
+- Closed-loop PR-body authoring: `pr-body lint --pr <n> --body-file <path>`
+  lints a local Markdown draft against live read-only GitHub context (the local
+  file replaces only the in-memory candidate body; live task/decision reference
+  resolvers are injected; GitHub is never written), and
+  `pr-body scaffold --snapshot-output <path>` serializes the complete loaded
+  evaluation context as a versioned `agenticloop.pr-body-context` snapshot
+  (capture time, repository, PR, issue, head, base, fixed review mode, nested
+  preparation input, materialized task/decision inventories) for fully offline
+  `pr-body lint --snapshot <path> --body-file <path>`. Body and snapshot
+  outputs are written atomically with safe parent creation, and scaffold
+  reports the exact next lint command. Lint results add `contextMode`,
+  `bodyLintEvaluated`, and `gateEvaluated` (additive, still `schemaVersion: 1`)
+  alongside retained `inputComplete`, `lintReady`, `gatePassed`, and
+  `publicationReady`; errors, warnings, warning diagnostics, failure
+  categories, ownership, and first-repair routing are merged truthfully across
+  context, body-lint, and gate phases, and incomplete context can no longer
+  masquerade as an evaluated semantic gate. Failure categories remain empty on
+  passing warning-only results, every rendered diagnostic has a domain owner,
+  legacy output says that live state was not checked, and repair commands
+  follow the first safe repair instead of repeating a stale invocation.
+  Snapshot provenance is validated strictly, configured nested task-file
+  templates are materialized without flattening, and live CLI tests use an
+  injectable read-only GitHub command-runner seam.
+- Shared preflight diagnostics now always carry a domain `owner`. This is an
+  additive JSON-shape change across `github-preflight`, `github-ready`, and
+  `github-review-prepare`, with exhaustive owner routing for every canonical
+  preflight diagnostic category and a defensive Maintainer fallback for
+  externally supplied categories.
 - Executable review preparation: one serializable preparation-input
   schema drives offline PR-body lint/scaffolding, live preflight, review
   preparation, and merge readiness under a single completeness policy (every
@@ -20,6 +48,14 @@
   no-progress dispositions.
 
 ### Migration and compatibility
+- `pr-body lint --input <evaluation-input.json>` is deprecated as an ambiguous
+  expert compatibility path: it retains its serialized-input semantics for now,
+  emits a deprecation diagnostic in human output, `warnings`, and
+  `warningDiagnostics`, cannot be combined with `--pr`, `--snapshot`,
+  `--body-file`, `--issue`, or `--repo`, and rejects Markdown input with a
+  targeted Engineer-owned error pointing at `--body-file`. Use
+  `--pr --body-file` (live) or `--snapshot --body-file` (offline) instead;
+  removal requires a separately approved breaking release.
 - Resolution entries: a `resolved` entry binds the current artifact through its
   structured `[ref: ...]`; a prose-only exact current-artifact citation remains
   valid with a migration diagnostic on both backends, while a present malformed

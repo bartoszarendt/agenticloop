@@ -3,9 +3,17 @@
 ## Executable Review Preparation
 
 Use `pr-body scaffold/lint -> github-preflight -> github-review-prepare ->
-Maintainer review -> github-review-audit -> github-ready`. Preparation is
+Maintainer review -> github-review-audit -> github-ready`. The Engineer authors
+the PR body in Markdown: after the final implementation push and required
+checks, `pr-body scaffold` renders the local draft (and an optional versioned
+offline context snapshot with materialized task/decision inventories), and
+`pr-body lint` evaluates the local draft against live read-only context
+(`--pr --body-file`) or the CLI-authored snapshot (`--snapshot --body-file`)
+before any explicit body write. Preparation is
 read-only and dispatches only a schema-valid, PR-bound, exact-head `ok === true`
-packet. Status checks never substitute declared observation records, and stable
+packet, and `github-review-prepare` evaluates published live state only; it is
+never the unpublished-draft linter. Status checks never substitute declared
+observation records, and stable
 IDs never substitute the exact declared command. The current matrix holds only
 prior active IDs and structured resolved references; history is append-only.
 Same-author checkpoint repair is bounded and no-progress remains separate from

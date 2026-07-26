@@ -72,6 +72,7 @@ const MANIFEST = {
     'test/review-handoff-adapter-contract.test.js',
     'test/review-preparation-cli.test.js',
     'test/plugin-packaging.test.js',
+    'test/pr-body-workflow.test.js',
     'test/project-detection.test.js',
     'test/project-map.test.js',
     'test/remove-lifecycle.test.js',

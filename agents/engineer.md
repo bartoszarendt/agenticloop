@@ -156,13 +156,23 @@ task-record obligation.
   artifact reference.
 - For GitHub-backed implementation PRs, publish the current summary once in the
   pull request body; do not duplicate it as a separate issue or PR comment.
-- For GitHub-backed work, use `npx agenticloop pr-body scaffold --pr <number>`
-  and offline `pr-body lint` before the first body write, then run
+- For GitHub-backed work, finish the final push and required checks, then run
+  `npx agenticloop pr-body scaffold --pr <number> --output <body.md>` (add
+  `--snapshot-output <context.snapshot.json>` for offline lint). Replace every
+  `REPLACE` placeholder and lint the local draft before the first body write:
+  `npx agenticloop pr-body lint --pr <number> --body-file <body.md>` (live
+  read-only context) or
+  `npx agenticloop pr-body lint --snapshot <context.snapshot.json> --body-file <body.md>`
+  (offline). You edit Markdown only; the CLI authors the evaluation context, so
+  never hand-author preparation JSON or use `github-review-prepare` as a draft
+  linter (it evaluates published live state). Publish explicitly, then run
   `npx agenticloop github-preflight --pr <number>`. Run the read-only
   `commit-attribution check --task <id>` before publication; it prints guidance
   but never amends, commits, pushes, or force-pushes. Fix the pull request body
-  (required-check evidence, `Current PR head` marker) until it passes. A failing
-  preflight is a revision defect, not a reviewer task.
+  (required-check evidence, `Current PR head` marker) until it passes. A push
+  after scaffolding invalidates the authoring packet: rerun required checks and
+  re-scaffold against the new head. A failing preflight is a revision defect,
+  not a reviewer task.
 - Address review feedback or dispute it with evidence. Before requesting review
   (first or re-review), confirm the handoff requirements in [[review-and-accept]]
   are met: the exact implementation artifact is current, required checks pass,
