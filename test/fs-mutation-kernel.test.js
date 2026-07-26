@@ -1,5 +1,5 @@
 /**
- * Direct filesystem mutation kernel tests (Phase 28 reopen).
+ * Direct filesystem mutation kernel tests.
  *
  * The kernel owns target-bound validation and rollback. These tests reproduce
  * every independently-confirmed defect and assert restored bytes and on-disk

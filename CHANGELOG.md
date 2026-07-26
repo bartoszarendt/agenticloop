@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+### Added
+- Executable review preparation: one serializable preparation-input
+  schema drives offline PR-body lint/scaffolding, live preflight, review
+  preparation, and merge readiness under a single completeness policy (every
+  category present; explicit `null` distinguished from silent omission). Typed
+  proof kinds and satisfaction sources with canonical structured
+  per-observation evidence; explicit base-tree path intent, generated-output
+  provenance, dependency readiness, and read-only commit-attribution guidance;
+  exact-head fail-closed review packets with mechanical stale-head rejection at
+  emission and at consumer verification
+  (`github-review-prepare --packet <path>`); structured resolution references
+  and finding-ID lifecycle; bounded same-author checkpoint repairs through one
+  pure shared repair validator; explicit checkpoint states
+  (`absent`/`rendered`/`authorizes_revision`/`consumed`/`invalid`); revision
+  classification (`implementation_changing`/`record_only`) and distinct
+  no-progress dispositions.
+
+### Migration and compatibility
+- Resolution entries: a `resolved` entry binds the current artifact through its
+  structured `[ref: ...]`; a prose-only exact current-artifact citation remains
+  valid with a migration diagnostic on both backends, while a present malformed
+  or stale structured reference is always an error. Files legacy prose
+  citations now match as complete reference tokens, so `branch:feat` no longer
+  matches prose containing `branch:feature`. Hex identities compare
+  case-insensitively; branch, patch, and local-diff identifiers compare exactly.
+- No-progress guard: two consecutive valid implementation-changing
+  `needs_revision` outcomes sustaining the same active finding IDs now pause an
+  equivalent revision until a bound `no_progress_disposition` is recorded.
+  Record-only corrections, stale reviews, accepted outcomes, withdrawn or
+  retired findings, and new-only finding sets never trigger it.
+- Typed finding-ID baseline: a legacy `needs_revision` review whose findings
+  field is missing (accepted only for an old artifact) establishes no IDs; the
+  first typed `needs_revision` outcome after it allocates IDs from `F-1`.
+- Revision classification defaults: an outcome without a declared
+  classification is treated as `implementation_changing`.
+- Commit attribution: the local check and live preflight share one canonical
+  final-trailer-block parser; a blank separator before the final trailer block
+  is not required (matching prior live behavior), standard Git trailers may be
+  mixed in, and Task/Agent tokens in prose are never scanned as trailers.
+- Evidence: an evidence entry's proof kind is inferred from its own shape, so
+  command-shaped evidence can no longer satisfy a manual check, and manual-shaped
+  evidence (including legacy command labels that dropped their backticks) cannot
+  satisfy a command check. Preserve the declared backtick command in command
+  evidence during migration. A stable RC ID survives wording edits only when
+  kind, source, exact command identity, and observation contract all match
+  (previously a display-text drift produced only a warning). Declared
+  observations require structured per-observation records
+  (`Observation:`/`Level:`/`Result:`/`Artifact:`/`Source:`); an exact successful
+  status check cannot replace them, and a copied
+  observation name list no longer satisfies them.
+- Files checkpoints, repairs, and no-progress carriers now require exactly
+  `Orchestrator: orchestrator`; a wrong trusted role is a repairable malformed
+  candidate rather than silently accepted.
+
 ### Changed
 - Tightened `parseReviewMarker()` so every `needs_revision` marker requires
   exactly one `AGENT_REVIEW_FINDINGS` field containing unique canonical
@@ -33,6 +87,40 @@
   existing records retain their stored budgets.
 - Closeout conditionally synchronizes selected-plan progress before final audit
   freeze, then certifies the resulting exact candidate before publishing complete.
+
+### Fixed
+- Required-check policy is now validated before PR-body or status-check
+  satisfaction, so malformed kinds/sources, command proofs without exact
+  backticked identities, non-command status substitution, and status-only
+  observation contracts fail closed as Maintainer-owned task-policy errors.
+  ID-less evidence matching ignores recognized typed annotations while
+  preserving exact command identity, and ambiguous semantic check labels now
+  require distinct `RC-N` ids.
+- Review-preparation completion: proof-metadata `[source:value]` and `[source: value]` now
+  parse identically (the template-literal whitespace expression is escaped
+  correctly, so a leading-`s` value such as `status_check` is no longer
+  truncated). Finding IDs are processed numerically within each ordered review
+  event, so a severity ordering such as `[F-2, F-1]` is no longer rejected as a
+  gap. A `no_progress_disposition` must now bind the exact sustained finding IDs
+  plus the required target/reference; a disposition bound to different findings
+  cannot authorize another revision. Raw PR comments/reviews are the
+  authorization source of truth: a fabricated, stale, or empty supplied
+  `reviewHistory` is rejected by canonical content comparison whenever the
+  carrier fields are present. `pr-body lint` is structural (sections, exact
+  head marker and artifact, required checks, verdicts, observation records,
+  resolution entries, final Engineer attribution), and `pr-body scaffold`
+  reports `generated`/`lintReady`/`gatePassed` separately instead of implying a
+  pass. Files-backend resolution preserves branch/patch casing in rendered
+  Markdown, accepts the documented `local-diff` reference, and the legacy
+  prose-citation migration applies to both backends. Named files references are
+  case-sensitive; only SHA material is case-folded. Legacy manual checks retain
+  their compatibility behavior and require an entry-level artifact only after
+  explicitly adopting typed `manual` or `contract_proof` evidence. Checkpoint repair
+  application is pure (caller events are never mutated), planner and
+  application share one repair validator, and the planner never emits a carrier
+  application would reject. Review preparation refetches the head immediately
+  before emitting a packet. Commit attribution scans only the final contiguous
+  Git trailer block and never arbitrary prose.
 
 ## 0.3.1 - 2026-07-25
 
@@ -217,7 +305,7 @@
 ## 0.2.0 - 2026-07-23
 
 ### Added
-- Phase 25 Set 2 project posture, parallel-scan, and review controls. Confirmed
+- Project posture, parallel-scan, and review controls. Confirmed
   project maps now require one human-confirmed `development_stage` (`greenfield`,
   `expansion`, `stabilization`, or `maintenance`); existing confirmed projects
   without it must run interactive `agenticloop setup` once before validation and

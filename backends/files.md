@@ -323,8 +323,12 @@ helpful:
 implementation_artifact: branch:<name>
 ```
 
-Other valid references include `commit:<sha>`, `range:<base>..<head>`, or a
-patch path if the project uses patch files.
+Other valid references include `commit:<sha>`, `range:<base>..<head>`, a patch
+path (`patch:<path>`), or a documented local-diff reference (`local-diff:<ref>`)
+if the project records a checked-out local diff. The `## Revision Resolution`
+matrix accepts these exact files artifact forms in `[ref: ...]`; branch and patch
+casing is preserved and compared exactly, while hex SHAs are canonicalized to
+lowercase. Patch and local-diff identifiers are also case-sensitive.
 
 For a managed join, use an exact
 `range:<full-40-sha>..<full-40-sha>` for the dedicated join task so
@@ -357,6 +361,14 @@ because the implementation diff looks unchanged. If updating the durable task
 record changes `implementation_artifact`, prior conclusions are stale unless the
 existing exact-match rule already proves identity. Do not add a content-hash or
 equivalence mechanism.
+
+A review outcome entry in `## Review History` may declare
+`- Classification: implementation_changing` or `- Classification: record_only`;
+absence defaults to `implementation_changing`. Only consecutive valid
+implementation-changing `needs_revision` outcomes sustaining the same active
+finding IDs trigger the no-progress guard. The first typed `needs_revision`
+outcome after a legacy missing-findings review allocates IDs from `F-1` and
+forms the typed baseline.
 
 ### Maintainer Review Fixup (files projection)
 
@@ -395,7 +407,7 @@ append-only `## Review History` section. The checkpoint entry itself is:
 - Review count: 5
 - Artifact: commit:abc123
 - Target: F-2: refresh the local verification evidence
-- Orchestrator: orchestrator-bot
+- Orchestrator: orchestrator
 ```
 
 The checkpoint schema requires:
@@ -407,7 +419,8 @@ The checkpoint schema requires:
 - `artifact`: the latest reviewed artifact
 - `target`: required when direction is `targeted_revision`
 - `reference`: required when direction is `needs_context` or `blocked`
-- `orchestrator`: required
+- `orchestrator`: required; files checkpoints, repairs, and no-progress
+  carriers must declare exactly `Orchestrator: orchestrator`
 
 A `targeted_revision` checkpoint authorizes exactly one next revision. If that
 revision receives another `needs_revision`, a new current checkpoint is required.
@@ -448,6 +461,29 @@ the conditional selected-plan progress procedure in [[task-closeout]]. Record it
 path, affected item, state transition, and covered task IDs in the closeout note.
 If it changes the repository, refresh the candidate baseline and certification
 before publishing `AGENT_CLOSEOUT_STATUS: complete`.
+
+## Review Preparation And Recovery
+
+The files `## Revision Resolution` matrix contains only the immediately prior
+valid `needs_revision` finding IDs. Prior rounds stay append-only in
+`## Review History`. Resolved entries bind their structured files artifact
+reference; do not duplicate an identity in prose. Stable IDs are task-history
+scoped: sustained IDs remain, omitted or withdrawn IDs retire permanently, and
+new IDs use the next unused number without validator semantic inference.
+
+Append `### Review Round Checkpoint Repair` only for one bounded trusted-role
+equivalent repair of a named malformed checkpoint. It records the source,
+original role, reason, and mechanically derivable corrected fields; it cannot
+change authority-bearing direction/cause/target, artifact, count, or outcomes,
+and it never becomes a checkpoint itself. Append `### No Progress Disposition`
+for repeated stable findings using `targeted_revision`, `split_task`,
+`contract_decision`, or `blocked`, bound to the exact sustained finding IDs plus
+the required target/reference; it stays distinct from checkpoint direction and
+cannot authorize a parent revision except the documented targeted path.
+
+Typed required checks keep proof kind separate from satisfaction source, and
+manual/contract-proof checks require the canonical structured per-observation
+records owned by the verification-evidence skill.
 
 ## Current State and History Discipline
 

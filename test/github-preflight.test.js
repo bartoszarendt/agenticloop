@@ -172,6 +172,24 @@ function checkpointComment({ artifact = HEAD, reviewCount = 3, author = LOOP_ACC
   };
 }
 
+function noProgressComment({ author = LOOP_ACCOUNT } = {}) {
+  return {
+    id: 299,
+    html_url: 'https://example.invalid/comments/299',
+    created_at: '2026-07-25T10:02:00Z',
+    body: [
+      '<!-- AGENTIC_LOOP_NO_PROGRESS -->', '',
+      '## No Progress Disposition', '',
+      '- No progress disposition: targeted_revision',
+      '- Sustained finding ids: F-1',
+      '- Target: replace the proof path with an exact final-head observation',
+      `- Orchestrator: ${LOOP_ACCOUNT.login}`, '',
+      '[[agent: orchestrator]]',
+    ].join('\n'),
+    user: author,
+  };
+}
+
 describe('extractSectionBody', () => {
   it('extracts a section body and stops at the next same-level heading', () => {
     const md = '## A\nalpha\nbeta\n## B\ngamma';
@@ -236,6 +254,22 @@ describe('parseRequiredChecks', () => {
     const checks = parseRequiredChecks(issueBody(['[RC-1] `npm test`', '`npm run lint`']));
     assert.equal(checks[0].id, 'RC-1');
     assert.equal(checks[1].id, null);
+  });
+
+  it('keeps typed metadata for reporting but excludes it from the semantic match key', () => {
+    const [check] = parseRequiredChecks(issueBody([
+      '`npm test` [Kind: command] [Sources: pr_body] [Observations: output@running_path]',
+    ]));
+    assert.equal(check.normalized, 'npm test [kind: command] [sources: pr_body] [observations: output@running_path]');
+    assert.equal(check.matchKey, 'npm test');
+    assert.equal(check.text, '`npm test` [Kind: command] [Sources: pr_body] [Observations: output@running_path]');
+  });
+
+  it('does not strip unrecognized bracketed text from the semantic match key', () => {
+    const [check] = parseRequiredChecks(issueBody([
+      '`npm test` [Owner: release] [Kind: command]',
+    ]));
+    assert.equal(check.matchKey, 'npm test [owner: release]');
   });
 });
 
@@ -555,13 +589,29 @@ describe('evaluatePreflight', () => {
     const prData = {
       number: 42,
       headRefOid: HEAD,
-      body: prBody({ entries: [{ check: '[RC-1] test suite', verdict: 'passed', evidence: '128 passing' }] }),
+      body: prBody({ entries: [{ check: '[RC-1] Run `npm test` quietly', verdict: 'passed', evidence: '128 passing' }] }),
       statusCheckRollup: [],
     };
     const issueData = { number: 7, body: issueBody(['[RC-1] `npm test`']) };
     const result = evaluatePreflight({ prData, issueData });
     assert.equal(result.ok, true, JSON.stringify(result.errors));
     assert.ok(result.warnings.some(warning => warning.includes('displayed check text differs')));
+  });
+
+  it('does not let a stable id survive dropping or changing the command identity', () => {
+    // A stable ID survives wording edits only when kind,
+    // source, command identity, and observation contract all match. Dropping
+    // the backtick command is a kind change and an error, not a warning.
+    const prData = {
+      number: 42,
+      headRefOid: HEAD,
+      body: prBody({ entries: [{ check: '[RC-1] test suite', verdict: 'passed', evidence: '128 passing' }] }),
+      statusCheckRollup: [],
+    };
+    const issueData = { number: 7, body: issueBody(['[RC-1] `npm test`']) };
+    const result = evaluatePreflight({ prData, issueData });
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some(error => /proof kind 'manual' does not match declared 'command'/.test(error)), result.errors.join('\n'));
   });
 
   it('rejects duplicate stable check ids', () => {
@@ -776,7 +826,7 @@ describe('evaluatePreflight', () => {
   });
 
   it('does not let a same-named status check satisfy a manual (prose) check', () => {
-    const check = 'Phase 20 manual checks';
+    const check = 'Legacy manual checks';
     const prData = {
       number: 42,
       headRefOid: HEAD,
@@ -888,10 +938,13 @@ describe('evaluatePreflight', () => {
 
 describe('runPreflight (injected gh runner)', () => {
   function makeRunner(prData, issueData) {
+    // `gh pr view --json` always returns every requested field; the mock serves
+    // the same complete shape.
+    const servedPrData = { baseRefOid: 'a'.repeat(40), files: [], commits: [], ...prData };
     return (command, args) => {
       assert.equal(command, 'gh');
       if (args[0] === 'pr') {
-        return { status: 0, stdout: JSON.stringify(prData), stderr: '' };
+        return { status: 0, stdout: JSON.stringify(servedPrData), stderr: '' };
       }
       if (args[0] === 'issue') {
         return { status: 0, stdout: JSON.stringify(issueData), stderr: '' };
@@ -901,6 +954,9 @@ describe('runPreflight (injected gh runner)', () => {
       }
       if (args[0] === 'api' && args[1] === 'user') {
         return { status: 0, stdout: JSON.stringify(LOOP_ACCOUNT), stderr: '' };
+      }
+      if (args[0] === 'api' && /\/git\/trees\//.test(args[1] ?? '')) {
+        return { status: 0, stdout: JSON.stringify({ tree: [{ path: 'package.json', type: 'blob' }], truncated: false }), stderr: '' };
       }
       if (args[0] === 'api' && args.includes('--paginate')) {
         return { status: 0, stdout: JSON.stringify([issueData.comments ?? []]), stderr: '' };
@@ -927,6 +983,7 @@ describe('runPreflight (injected gh runner)', () => {
     const prData = {
       number: 42,
       headRefOid: HEAD,
+      baseRefOid: 'a'.repeat(40),
       body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
       closingIssuesReferences: [{ number: 7 }],
       statusCheckRollup: [],
@@ -943,6 +1000,7 @@ describe('runPreflight (injected gh runner)', () => {
       }
       if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'o/r' }), stderr: '' };
       if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify(LOOP_ACCOUNT), stderr: '' };
+      if (args[0] === 'api' && /\/git\/trees\//.test(args[1] ?? '')) return { status: 0, stdout: JSON.stringify({ tree: [], truncated: false }), stderr: '' };
       if (args[0] === 'api' && args.includes('--paginate')) {
         commentApiArgs.push(args);
         return { status: 0, stdout: JSON.stringify([issueData.comments ?? []]), stderr: '' };
@@ -1000,6 +1058,7 @@ describe('runPreflight (injected gh runner)', () => {
       if (args[0] === 'issue') return { status: 0, stdout: JSON.stringify(issueData), stderr: '' };
       if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'o/r' }), stderr: '' };
       if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify(LOOP_ACCOUNT), stderr: '' };
+      if (args[0] === 'api' && /\/git\/trees\//.test(args[1] ?? '')) return { status: 0, stdout: JSON.stringify({ tree: [{ path: 'package.json', type: 'blob' }], truncated: false }), stderr: '' };
       if (args[0] === 'api' && args.includes('--paginate')) {
         return { status: 0, stdout: JSON.stringify([[]]), stderr: '' };
       }
@@ -1024,6 +1083,7 @@ describe('runPreflight (injected gh runner)', () => {
     const prData = {
       number: 42,
       headRefOid: HEAD,
+      baseRefOid: 'a'.repeat(40),
       body: prBody({ entries: [{ check: '[RC-1] `npm test`', verdict: 'passed', evidence: 'ok' }] }),
       closingIssuesReferences: [{ number: 7 }],
       statusCheckRollup: [],
@@ -1079,9 +1139,10 @@ describe('runPreflight (injected gh runner)', () => {
   });
 
   function productionHistoryRunner(prData, issueData, { comments = [], reviews = [] } = {}) {
+    const servedPrData = { baseRefOid: 'a'.repeat(40), files: [], commits: [], ...prData };
     return (command, args) => {
       assert.equal(command, 'gh');
-      if (args[0] === 'pr') return { status: 0, stdout: JSON.stringify(prData), stderr: '' };
+      if (args[0] === 'pr') return { status: 0, stdout: JSON.stringify(servedPrData), stderr: '' };
       if (args[0] === 'issue') return { status: 0, stdout: JSON.stringify(issueData), stderr: '' };
       if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'o/r' }), stderr: '' };
       if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify(LOOP_ACCOUNT), stderr: '' };
@@ -1214,6 +1275,7 @@ describe('runPreflight (injected gh runner)', () => {
       needsRevisionComment(),
       needsRevisionComment(),
       checkpointComment(),
+      noProgressComment(),
     ];
     const result = runPreflight({
       pr: 42,
@@ -1372,10 +1434,10 @@ describe('runPreflight (injected gh runner)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 29: exact-head, path/deviation, summary, and attribution tests
+// Exact-head, path/deviation, summary, and attribution tests
 // ---------------------------------------------------------------------------
 
-describe('Phase 29 - exact head identity', () => {
+describe('exact head identity', () => {
   it('rejects a seven-character SHA prefix in the PR body marker', () => {
     const shortHead = HEAD.slice(0, 7);
     const prData = {
@@ -1417,7 +1479,7 @@ describe('Phase 29 - exact head identity', () => {
   });
 });
 
-describe('Phase 29 - path/deviation validation', () => {
+describe('path/deviation validation', () => {
   const devIssueBody = [
     '---',
     'allowed_paths:',
@@ -1600,7 +1662,7 @@ describe('Phase 29 - path/deviation validation', () => {
   });
 });
 
-describe('Phase 29 - completion summary validation', () => {
+describe('completion summary validation', () => {
   it('rejects missing Artifacts section', () => {
     const prData = {
       number: 42,
@@ -1645,7 +1707,7 @@ describe('Phase 29 - completion summary validation', () => {
   });
 });
 
-describe('Phase 29 - attribution validation', () => {
+describe('attribution validation', () => {
   it('does not reject a human-authored commit without trailers', () => {
     const result = evaluatePreflight({
       prData: {
@@ -1694,7 +1756,7 @@ describe('Phase 29 - attribution validation', () => {
   });
 });
 
-describe('Phase 29 - structured failure categories', () => {
+describe('structured failure categories', () => {
   it('returns categorized errors on failure', () => {
     const result = evaluatePreflight({
       prData: {
@@ -1727,10 +1789,10 @@ describe('Phase 29 - structured failure categories', () => {
 });
 
 // ============================================================================
-// Phase 29 - Characterization tests for confirmed defects (should fail before fixes)
+// Characterization tests for confirmed defects (should fail before fixes)
 // ============================================================================
 
-describe('Phase 29 - Defect: canonical Task: T-001 rejected in favor of #7', () => {
+describe('Defect: canonical Task: T-001 rejected in favor of #7', () => {
   function issueBodyWithTaskId(taskId) {
     return [
       '---',
@@ -1765,7 +1827,7 @@ describe('Phase 29 - Defect: canonical Task: T-001 rejected in favor of #7', () 
   });
 });
 
-describe('Phase 29 - Defect: malformed allowed_paths disables scope validation', () => {
+describe('Defect: malformed allowed_paths disables scope validation', () => {
   function issueBodyWithAllowedPaths(value) {
     return [
       '---',
@@ -1815,7 +1877,7 @@ describe('Phase 29 - Defect: malformed allowed_paths disables scope validation',
   });
 });
 
-describe('Phase 29 - Defect: unsafe path patterns silently discarded', () => {
+describe('Defect: unsafe path patterns silently discarded', () => {
   function issueBodyWithUnsafePatterns(patterns) {
     const patternLines = patterns.map(p => `  - ${p}`).join('\n');
     return [
@@ -1896,7 +1958,7 @@ describe('Phase 29 - Defect: unsafe path patterns silently discarded', () => {
   });
 });
 
-describe('Phase 29 - Defect: fenced/quoted/indented attribution treated as live', () => {
+describe('Defect: fenced/quoted/indented attribution treated as live', () => {
   it('FAILS: fenced code block with [[agent: engineer]] is ignored (not treated as live)', () => {
     const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) +
       '\n```\n[[agent: engineer]]\n```\n';
@@ -1966,7 +2028,7 @@ describe('Phase 29 - Defect: fenced/quoted/indented attribution treated as live'
   });
 });
 
-describe('Phase 29 - Defect: commit trailer regexes match mid-prose', () => {
+describe('Defect: commit trailer regexes match mid-prose', () => {
   it('mid-prose "Task: T-001" is not treated as a valid trailer', () => {
     const result = evaluatePreflight({
       prData: {
@@ -2031,7 +2093,7 @@ describe('Phase 29 - Defect: commit trailer regexes match mid-prose', () => {
   });
 });
 
-describe('Phase 29 - Defect: summary validation allows placeholders and rejects historical SHAs', () => {
+describe('Defect: summary validation allows placeholders and rejects historical SHAs', () => {
   it('FAILS: placeholder "TBD" in Artifacts section is rejected', () => {
     const body = prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] })
       .replace('PR at ' + HEAD + '.', 'PR at TBD.');
@@ -2099,7 +2161,7 @@ describe('Phase 29 - Defect: summary validation allows placeholders and rejects 
   });
 });
 
-describe('Phase 29 - Defect: structured error routing uses ambiguous substring matching', () => {
+describe('Defect: structured error routing uses ambiguous substring matching', () => {
   it('FAILS: missing Artifacts error categorized as summary_shape not head_identity', () => {
     const prData = {
       number: 42,
@@ -2219,7 +2281,7 @@ describe('Phase 29 - Defect: structured error routing uses ambiguous substring m
   });
 });
 
-describe('Phase 29 - Defect: stale deviation declarations not rejected', () => {
+describe('Defect: stale deviation declarations not rejected', () => {
   function devIssueBody() {
     return [
       '---',
@@ -2289,7 +2351,7 @@ describe('Phase 29 - Defect: stale deviation declarations not rejected', () => {
   });
 });
 
-describe('Phase 29 - Defect: over-budget review without checkpoint passes', () => {
+describe('Defect: over-budget review without checkpoint passes', () => {
   it('a revision after an explicit budget-3 checkpoint boundary should fail preflight', () => {
     const revisedHead = 'b'.repeat(40);
     const reviewOutcomes = [
@@ -2325,7 +2387,7 @@ describe('Phase 29 - Defect: over-budget review without checkpoint passes', () =
   });
 });
 
-describe('Phase 29 - Defect: checkpoint replay passes', () => {
+describe('Defect: checkpoint replay passes', () => {
   it('replayed checkpoint after another needs_revision should fail', () => {
     const artifactB = 'b'.repeat(40);
     const artifactC = 'c'.repeat(40);
@@ -2397,7 +2459,7 @@ describe('Phase 29 - Defect: checkpoint replay passes', () => {
   });
 });
 
-describe('Phase 29 - Defect: missing resolution-matrix bullet entry passes', () => {
+describe('Defect: missing resolution-matrix bullet entry passes', () => {
   it('re-review without resolution matrix should fail', () => {
     const reviewOutcomes = [
       { status: 'needs_revision', artifact: HEAD, findingIds: ['F-1', 'F-2', 'F-3'] },
@@ -2484,7 +2546,7 @@ describe('Phase 29 - Defect: missing resolution-matrix bullet entry passes', () 
   });
 });
 
-describe('Phase 29 - Defect: dispatched artifact A, current head B not rejected', () => {
+describe('Defect: dispatched artifact A, current head B not rejected', () => {
   it('push from A to B during review lease should fail audit', () => {
     const result = evaluateGitHubReviewAudit({
       prData: {

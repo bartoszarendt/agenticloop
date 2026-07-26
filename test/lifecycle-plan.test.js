@@ -1,5 +1,5 @@
 /**
- * Lifecycle plan schema, validation, parity, and kernel tests (Phase 28).
+ * Lifecycle plan schema, validation, parity, and kernel tests.
  */
 
 import { after, before, describe, it } from 'node:test';

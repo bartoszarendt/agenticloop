@@ -1,5 +1,5 @@
 /**
- * Phase 27 end-to-end lifecycle, deterministic and fixture-driven.
+ * Work-unit audit end-to-end lifecycle, deterministic and fixture-driven.
  *
  * Walks one work unit through: accepted tasks -> initial audit -> needs
  * remediation -> remediation integrated -> old certificate goes stale -> fresh
@@ -208,7 +208,7 @@ describe('audit end-to-end lifecycle', () => {
   });
 
   it('does not retroactively invalidate a historical work unit that has no audit record', () => {
-    // A project that predates Phase 27 has no audit records. Validating audit
+    // A project that predates work-unit audit records has no audit records. Validating audit
     // records for that project must be clean; the gate only blocks a NEW
     // closeout, it does not reach back into already-published markers.
     const target = makeTarget('historical');

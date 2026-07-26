@@ -58,23 +58,34 @@ const TOLERANCE = 0.05;
 // reference library. Both are new capability, not duplication: the audit
 // certificate contract lives only in the skill, and the role file carries no
 // copied canonical block.
-// Baselines are deliberately raised for Phase 30 managed joins. The full law is
+// Baselines are deliberately raised for managed joins. The full law is
 // owned once by parallel-delegation; generated reference libraries must carry
 // that law, while roles/backends retain only local deltas. Exact ownership,
 // artifact-bound composition, bounded reconciliation, and final-artifact review
 // are irreducible capability growth rather than adapter duplication.
-// Agent-definition baselines are deliberately rebased to the measured Phase 30
-// post-review sizes after restoring the Maintainer's pre-existing Phase 25
+// Reference-library baselines include the shared executable-preparation
+// vocabulary. The rule is packaged through existing roles and skills rather than
+// adapter-specific copies.
+// Reference-library baselines for codex, copilot, and cursor are deliberately
+// rebased to the measured review-preparation completion state: the typed proof/evidence
+// contract (structured per-observation records owned by verification-evidence),
+// the preparation/review-packet lifecycle, bounded checkpoint repair, revision
+// classification, and the no-progress disposition are new canonical capability
+// packaged once through the existing skills and backends docs. Duplicated
+// review-preparation prose was first consolidated into single owners; the residual growth is
+// irreducible contract, not adapter duplication.
+// Agent-definition baselines are deliberately rebased to the measured
+// post-review sizes after restoring the Maintainer's pre-existing
 // parallel-safety duties and the Orchestrator's current-state reassessment and
 // knowledge-independence gates. The review found those responsibilities had
 // been replaced instead of extended; this is required contract restoration,
 // not a second copy of the managed-join law.
 const ADAPTERS = [
   { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 11005, agentDefinitions: 10185, activationSurface: 687 } },
-  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 59236, agentDefinitions: 10757, activationSurface: 977, referenceLibrary: 47093 } },
+  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 59236, agentDefinitions: 10757, activationSurface: 977, referenceLibrary: 49672 } },
   { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 47775, agentDefinitions: 9542, activationSurface: 1568, referenceLibrary: 36244 } },
-  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 57145, agentDefinitions: 10371, activationSurface: 978, referenceLibrary: 45375 } },
-  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 56933, agentDefinitions: 10357, activationSurface: 786, referenceLibrary: 45375 } },
+  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 57145, agentDefinitions: 10371, activationSurface: 978, referenceLibrary: 47919 } },
+  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 56933, agentDefinitions: 10357, activationSurface: 786, referenceLibrary: 47919 } },
 ];
 
 let tmpDir;

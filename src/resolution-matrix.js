@@ -15,6 +15,66 @@ export const FINDING_ID_RE = /^F-[1-9]\d*$/;
 export const RESOLUTION_ENTRY_SHAPE =
   '"- [F-1] resolved|disputed|blocked: <evidence> [ref: <reference>]"';
 
+const FULL_SHA = /^[0-9a-f]{40}$/i;
+
+/** Normalize only the artifact forms accepted by the selected backend. */
+export function normalizeResolutionArtifact(reference, backend = 'github') {
+  const raw = String(reference ?? '').trim();
+  if (!raw) return null;
+  if (backend === 'github') {
+    const match = raw.match(/^(?:commit:|sha:)?([0-9a-f]{40})$/i);
+    return match ? `commit:${match[1].toLowerCase()}` : null;
+  }
+  // Files keeps its existing durable artifact vocabulary. Hex identities are
+  // case-insensitive and canonicalized; named refs and paths are case-sensitive.
+  const commit = raw.match(/^commit:([0-9a-f]{40})$/i);
+  if (commit) return `commit:${commit[1].toLowerCase()}`;
+  const range = raw.match(/^range:([0-9a-f]{40})\.\.([0-9a-f]{40})$/i);
+  if (range) return `range:${range[1].toLowerCase()}..${range[2].toLowerCase()}`;
+  if (/^(?:branch:[^\s]+|patch:[^\s]+|local-diff:[^\s]+)$/.test(raw)) return raw;
+  return null;
+}
+
+/**
+ * Render an artifact reference for durable Markdown. GitHub canonical rendering
+ * is `commit:<lowercase-full-40-sha>`; files preserves its original casing for
+ * branch, patch, and local-diff references (case-sensitive in git) while still
+ * canonicalizing hex SHAs to lowercase.
+ */
+export function renderResolutionArtifact(reference, backend = 'github') {
+  const raw = String(reference ?? '').trim();
+  if (!raw) return null;
+  if (backend === 'github') {
+    return normalizeResolutionArtifact(raw, 'github');
+  }
+  if (/^(?:commit:[0-9a-f]{40}|range:[0-9a-f]{40}\.\.[0-9a-f]{40})$/i.test(raw)) {
+    return raw.toLowerCase();
+  }
+  if (/^(?:branch:[^\s]+|patch:[^\s]+|local-diff:[^\s]+)$/.test(raw)) {
+    return raw;
+  }
+  return null;
+}
+
+function legacyArtifactInEvidence(evidence, currentArtifact, backend = 'github') {
+  const artifact = String(currentArtifact ?? '').trim();
+  if (!artifact) return false;
+  if (backend === 'github') {
+    const full = artifact.toLowerCase().replace(/^(?:commit:|sha:)/, '');
+    if (!FULL_SHA.test(full)) return false;
+    return new RegExp(`(^|[^0-9a-f])${full}([^0-9a-f]|$)`, 'i').test(String(evidence ?? ''));
+  }
+  // Files: the exact current artifact vocabulary (branch:, range:, patch:,
+  // commit:, local-diff:) must appear as a complete reference token in the
+  // substantive prose, never as a substring: `branch:feat` must not match
+  // `branch:feature`. Hex artifacts compare case-insensitively; named refs and
+  // paths compare exactly. A trailing sentence period is allowed, but a dotted
+  // continuation of the token is not.
+  const escaped = artifact.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const flags = /^(?:commit:|range:)/i.test(artifact) ? 'i' : '';
+  return new RegExp(`(?<![\\w:/.-])${escaped}(?!\\.[\\w:/-])(?![\\w:/-])`, flags).test(String(evidence ?? ''));
+}
+
 function resolutionShapeError() {
   return 'revision resolution entries must be live top-level bullet entries outside fenced code, blockquotes, and indented code; ' +
     `expected: ${RESOLUTION_ENTRY_SHAPE}`;
@@ -147,6 +207,7 @@ export function validateResolutionMatrix({
   requiredFindingIds = [],
   entries = [],
   currentArtifact = '',
+  backend = 'github',
 } = {}) {
   const errors = [];
   const warnings = [];
@@ -191,11 +252,29 @@ export function validateResolutionMatrix({
       errors.push(`finding '${id}' evidence is not substantive`);
     }
 
-    // resolved must cite current-artifact evidence
+    // The structured reference, not prose, binds resolved work to the current
+    // artifact. A missing legacy reference is accepted only as a migration path,
+    // for both backends. A present malformed or stale structured reference is
+    // always an error and never falls back to prose.
     if (entry.disposition === 'resolved' && currentArtifact) {
-      const current = String(currentArtifact).toLowerCase();
-      if (!evidence.toLowerCase().includes(current)) {
-        errors.push(`finding '${id}' is marked resolved but does not cite current artifact '${currentArtifact}'`);
+      const actual = normalizeResolutionArtifact(entry.reference, backend);
+      const expected = normalizeResolutionArtifact(currentArtifact, backend);
+      if (entry.reference) {
+        if (!actual) {
+          const expectedForm = backend === 'github'
+            ? '[ref: commit:<full-40-character-sha>]'
+            : '[ref: commit:<full-40-sha>|range:<base>..<head>|branch:<name>|patch:<path>|local-diff:<ref>]';
+          errors.push(`finding '${id}' has malformed resolved artifact reference '${entry.reference}'; expected ${expectedForm}`);
+        } else if (!expected || actual !== expected) {
+          errors.push(`finding '${id}' resolved artifact reference '${entry.reference}' does not match current artifact '${currentArtifact}'`);
+        }
+      } else if (legacyArtifactInEvidence(evidence, currentArtifact, backend)) {
+        const rewrite = backend === 'github'
+          ? `commit:${String(currentArtifact).toLowerCase().replace(/^(?:commit:|sha:)/, '')}`
+          : currentArtifact;
+        warnings.push(`finding '${id}' uses a legacy prose artifact citation; migration: rewrite it as [ref: ${rewrite}]`);
+      } else {
+        errors.push(`finding '${id}' does not cite current artifact '${currentArtifact}' through a structured reference`);
       }
     }
 
@@ -213,7 +292,7 @@ export function validateResolutionMatrix({
   // No extra entries (entries for findings not in the prior review)
   for (const entry of entries) {
     if (!requiredSet.has(entry.findingId)) {
-      errors.push(`resolution entry '${entry.findingId}' does not match any prior finding`);
+      errors.push(`resolution entry '${entry.findingId}' does not match the immediately prior needs_revision finding set; keep older outcomes in review history, not the current matrix`);
     }
   }
 
@@ -231,7 +310,10 @@ export function formatResolutionMatrix(entries) {
   for (const entry of entries) {
     let line = `- [${entry.findingId}] ${entry.disposition}: ${entry.evidence}`;
     if (entry.reference) {
-      line += ` [ref: ${entry.reference}]`;
+      const reference = entry.disposition === 'resolved'
+        ? renderResolutionArtifact(entry.reference, entry.backend ?? 'github') ?? entry.reference
+        : entry.reference;
+      line += ` [ref: ${reference}]`;
     }
     lines.push(line);
   }

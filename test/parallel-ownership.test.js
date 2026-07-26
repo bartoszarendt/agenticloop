@@ -85,7 +85,7 @@ function makeGitRepo() {
   return repo;
 }
 
-describe('Phase 30 structured ownership declarations', () => {
+describe('structured ownership declarations', () => {
   it('keeps the canonical serial task template out of structured ownership', () => {
     const template = readFileSync(new URL('../memory/task-record.md', import.meta.url), 'utf-8');
     const declaration = parseOwnershipDeclaration(template);
@@ -172,7 +172,7 @@ describe('Phase 30 structured ownership declarations', () => {
   });
 });
 
-describe('Phase 30 artifact-bound changed-file accounting', () => {
+describe('artifact-bound changed-file accounting', () => {
   const declaration = parseOwnershipDeclaration(taskBody({
     allowedPaths: ['src/**', 'schemas/**'],
     ownedPaths: ['src/error_mapping.js'],
@@ -268,7 +268,7 @@ describe('Phase 30 artifact-bound changed-file accounting', () => {
   });
 });
 
-describe('Phase 30 task and pairwise eligibility', () => {
+describe('task and pairwise eligibility', () => {
   it('classifies broad API scope and unrelated schema work as disjoint (P30-S1)', () => {
     const api = lane('API-1', taskBody({
       allowedPaths: ['api/**'],
@@ -360,7 +360,7 @@ describe('Phase 30 task and pairwise eligibility', () => {
   });
 });
 
-describe('Phase 30 reconciliation and exact-artifact invalidation', () => {
+describe('reconciliation and exact-artifact invalidation', () => {
   const plan = {
     joinTask: { attemptBudget: 2 },
     conflictPaths: ['schemas/__init__.py'],
@@ -420,7 +420,7 @@ describe('Phase 30 reconciliation and exact-artifact invalidation', () => {
   });
 });
 
-describe('Phase 30 disposable Git composition', () => {
+describe('disposable Git composition', () => {
   it('composes exact disjoint lane artifacts into a stable final tree', () => {
     const repo = makeGitRepo();
     try {

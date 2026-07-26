@@ -12,6 +12,32 @@ metadata:
 
 Evidence before claims, always. A success claim without a fresh run behind it is misreporting, not optimism.
 
+## Proof Kinds And Sources
+
+For a typed required check, retain its proof kind independently from its
+satisfaction source. Kinds are `command`, `manual`, and `contract_proof`.
+Sources are `pr_body`, `status_check`, `manual_observation`, and
+`automated_observation`. A status check is an allowed substitute only when the
+task explicitly permits that exact source for a command check; it never
+satisfies manual or contract-proof work merely because an RC ID matches. A
+check that declares observations always requires its structured observation
+records; even an exact successful status check cannot substitute them.
+The task contract is validated before either PR-body evidence or a status check
+can satisfy it. A command proof must declare its exact command in a backtick
+code span. Invalid kinds or sources, status-check satisfaction on a non-command
+proof, and observations with no structured PR-body observation source are
+Maintainer-owned task-policy failures.
+
+Manual and contract-proof evidence records each declared observation with the
+canonical structured shape: one `Observation: <id>` per declared observation,
+with its `Level:` (`running_path` unless the task pins `name@level`), a concrete
+`Result:` or bounded excerpt, the current `Artifact:`, and the entry's
+`Source:`. Copied observation names, generic pass counts, helper-only state,
+parser or unit-only results, and mock-bound arguments are not evidence unless
+the task pins that level as the oracle. An entry's kind comes from its own
+shape: an explicit `Kind:`, else a backtick command is command evidence and
+anything else is manual; a command-shaped entry never satisfies a manual check.
+
 ## The gate
 
 Before any "done", "fixed", "passing", "green", or "complete" claim:
@@ -198,8 +224,12 @@ Current PR head: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
 ```
 
 This PR-body entry is separate from exceptional `## Verification Attempts`
-history. Use the exact required-check text and one of `passed`, `failed`,
-`blocked`, or `not run` for `Verdict`.
+history. Prefer the exact required-check text and use one of `passed`, `failed`,
+`blocked`, or `not run` for `Verdict`. When an ID-less check has typed
+annotations, its evidence label may use the same semantic check text without
+repeating recognized kind/source/observation annotations; the exact command
+identity is still mandatory. If two ID-less checks reduce to the same semantic
+text, give them distinct `RC-N` ids.
 
 The maintainer appends triage. `pending` is allowed only while active; accepted
 or closed work cannot retain an exceptional episode whose latest attempt is

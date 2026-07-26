@@ -35,17 +35,17 @@ function generatedText(root) {
   return files.map(file => readFileSync(file, 'utf-8')).join('\n');
 }
 
-describe('Phase 29 generated adapter contract', () => {
+describe('generated review-handoff adapter contract', () => {
   let temporaryRoot;
 
   before(() => {
     if (!existsSync(TMP_ROOT)) mkdirSync(TMP_ROOT, { recursive: true });
-    temporaryRoot = mkdtempSync(join(TMP_ROOT, 'phase29-adapters-'));
+    temporaryRoot = mkdtempSync(join(TMP_ROOT, 'review-handoff-adapters-'));
   });
   after(() => rmSync(temporaryRoot, { recursive: true, force: true }));
 
   for (const [name, generate] of ADAPTERS) {
-    it(`${name} derives the Phase 29 handoff contract from canonical source`, () => {
+    it(`${name} derives the exact-artifact handoff contract from canonical source`, () => {
       const target = mkdtempSync(join(temporaryRoot, `${name}-target-`));
       const output = mkdtempSync(join(temporaryRoot, `${name}-output-`));
       seedTargetLayout(REPO_ROOT, target, { includeDocs: false, includeScratch: false });

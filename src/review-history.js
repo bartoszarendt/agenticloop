@@ -6,10 +6,31 @@
 
 import { markdownLines, markdownSection, parseAtxHeading } from './markdown.js';
 import { REVIEW_MODES, isValidReviewMode } from './review-provenance.js';
-import { parseReviewCheckpoint } from './review-checkpoint.js';
+import { applyCheckpointRepairs, parseCheckpointRepair, parseReviewCheckpoint, VALID_NO_PROGRESS_DISPOSITIONS } from './review-checkpoint.js';
 import { FINDING_ID_RE } from './resolution-matrix.js';
 
 export { FINDING_ID_RE } from './resolution-matrix.js';
+
+/** Canonical revision classification values shared by both backends. */
+export const VALID_REVISION_CLASSIFICATIONS = new Set(['implementation_changing', 'record_only']);
+
+/**
+ * Validate one optional revision-classification value. A legacy outcome with
+ * no declared classification defaults to `implementation_changing` (documented
+ * fail-safe default: existing unclassified history keeps its established
+ * no-progress semantics).
+ *
+ * @param {string} raw
+ * @returns {{ classification: string|null, error: string|null }}
+ */
+export function parseRevisionClassification(raw) {
+  const value = String(raw ?? '').trim().toLowerCase();
+  if (!value) return { classification: null, error: null };
+  if (!VALID_REVISION_CLASSIFICATIONS.has(value)) {
+    return { classification: null, error: `unsupported review classification '${value}'; expected one of: ${[...VALID_REVISION_CLASSIFICATIONS].join(', ')}` };
+  }
+  return { classification: value, error: null };
+}
 
 /** @param {string} body @param {string} name */
 function markerValues(body, name) {
@@ -31,6 +52,51 @@ function finalLiveRole(body) {
     .filter(line => line.live && line.raw.trim())
     .at(-1)?.raw.trim() ?? '';
   return finalLine.match(/^\[\[agent:\s*([a-z_]+)\]\]$/i)?.[1].toLowerCase() ?? null;
+}
+
+/** Parse the distinct no-progress carrier without overloading checkpoint fields. */export function parseNoProgressDisposition(body, options = {}) {
+  const raw = String(body ?? '');
+  const carrier = options.carrier ?? 'github';
+  const marker = markdownLines(raw).some(line => line.live && /<!--\s*AGENTIC_LOOP_NO_PROGRESS\s*-->/.test(line.raw));
+  const section = markdownSection(raw, '## No Progress Disposition') ?? markdownSection(raw, '### No Progress Disposition');
+  if (!marker && !section) return { found: false, event: null, errors: [] };
+  const errors = [];
+  if (carrier === 'github' && !marker) errors.push('GitHub no-progress disposition is missing the AGENTIC_LOOP_NO_PROGRESS marker');
+  if (!section) errors.push('no-progress marker is missing the No Progress Disposition section');
+  const { fields, errors: fieldErrors } = labelledFields((section?.lines ?? []).map(line => line.raw).join('\n'));
+  errors.push(...fieldErrors);
+  const disposition = String(fields.no_progress_disposition ?? fields.disposition ?? '').toLowerCase();
+  const target = fields.target ?? '';
+  const reference = fields.reference ?? '';
+  const orchestrator = fields.orchestrator ?? '';
+  const rawSustained = fields.sustained_finding_ids ?? fields.finding_ids ?? fields.findings ?? '';
+  const sustainedFindingIds = String(rawSustained).split(',').map(value => value.trim()).filter(Boolean);
+  if (!VALID_NO_PROGRESS_DISPOSITIONS.has(disposition)) errors.push(`no_progress_disposition '${disposition}' must be one of: ${[...VALID_NO_PROGRESS_DISPOSITIONS].join(', ')}`);
+  if (disposition === 'targeted_revision' && !target) errors.push('no_progress targeted_revision requires Target');
+  if (['split_task', 'contract_decision', 'blocked'].includes(disposition) && !reference) errors.push(`no_progress ${disposition} requires Reference`);
+  if (sustainedFindingIds.length === 0) errors.push('no-progress disposition must bind the exact sustained finding ids it addresses');
+  for (const id of sustainedFindingIds) {
+    if (!FINDING_ID_RE.test(id)) errors.push(`no-progress sustained finding id '${id}' is not canonical (expected F-<positive integer>)`);
+  }
+  if (!orchestrator) errors.push('no-progress disposition requires Orchestrator');
+  return { found: true, event: { type: 'no_progress', disposition, target, reference, sustainedFindingIds, orchestratorAttribution: orchestrator, carrier }, errors };
+}
+
+export function formatNoProgressDisposition(event, options = {}) {
+  const carrier = options.carrier ?? 'github';
+  const heading = '#'.repeat(options.headingLevel ?? (carrier === 'files' ? 3 : 2));
+  const lines = [
+    ...(carrier === 'github' ? ['<!-- AGENTIC_LOOP_NO_PROGRESS -->', ''] : []),
+    `${heading} No Progress Disposition`, '',
+    `- No progress disposition: ${event.disposition}`,
+  ];
+  if (event.sustainedFindingIds?.length) lines.push(`- Sustained finding ids: ${event.sustainedFindingIds.join(', ')}`);
+  if (event.target) lines.push(`- Target: ${event.target}`);
+  if (event.reference) lines.push(`- Reference: ${event.reference}`);
+  lines.push(`- Orchestrator: ${event.orchestratorAttribution ?? 'orchestrator'}`);
+  if (carrier === 'github') lines.push('', '[[agent: orchestrator]]');
+  lines.push('');
+  return lines.join('\n');
 }
 
 /** @param {string} raw */
@@ -78,9 +144,10 @@ export function parseReviewMarker(body, source = {}) {
   const artifacts = markerValues(liveBody, 'AGENT_REVIEW_ARTIFACT');
   const findings = markerValues(liveBody, 'AGENT_REVIEW_FINDINGS');
   const humanRefs = markerValues(liveBody, 'AGENT_HUMAN_REVIEW_REF');
-  if (statuses.length + modes.length + artifacts.length + findings.length + humanRefs.length === 0) {
+  const classifications = markerValues(liveBody, 'AGENT_REVIEW_CLASSIFICATION');
+  if (statuses.length + modes.length + artifacts.length + findings.length + humanRefs.length + classifications.length === 0) {
     const hasMarkerLikeText = markdownLines(rawBody).some(line =>
-      /AGENT_(?:REVIEW_(?:STATUS|MODE|ARTIFACT|FINDINGS)|HUMAN_REVIEW_REF)\s*:/i.test(line.raw)
+      /AGENT_(?:REVIEW_(?:STATUS|MODE|ARTIFACT|FINDINGS|CLASSIFICATION)|HUMAN_REVIEW_REF)\s*:/i.test(line.raw)
     );
     if (!hasMarkerLikeText) return null;
     return {
@@ -94,9 +161,12 @@ export function parseReviewMarker(body, source = {}) {
     if (values.length !== 1) errors.push(`review marker must contain exactly one ${name}`);
   }
   if (humanRefs.length > 1) errors.push('review marker must contain at most one human review reference');
+  if (classifications.length > 1) errors.push('review marker must contain at most one classification');
   const status = statuses[0] ?? '';
   const mode = modes[0] ?? '';
   const artifact = (artifacts[0] ?? '').toLowerCase();
+  const parsedClassification = parseRevisionClassification(classifications[0]);
+  if (parsedClassification.error) errors.push(parsedClassification.error);
   if (status && !['accepted', 'needs_revision'].includes(status)) {
     errors.push(`unsupported review status '${status}'; expected one of: accepted, needs_revision`);
   }
@@ -118,6 +188,7 @@ export function parseReviewMarker(body, source = {}) {
   errors.push(...parsedFindings.errors);
   return {
     type: 'outcome', status, mode, artifact, findingIds: parsedFindings.findingIds,
+    classification: parsedClassification.classification,
     humanReviewRef: humanRefs[0] ?? '', source, author: extractReviewAuthor(source), errors,
   };
 }
@@ -191,6 +262,45 @@ function orderGitHubHistoryEvents(events) {
 }
 
 /**
+ * Enforce only declared stable-ID lifecycle rules. This intentionally does not
+ * compare finding prose: Maintainer owns whether two findings are semantically
+ * the same. It merely prevents renumbering and retired-ID reuse in durable
+ * valid needs_revision history.
+ */
+export function validateFindingIdLifecycle(events) {
+  const errors = [];
+  const active = new Set();
+  const retired = new Set();
+  let next = 1;
+  for (const event of [...(events ?? [])].sort((a, b) => (a.sourceOrder ?? 0) - (b.sourceOrder ?? 0))) {
+    if (event?.type !== 'outcome' || event.status !== 'needs_revision' || event.legacyMissingFindingIds) continue;
+    const ids = Array.isArray(event.findingIds) ? event.findingIds : [];
+    const current = new Set(ids);
+    // Process finding IDs numerically within each ordered review event so a
+    // severity ordering such as [F-2, F-1] is not rejected as an allocation
+    // gap. Sustained (active) IDs never allocate; new IDs allocate in numeric
+    // order, and real gaps/renumbering/reuse remain errors.
+    const orderedIds = [...ids].sort((a, b) => Number(String(a).slice(2)) - Number(String(b).slice(2)));
+    for (const id of orderedIds) {
+      const number = Number(String(id).slice(2));
+      if (retired.has(id)) errors.push(`review history reuses permanently retired finding id '${id}'`);
+      if (!active.has(id)) {
+        if (number !== next) {
+          errors.push(`new finding id '${id}' must use next unused id 'F-${next}'`);
+        }
+        next = Math.max(next, number + 1);
+      }
+    }
+    for (const id of active) {
+      if (!current.has(id)) retired.add(id);
+    }
+    active.clear();
+    for (const id of current) active.add(id);
+  }
+  return { valid: errors.length === 0, errors, activeFindingIds: [...active].sort((a, b) => Number(a.slice(2)) - Number(b.slice(2))), retiredFindingIds: [...retired].sort((a, b) => Number(a.slice(2)) - Number(b.slice(2))), nextFindingId: `F-${next}` };
+}
+
+/**
  * Convert all separately fetched GitHub PR conversation comments and review
  * bodies into a strictly trusted, source-ordered history. Untrusted sources do
  * not create events or errors; trusted malformed carriers fail closed.
@@ -206,8 +316,14 @@ export function collectGitHubReviewHistory(prData, expectedAccount) {
     const reference = durableSourceReference(source, sourceOrder + 1);
     const marker = parseReviewMarker(body, source);
     const checkpoint = parseReviewCheckpoint(body, { carrier: 'github' });
+    const repair = parseCheckpointRepair(body, { carrier: 'github' });
+    const noProgress = parseNoProgressDisposition(body, { carrier: 'github' });
     if (trusted && marker?.type === 'outcome' && checkpoint.found) {
       errors.push(`${entry.kind} ${reference}: one carrier cannot contain both a review outcome and a checkpoint`);
+      continue;
+    }
+    if (trusted && noProgress.found && (marker?.type === 'outcome' || checkpoint.found || repair.found)) {
+      errors.push(`${entry.kind} ${reference}: no-progress disposition must use its own distinct carrier`);
       continue;
     }
     // Near misses are diagnostic-only and cannot alter durable history. Do not
@@ -242,13 +358,25 @@ export function collectGitHubReviewHistory(prData, expectedAccount) {
     if (checkpoint.found && trusted) {
       const checkpointRole = finalLiveRole(body);
       if (checkpoint.errors.length) {
-        errors.push(...checkpoint.errors.map(error => `${entry.kind} ${reference}: ${error}`));
+        events.push({
+          type: 'checkpoint_candidate', checkpoint: checkpoint.checkpoint, errors: checkpoint.errors,
+          sourceReference: reference, sourceTimestamp: githubSourceTimestamp(source), sourceKind: entry.kind,
+          discoveryOrder: sourceOrder, author, trusted: true,
+        });
       } else if (!reference) {
         errors.push(`trusted ${entry.kind} checkpoint has no durable source reference`);
       } else if (checkpointRole !== 'orchestrator') {
         errors.push(`${entry.kind} ${reference}: checkpoint must end with the orchestrator attribution trailer '[[agent: orchestrator]]'`);
       } else if (String(checkpoint.checkpoint.orchestratorAttribution).toLowerCase() !== String(author?.login ?? '').toLowerCase()) {
-        errors.push(`${entry.kind} ${reference}: checkpoint Orchestrator attribution does not match its authenticated author`);
+        // Wrong-but-repairable authenticated attribution stays a malformed
+        // candidate: one bounded same-author repair may correct it.
+        // Unrepaired it remains fatal below.
+        events.push({
+          type: 'checkpoint_candidate', checkpoint: checkpoint.checkpoint,
+          errors: [`checkpoint Orchestrator attribution '${checkpoint.checkpoint.orchestratorAttribution}' does not match its authenticated author`],
+          sourceReference: reference, sourceTimestamp: githubSourceTimestamp(source), sourceKind: entry.kind,
+          discoveryOrder: sourceOrder, author, trusted: true,
+        });
       } else {
         events.push({
           ...checkpoint.checkpoint,
@@ -261,8 +389,36 @@ export function collectGitHubReviewHistory(prData, expectedAccount) {
         });
       }
     }
+    if (repair.found && trusted) {
+      const repairRole = finalLiveRole(body);
+      if (repair.errors.length) {
+        errors.push(...repair.errors.map(error => `${entry.kind} ${reference}: ${error}`));
+      } else if (!reference) {
+        errors.push(`trusted ${entry.kind} checkpoint repair has no durable source reference`);
+      } else if (repairRole !== 'orchestrator') {
+        errors.push(`${entry.kind} ${reference}: checkpoint repair must end with the orchestrator attribution trailer '[[agent: orchestrator]]'`);
+      } else if (String(repair.repair.orchestratorAttribution).toLowerCase() !== String(author?.login ?? '').toLowerCase()) {
+        errors.push(`${entry.kind} ${reference}: checkpoint repair Orchestrator attribution does not match its authenticated author`);
+      } else {
+        events.push({
+          ...repair.repair, sourceReference: reference, sourceTimestamp: githubSourceTimestamp(source), sourceKind: entry.kind,
+          discoveryOrder: sourceOrder, author, trusted: true,
+        });
+      }
+    }
+    if (noProgress.found && trusted) {
+      if (noProgress.errors.length) errors.push(...noProgress.errors.map(error => `${entry.kind} ${reference}: ${error}`));
+      else if (finalLiveRole(body) !== 'orchestrator') errors.push(`${entry.kind} ${reference}: no-progress disposition must end with [[agent: orchestrator]]`);
+      else if (String(noProgress.event.orchestratorAttribution).toLowerCase() !== String(author?.login ?? '').toLowerCase()) errors.push(`${entry.kind} ${reference}: no-progress Orchestrator attribution does not match its authenticated author`);
+      else events.push({ ...noProgress.event, sourceReference: reference, sourceTimestamp: githubSourceTimestamp(source), sourceKind: entry.kind, discoveryOrder: sourceOrder, author, trusted: true });
+    }
   }
-  return { events: orderGitHubHistoryEvents(events), errors };
+  const repairedHistory = applyCheckpointRepairs(orderGitHubHistoryEvents(events));
+  const ordered = repairedHistory.events;
+  const lifecycle = validateFindingIdLifecycle(ordered);
+  const result = { events: ordered, errors: [...errors, ...repairedHistory.errors, ...lifecycle.errors] };
+  if (ordered.some(event => event.type === 'outcome' && event.status === 'needs_revision')) result.findingLifecycle = lifecycle;
+  return result;
 }
 
 function labelledFields(body) {
@@ -292,11 +448,13 @@ function parseFilesOutcome(body, sourceOrder, reference) {
   }
   if (!artifact || /\s/.test(artifact)) errors.push(`review history ${reference} has invalid Artifact '${artifact}'`);
   if (fields.maintainer?.toLowerCase() !== 'maintainer') errors.push(`review history ${reference} must declare Maintainer: maintainer`);
+  const parsedClassification = parseRevisionClassification(fields.classification);
+  if (parsedClassification.error) errors.push(`review history ${reference}: ${parsedClassification.error}`);
   const findings = status === 'needs_revision'
     ? parseFindingIds(fields.findings ?? '')
     : { findingIds: [], errors: fields.findings ? ['accepted review history entry must not declare required findings'] : [] };
   errors.push(...findings.errors.map(error => `review history ${reference}: ${error}`));
-  return { event: { type: 'outcome', status, mode, artifact, findingIds: findings.findingIds, sourceOrder, sourceReference: reference }, errors };
+  return { event: { type: 'outcome', status, mode, artifact, findingIds: findings.findingIds, classification: parsedClassification.classification, sourceOrder, sourceReference: reference }, errors };
 }
 
 /**
@@ -324,8 +482,36 @@ export function parseFilesReviewHistory(content) {
     const body = `### ${entry.heading}\n${entry.lines.join('\n')}`;
     if (/^Review Round Checkpoint$/i.test(entry.heading)) {
       const checkpoint = parseReviewCheckpoint(body, { carrier: 'files' });
-      if (checkpoint.errors.length) errors.push(...checkpoint.errors.map(error => `files checkpoint: ${error}`));
-      else events.push({ ...checkpoint.checkpoint, sourceOrder, sourceReference: `review-history:${sourceOrder + 1}`, trusted: true });
+      if (checkpoint.errors.length) events.push({
+        type: 'checkpoint_candidate', checkpoint: checkpoint.checkpoint, errors: checkpoint.errors,
+        sourceOrder, sourceReference: `review-history:${sourceOrder + 1}`, trusted: true, trustedRole: 'orchestrator', sourceKind: 'files',
+      });
+      else if (String(checkpoint.checkpoint.orchestratorAttribution ?? '').toLowerCase() !== 'orchestrator') {
+        // Files checkpoints require the exact trusted-role attribution
+        // `Orchestrator: orchestrator`. A wrong role stays a malformed
+        // candidate so one bounded trusted-role repair may correct it.
+        events.push({
+          type: 'checkpoint_candidate', checkpoint: checkpoint.checkpoint,
+          errors: ['files checkpoint must declare Orchestrator: orchestrator'],
+          sourceOrder, sourceReference: `review-history:${sourceOrder + 1}`, trusted: true, trustedRole: 'orchestrator', sourceKind: 'files',
+        });
+      }
+      else events.push({ ...checkpoint.checkpoint, sourceOrder, sourceReference: `review-history:${sourceOrder + 1}`, trusted: true, trustedRole: 'orchestrator', sourceKind: 'files' });
+      continue;
+    }
+    if (/^Review Round Checkpoint Repair$/i.test(entry.heading)) {
+      const repair = parseCheckpointRepair(body, { carrier: 'files' });
+      if (repair.errors.length) errors.push(...repair.errors.map(error => `files checkpoint repair: ${error}`));
+      else if (String(repair.repair.orchestratorAttribution).toLowerCase() !== 'orchestrator') {
+        errors.push('files checkpoint repair must declare Orchestrator: orchestrator');
+      } else events.push({ ...repair.repair, sourceOrder, sourceReference: `review-history:${sourceOrder + 1}`, trusted: true, trustedRole: 'orchestrator', sourceKind: 'files' });
+      continue;
+    }
+    if (/^No Progress Disposition$/i.test(entry.heading)) {
+      const noProgress = parseNoProgressDisposition(body, { carrier: 'files' });
+      if (noProgress.errors.length) errors.push(...noProgress.errors.map(error => `files no-progress disposition: ${error}`));
+      else if (String(noProgress.event.orchestratorAttribution).toLowerCase() !== 'orchestrator') errors.push('files no-progress disposition must declare Orchestrator: orchestrator');
+      else events.push({ ...noProgress.event, sourceOrder, sourceReference: `review-history:${sourceOrder + 1}`, trusted: true, trustedRole: 'orchestrator', sourceKind: 'files' });
       continue;
     }
     const reviewMatch = entry.heading.match(/^Review\s+(.+)$/i);
@@ -335,5 +521,9 @@ export function parseFilesReviewHistory(content) {
     errors.push(...outcome.errors);
     if (outcome.errors.length === 0) events.push(outcome.event);
   }
-  return { events, errors };
+  const repairedHistory = applyCheckpointRepairs(events);
+  const lifecycle = validateFindingIdLifecycle(repairedHistory.events);
+  const result = { events: repairedHistory.events, errors: [...errors, ...repairedHistory.errors, ...lifecycle.errors] };
+  if (repairedHistory.events.some(event => event.type === 'outcome' && event.status === 'needs_revision')) result.findingLifecycle = lifecycle;
+  return result;
 }

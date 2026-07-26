@@ -13,7 +13,7 @@
  * ordinary task-record validator; no audit-specific carve-outs belong in
  * `validateFilesTaskRecord`.
  *
- * This store does not reintroduce the summaries store removed in Phase 23. That
+ * This store does not reintroduce the removed legacy summaries store. That
  * store duplicated per-task completion summaries that already live inline in the
  * task record. This store holds state that exists nowhere else: work-unit
  * certification status, the exact certified baseline, and report history. It is

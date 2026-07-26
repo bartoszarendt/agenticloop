@@ -1,5 +1,16 @@
 # Agentic Loop Methodology
 
+## Executable Review Preparation
+
+Use `pr-body scaffold/lint -> github-preflight -> github-review-prepare ->
+Maintainer review -> github-review-audit -> github-ready`. Preparation is
+read-only and dispatches only a schema-valid, PR-bound, exact-head `ok === true`
+packet. Status checks never substitute declared observation records, and stable
+IDs never substitute the exact declared command. The current matrix holds only
+prior active IDs and structured resolved references; history is append-only.
+Same-author checkpoint repair is bounded and no-progress remains separate from
+checkpoint direction and the global review budget.
+
 Agentic Loop is a supervised implementation workflow for AI coding agents. It
 turns a vague request into a durable task record, a scoped implementation,
 evidence, review, and closeout.

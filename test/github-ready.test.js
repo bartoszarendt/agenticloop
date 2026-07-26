@@ -125,10 +125,12 @@ function makePr(overrides = {}) {
   return {
     number: 42,
     headRefOid: HEAD,
+    baseRefOid: 'c'.repeat(40),
     body: evidenceBody(HEAD),
     files: [{ path: 'src/x.js' }],
     closingIssuesReferences: [{ number: 7 }],
     statusCheckRollup: [],
+    commits: [],
     comments: [reviewMarker(HEAD)],
     reviews: [],
     ...overrides,
@@ -189,10 +191,10 @@ describe('github-ready composite gate', () => {
       errors: [],
     });
     assert.deepEqual(result.errors, []);
-    // Documented top-level keys only.
+    // Ready uses the same JSON diagnostic envelope as preflight.
     assert.deepEqual(
       Object.keys(result).sort(),
-      ['errors', 'headRefOid', 'issue', 'ok', 'pr', 'preflight', 'readyForMerge', 'reviewAudit'].sort()
+      ['diagnostics', 'errors', 'failureCategories', 'firstSafeRepair', 'headRefOid', 'issue', 'ok', 'pr', 'preflight', 'readyForMerge', 'reviewAudit', 'schemaVersion', 'warningDiagnostics', 'warnings'].sort()
     );
   });
 

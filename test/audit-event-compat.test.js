@@ -1,5 +1,5 @@
 /**
- * Phase 27 event-logging compatibility.
+ * Event-logging compatibility for work-unit audit events.
  *
  * Auditor is a valid event role and a valid orchestrator delegation target, but
  * the audit verdict is never a task review result and the event schema version

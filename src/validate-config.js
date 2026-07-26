@@ -142,6 +142,7 @@ import { validateVerificationAttempts } from './verification-learning.js';
 import { parseFilesReviewHistory } from './review-history.js';
 import {
   countTaskBudgetFieldOccurrences,
+  evaluateNoProgress,
   evaluateReviewCheckpoint,
   parseReviewBudgetValue,
   resolveTaskAttemptBudget,
@@ -755,6 +756,8 @@ export function validateFilesReviewControls(content, filename, {
     requireRevision: authorizingRevision,
   });
   errors.push(...checkpoint.errors.map(error => `Task record '${filename}' ${error}`));
+  const noProgress = evaluateNoProgress({ reviewHistory: history.events });
+  if (authorizingRevision) errors.push(...noProgress.errors.map(error => `Task record '${filename}' ${error}`));
 
   const priorOutcome = [...history.events].reverse().find(event =>
     !event.legacyMissingFindingIds && event.type === 'outcome' &&
@@ -781,6 +784,7 @@ export function validateFilesReviewControls(content, filename, {
         requiredFindingIds: findingIds,
         entries: matrix.entries,
         currentArtifact: implementationArtifact,
+        backend: 'files',
       });
       errors.push(...result.errors.map(error => `Task record '${filename}' ${error}`));
     }

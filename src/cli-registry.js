@@ -173,6 +173,72 @@ export const COMMAND_REGISTRY = {
       jsonOption,
     ],
   },
+  'pr-body': {
+    summary: 'Scaffold a canonical PR body or lint a complete preparation input offline.',
+    usage: 'agenticloop pr-body <scaffold|lint> [options]',
+    subcommands: {
+      scaffold: {
+        summary: 'Read GitHub data and render a local PR-body scaffold without writing GitHub.',
+        usage: 'agenticloop pr-body scaffold --pr <number> [--issue <number>] [--repo <owner/name>] [--output <path>] [--json]',
+        options: [
+          opt('pr', 'string', 'Pull request number. Required.'),
+          opt('issue', 'string', 'Linked task issue number override.'),
+          opt('repo', 'string', 'Target repository.'),
+          opt('output', 'string', 'Optional local output path; stdout when omitted.'),
+          jsonOption,
+        ],
+      },
+      lint: {
+        summary: 'Evaluate a complete serialized preparation input with no GitHub access.',
+        usage: 'agenticloop pr-body lint --input <evaluation-input.json> [--json]',
+        options: [opt('input', 'string', 'Complete serialized preparation-input JSON document. Required.'), jsonOption],
+      },
+    },
+  },
+  'task-readiness': {
+    summary: 'Read-only readiness check for files, GitHub, or supplied task input with explicit base-tree intent.',
+    usage: 'agenticloop task-readiness (--task <id>|--issue <n>|--task-body <path>) (--base <ref>|--base-paths <path>) --mode <authoring|review> [--json]',
+    options: [
+      targetOption(),
+      opt('task', 'string', 'Files-backend task id.'),
+      opt('issue', 'string', 'GitHub task issue number.'),
+      opt('task-body', 'string', 'Offline task Markdown file.'),
+      opt('base', 'string', 'Git ref or tree used for an explicit path inventory.'),
+      opt('base-paths', 'string', 'JSON path inventory file for offline evaluation.'),
+      opt('mode', 'string', 'Explicit readiness mode.', { enum: ['authoring', 'review'] }),
+      opt('dependencies', 'string', 'Optional JSON mapping of declared dependency ids to status.'),
+      jsonOption,
+    ],
+  },
+  'commit-attribution': {
+    summary: 'Read-only Engineer commit-trailer validation and canonical repair guidance.',
+    usage: 'agenticloop commit-attribution check --task <id> [--commit <ref>] [--message-file <path>] [--json]',
+    subcommands: {
+      check: {
+        summary: 'Check Task/Agent trailers without amending, committing, pushing, or force-pushing.',
+        options: [targetOption(), opt('task', 'string', 'Expected task id. Required.'), opt('commit', 'string', 'Commit ref (default: HEAD).'), opt('message-file', 'string', 'Read a commit message from a local file.'), jsonOption],
+      },
+    },
+  },
+  'github-checkpoint': {
+    summary: 'Read-only checkpoint rendering and bounded checkpoint-repair planning.',
+    usage: 'agenticloop github-checkpoint <render|repair-plan> --pr <number> [options]',
+    subcommands: {
+      render: {
+        summary: 'Render a checkpoint from authenticated ordered history; never post it.',
+        options: [opt('pr', 'string', 'Pull request number. Required.'), opt('issue', 'string', 'Linked task issue number override.'), opt('repo', 'string', 'Target repository.'), opt('direction', 'string', 'Checkpoint direction.', { enum: ['targeted_revision', 'needs_context', 'blocked'] }), opt('cause', 'string', 'Checkpoint cause.'), opt('target', 'string', 'Required target for targeted_revision.'), opt('reference', 'string', 'Required reference for needs_context or blocked.'), jsonOption],
+      },
+      'repair-plan': {
+        summary: 'Validate and render one bounded same-author repair carrier; never post it.',
+        options: [opt('pr', 'string', 'Pull request number. Required.'), opt('source', 'string', 'Exact malformed comment or review id. Required.'), opt('issue', 'string', 'Linked task issue number override.'), opt('repo', 'string', 'Target repository.'), jsonOption],
+      },
+    },
+  },
+  'github-review-prepare': {
+    summary: 'Fail-closed exact-head, read-only Maintainer delegation preparation.',
+    usage: 'agenticloop github-review-prepare --pr <number> [--issue <number>] [--repo <owner/name>] [--workspace <path>] [--packet <path>] [--json]',
+    options: [opt('pr', 'string', 'Pull request number. Required.'), opt('issue', 'string', 'Linked task issue number override.'), opt('repo', 'string', 'Target repository.'), opt('workspace', 'string', 'Optional workspace that must resolve to the exact dispatched head.'), opt('packet', 'string', 'Verify a previously emitted preparation packet file against the current head before dispatch (read-only).'), jsonOption],
+  },
   doctor: {
     summary: 'Read-only diagnosis: setup checklist, adapter state, and next commands.',
     usage: 'agenticloop doctor [--target <dir>]',
@@ -761,9 +827,9 @@ export function renderFullHelp() {
   lines.push('');
   lines.push('Commands:');
   for (const [name, spec] of Object.entries(COMMAND_REGISTRY)) {
-    lines.push(`  ${name.padEnd(20)}${spec.summary}`);
+    lines.push(`  ${name.padEnd(Math.max(20, name.length + 1))}${spec.summary}`);
     for (const alias of spec.aliases ?? []) {
-      lines.push(`  ${alias.padEnd(20)}Compatibility alias for ${name}.`);
+      lines.push(`  ${alias.padEnd(Math.max(20, alias.length + 1))}Compatibility alias for ${name}.`);
     }
   }
   lines.push('  help'.padEnd(21) + 'Show this help, or "agenticloop help <command>" for one command.');

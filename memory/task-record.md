@@ -52,6 +52,23 @@ review_budget: 5
 # section and reviewer enforcement through `## Deviations From Plan`.
 # allowed_paths is a broad scope/deviation map, not a precise write promise.
 allowed_paths: []
+# Path intent is evaluated against an explicit base-tree inventory before review.
+# Exact literals that are not in that tree must be named here or under
+# generated_paths; globs are never creation-capable.
+# intended_creations:
+#   - src/new-module.js
+# Generated output remains in scope and requires generator/source provenance plus
+# an exact regeneration or parity verification command.
+# generated_paths:
+#   docs/generated.md:
+#     generator: npm run docs:generate
+#     source: src/docs-schema.js
+#     verification: npm run docs:generate -- --check
+# Blocking task or artifact dependencies use the existing dependency projection.
+# They must be resolved before implementation readiness; this is not a semantic
+# inference over Scope or Acceptance Criteria.
+# depends_on:
+#   - T-000
 # Optional structured expected-write projection for a multi-task parallel scan.
 # Uncomment only when the task participates in a current multi-task unit. Use
 # the same safe repo-relative path syntax as allowed_paths; it must be contained

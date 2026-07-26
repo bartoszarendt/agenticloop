@@ -532,6 +532,9 @@ describe('published checkpoint contracts', () => {
       ...checkpoint,
       artifact: 'commit:abc123',
       target: 'F-2: refresh the local verification evidence',
+      // Files checkpoints, repairs, and no-progress carriers require the exact
+      // trusted-role attribution `Orchestrator: orchestrator`.
+      orchestratorAttribution: 'orchestrator',
     };
     assert.equal(documented, formatCheckpoint(filesCheckpoint, { carrier: 'files' }).trim());
     assert.deepEqual(parseReviewCheckpoint(documented, { carrier: 'files' }).errors, []);

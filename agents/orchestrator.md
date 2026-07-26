@@ -44,9 +44,11 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   the current review round rather than a `needs_revision` round. Route any failed,
   expanded, uncertain, repeated, or independent-review finding to the engineer.
   This does not grant the orchestrator implementation or review authority.
-- Before delegating GitHub review, fetch the full current PR head, run
-  `github-preflight` against that live state, and dispatch only when the
-  returned head equals the intended review artifact. Prevent Engineer
+- Before delegating GitHub review, run `github-review-prepare --pr <number>`
+  against the live state. Dispatch only its successful exact-head packet: a
+  matching returned head never overrides `result.ok !== true`. Failed
+  preparation stops before semantic review and routes every diagnostic to its
+  canonical owner. Prevent Engineer
   mutation/push during the active review lease. After review returns, refetch
   the current PR head and validate the returned marker/status/provenance using
   the existing review audit against both the expected status and the originally
@@ -66,6 +68,12 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   Maintainer through Maintainer Review Fixup; Lens 1,
   implementation-changing, uncertain, repeated, or otherwise ineligible fix to
   Engineer.
+- After two consecutive valid reviews retain a stable implementation finding,
+  record the distinct no-progress disposition before routing another equivalent
+  Engineer revision. It is `targeted_revision`, `split_task`,
+  `contract_decision`, or `blocked`, never a checkpoint direction. At the
+  ordinary budget boundary a targeted revision still needs the existing
+  single-use Review Round Checkpoint.
 - Delegate work-unit certification to auditor once every covered task is
   accepted and its artifacts are integrated or composed into one exact frozen
   candidate. Auditor is a fresh, separate invocation every time and has no

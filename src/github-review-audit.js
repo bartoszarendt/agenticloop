@@ -592,7 +592,7 @@ export function evaluateGitHubReviewAudit({
     errors.push(...marker.errors);
   }
 
-  // Phase 29: expected artifact validation
+  // Expected artifact validation
   let normalizedExpectedArtifact = null;
   if (expectedArtifact !== null && expectedArtifact !== undefined && expectedArtifact !== '') {
     normalizedExpectedArtifact = String(expectedArtifact).toLowerCase().trim();
@@ -702,7 +702,7 @@ export function evaluateGitHubReviewAudit({
   const statusMatch = outcome?.status === expectedStatus;
   let artifactMatch = true;
 
-  // Phase 29: validate that the review marker names the expected artifact
+  // Validate that the review marker names the expected artifact
   if (normalizedExpectedArtifact && outcome) {
     if (outcome.artifact && outcome.artifact !== normalizedExpectedArtifact) {
       errors.push(`review marker artifact '${outcome.artifact.slice(0, 8)}...' does not match expected dispatched artifact '${normalizedExpectedArtifact.slice(0, 8)}...'`);

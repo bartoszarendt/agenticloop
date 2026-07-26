@@ -41,7 +41,8 @@
  *   agenticloop generate all          [--target <dir>] [--output-dir <dir>]
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join, resolve, isAbsolute } from 'node:path';
 import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.js';
 import {
@@ -104,10 +105,17 @@ import {
   validateEventLogs,
 } from './event-logging.js';
 import { runValidation } from './validate-runner.js';
+import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
 import { validateLinks, formatLinkErrors } from './link-validator.js';
-import { runPreflight, PreflightError } from './github-preflight.js';
+import { evaluatePreflight, loadPreflightInput, parseRequiredChecks, runPreflight, PreflightError } from './github-preflight.js';
 import { runGitHubReviewAudit, GitHubReviewAuditError } from './github-review-audit.js';
 import { runGitHubReady, formatGitHubReadyReport, GitHubReadyError } from './github-ready.js';
+import { evaluatePreparationInput } from './preparation-input.js';
+import { renderPrBodyScaffold, lintPrBody } from './pr-body.js';
+import { evaluateTaskReadiness } from './task-readiness.js';
+import { evaluateCommitAttribution } from './commit-attribution.js';
+import { planGitHubCheckpointRepair, renderGitHubCheckpoint } from './github-checkpoint.js';
+import { runGitHubReviewPrepare } from './github-review-prepare.js';
 import {
   cleanupAgenticLoopWorktrees,
   createAgenticLoopWorktree,
@@ -738,7 +746,7 @@ async function cmdGithubPreflight(args, io) {
 
   if (!opts.pr) {
     if (asJson) {
-      io.out(JSON.stringify({ ok: false, errors: ['--pr <number> is required'] }));
+      io.out(JSON.stringify(commandFailure('github-preflight', new PreflightError('--pr <number> is required'), 'usage')));
     } else {
       io.err('github-preflight requires --pr <number>');
     }
@@ -751,7 +759,7 @@ async function cmdGithubPreflight(args, io) {
   } catch (error) {
     if (error instanceof PreflightError) {
       if (asJson) {
-        io.out(JSON.stringify({ ok: false, errors: [error.message] }));
+        io.out(JSON.stringify(commandFailure('github-preflight', error)));
       } else {
         io.err(`github-preflight failed: ${error.message}`);
       }
@@ -802,7 +810,7 @@ async function cmdGithubReviewAudit(args, io) {
   const asJson = Boolean(opts.json);
   if (!opts.pr) {
     const error = '--pr <number> is required';
-    if (asJson) io.out(JSON.stringify({ ok: false, errors: [error] }));
+    if (asJson) io.out(JSON.stringify(commandFailure('github-review-audit', new GitHubReviewAuditError(error), 'usage')));
     else io.err(`github-review-audit requires ${error}`);
     return EXIT_USAGE;
   }
@@ -813,7 +821,7 @@ async function cmdGithubReviewAudit(args, io) {
     result = runGitHubReviewAudit({ pr: opts.pr, issue: opts.issue, repo: opts.repo, expectedStatus, expectedArtifact, workspace: opts.workspace });
   } catch (error) {
     if (!(error instanceof GitHubReviewAuditError)) throw error;
-    if (asJson) io.out(JSON.stringify({ ok: false, errors: [error.message] }));
+    if (asJson) io.out(JSON.stringify(commandFailure('github-review-audit', error)));
     else io.err(`github-review-audit failed: ${error.message}`);
     return 1;
   }
@@ -853,7 +861,7 @@ async function cmdGithubReady(args, io) {
   const { opts } = parseCommandArgs('github-ready', COMMAND_REGISTRY['github-ready'], args);
   const asJson = Boolean(opts.json);
   if (!opts.pr) {
-    if (asJson) io.out(JSON.stringify({ ok: false, readyForMerge: false, errors: ['--pr <number> is required'] }));
+    if (asJson) io.out(JSON.stringify({ ...commandFailure('github-ready', new GitHubReadyError('--pr <number> is required'), 'usage'), readyForMerge: false }));
     else io.err('github-ready requires --pr <number>');
     return EXIT_USAGE;
   }
@@ -863,7 +871,7 @@ async function cmdGithubReady(args, io) {
     result = runGitHubReady({ pr: opts.pr, issue: opts.issue, repo: opts.repo });
   } catch (error) {
     if (!(error instanceof GitHubReadyError)) throw error;
-    if (asJson) io.out(JSON.stringify({ ok: false, readyForMerge: false, errors: [error.message] }));
+    if (asJson) io.out(JSON.stringify({ ...commandFailure('github-ready', error), readyForMerge: false }));
     else io.err(`github-ready failed: ${error.message}`);
     return 1;
   }
@@ -879,6 +887,213 @@ async function cmdGithubReady(args, io) {
   for (const error of errors) io.err(`    ERROR: ${error}`);
   io.out();
   return result.ok ? 0 : 1;
+}
+
+function printGateResult(command, result, asJson, io, exitCode = null) {
+  const status = exitCode ?? (result.ok ? 0 : 1);
+  if (asJson) {
+    io.out(JSON.stringify(result));
+    return status;
+  }
+  io.out();
+  io.out(`agenticloop ${command}`);
+  io.out('='.repeat(50));
+  if (result.pr) io.out(`  PR: #${result.pr}`);
+  if (result.issue) io.out(`  issue: #${result.issue}`);
+  if (result.headRefOid) io.out(`  current head: ${result.headRefOid}`);
+  io.out(`  status: ${result.ok ? 'passed' : 'FAILED'}`);
+  for (const warning of result.warnings ?? []) io.warn(`  WARN: ${warning}`);
+  for (const error of result.errors ?? []) io.err(`  ERROR: ${error}`);
+  if (result.firstSafeRepair) io.out(`  first safe repair: ${result.firstSafeRepair}`);
+  io.out();
+  return status;
+}
+
+function commandFailure(command, error, category = 'operational_error') {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    schemaVersion: 1,
+    command,
+    ok: false,
+    errors: [message],
+    warnings: [],
+    diagnostics: [{ message, category, owner: category === 'usage' ? 'engineer' : 'human_authority', nextAction: 'correct the command input or unavailable dependency, then rerun' }],
+    warningDiagnostics: [],
+    failureCategories: [category],
+    firstSafeRepair: 'correct the reported operational error and rerun the command',
+  };
+}
+
+async function cmdPrBody(args, io) {
+  const sub = args[0];
+  const spec = sub && COMMAND_REGISTRY['pr-body'].subcommands[sub];
+  if (!spec) throw new CliUsageError('pr-body requires a subcommand: scaffold | lint');
+  const { opts } = parseCommandArgs(`pr-body ${sub}`, spec, args.slice(1));
+  const asJson = Boolean(opts.json);
+  if (sub === 'lint') {
+    try {
+      if (!opts.input) return printGateResult('pr-body lint', commandFailure('pr-body lint', new CliUsageError('pr-body lint requires --input <evaluation-input.json>'), 'usage'), asJson, io, EXIT_USAGE);
+      const parsed = JSON.parse(readFileSync(resolveCliTarget(io, opts.input), 'utf8'));
+      const historyEvents = Array.isArray(parsed?.reviewHistory?.events) ? parsed.reviewHistory.events : [];
+      const priorOutcome = [...historyEvents].reverse().find(event => event?.type === 'outcome' && event?.status === 'needs_revision' && Array.isArray(event.findingIds) && !event.legacyMissingFindingIds);
+      const structural = lintPrBody(parsed?.prData?.body ?? '', {
+        requiredChecks: parseRequiredChecks(parsed?.issueData?.body),
+        currentHead: parsed?.prData?.headRefOid,
+        statusChecks: parsed?.prData?.statusCheckRollup ?? [],
+        priorFindingIds: priorOutcome?.findingIds ?? [],
+      });
+      const result = evaluatePreparationInput(parsed, evaluatePreflight);
+      // Command execution success, structural lint readiness, and gate success
+      // are deliberately separate results: a scaffold containing a canonical
+      // placeholder can never be lint ready, and a lint-ready body still must
+      // pass the semantic gate.
+      const gatePassed = Boolean(result.ok);
+      const lintReady = structural.lintReady;
+      const merged = {
+        ...result,
+        scaffolded: structural.scaffolded,
+        lintReady,
+        gatePassed,
+        publicationReady: lintReady && gatePassed,
+        ok: lintReady && gatePassed,
+        errors: [...structural.errors, ...(result.errors ?? [])],
+        diagnostics: [...structural.diagnostics, ...(result.diagnostics ?? [])],
+        firstSafeRepair: !lintReady ? structural.firstSafeRepair : (result.firstSafeRepair ?? null),
+      };
+      return printGateResult('pr-body lint', merged, asJson, io);
+    } catch (error) {
+      if (error instanceof CliUsageError) return asJson ? printGateResult('pr-body lint', commandFailure('pr-body lint', error, 'usage'), true, io) : Promise.reject(error);
+      return printGateResult('pr-body lint', commandFailure('pr-body lint', error), asJson, io);
+    }
+  }
+  try {
+    if (!opts.pr) return printGateResult('pr-body scaffold', commandFailure('pr-body scaffold', new CliUsageError('pr-body scaffold requires --pr <number>'), 'usage'), asJson, io, EXIT_USAGE);
+    const loaded = loadPreflightInput({ pr: opts.pr, issue: opts.issue, repo: opts.repo, target: io.cwd, includeBasePaths: true });
+    const evaluation = evaluatePreparationInput(loaded.input, evaluatePreflight, { referenceResolvers: loaded.referenceResolvers });
+    const requiredChecks = evaluation.requiredChecks ?? parseRequiredChecks(loaded.input.issueData?.body);
+    const body = renderPrBodyScaffold({ ...loaded.input, requiredChecks });
+    if (opts.output) writeFileSync(resolveCliTarget(io, opts.output), body, 'utf8');
+    // Exit 0 means the scaffold was generated successfully. The scaffold is
+    // intentionally incomplete: it is not lint ready and has not passed any
+    // gate, and the output must say so rather than print "passed".
+    const result = {
+      schemaVersion: 1, ok: true, errors: [], warnings: evaluation.warnings ?? [], diagnostics: [],
+      generated: true, lintReady: false, gatePassed: false, publicationReady: false,
+      pr: loaded.input.prData.number, issue: loaded.input.issueData.number, headRefOid: loaded.input.prData.headRefOid,
+      output: opts.output ? resolveCliTarget(io, opts.output) : null, body,
+      firstSafeRepair: 'replace every REPLACE placeholder and rerun pr-body lint before any GitHub write',
+    };
+    if (asJson) return printGateResult('pr-body scaffold', result, true, io);
+    if (!opts.output) io.out(body);
+    else io.out(`Scaffold written to ${result.output}`);
+    io.out('Scaffold generated; it is intentionally incomplete and NOT publication-ready (lint not run, gate not passed).');
+    io.out(`First safe repair: ${result.firstSafeRepair}`);
+    return 0;
+  } catch (error) {
+    if (error instanceof CliUsageError) return asJson ? printGateResult('pr-body scaffold', commandFailure('pr-body scaffold', error, 'usage'), true, io) : Promise.reject(error);
+    return printGateResult('pr-body scaffold', commandFailure('pr-body scaffold', error), asJson, io);
+  }
+}
+
+function readBasePaths(base, basePaths, target) {
+  if (basePaths) {
+    const value = JSON.parse(readFileSync(resolve(target, basePaths), 'utf8'));
+    const paths = Array.isArray(value) ? value : value.paths;
+    if (!Array.isArray(paths)) throw new Error('--base-paths JSON must be an array or { paths: [] }');
+    return paths;
+  }
+  if (!base) throw new CliUsageError('task-readiness requires --base <ref-or-tree> or --base-paths <path>');
+  const result = spawnSync('git', ['ls-tree', '-r', '--name-only', base], { cwd: target, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(`cannot read base tree '${base}': ${(result.stderr || result.error?.message || '').trim()}`);
+  return result.stdout.split(/\r?\n/).filter(Boolean);
+}
+
+function taskReadinessBody(opts, target) {
+  if (opts.taskBody) return readFileSync(resolve(target, opts.taskBody), 'utf8');
+  if (opts.task) return readFileSync(join(target, '.agenticloop', 'tasks', `${opts.task}.md`), 'utf8');
+  if (opts.issue) {
+    const data = runGhJson(defaultGhCommandRunner, ['issue', 'view', String(opts.issue), '--json', 'body']);
+    if (!data?.body) throw new Error(`GitHub issue #${opts.issue} has no task body`);
+    return data.body;
+  }
+  throw new CliUsageError('task-readiness requires --task, --issue, or --task-body');
+}
+
+async function cmdTaskReadiness(args, io) {
+  const { opts } = parseCommandArgs('task-readiness', COMMAND_REGISTRY['task-readiness'], args);
+  const asJson = Boolean(opts.json);
+  try {
+    const target = resolveCliTarget(io, opts.target);
+    const taskBody = taskReadinessBody(opts, target);
+    const basePaths = readBasePaths(opts.base, opts.basePaths, target);
+    const result = evaluateTaskReadiness({ taskBody, basePaths, mode: opts.mode, dependencies: opts.dependencies ? JSON.parse(readFileSync(resolveCliTarget(io, opts.dependencies), 'utf8')) : {} });
+    return printGateResult('task-readiness', result, asJson, io);
+  } catch (error) {
+    if (error instanceof CliUsageError) return asJson ? printGateResult('task-readiness', commandFailure('task-readiness', error, 'usage'), true, io) : Promise.reject(error);
+    return printGateResult('task-readiness', commandFailure('task-readiness', error), asJson, io);
+  }
+}
+
+async function cmdCommitAttribution(args, io) {
+  const sub = args[0];
+  const spec = sub && COMMAND_REGISTRY['commit-attribution'].subcommands[sub];
+  if (!spec) throw new CliUsageError('commit-attribution requires subcommand: check');
+  const { opts } = parseCommandArgs(`commit-attribution ${sub}`, spec, args.slice(1));
+  const asJson = Boolean(opts.json);
+  try {
+    if (!opts.task) return printGateResult('commit-attribution check', commandFailure('commit-attribution check', new CliUsageError('commit-attribution check requires --task <id>'), 'usage'), asJson, io, EXIT_USAGE);
+    if (opts.commit && opts.messageFile) return printGateResult('commit-attribution check', commandFailure('commit-attribution check', new CliUsageError('use either --commit or --message-file, not both'), 'usage'), asJson, io, EXIT_USAGE);
+    const target = resolveCliTarget(io, opts.target);
+    const message = opts.messageFile
+      ? readFileSync(resolveCliTarget(io, opts.messageFile), 'utf8')
+      : (() => {
+        const result = spawnSync('git', ['log', '-1', '--format=%B', opts.commit ?? 'HEAD'], { cwd: target, encoding: 'utf8' });
+        if (result.status !== 0) throw new Error(`cannot read commit message: ${(result.stderr || result.error?.message || '').trim()}`);
+        return result.stdout;
+      })();
+    return printGateResult('commit-attribution check', evaluateCommitAttribution({ message, taskId: opts.task }), asJson, io);
+  } catch (error) {
+    if (error instanceof CliUsageError) return asJson ? printGateResult('commit-attribution check', commandFailure('commit-attribution check', error, 'usage'), true, io) : Promise.reject(error);
+    return printGateResult('commit-attribution check', commandFailure('commit-attribution check', error), asJson, io);
+  }
+}
+
+async function cmdGithubCheckpoint(args, io) {
+  const sub = args[0];
+  const spec = sub && COMMAND_REGISTRY['github-checkpoint'].subcommands[sub];
+  if (!spec) throw new CliUsageError('github-checkpoint requires subcommand: render | repair-plan');
+  const { opts } = parseCommandArgs(`github-checkpoint ${sub}`, spec, args.slice(1));
+  const asJson = Boolean(opts.json);
+  try {
+    if (!opts.pr) return printGateResult(`github-checkpoint ${sub}`, commandFailure(`github-checkpoint ${sub}`, new CliUsageError(`github-checkpoint ${sub} requires --pr <number>`), 'usage'), asJson, io, EXIT_USAGE);
+    const result = sub === 'render'
+      ? renderGitHubCheckpoint({ ...opts, target: io.cwd })
+      : planGitHubCheckpointRepair({ ...opts, target: io.cwd });
+    if (asJson) return printGateResult(`github-checkpoint ${sub}`, result, true, io);
+    io.out(result.carrier);
+    if (result.firstSafeRepair) io.out(`First safe repair: ${result.firstSafeRepair}`);
+    return 0;
+  } catch (error) {
+    if (error instanceof CliUsageError) return asJson ? printGateResult(`github-checkpoint ${sub}`, commandFailure(`github-checkpoint ${sub}`, error, 'usage'), true, io) : Promise.reject(error);
+    return printGateResult(`github-checkpoint ${sub}`, commandFailure(`github-checkpoint ${sub}`, error), asJson, io);
+  }
+}
+
+async function cmdGithubReviewPrepare(args, io) {
+  const { opts } = parseCommandArgs('github-review-prepare', COMMAND_REGISTRY['github-review-prepare'], args);
+  const asJson = Boolean(opts.json);
+  try {
+    if (!opts.pr) return printGateResult('github-review-prepare', commandFailure('github-review-prepare', new CliUsageError('github-review-prepare requires --pr <number>'), 'usage'), asJson, io, EXIT_USAGE);
+    const result = runGitHubReviewPrepare({ ...opts, packet: opts.packet ? resolveCliTarget(io, opts.packet) : undefined, target: io.cwd });
+    if (asJson) return printGateResult('github-review-prepare', result, true, io);
+    const code = printGateResult('github-review-prepare', result, false, io);
+    if (result.ok) io.out(JSON.stringify(result.packet, null, 2));
+    else for (const [owner, diagnostics] of Object.entries(result.ownerRouting ?? {})) io.out(`  route ${owner}: ${diagnostics.length} diagnostic(s)`);
+    return code;
+  } catch (error) {
+    if (error instanceof CliUsageError) return asJson ? printGateResult('github-review-prepare', commandFailure('github-review-prepare', error, 'usage'), true, io) : Promise.reject(error);
+    return printGateResult('github-review-prepare', commandFailure('github-review-prepare', error), asJson, io);
+  }
 }
 
 async function cmdEvent(args, commandLabel = 'event-logging', io = createIo()) {
@@ -1723,6 +1938,11 @@ const COMMAND_HANDLERS = {
   'github-preflight': cmdGithubPreflight,
   'github-review-audit': cmdGithubReviewAudit,
   'github-ready': cmdGithubReady,
+  'pr-body': cmdPrBody,
+  'task-readiness': cmdTaskReadiness,
+  'commit-attribution': cmdCommitAttribution,
+  'github-checkpoint': cmdGithubCheckpoint,
+  'github-review-prepare': cmdGithubReviewPrepare,
   doctor: cmdDoctor,
   status: cmdStatus,
   worktree: cmdWorktree,

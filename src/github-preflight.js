@@ -49,6 +49,7 @@ import {
   countTaskBudgetFieldOccurrences,
   parseReviewCheckpoint,
   evaluateReviewCheckpoint,
+  evaluateNoProgress,
   DEFAULT_REVIEW_BUDGET,
   parseReviewBudgetValue,
   resolveTaskAttemptBudget,
@@ -60,6 +61,12 @@ import {
   parseResolutionMatrix,
   validateResolutionMatrix,
 } from './resolution-matrix.js';
+import { evaluateTaskReadiness } from './task-readiness.js';
+import { parseFinalTrailerBlock } from './commit-attribution.js';
+import {
+  createPreparationInput,
+  evaluatePreparationInput,
+} from './preparation-input.js';
 
 export class PreflightError extends Error {
   constructor(message) {
@@ -155,23 +162,188 @@ export function extractCommand(text) {
   return match ? normalizeCheckText(match[1]) : null;
 }
 
+const PROOF_KINDS = new Set(['command', 'manual', 'contract_proof']);
+const SATISFACTION_SOURCES = new Set(['pr_body', 'status_check', 'manual_observation', 'automated_observation']);
+const OBSERVATION_EVIDENCE_SOURCES = new Set(['pr_body', 'manual_observation', 'automated_observation']);
+const OBSERVATION_LEVELS = new Set(['running_path', 'unit', 'parser', 'helper', 'mock']);
+const REQUIRED_CHECK_METADATA_NAMES = [
+  'kind',
+  'proof kind',
+  'source',
+  'sources',
+  'satisfaction source',
+  'satisfaction sources',
+  'observation',
+  'observations',
+];
+const REQUIRED_CHECK_METADATA_RE = new RegExp(
+  `(?:\\[|\\()\\s*(?:${REQUIRED_CHECK_METADATA_NAMES
+    .map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|')})\\s*:[^\\]\\)]*(?:\\]|\\))`,
+  'gi'
+);
+const GENERIC_OBSERVATION_RESULT_RE =
+  /^(?:\d+\s+(?:tests?|checks?|examples?|assertions?|cases?|scenarios?)\s+(?:passed?|passing|succeeded|green)|(?:all\s+)?(?:tests?|checks?\s+)?(?:passed|pass|ok|green|success(?:ful)?|done)\.?)$/i;
+
+/**
+ * Build the semantic fallback identity used when a required check has no
+ * stable RC id. Recognized typed metadata remains available on the parsed
+ * object but is not part of the human evidence label that must match.
+ */
+export function normalizeRequiredCheckMatchKey(text) {
+  return normalizeCheckText(String(text ?? '').replace(REQUIRED_CHECK_METADATA_RE, ' '));
+}
+
+function metadataValue(text, names) {
+  const joined = names.map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const match = String(text ?? '').match(new RegExp(`(?:\\[|\\()\\s*(?:${joined})\\s*:\\s*([^\\]\)]+)`, 'i'));
+  return match?.[1]?.trim() ?? null;
+}
+
+function parseObservationList(value) {
+  return String(value ?? '').split(/[|,;]/).map(item => item.trim()).filter(Boolean);
+}
+
+/** Parse optional typed-proof annotations without changing legacy wording. */
+function parseRequiredCheckMetadata(text, command) {
+  const rawKind = metadataValue(text, ['kind', 'proof kind']);
+  const kind = rawKind?.toLowerCase().replace(/[ -]+/g, '_') ?? (command ? 'command' : 'manual');
+  const rawSources = metadataValue(text, ['source', 'sources', 'satisfaction source', 'satisfaction sources']);
+  const sources = rawSources
+    ? parseObservationList(rawSources).map(value => value.toLowerCase().replace(/[ -]+/g, '_'))
+    : rawKind
+      ? (kind === 'command'
+        ? ['pr_body']
+        : kind === 'contract_proof'
+          // A declared contract_proof with no explicit source may be satisfied by
+          // either manual or automated observation (D9); it is never silently
+          // forced to manual-only. Automated evidence must still cover every
+          // declared observation.
+          ? ['manual_observation', 'automated_observation']
+          : ['manual_observation'])
+      : (command ? ['pr_body', 'status_check'] : ['pr_body']);
+  // A declared observation may pin its oracle level as `name@level`; without an
+  // explicit level the observation requires running-path evidence.
+  const observations = [];
+  const observationLevels = {};
+  for (const raw of parseObservationList(metadataValue(text, ['observation', 'observations']))) {
+    const at = raw.lastIndexOf('@');
+    if (at > 0) {
+      const id = raw.slice(0, at).trim();
+      observations.push(id);
+      observationLevels[id] = raw.slice(at + 1).trim().toLowerCase().replace(/[ -]+/g, '_');
+    } else {
+      observations.push(raw);
+    }
+  }
+  return {
+    kind,
+    kindDeclared: Boolean(rawKind),
+    allowedSources: sources,
+    observations,
+    observationLevels,
+  };
+}
+
 /**
  * Parse the issue body's `## Required Checks` section. Every non-empty list
  * item is treated as a required check. The original text is preserved for
  * reporting; a normalized form is added for comparison, and `command` holds the
  * backtick command when the check is written as one (null for manual checks).
  *
- * @returns {{ text: string, normalized: string, command: string|null, id: string|null }[]}
+ * @returns {{ text: string, normalized: string, matchKey: string, command: string|null, id: string|null }[]}
  */
 export function parseRequiredChecks(issueBody) {
   const section = extractSectionBody(issueBody, '## Required Checks');
   if (section === null) return [];
-  return topLevelListItems(section).map(text => ({
-    text,
-    normalized: normalizeCheckText(text),
-    command: extractCommand(text),
-    id: extractCheckId(text),
-  }));
+  return topLevelListItems(section).map(text => {
+    const command = extractCommand(text);
+    return {
+      text,
+      normalized: normalizeCheckText(text),
+      matchKey: normalizeRequiredCheckMatchKey(text),
+      command,
+      id: extractCheckId(text),
+      ...parseRequiredCheckMetadata(text, command),
+    };
+  });
+}
+
+/**
+ * Validate task-owned required-check declarations before any evidence or
+ * status-check satisfaction path runs.
+ *
+ * @returns {{ index: number, check: string, reason: string, category: 'task_policy',
+ *             owner: 'maintainer', nextAction: string }[]}
+ */
+export function validateRequiredCheckContracts(requiredChecks) {
+  const checks = Array.isArray(requiredChecks) ? requiredChecks : [];
+  const failures = [];
+  const add = (index, reason) => failures.push({
+    index,
+    check: checks[index]?.text ?? '<unknown required check>',
+    reason,
+    category: 'task_policy',
+    owner: 'maintainer',
+    nextAction: 'repair the linked task required-check contract before collecting implementation evidence',
+  });
+
+  for (const [index, check] of checks.entries()) {
+    const kind = check.kind ?? (check.command ? 'command' : 'manual');
+    const sources = check.allowedSources ?? (check.command ? ['pr_body', 'status_check'] : ['pr_body']);
+    const observations = check.observations ?? [];
+    const matchKey = check.matchKey ?? normalizeRequiredCheckMatchKey(check.text);
+
+    if (!matchKey) add(index, 'required check has no semantic identity after typed metadata is removed');
+    if (!PROOF_KINDS.has(kind)) add(index, `required check has invalid proof kind '${kind}'`);
+
+    const invalidSources = sources.filter(source => !SATISFACTION_SOURCES.has(source));
+    if (invalidSources.length > 0) {
+      add(index, `required check declares invalid satisfaction source${invalidSources.length === 1 ? '' : 's'} (${invalidSources.join(', ')})`);
+    }
+
+    if (kind === 'command' && !check.command) {
+      add(index, "command check must declare its exact command in a backtick code span");
+    }
+    if (sources.includes('status_check') && kind !== 'command') {
+      add(index, "status_check satisfaction is allowed only for proof kind 'command'");
+    }
+    if (observations.length > 0 && !sources.some(source => OBSERVATION_EVIDENCE_SOURCES.has(source))) {
+      add(index, 'declared observations require at least one structured PR-body observation source; a status-check-only contract is unsatisfiable');
+    }
+    for (const observation of observations) {
+      const level = check.observationLevels?.[observation] ?? 'running_path';
+      if (!OBSERVATION_LEVELS.has(level)) {
+        add(index, `required check declares invalid oracle level '${level}' for observation '${observation}'`);
+      }
+    }
+  }
+
+  const ids = new Map();
+  const idlessMatchKeys = new Map();
+  for (const [index, check] of checks.entries()) {
+    if (check.id) {
+      const group = ids.get(check.id) ?? [];
+      group.push(index);
+      ids.set(check.id, group);
+      continue;
+    }
+    const matchKey = check.matchKey ?? normalizeRequiredCheckMatchKey(check.text);
+    if (!matchKey) continue;
+    const group = idlessMatchKeys.get(matchKey) ?? [];
+    group.push(index);
+    idlessMatchKeys.set(matchKey, group);
+  }
+  for (const [id, indexes] of ids) {
+    if (indexes.length > 1) add(indexes[0], `task uses duplicate required-check id '${id}'`);
+  }
+  for (const [matchKey, indexes] of idlessMatchKeys) {
+    if (indexes.length > 1) {
+      add(indexes[0], `multiple required checks share semantic identity '${matchKey}'; assign distinct RC-N ids`);
+    }
+  }
+
+  return failures;
 }
 
 /**
@@ -199,7 +371,7 @@ export function extractHeadMarker(text) {
  *     Evidence: <concise output excerpt or status-check reference>
  *
  * @returns {{ section: string|null, headSha: string|null,
- *             entries: { check: string, verdict: string|null, evidence: string|null, id?: string|null }[], errors: string[] }}
+     *             entries: { check: string, verdict: string|null, evidence: string|null, id?: string|null }[], errors: string[] }}
  */
 export function parsePrEvidence(prBody) {
   const sectionData = markdownSection(String(prBody ?? ''), '## Evidence');
@@ -211,8 +383,16 @@ export function parsePrEvidence(prBody) {
     const reqRe = /^[-*]\s*Required check:\s*(.+?)\s*$/i;
     const verdictRe = /^Verdict:\s*(.+?)\s*$/i;
     const evidenceRe = /^Evidence:\s*(.+?)\s*$/i;
+    const kindRe = /^Kind:\s*(.+?)\s*$/i;
+    const sourceRe = /^Source:\s*(.+?)\s*$/i;
+    const observationsRe = /^Observations:\s*(.+?)\s*$/i;
+    const observationStartRe = /^Observation:\s*(.+?)\s*$/i;
+    const levelRe = /^Level:\s*(.+?)\s*$/i;
+    const resultRe = /^Result:\s*(.+?)\s*$/i;
+    const artifactRe = /^(?:Implementation head|Artifact):\s*(.+?)\s*$/i;
     let current = null;
     let currentField = null;
+    let currentObservation = null;
     let entryIndent = null;
     let continuationEligible = false;
     const append = value => {
@@ -236,6 +416,7 @@ export function parsePrEvidence(prBody) {
       const line = rawLine.trim();
       if (!line) {
         currentField = null;
+        currentObservation = null;
         continuationEligible = false;
         continue;
       }
@@ -248,10 +429,56 @@ export function parsePrEvidence(prBody) {
         const id = extractCheckId(current.check);
         if (id) current.id = id;
         currentField = 'check';
+        currentObservation = null;
         continuationEligible = true;
         continue;
       }
       if (current) {
+        const observationStart = line.match(observationStartRe);
+        if (observationStart) {
+          // A structured per-observation record: id, oracle level, concrete
+          // result, current implementation artifact, and satisfaction source.
+          currentObservation = { id: observationStart[1].trim(), level: null, result: null, artifact: null, source: null };
+          (current.observationRecords ??= []).push(currentObservation);
+          currentField = null;
+          continuationEligible = false;
+          continue;
+        }
+        const observationsList = line.match(observationsRe);
+        if (observationsList) {
+          // Legacy name list, retained for diagnostics only; it never
+          // satisfies a declared observation by itself.
+          current.observations = parseObservationList(observationsList[1]);
+          currentObservation = null;
+          currentField = null;
+          continuationEligible = false;
+          continue;
+        }
+        if (currentObservation) {
+          const levelMatch = line.match(levelRe);
+          if (levelMatch) {
+            currentObservation.level = levelMatch[1].trim().toLowerCase().replace(/[ -]+/g, '_');
+            continue;
+          }
+          const resultMatch = line.match(resultRe);
+          if (resultMatch) {
+            currentObservation.result = resultMatch[1].trim();
+            continue;
+          }
+          const observationSource = line.match(sourceRe);
+          if (observationSource) {
+            currentObservation.source = observationSource[1].trim().toLowerCase().replace(/[ -]+/g, '_');
+            continue;
+          }
+          const observationArtifact = line.match(artifactRe);
+          if (observationArtifact) {
+            currentObservation.artifact = observationArtifact[1].trim().toLowerCase();
+            continue;
+          }
+          // Unrecognized content ends the record so malformed fields cannot
+          // leak into it.
+          currentObservation = null;
+        }
         const verdictMatch = line.match(verdictRe);
         if (verdictMatch) {
           current.verdict = verdictMatch[1].trim();
@@ -264,6 +491,27 @@ export function parsePrEvidence(prBody) {
           current.evidence = evidenceMatch[1].trim();
           currentField = 'evidence';
           continuationEligible = true;
+          continue;
+        }
+        const kindMatch = line.match(kindRe);
+        if (kindMatch) {
+          current.kind = kindMatch[1].trim().toLowerCase().replace(/[ -]+/g, '_');
+          currentField = 'kind';
+          continuationEligible = false;
+          continue;
+        }
+        const sourceMatch = line.match(sourceRe);
+        if (sourceMatch) {
+          current.source = sourceMatch[1].trim().toLowerCase().replace(/[ -]+/g, '_');
+          currentField = 'source';
+          continuationEligible = false;
+          continue;
+        }
+        const artifactMatch = line.match(artifactRe);
+        if (artifactMatch) {
+          current.artifact = artifactMatch[1].trim().toLowerCase();
+          currentField = null;
+          continuationEligible = false;
           continue;
         }
         if (continuationEligible && currentField && /^[ \t]+\S/.test(rawLine)) {
@@ -327,7 +575,7 @@ function matchStatusChecks(requiredCheck, statusChecks) {
 }
 
 /**
- * Compare PR head SHA marker against the actual head. Phase 29 requires exact
+ * Compare PR head SHA marker against the actual head. Review preparation requires exact
  * full 40-character SHA equality; short prefixes are rejected.
  */
 export function headMatches(claimed, actual) {
@@ -338,54 +586,207 @@ export function headMatches(claimed, actual) {
 }
 
 /**
+ * Validate the canonical structured per-observation evidence shape. Every
+ * declared observation needs its own record carrying the observation ID, the
+ * execution/oracle level (running_path unless the task pins another level with
+ * `name@level`), a concrete result or bounded excerpt, the current
+ * implementation artifact, and the satisfaction source. Copied observation
+ * names, generic pass counts, helper-only state, mock-bound arguments, and
+ * parser/unit-only results never satisfy a running-path observation.
+ *
+ * @returns {string[]} validation failure reasons
+ */
+function validateObservationRecords(rc, entry, source, options) {
+  const errors = [];
+  const records = new Map();
+  for (const record of entry.observationRecords ?? []) {
+    if (records.has(record.id)) errors.push(`duplicate structured observation record '${record.id}'`);
+    records.set(record.id, record);
+  }
+  const declaredLevels = rc.observationLevels ?? {};
+  for (const observation of rc.observations ?? []) {
+    const declaredLevel = declaredLevels[observation] ?? 'running_path';
+    if (!OBSERVATION_LEVELS.has(declaredLevel)) {
+      errors.push(`required check declares invalid oracle level '${declaredLevel}' for observation '${observation}'`);
+      continue;
+    }
+    const record = records.get(observation);
+    if (!record) {
+      errors.push(`evidence is missing a structured record for declared observation '${observation}'; copied observation names or generic pass counts are not evidence`);
+      continue;
+    }
+    if (!record.level) {
+      errors.push(`observation '${observation}' must record its execution/oracle level`);
+    } else if (!OBSERVATION_LEVELS.has(record.level)) {
+      errors.push(`observation '${observation}' records invalid oracle level '${record.level}'`);
+    } else if (record.level !== declaredLevel) {
+      errors.push(`observation '${observation}' records '${record.level}' evidence but the task requires '${declaredLevel}' evidence`);
+    }
+    const result = String(record.result ?? '').trim();
+    if (!result) {
+      errors.push(`observation '${observation}' must record a concrete result or bounded excerpt`);
+    } else if (result.length < 12 || GENERIC_OBSERVATION_RESULT_RE.test(result)) {
+      errors.push(`observation '${observation}' result is not substantive; generic pass counts and bare verdicts are not evidence`);
+    }
+    if (!record.artifact) {
+      errors.push(`observation '${observation}' must record the current implementation artifact`);
+    } else if (options.currentArtifact && !headMatches(record.artifact, options.currentArtifact)) {
+      errors.push(`observation '${observation}' records stale artifact evidence; expected the current implementation artifact`);
+    }
+    if (!record.source) {
+      errors.push(`observation '${observation}' must record its satisfaction source`);
+    } else if (record.source !== source) {
+      errors.push(`observation '${observation}' source '${record.source}' does not match the evidence satisfaction source '${source}'`);
+    }
+  }
+  return errors;
+}
+
+/**
+ * Validate the final-state fields that every parsed PR-body evidence entry owns,
+ * independent of whether a caller supplied the task's required-check context.
+ *
+ * @returns {{ verdict: string, errors: string[], warnings: string[] }}
+ */
+export function validateEvidenceEntryFinality(entry) {
+  const errors = [];
+  const warnings = [];
+  const verdict = String(entry?.verdict ?? '').toLowerCase().trim();
+  const label = String(entry?.check ?? '').trim() || '<unnamed evidence entry>';
+  if (!verdict) {
+    errors.push('evidence entry is missing a Verdict line');
+  } else if (!VALID_VERDICTS.has(verdict)) {
+    errors.push(`unrecognized verdict '${entry.verdict}'; expected one of: ${[...VALID_VERDICTS].join(', ')}`);
+  } else if (verdict === 'not run') {
+    errors.push("verdict 'not run' is not final-state evidence");
+  }
+  if (!String(entry?.evidence ?? '').trim()) {
+    errors.push('evidence entry is missing an Evidence excerpt');
+  }
+  if (errors.length === 0 && (verdict === 'failed' || verdict === 'blocked')) {
+    warnings.push(`Required check '${label}' reports verdict '${verdict}'`);
+  }
+  return { verdict, errors, warnings };
+}
+
+/**
  * Compare required checks to PR-body evidence and status checks.
  *
  * @returns {{ matches: object[], statusSubstitutions: object[],
- *             missing: { check: string, reason: string }[], warnings: string[] }}
+ *             missing: { check: string, reason: string, category?: string,
+ *                        owner?: string, nextAction?: string }[], warnings: string[] }}
  */
-export function compareRequiredChecksToEvidence(requiredChecks, evidenceEntries, statusChecks) {
+export function compareRequiredChecksToEvidence(requiredChecks, evidenceEntries, statusChecks, options = {}) {
   const matches = [];
   const statusSubstitutions = [];
   const missing = [];
   const warnings = [];
+  const contractFailures = validateRequiredCheckContracts(requiredChecks);
+  if (contractFailures.length > 0) {
+    return {
+      matches,
+      statusSubstitutions,
+      missing: contractFailures.map(({ index: _index, ...failure }) => failure),
+      warnings,
+    };
+  }
 
   for (const rc of requiredChecks) {
+    const allowedSources = rc.allowedSources ?? (rc.command ? ['pr_body', 'status_check'] : ['pr_body']);
+    const proofKind = rc.kind ?? (rc.command ? 'command' : 'manual');
+    const observations = rc.observations ?? [];
     const entry = evidenceEntries.find(e =>
-      rc.id ? extractCheckId(e.check) === rc.id : normalizeCheckText(e.check) === rc.normalized
+      rc.id
+        ? extractCheckId(e.check) === rc.id
+        : normalizeRequiredCheckMatchKey(e.check) === (rc.matchKey ?? normalizeRequiredCheckMatchKey(rc.text))
     );
     if (entry) {
-      const verdict = (entry.verdict ?? '').toLowerCase().trim();
-      const hasEvidence = Boolean((entry.evidence ?? '').trim());
-      if (!verdict) {
-        missing.push({ check: rc.text, reason: 'evidence entry is missing a Verdict line' });
+      const source = entry.source ?? 'pr_body';
+      // An evidence entry's kind is inferred from its own shape, never from the
+      // required check it attempts to satisfy: an explicit Kind declaration
+      // wins, otherwise a backtick command is command evidence and any other
+      // legacy entry is manual. A command-shaped entry can therefore never
+      // satisfy a manual check.
+      const entryKind = entry.kind ?? (extractCommand(entry.check) ? 'command' : 'manual');
+      if (!PROOF_KINDS.has(proofKind)) {
+        missing.push({ check: rc.text, reason: `required check has invalid proof kind '${proofKind}'` });
         continue;
       }
-      if (!VALID_VERDICTS.has(verdict)) {
-        missing.push({ check: rc.text, reason: `unrecognized verdict '${entry.verdict}'; expected one of: ${[...VALID_VERDICTS].join(', ')}` });
+      if (!allowedSources.every(value => SATISFACTION_SOURCES.has(value))) {
+        missing.push({ check: rc.text, reason: `required check declares an invalid satisfaction source (${allowedSources.join(', ')})` });
         continue;
       }
-      if (verdict === 'not run') {
-        missing.push({ check: rc.text, reason: "verdict 'not run' is not final-state evidence" });
+      if (!PROOF_KINDS.has(entryKind)) {
+        missing.push({ check: rc.text, reason: `evidence records invalid proof kind '${entryKind}'` });
         continue;
       }
-      if (!hasEvidence) {
-        missing.push({ check: rc.text, reason: 'evidence entry is missing an Evidence excerpt' });
+      if (rc.kindDeclared && !entry.kind) {
+        missing.push({ check: rc.text, reason: `evidence must record proof kind '${rc.kind}'` });
         continue;
       }
-      if (verdict === 'failed' || verdict === 'blocked') {
-        warnings.push(`Required check '${rc.text}' reports verdict '${verdict}'`);
+      if (entryKind !== proofKind) {
+        missing.push({ check: rc.text, reason: `evidence proof kind '${entryKind}' does not match declared '${proofKind}'` });
+        continue;
       }
+      if (!SATISFACTION_SOURCES.has(source)) {
+        missing.push({ check: rc.text, reason: `evidence records invalid satisfaction source '${source}'` });
+        continue;
+      }
+      if (!allowedSources.includes(source)) {
+        missing.push({ check: rc.text, reason: `evidence satisfaction source '${source}' is not allowed for this ${proofKind} check` });
+        continue;
+      }
+      const requiredCommand = rc.command;
+      const evidencedCommand = extractCommand(entry.check);
+      if (requiredCommand && !evidencedCommand) {
+        missing.push({ check: rc.text, reason: `command evidence must record the exact declared command '${requiredCommand}'` });
+        continue;
+      }
+      if (requiredCommand && evidencedCommand !== requiredCommand) {
+        missing.push({ check: rc.text, reason: `evidence command '${evidencedCommand}' does not match declared command '${requiredCommand}'` });
+        continue;
+      }
+      if (observations.length > 0) {
+        const observationErrors = validateObservationRecords(rc, entry, source, options);
+        if (observationErrors.length > 0) {
+          for (const reason of observationErrors) missing.push({ check: rc.text, reason });
+          continue;
+        }
+      }
+      if ((proofKind === 'manual' || proofKind === 'contract_proof') && rc.kindDeclared && !entry.artifact) {
+        missing.push({ check: rc.text, reason: `${proofKind} evidence must record the exact implementation head` });
+        continue;
+      }
+      if (entry.artifact && options.currentArtifact && !headMatches(entry.artifact, options.currentArtifact)) {
+        missing.push({ check: rc.text, reason: `evidence implementation head '${entry.artifact}' is not the current artifact` });
+        continue;
+      }
+      const finality = options.finalityValidated
+        ? { verdict: String(entry?.verdict ?? '').toLowerCase().trim(), errors: [], warnings: [] }
+        : validateEvidenceEntryFinality(entry);
+      if (finality.errors.length > 0) {
+        for (const reason of finality.errors) missing.push({ check: rc.text, reason });
+        continue;
+      }
+      warnings.push(...finality.warnings);
       if (rc.id && normalizeCheckText(entry.check) !== rc.normalized) {
         warnings.push(`Evidence for ${rc.id} matched by stable id but its displayed check text differs from the issue`);
       }
-      matches.push({ check: rc.text, id: rc.id ?? null, via: 'pr-body', verdict });
+      matches.push({ check: rc.text, id: rc.id ?? null, via: 'pr-body', verdict: finality.verdict, kind: proofKind, source });
       continue;
     }
 
-    const statusMatches = matchStatusChecks(rc, statusChecks);
+    if (observations.length > 0) {
+      missing.push({
+        check: rc.text,
+        reason: 'declared observations require explicit structured PR-body evidence; a status check cannot substitute',
+      });
+      continue;
+    }
+    const statusMatches = allowedSources.includes('status_check') ? matchStatusChecks(rc, statusChecks) : [];
     if (statusMatches.length === 1) {
       const name = statusCheckName(statusMatches[0]);
-      matches.push({ check: rc.text, id: rc.id ?? null, via: 'status-check', statusCheck: name });
+      matches.push({ check: rc.text, id: rc.id ?? null, via: 'status-check', statusCheck: name, kind: proofKind, source: 'status_check' });
       statusSubstitutions.push({ check: rc.text, statusCheck: name });
       continue;
     }
@@ -396,18 +797,19 @@ export function compareRequiredChecksToEvidence(requiredChecks, evidenceEntries,
     }
     const normalizedCandidates = evidenceEntries.map(candidate => ({
       text: candidate.check,
-      normalized: normalizeCheckText(candidate.check),
+      normalized: normalizeRequiredCheckMatchKey(candidate.check),
     }));
+    const requiredMatchKey = rc.matchKey ?? normalizeRequiredCheckMatchKey(rc.text);
     const near = normalizedCandidates.find(candidate =>
       candidate.normalized.length >= 12 &&
-      (candidate.normalized.startsWith(rc.normalized) || rc.normalized.startsWith(candidate.normalized))
+      (candidate.normalized.startsWith(requiredMatchKey) || requiredMatchKey.startsWith(candidate.normalized))
     );
     const nearHint = near ? `; closest parsed PR-body entry is '${near.text}'` : '';
     missing.push({
       check: rc.text,
       reason: rc.command
-        ? `command check has no PR-body evidence entry and no exact-match successful status check${nearHint}`
-        : `manual check requires explicit PR-body evidence (a Verdict and Evidence excerpt); a status check cannot substitute${nearHint}`,
+        ? `command check has no acceptable evidence entry${allowedSources.includes('status_check') ? ' and no exact-match successful status check' : ''}${nearHint}`
+        : `${proofKind === 'manual' ? 'manual check requires explicit PR-body evidence' : `${proofKind} check requires its declared observation evidence`}; a generic status check cannot substitute${nearHint}`,
     });
   }
 
@@ -596,12 +998,11 @@ export function validateCompletionSummary(prBody, headRefOid) {
  * When the PR body has a role trailer and the head commit has Task:/Agent:
  * trailers, verify consistency. Does not reject human-authored commits.
  *
- * Uses live-line filtering to ignore fenced code, blockquotes, and indented code.
- * Matches trailers only in the final trailer block of the commit message.
- * The trailer block is the final contiguous block of "Key: Value" lines at the
- * end of the commit message, separated from the body by a blank line. Standard
- * trailers like Co-authored-by, Signed-off-by, and Reviewed-by are allowed
- * alongside Task: and Agent: without breaking the block.
+ * Uses the canonical final-trailer-block parser shared with the local
+ * commit-attribution check: the final contiguous run of `Token: value` lines
+ * over live lines (fenced code, blockquotes, and indented code ignored).
+ * Standard trailers like Co-authored-by, Signed-off-by, and Reviewed-by are
+ * allowed alongside Task: and Agent: without breaking the block.
  *
  * @returns {{ errors: string[], warnings: string[], attributionEstablished: boolean }}
  */
@@ -631,39 +1032,21 @@ export function validateAttribution(prBody, headCommitMessage, issueData) {
     errors.push('body contains conflicting live role trailers');
   }
   const bodyRole = finalBodyRole;
-  const liveCommitLines = markdownLines(headCommitMessage ?? '').filter(line => line.live).map(line => line.raw);
 
-  // Extract the final contiguous trailer block from the commit message.
-  // A Git trailer block is the final consecutive "Key: Value" lines, separated
-  // from the commit body by a blank line. We recognize standard trailers
-  // (Task:, Agent:, Co-authored-by:, Signed-off-by:, Reviewed-by:, etc.)
-  // and allow them mixed in the block.
-  const KNOWN_TRAILER_KEYS = [
-    'task', 'agent', 'co-authored-by', 'signed-off-by', 'reviewed-by',
-    'acked-by', 'tested-by', 'reported-by', 'suggested-by', 'helped-by',
-    'inspired-by', 'cc', 'see-also', 'ref', 'related-to', 'fixes', 'closes',
-  ];
-
-  const trailerLines = [];
-  let cursor = liveCommitLines.length - 1;
-  while (cursor >= 0 && !liveCommitLines[cursor].trim()) cursor--;
-  for (; cursor >= 0; cursor--) {
-    const line = liveCommitLines[cursor].trim();
-    const trailerMatch = line.match(/^([A-Za-z][\w-]*)\s*:\s*(.+)$/);
-    if (!trailerMatch) break;
-    const key = trailerMatch[1].toLowerCase();
-    if (!(KNOWN_TRAILER_KEYS.includes(key) || /^[A-Z][\w-]*$/.test(trailerMatch[1]))) break;
-    trailerLines.unshift(line);
-  }
-
-  const trailerBlock = trailerLines.join('\n');
-
-  // Extract Task: and Agent: trailers from the trailer block
-  const taskMatches = [...trailerBlock.matchAll(/^Task:\s*(\S+)$/gmi)];
-  const agentMatches = [...trailerBlock.matchAll(/^Agent:\s*(\S+)$/gmi)];
+  // The canonical final-trailer-block parser is shared with the local
+  // commit-attribution check so live and offline attribution agree exactly:
+  // the final contiguous run of `Token: value` lines (standard Git trailers
+  // allowed) is authoritative, a blank separator is not required, and
+  // Task/Agent lines outside that block are misplaced rather than scanned.
+  const { named, misplaced } = parseFinalTrailerBlock(headCommitMessage ?? '');
+  const taskMatches = named.filter(entry => entry.name === 'task').map(entry => entry.value);
+  const agentMatches = named.filter(entry => entry.name === 'agent').map(entry => entry.value);
 
   const expectedTaskId = taskIdentity?.taskId ?? null;
   const expectedShape = expectedTaskId ? githubAttributionShape(expectedTaskId, bodyRole) : null;
+  if (misplaced.length) {
+    errors.push(`head commit has misplaced Task/Agent trailer(s) outside the final contiguous trailer block: ${[...new Set(misplaced)].join(', ')}`);
+  }
   if (taskMatches.length === 0) {
     errors.push(expectedShape
       ? `head commit is missing required Task: trailer; expected '${expectedShape.taskTrailer}'`
@@ -684,16 +1067,16 @@ export function validateAttribution(prBody, headCommitMessage, issueData) {
   attributionEstablished = true;
 
   if (taskMatches.length === 1 && expectedTaskId) {
-    const commitTask = taskMatches[0][1].trim();
+    const commitTask = taskMatches[0].trim();
     if (commitTask !== expectedTaskId) {
       errors.push(`head commit Task: '${commitTask}' does not match expected '${expectedShape.taskTrailer}'`);
     }
   }
 
   if (agentMatches.length === 1) {
-    const commitAgent = agentMatches[0][1].toLowerCase();
+    const commitAgent = agentMatches[0].toLowerCase();
     if (commitAgent !== bodyRole) {
-      errors.push(`head commit Agent: '${agentMatches[0][1]}' does not match expected 'Agent: ${bodyRole}' for body trailer '${expectedShape?.bodyTrailer ?? `[[agent: ${bodyRole}]]`}'`);
+      errors.push(`head commit Agent: '${agentMatches[0]}' does not match expected 'Agent: ${bodyRole}' for body trailer '${expectedShape?.bodyTrailer ?? `[[agent: ${bodyRole}]]`}'`);
     }
   }
 
@@ -711,6 +1094,10 @@ export function categorizePreflightErrors(errors) {
     head_identity: [],
     summary_shape: [],
     scope_deviations: [],
+    task_contract: [],
+    path_intent: [],
+    generated_paths: [],
+    dependencies: [],
     attribution: [],
     evidence: [],
     checks: [],
@@ -764,11 +1151,13 @@ function normalizePreflightDiagnostics(items) {
   return items.map(item => {
     const message = typeof item === 'string' ? item : item.message;
     const inferredCategory = categorizePreflightErrors([item])[0]?.category ?? 'other';
-    /** @type {{ category: string, message: string, expectedShape?: string, expectedValues?: string[], requiredFindingIds?: string[] }} */
+    /** @type {{ category: string, message: string, owner?: string, nextAction?: string, expectedShape?: string, expectedValues?: string[], requiredFindingIds?: string[] }} */
     const diagnostic = {
       category: typeof item === 'object' && item.category ? item.category : inferredCategory,
       message,
     };
+    if (typeof item === 'object' && typeof item.owner === 'string') diagnostic.owner = item.owner;
+    if (typeof item === 'object' && typeof item.nextAction === 'string') diagnostic.nextAction = item.nextAction;
     if (typeof item === 'object' && typeof item.expectedShape === 'string') {
       diagnostic.expectedShape = item.expectedShape;
     }
@@ -779,6 +1168,18 @@ function normalizePreflightDiagnostics(items) {
       diagnostic.requiredFindingIds = [...item.requiredFindingIds];
     }
     return diagnostic;
+  });
+}
+
+/**
+ * Canonical serialized shape of a review-history object for content-level
+ * consistency comparison. Event and error content is compared, never merely
+ * array lengths.
+ */
+function canonicalHistoryShape(history) {
+  return JSON.stringify({
+    events: Array.isArray(history?.events) ? history.events : [],
+    errors: Array.isArray(history?.errors) ? history.errors : [],
   });
 }
 
@@ -816,6 +1217,9 @@ export function evaluatePreflight({
   reviewBudget = DEFAULT_REVIEW_BUDGET,
   reviewBudgetError = null,
   projectMapConfig = null,
+  basePaths,
+  mode,
+  pathInventoryRequired = false,
 }) {
   const errors = [];
   const warnings = [];
@@ -841,14 +1245,6 @@ export function evaluatePreflight({
         : "Linked issue has no non-empty '## Required Checks' section; the task record is incomplete"
     );
   }
-  const requiredIds = requiredChecks.map(check => check.id).filter(Boolean);
-  for (const id of new Set(requiredIds)) {
-    if (requiredIds.filter(candidate => candidate === id).length > 1) {
-      const label = issueNumber ? `Issue #${issueNumber}` : 'Linked issue';
-      errors.push(`${label} uses duplicate required-check id '${id}'`);
-    }
-  }
-
   const verificationAttempts = validateGitHubVerificationAttempts(issueData?.comments, {
     requiredChecks,
     status: verificationStatus,
@@ -892,14 +1288,27 @@ export function evaluatePreflight({
   const comparison = compareRequiredChecksToEvidence(
     requiredChecks,
     evidence.entries,
-    prData?.statusCheckRollup
+    prData?.statusCheckRollup,
+    { currentArtifact: headRefOid }
   );
 
   for (const item of comparison.missing) {
-    const message = `Required check '${item.check}' has no acceptable evidence: ${item.reason}`;
-    errors.push(item.reason.startsWith('unrecognized verdict ')
-      ? { message, category: 'evidence', expectedValues: [...VALID_VERDICTS] }
-      : message);
+    const taskContractFailure = item.category === 'task_policy';
+    const message = taskContractFailure
+      ? `Required-check contract '${item.check}' is invalid: ${item.reason}`
+      : `Required check '${item.check}' has no acceptable evidence: ${item.reason}`;
+    if (taskContractFailure) {
+      errors.push({
+        message,
+        category: item.category,
+        owner: item.owner,
+        nextAction: item.nextAction,
+      });
+    } else {
+      errors.push(item.reason.startsWith('unrecognized verdict ')
+        ? { message, category: 'evidence', expectedValues: [...VALID_VERDICTS] }
+        : message);
+    }
   }
   warnings.push(...comparison.warnings);
 
@@ -920,24 +1329,44 @@ export function evaluatePreflight({
     }
   }
 
-  // Phase 29: path/deviation validation
+  // Path/deviation validation. Deviations are parsed exactly once
+  // and `validatePathsAgainstDeviations` is the single changed-path authority.
+  // When the path inventory is required, task readiness runs that authority
+  // (with generated-path authorization); otherwise preflight runs it here.
   const scopePatterns = parseScopePatterns(issueData?.body);
   const prFiles = Array.isArray(prData?.files)
     ? prData.files.map(f => typeof f === 'string' ? f : (f?.path ?? '')).filter(Boolean)
     : [];
+  const deviations = scopePatterns?.patterns ? parseDeviations(prData?.body) : { entries: [], errors: [] };
   let pathValidation = null;
   if (scopePatterns) {
     if (scopePatterns.error) {
       errors.push({ message: scopePatterns.error, category: 'scope_deviations' });
-    } else if (scopePatterns.patterns && prFiles.length > 0) {
-      const deviations = parseDeviations(prData?.body);
+    } else if (scopePatterns.patterns) {
       for (const err of deviations.errors) {
         errors.push({ message: err, category: 'scope_deviations' });
       }
-      pathValidation = validatePathsAgainstDeviations(prFiles, scopePatterns.patterns, deviations.entries);
-      for (const err of pathValidation.errors) {
-        errors.push({ message: err, category: 'scope_deviations' });
-      }
+    }
+  }
+  let taskReadiness = null;
+  if (pathInventoryRequired) {
+    taskReadiness = evaluateTaskReadiness({
+      taskBody: issueData?.body,
+      basePaths,
+      mode: mode ?? 'review',
+      changedPaths: prFiles,
+      deviationEntries: deviations.entries,
+      projectFacts,
+    });
+    for (const diagnostic of taskReadiness.diagnostics) {
+      const target = diagnostic.level === 'error' ? errors : warnings;
+      target.push({ message: diagnostic.message, category: diagnostic.category, owner: diagnostic.owner, nextAction: diagnostic.nextAction });
+    }
+  }
+  if (scopePatterns?.patterns && prFiles.length > 0 && !taskReadiness?.deviations) {
+    pathValidation = validatePathsAgainstDeviations(prFiles, scopePatterns.patterns, deviations.entries);
+    for (const err of pathValidation.errors) {
+      errors.push({ message: err, category: 'scope_deviations' });
     }
   }
 
@@ -980,7 +1409,7 @@ export function evaluatePreflight({
     }
   }
 
-  // Phase 29: completion-summary shape validation
+  // Completion-summary shape validation
   const summaryValidation = validateCompletionSummary(prData?.body, headRefOid);
   for (const err of summaryValidation.errors) {
     if (typeof err === 'string') {
@@ -993,7 +1422,7 @@ export function evaluatePreflight({
     warnings.push({ message: warn, category: 'summary_shape' });
   }
 
-  // Phase 29: attribution validation (when mechanically establishable)
+  // Attribution validation (when mechanically establishable)
   // Extract head commit message from PR commits data
   const prCommits = Array.isArray(prData?.commits) ? prData.commits : [];
   const headCommit = prCommits.find(c => String(c?.oid ?? '').toLowerCase() === headRefOid);
@@ -1016,11 +1445,27 @@ export function evaluatePreflight({
     warnings.push({ message: warn, category: 'attribution' });
   }
 
-  // Phase 29: Review Round Checkpoint enforcement. Production data is parsed
-  // from separately paginated PR comments/reviews; only the legacy pure helper
-  // path receives explicit reviewOutcomes.
+  // Review Round Checkpoint enforcement. Raw PR comments/reviews
+  // are the authorization source of truth: whenever the carrier fields are
+  // part of the input, durable history is derived from them and any supplied
+  // serialized reviewHistory is only a diagnostic/cache copy that must match
+  // the derived history in canonical event/error content, never merely in
+  // length. A fabricated or stale supplied history can never authorize
+  // evaluation. When the carrier fields are entirely absent, the documented
+  // legacy pure-helper contract trusts the explicit reviewHistory/
+  // reviewOutcomes inputs instead.
   let checkpointValidation = null;
-  const durableHistory = reviewHistory ?? collectGitHubReviewHistory(prData, expectedAccount);
+  const hasCarrierFields = Array.isArray(prData?.comments) || Array.isArray(prData?.reviews);
+  const carrierDerivedHistory = hasCarrierFields ? collectGitHubReviewHistory(prData, expectedAccount) : null;
+  let durableHistory;
+  if (carrierDerivedHistory) {
+    durableHistory = carrierDerivedHistory;
+    if (reviewHistory && canonicalHistoryShape(reviewHistory) !== canonicalHistoryShape(carrierDerivedHistory)) {
+      errors.push({ message: 'supplied reviewHistory is inconsistent with the raw PR comments/reviews; derive review history from those carriers rather than supplying a fabricated, stale, or empty normalized history', category: 'review_checkpoint' });
+    }
+  } else {
+    durableHistory = reviewHistory ?? { events: [], errors: [] };
+  }
   const historyEvents = Array.isArray(durableHistory?.events) ? durableHistory.events : [];
   for (const historyError of durableHistory?.errors ?? []) {
     errors.push({ message: historyError, category: 'review_checkpoint' });
@@ -1054,7 +1499,12 @@ export function evaluatePreflight({
     }
   }
 
-  // Phase 29: every re-review resolves the stable finding IDs from the latest
+  const noProgressValidation = evaluateNoProgress({ reviewHistory: historyEvents });
+  for (const err of noProgressValidation.errors) {
+    errors.push({ message: err, category: 'review_checkpoint' });
+  }
+
+  // Every re-review resolves the stable finding IDs from the latest
   // valid `needs_revision` carrier. Parser errors are part of the gate; a
   // duplicate matrix bullet entry cannot become valid merely because map lookup wins.
   let resolutionMatrixValidation = null;
@@ -1102,6 +1552,7 @@ export function evaluatePreflight({
   const errorStrings = errors.map(e => typeof e === 'string' ? e : e.message);
 
   return {
+    schemaVersion: 1,
     ok,
     errors: errorStrings,
     warnings: warnings.map(w => typeof w === 'string' ? w : w.message),
@@ -1116,12 +1567,21 @@ export function evaluatePreflight({
     missing: comparison.missing,
     failureCategories: ok ? [] : categorizePreflightErrors(errors),
     pathValidation: pathValidation ? { unmatched: pathValidation.unmatched, missingDeviations: pathValidation.missingDeviations } : null,
+    taskReadiness: taskReadiness ? { ok: taskReadiness.ok, paths: taskReadiness.paths, dependencies: taskReadiness.dependencies } : null,
     summaryValidation: { errors: summaryValidation.errors.map(e => typeof e === 'string' ? e : e.message) },
     attributionValidation: { established: attributionValidation.attributionEstablished, errors: attributionValidation.errors },
     attemptBudget: { budget: attemptBudget.budget, source: attemptBudget.source ?? 'task' },
     reviewHistory: { events: historyEvents.length, errors: durableHistory?.errors ?? [] },
     checkpointValidation: checkpointValidation ? { authorized: checkpointValidation.authorized, errors: checkpointValidation.errors } : null,
+    noProgressValidation: {
+      authorized: noProgressValidation.authorized,
+      required: noProgressValidation.required,
+      sustainedFindingIds: noProgressValidation.sustainedFindingIds,
+      disposition: noProgressValidation.disposition?.disposition ?? null,
+      errors: noProgressValidation.errors,
+    },
     resolutionMatrixValidation: resolutionMatrixValidation ? { valid: resolutionMatrixValidation.valid, errors: resolutionMatrixValidation.errors } : null,
+    firstSafeRepair: ok ? null : (normalizePreflightDiagnostics(errors)[0]?.nextAction ?? 'repair the first diagnostic and rerun github-preflight'),
   };
 }
 
@@ -1176,6 +1636,22 @@ function fetchAllPrConversationComments(commandRunner, ownerName, prNumber) {
 
 function fetchAllPrReviews(commandRunner, ownerName, prNumber) {
   return fetchAllPaginated(commandRunner, ownerName, `pulls/${prNumber}/reviews`, 'PR review');
+}
+
+function fetchBaseTreePaths(commandRunner, ownerName, baseRefOid) {
+  if (!/^[0-9a-f]{40}$/i.test(String(baseRefOid ?? ''))) {
+    throw new PreflightError('PR baseRefOid is unavailable or not a full SHA; cannot build the required base-tree path inventory');
+  }
+  const data = runGhPreflightJson(commandRunner, [
+    'api',
+    `repos/${ownerName}/git/trees/${baseRefOid}?recursive=1`,
+  ]);
+  if (!data || !Array.isArray(data.tree) || data.truncated === true) {
+    throw new PreflightError('GitHub base-tree inventory is incomplete; cannot silently skip task path readiness');
+  }
+  return data.tree
+    .filter(entry => entry?.type === 'blob' && typeof entry.path === 'string')
+    .map(entry => entry.path.replace(/\\/g, '/'));
 }
 
 function repositoryContentEndpoint(ownerName, path, ref) {
@@ -1266,7 +1742,7 @@ export function resolveIssueNumber(prData, explicitIssue) {
  * @returns {object} the evaluatePreflight result.
  * @throws {PreflightError} on missing/incomplete GitHub data.
  */
-export function runPreflight({
+export function loadPreflightInput({
   pr,
   issue,
   repo,
@@ -1275,6 +1751,7 @@ export function runPreflight({
   target = process.cwd(),
   verificationContext,
   expectedAccount,
+  includeBasePaths = true,
 } = {}) {
   if (pr === undefined || pr === null || pr === '') {
     throw new PreflightError('--pr <number> is required');
@@ -1287,6 +1764,12 @@ export function runPreflight({
   const prArgs = ['pr', 'view', String(prNumber), '--json', PR_FIELDS];
   if (repo) prArgs.push('--repo', repo);
   const prData = runGhPreflightJson(commandRunner, prArgs);
+  // `gh pr view --json` always returns the requested list fields as arrays;
+  // normalize explicitly so the preparation-input completeness policy sees
+  // every category rather than a silently omitted one.
+  for (const field of ['files', 'closingIssuesReferences', 'statusCheckRollup', 'commits']) {
+    if (!Array.isArray(prData[field])) prData[field] = [];
+  }
 
   const { issueNumber } = resolveIssueNumber(prData, issue);
 
@@ -1308,15 +1791,37 @@ export function runPreflight({
   const projectMapConfig = loadProjectMap(target)?.config ?? null;
   const reviewBudget = parseReviewBudget(issueData.body, projectMapConfig);
 
-  return evaluatePreflight({
-    prData,
-    issueData,
-    verificationStatus,
-    ...localContext,
-    expectedAccount: authenticatedAccount,
-    reviewHistory,
-    reviewBudget: reviewBudget.budget,
-    reviewBudgetError: reviewBudget.error,
-    projectMapConfig,
+  // A base inventory is relevant only to the explicit path contract. This keeps
+  // legacy tasks with no structured paths behavior-preserving while every task
+  // that declares paths is evaluated against the exact PR base tree.
+  const requiresPathInventory = includeBasePaths && Boolean(parseScopePatterns(issueData.body)?.patterns?.length);
+  const basePaths = requiresPathInventory ? fetchBaseTreePaths(commandRunner, ownerName, prData.baseRefOid) : [];
+  return {
+    input: createPreparationInput({
+      prData,
+      issueData,
+      expectedAccount: authenticatedAccount,
+      reviewHistory,
+      basePaths,
+      mode: 'review',
+      projectFacts: localContext.projectFacts,
+      verificationStatus,
+      reviewBudget: reviewBudget.budget,
+      reviewBudgetError: reviewBudget.error,
+      projectMapConfig,
+      pathInventoryRequired: requiresPathInventory,
+    }),
+    referenceResolvers: {
+      decisionExists: localContext.decisionExists,
+      taskExists: localContext.taskExists,
+    },
+  };
+}
+
+/** Load live GitHub data and evaluate it through the serializable input contract. */
+export function runPreflight(options = {}) {
+  const loaded = loadPreflightInput(options);
+  return evaluatePreparationInput(loaded.input, evaluatePreflight, {
+    referenceResolvers: loaded.referenceResolvers,
   });
 }

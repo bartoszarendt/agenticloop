@@ -1,5 +1,5 @@
 /**
- * CLI safety contract tests (Phase 28).
+ * CLI safety contract tests.
  *
  * Zero-mutation guarantees for help, invalid usage, dry-run, declined apply,
  * and pre-apply cancellation; exit-status contract (0/1/2/130); injectable

@@ -330,7 +330,7 @@ export function lifecyclePlanBlockers(plan) {
 }
 
 /**
- * Apply a validated lifecycle plan under the Phase 28 cross-segment contract:
+ * Apply a validated lifecycle plan under the cross-segment contract:
  *
  *   - Each built-in lifecycle segment is atomic (a generic kernel batch, an
  *     exec descriptor, or one adapter generation transaction). An injected

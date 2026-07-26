@@ -1,5 +1,5 @@
 /**
- * Setup state matrix and idempotency tests (Phase 28 Track B).
+ * Setup state matrix and idempotency tests.
  *
  * Empty, current, legacy, partial, and inverse-partial targets all flow
  * through one repair-aware plan/apply path. Repeated setup produces zero

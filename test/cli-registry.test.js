@@ -1,5 +1,5 @@
 /**
- * Strict CLI parser registry tests (Phase 28 Track A).
+ * Strict CLI parser registry tests.
  *
  * Covers the declarative registry and parse wrapper: strict unknown-option
  * and missing-value failures, repeatable options, Boolean options not

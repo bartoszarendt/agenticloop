@@ -205,8 +205,10 @@ delegation mode; the final fixup review still uses
 Before delegating GitHub review, Orchestrator must:
 
 1. Fetch the full current PR head (`headRefOid`).
-2. Run `github-preflight` against that live state.
-3. Confirm the returned preflight head equals the artifact being dispatched.
+2. Run `github-review-prepare --pr <number>` against that live state.
+3. Dispatch only the packet when its `ok` is exactly `true` and its full head
+   equals the artifact being dispatched. A failed preparation result emits no
+   usable Maintainer delegation packet; route its complete diagnostics by owner.
 4. Prevent Engineer mutation/push during the active review lease.
 
 The Maintainer delegation packet must include:
@@ -280,6 +282,12 @@ one next Engineer revision B. If B receives another review outcome, require a ne
 checkpoint before a further revision. Never
 reset or erase review history. Reject missing, stale, malformed, or replayed
 checkpoint authorization.
+
+Do not delete or silently supersede a trusted malformed checkpoint. The
+dedicated same-author `checkpoint_repair` carrier names the exact source and
+fills only mechanically derivable syntax or attribution fields; it cannot change
+artifact, count, direction, cause, target, outcome, or authority, and is never
+selected or counted. `github-checkpoint repair-plan` renders but never posts it.
 
 For GitHub, append the checkpoint to the PR conversation with the marker, full
 SHA, authenticated Orchestrator field, and final role trailer. For files-backed,

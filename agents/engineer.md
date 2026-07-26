@@ -156,8 +156,11 @@ task-record obligation.
   artifact reference.
 - For GitHub-backed implementation PRs, publish the current summary once in the
   pull request body; do not duplicate it as a separate issue or PR comment.
-- For GitHub-backed work, before requesting review, run the pre-review gate
-  `npx agenticloop github-preflight --pr <number>` and fix the pull request body
+- For GitHub-backed work, use `npx agenticloop pr-body scaffold --pr <number>`
+  and offline `pr-body lint` before the first body write, then run
+  `npx agenticloop github-preflight --pr <number>`. Run the read-only
+  `commit-attribution check --task <id>` before publication; it prints guidance
+  but never amends, commits, pushes, or force-pushes. Fix the pull request body
   (required-check evidence, `Current PR head` marker) until it passes. A failing
   preflight is a revision defect, not a reviewer task.
 - Address review feedback or dispute it with evidence. Before requesting review

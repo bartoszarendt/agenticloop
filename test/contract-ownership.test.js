@@ -294,7 +294,7 @@ describe('contract ownership', () => {
     assert.match(read('backends/github.md'), /dedicated join task has its own issue, branch, and/i);
   });
 
-  it('rejects stale disjoint-files mirrors and preserves Phase 25 role duties', () => {
+  it('rejects stale disjoint-files mirrors and preserves canonical role duties', () => {
     for (const rel of [
       'agents/orchestrator.md',
       'agents/maintainer.md',
@@ -304,7 +304,7 @@ describe('contract ownership', () => {
       assert.doesNotMatch(
         read(rel),
         /disjoint (?:expected|allowed) files or areas/i,
-        `${rel} must not restore the pre-Phase-30 scope-ceiling hard gate`
+        `${rel} must not restore the retired scope-ceiling hard gate`
       );
     }
     assert.match(read('agents/maintainer.md'), /fill \[\[task-record-contract\]\] `## Parallel Safety` with owned paths\/backend objects/i);

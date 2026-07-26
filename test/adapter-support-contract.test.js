@@ -69,7 +69,7 @@ describe('contract: all implemented adapters are supported', () => {
       for (const adapter of IMPLEMENTED_ADAPTERS) {
         // Look for "experimental" near adapter name mentions. We want to catch
         // phrasing like "Claude Code adapter is experimental", "experimental Codex plugin", etc.
-        // But NOT phrases in historical contexts (e.g. "was experimental before Phase 07").
+        // But NOT phrases in historical or past-tense contexts.
         const patterns = [
           new RegExp(`${adapter}.*experimental`, 'i'),
           new RegExp(`experimental.*${adapter}`, 'i'),
@@ -84,10 +84,6 @@ describe('contract: all implemented adapters are supported', () => {
               line.includes('previously experimental') ||
               line.includes('no longer experimental') ||
               line.includes('(Superseded') ||
-              line.includes('Phase 07') ||
-              line.includes('Phase 05') ||
-              line.includes('Phase 10') ||
-              line.includes('Phase 12') ||
               // Allow "experimental surface at the toolkit root" for Claude plugin (it's the package root surface)
               (line.includes('experimental surface') && line.includes('toolkit root'))
             ) {

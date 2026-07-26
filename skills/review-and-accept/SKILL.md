@@ -12,6 +12,19 @@ metadata:
 
 The maintainer reviews the implementation artifact against the task record.
 
+For GitHub-backed review, accept only the successful read-only
+`github-review-prepare` exact-head packet as the delegation input. Do not begin
+semantic review after failed preparation, and do not repair Engineer evidence,
+checkpoint routing, or task contract defects inside a review response. A changed
+head invalidates the packet.
+
+`## Revision Resolution` is a current packet, not a history mirror: it contains
+exactly the prior valid `needs_revision` IDs. For `resolved`, bind the
+structured current-artifact reference (`commit:<full-sha>` on GitHub); prose
+explains the repair without duplicating identity. A prose-only exact current
+citation is migration-only; a present stale or malformed reference never falls
+back to prose.
+
 ## Recording the review outcome
 
 Review has exactly two outcomes, and every recorded outcome carries its

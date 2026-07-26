@@ -256,16 +256,26 @@ Current PR head: <headRefOid>
   Evidence: no errors reported
 ```
 
-Use the exact required-check text from the issue's `## Required Checks` so each
-entry maps to a required check. `Verdict` is one of `passed`, `failed`,
-`blocked`, or `not run`; `not run` is not final-state evidence. For command
-checks, give a command/verdict/output excerpt or rely on a matching successful
-status check. For manual checks, give a verdict and a concise evidence note;
-a successful CI status check never satisfies a manual check.
+Prefer the exact required-check text from the issue's `## Required Checks` so
+each entry maps to a required check. For an ID-less typed check, the evidence
+label may omit recognized kind/source/observation annotations while retaining
+the same semantic text and exact command identity. Two ID-less checks that
+reduce to the same semantic text are invalid until the Maintainer assigns
+distinct `RC-N` ids. `Verdict` is one of `passed`, `failed`, `blocked`, or `not
+run`; `not run` is not final-state evidence. For command checks, give a
+command/verdict/output excerpt or rely on a matching successful status check.
+For manual checks, give a verdict and a concise evidence note; a successful CI
+status check never satisfies a manual check.
 
 Only checks written as a backtick command (for example `` `npm test` ``) are
 eligible for status-check substitution. A check written as prose is treated as
 a manual check and always requires explicit PR-body evidence.
+When a command check declares observations, those observations require
+structured PR-body records and disable status-check substitution. Required-check
+contracts are validated before either satisfaction path: invalid kinds or
+sources, command proofs without an exact backticked command, status-check
+satisfaction on non-command proofs, and observations with no structured
+PR-body observation source are Maintainer-owned task-policy failures.
 
 An empty `statusCheckRollup` means there is no CI substitute. Empty status
 checks are not evidence and never satisfy a missing check. A status check
@@ -294,7 +304,7 @@ carrier is absent. For terminal work, the latest attempt in each carrier must
 pass or have final non-blocker maintainer triage; an active failed, blocked, or
 timed-out attempt and blocker triage prevent readiness.
 
-#### Phase 29 additions to preflight
+#### Exact-head preflight additions
 
 The preflight gate also validates:
 
@@ -446,7 +456,15 @@ AGENT_REVIEW_FINDINGS: F-1, F-2
 [[agent: maintainer]]
 ```
 
-`AGENT_REVIEW_ARTIFACT` is the full current PR head SHA. The audit discovers loop
+`AGENT_REVIEW_ARTIFACT` is the full current PR head SHA. A review may declare
+`AGENT_REVIEW_CLASSIFICATION: implementation_changing` or `record_only`;
+absence defaults to `implementation_changing`. Only consecutive valid
+implementation-changing `needs_revision` outcomes sustaining the same active
+finding IDs trigger the no-progress guard; record-only corrections, stale
+reviews, accepted outcomes, withdrawn or retired findings, and new-only finding
+sets never do. A legacy `needs_revision` review whose findings field is missing
+(accepted only for an old artifact) establishes no IDs; the first typed outcome
+after it allocates IDs from `F-1`. The audit discovers loop
 markers from both PR issue comments and PR review bodies. The linked task issue
 expresses the independent-review requirement through canonical YAML frontmatter
 `independent_review_required: true`; the explicit `AGENT_INDEPENDENT_REVIEW_REQUIRED: true`
@@ -729,6 +747,40 @@ the authoritative durable records.
 Use GitHub-specific values inside the canonical template. Keep the summary
 concise. Cite command output, issue/PR numbers, and task ids. Do not copy raw
 agent exchanges.
+
+## Review Preparation And Recovery
+
+Before a first or repaired PR-body write, render `pr-body scaffold` and complete
+the serializable offline `pr-body lint` input. A resolved matrix entry binds the
+current head with its structured `[ref: commit:<full-sha>]`; `sha:<full-sha>` and
+a bare full SHA are accepted on input, while a legacy prose-only exact current
+SHA receives a migration diagnostic. The current matrix contains exactly the
+latest valid `needs_revision` finding IDs; prior outcomes stay append-only
+review history. Sustained IDs are retained, omitted/withdrawn IDs retire
+permanently, and new IDs allocate monotonically without CLI semantic inference.
+
+Typed required checks keep proof kind (`command`, `manual`, `contract_proof`)
+separate from satisfaction source (`pr_body`, `status_check`,
+`manual_observation`, `automated_observation`); the evidence entry's kind comes
+from its own shape, and manual/contract-proof checks require the canonical
+structured per-observation records owned by the verification-evidence skill.
+Stable IDs never replace an exact declared command identity, and any declared
+observation records remain mandatory even when an exact status check succeeds.
+
+Never delete a trusted malformed checkpoint. The same authenticated Orchestrator
+may post one bounded `AGENTIC_LOOP_REVIEW_CHECKPOINT_REPAIR` carrier naming the
+exact source, original author, mechanically derivable corrected fields, and
+reason. It cannot alter direction, cause, target, artifact, count, outcome, or
+authority, and it is excluded from checkpoint selection and outcome counts.
+Use `github-checkpoint repair-plan` to render it; it never posts the carrier.
+
+Two consecutive valid implementation-changing reviews sustaining the same
+stable finding require a distinct `AGENTIC_LOOP_NO_PROGRESS` no-progress
+disposition (`targeted_revision`, `split_task`, `contract_decision`, or
+`blocked`) bound to the exact sustained finding IDs plus the required
+target/reference. It is not a checkpoint and does not change
+`checkpoint_direction`; an over-budget targeted revision still also needs the
+ordinary single-use checkpoint.
 
 ## Command Safety
 

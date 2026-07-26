@@ -271,6 +271,7 @@ function filesReviewHistory({
   artifact = 'commit:abc123',
   rounds = 3,
   checkpoint = false,
+  noProgress = false,
   consumedArtifact = '',
 } = {}) {
   const entries = ['## Review History', ''];
@@ -293,6 +294,16 @@ function filesReviewHistory({
       `- Review count: ${rounds}`,
       `- Artifact: ${artifact}`,
       '- Target: repair F-1',
+      '- Orchestrator: orchestrator',
+      ''
+    );
+  }
+  if (noProgress) {
+    entries.push(
+      '### No Progress Disposition',
+      '- No progress disposition: targeted_revision',
+      '- Sustained finding ids: F-1',
+      '- Target: replace the proof path',
       '- Orchestrator: orchestrator',
       ''
     );
@@ -508,7 +519,7 @@ function seedNeedsRevisionTask(target, {
       reviewMode: 'host_subagent',
       extra: ['review_budget: 3'],
     }),
-    filesReviewHistory({ artifact, checkpoint, consumedArtifact }),
+    filesReviewHistory({ artifact, checkpoint, noProgress: checkpoint, consumedArtifact }),
   ].join('\n\n');
   writeFileSync(join(tasksDir, 'T-001.md'), `${content}\n`, 'utf-8');
 }

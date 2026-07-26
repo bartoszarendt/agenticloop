@@ -1,5 +1,5 @@
 /**
- * Injected-cwd target resolution tests (Phase 28).
+ * Injected-cwd target resolution tests.
  *
  * Every public command resolves a relative --target against the injected
  * io.cwd via resolveCliTarget, never against process.cwd(). Each row runs a

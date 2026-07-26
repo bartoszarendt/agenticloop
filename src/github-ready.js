@@ -123,6 +123,7 @@ export function runGitHubReady({
   const readyForMerge = preflight.ok && reviewAudit.ok && errors.length === 0;
 
   return {
+    schemaVersion: 1,
     ok: readyForMerge,
     readyForMerge,
     pr: prNumber,
@@ -136,6 +137,15 @@ export function runGitHubReady({
       errors: reviewAudit.errors,
     },
     errors,
+    warnings: [],
+    diagnostics: [
+      ...(preflight.errors ?? []).map(message => ({ message, category: 'preflight', owner: 'engineer' })),
+      ...(reviewAudit.errors ?? []).map(message => ({ message, category: 'review_audit', owner: 'maintainer' })),
+      ...errors.map(message => ({ message, category: 'cross_gate_identity', owner: 'orchestrator' })),
+    ],
+    warningDiagnostics: [],
+    failureCategories: readyForMerge ? [] : ['preflight_or_review_audit'],
+    firstSafeRepair: readyForMerge ? null : 'repair the first failed component gate and rerun github-ready',
   };
 }
 

@@ -38,6 +38,11 @@ All commands:
 | `github-preflight` | Pre-review evidence gate for a GitHub PR |
 | `github-review-audit` | Artifact-bound review provenance for a PR |
 | `github-ready` | Read-only merge-readiness verdict |
+| `pr-body scaffold` / `pr-body lint` | Render a canonical body or fully lint a serialized preparation input offline |
+| `task-readiness` | Read-only explicit base-tree, path-intent, and dependency readiness check |
+| `commit-attribution check` | Read-only Engineer trailer check with repair guidance only |
+| `github-checkpoint render` / `repair-plan` | Render a checkpoint or one bounded append-only repair carrier without posting |
+| `github-review-prepare` | Fail-closed exact-head Maintainer delegation packet |
 | `bootstrap-labels` | Create required GitHub labels |
 
 Help conventions:
@@ -154,6 +159,63 @@ require that both the PR head and review marker still match the dispatched
 artifact. If a local review checkout is supplied, add `--workspace <path>` as
 well; it requires `--expect-artifact` and rejects a workspace whose Git HEAD
 does not match that exact SHA.
+
+## Review preparation lifecycle
+
+Use this read-only lifecycle for GitHub-backed work:
+
+```text
+pr-body scaffold/lint -> github-preflight -> github-review-prepare
+-> Maintainer review -> github-review-audit -> github-ready
+```
+
+`pr-body scaffold --pr <n> [--output <path>]` reads current GitHub state and
+renders a deliberately incomplete local body. Exit 0 means the scaffold was
+generated successfully; the result is `generated: true` with `lintReady: false`
+and `gatePassed: false`, so it is never reported as publication-ready. Replace
+every `REPLACE` field and run `pr-body lint --input <evaluation-input.json>`
+before publishing. Lint never contacts GitHub and rejects an incomplete input
+category instead of silently skipping evidence, history, attribution, status,
+base-tree, or reference checks. Lint is structural, not a placeholder grep: it
+validates the required sections, the exact current-head marker and
+implementation artifact, every required check with an allowed kind/source and a
+final verdict, substantive structured observation evidence, current resolution
+entries, and the final Engineer attribution. It reports `lintReady`,
+`gatePassed`, and `publicationReady` separately.
+
+Required-check task policy is validated before either PR-body or status-check
+satisfaction. Invalid kinds or sources, command proofs without an exact
+backticked command, status-check satisfaction for a non-command proof, and
+status-check-only observation contracts are routed to the Maintainer.
+
+The `scaffolded` field reports canonical scaffold shape/provenance (including
+the distinctive Changed Paths section); it does not mean the body remains
+incomplete. Use `lintReady` and `publicationReady` for readiness.
+
+`github-preflight` remains the low-level live evidence gate. Run
+`github-review-prepare --pr <n>` only after it passes. Preparation emits a
+Maintainer packet only when `result.ok === true` for the exact current full head;
+a matching head never overrides a failed result. Failed preparation routes every
+deterministic diagnostic to Engineer, Orchestrator, Maintainer, or human
+authority and does not invoke a reviewer. Any push invalidates the packet.
+
+`github-review-audit` is post-review provenance validation. `github-ready` is
+the post-acceptance, pre-merge composite and reuses the same preflight evaluator.
+Before dispatch, a previously emitted packet can be re-verified with
+`github-review-prepare --pr <n> --packet <path>`: the command refetches the
+current head read-only and rejects stale, missing, malformed, or mismatched
+packets. Before that refetch it validates the packet type/version, requested PR,
+task identity, review mode, independent-review consistency, preflight success
+digest, workspace shape, and exact internal head bindings. Malformed JSON or an
+invalid packet schema fails locally without contacting GitHub. Preparation
+itself also refetches the head immediately before emitting a packet, so a head
+that moves during preparation yields only a stale-head diagnostic. None of
+these commands posts, edits, requests review, accepts, merges, amends, pushes,
+or force-pushes.
+
+Every review-preparation gate supports `--json`. Normal, usage, loader, and operational
+failures use a versioned envelope with diagnostics, categories, ownership, and a
+first safe repair; human output is rendered from the same result.
 
 ## Workflow budgets
 
