@@ -293,6 +293,13 @@ that choose grouping may override this. For example, a phase-grouped project
 may set `task_id_pattern: "P<phase>-<number>"` and a matching regex.
 Setting `grouping_profile: phase` alone does not switch task IDs.
 
+On the setup edit path, choose the task-ID convention from the numbered
+selector. Presets write the human-readable pattern and regex together so they
+cannot drift. The custom option requires an anchored regex and a safe matching
+example. Automatic allocation currently supports only the recommended
+`T-###` convention; use `agenticloop task new --id <TASK-ID> ...` for other
+conventions.
+
 Document roles are typed: `rules`, `plan`, `overview`, `process`, `spec`,
 `design`, `context`, and `history`.
 

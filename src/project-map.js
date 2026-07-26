@@ -19,6 +19,9 @@ import {
   WORK_UNIT_AUDIT_MODES,
 } from './layout.js';
 import { parseVerificationOperatingFacts } from './verification-learning.js';
+import { taskIdRegexError } from './task-id.js';
+
+export { isValidTaskId } from './task-id.js';
 
 export const PROJECT_MAP_PATH = PROJECT_MAP_RELATIVE_PATH;
 
@@ -387,14 +390,9 @@ export function validateProjectMap(config, raw, repoRoot) {
     errors.push("project.md: task_id_pattern is required");
   }
 
-  if (!config.task_id_regex) {
-    errors.push("project.md: task_id_regex is required");
-  } else {
-    try {
-      new RegExp(config.task_id_regex);
-    } catch {
-      errors.push(`project.md: task_id_regex is not a valid regular expression: ${config.task_id_regex}`);
-    }
+  const taskRegexError = taskIdRegexError(config.task_id_regex);
+  if (taskRegexError) {
+    errors.push(`project.md: ${taskRegexError}`);
   }
 
   if (!config.task_file_template) {
@@ -455,19 +453,4 @@ export function validateProjectMap(config, raw, repoRoot) {
   }
 
   return { errors, warnings };
-}
-
-/**
- * Validate a task ID string against the configured regex.
- *
- * @param {string} taskId
- * @param {string} regex   Value of task_id_regex from project map config.
- * @returns {boolean}
- */
-export function isValidTaskId(taskId, regex) {
-  try {
-    return new RegExp(regex).test(taskId);
-  } catch {
-    return false;
-  }
 }

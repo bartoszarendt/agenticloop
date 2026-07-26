@@ -452,6 +452,28 @@ describe('task id validation', () => {
     assert.equal(isValidTaskId('P1-01', '^P\\d+-\\d{2,}$'), true);
     assert.equal(isValidTaskId('P1-1', '^P\\d+-\\d{2,}$'), false);
   });
+
+  it('enforces filename-safe whole-ID matching independently of the project regex', () => {
+    assert.equal(isValidTaskId('T-001/extra', '^.*$'), false);
+    assert.equal(isValidTaskId('../T-001', '^.*$'), false);
+    assert.equal(isValidTaskId('prefix-T-001', '^T-\\d{3,}$'), false);
+    assert.equal(isValidTaskId('T-001-suffix', '^T-\\d{3,}$'), false);
+  });
+
+  it('rejects unanchored and potentially pathological project regexes', () => {
+    for (const regex of ['T-\\d+', '^(a+)+$']) {
+      const dir = makeProjectMap([
+        'task_id_pattern: "custom"',
+        `task_id_regex: "${regex}"`,
+      ]);
+      const result = loadProjectMap(dir);
+      const validation = validateProjectMap(result.config, result.raw, dir);
+      assert.ok(
+        validation.errors.some(error => error.includes('task_id_regex')),
+        `${regex}: ${validation.errors.join('\n')}`
+      );
+    }
+  });
 });
 
 describe('document role registry', () => {

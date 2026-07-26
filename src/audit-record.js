@@ -29,6 +29,7 @@ import { basename, join } from 'node:path';
 import { parseFrontmatter } from './frontmatter.js';
 import { markdownLines, markdownSection, parseAtxHeading, topLevelListItems } from './markdown.js';
 import { decisionReferenceId } from './verification-learning.js';
+import { isValidTaskId } from './task-id.js';
 import {
   AUDITS_DIRECTORY_RELATIVE_PATH,
   AUDIT_BLOCKED_REASON_BUDGET_EXHAUSTED,
@@ -823,12 +824,8 @@ export function validateAuditRecord(content, label, options = {}) {
   if (record.coveredTasks.length === 0) {
     errors.push(`Audit record '${label}' requires a non-empty 'covered_tasks' boundary`);
   } else if (options.taskIdRegex) {
-    let pattern = null;
-    try {
-      pattern = new RegExp(options.taskIdRegex);
-    } catch { /* project map validation reports an invalid regex */ }
     for (const taskId of record.coveredTasks) {
-      if (pattern && !pattern.test(taskId)) {
+      if (!isValidTaskId(taskId, options.taskIdRegex)) {
         errors.push(
           `Audit record '${label}' covered task '${taskId}' does not match the project task id pattern`
         );

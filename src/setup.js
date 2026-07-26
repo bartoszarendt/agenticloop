@@ -42,6 +42,10 @@ import {
   hasCurrentLayout,
 } from './layout.js';
 import { runValidation } from './validate-runner.js';
+import {
+  isValidTaskId,
+  taskIdRegexError,
+} from './task-id.js';
 
 const VALID_ADAPTER_HOSTS = ['opencode', 'codex', 'claude-code', 'copilot', 'cursor'];
 const DEVELOPMENT_STAGE_DESCRIPTIONS = {
@@ -130,6 +134,30 @@ const EVENT_LOGGING_CHOICES = [
   { index: 1, label: 'Disabled - do not record workflow events (default)', value: 'disabled' },
   { index: 2, label: 'Enabled - write local task-scoped JSONL logs under .agenticloop/logs/', value: 'enabled' },
 ];
+const TASK_ID_PRESETS = [
+  {
+    key: 'neutral',
+    example: 'T-001',
+    label: 'T-001 - neutral sequential IDs (recommended; automatic allocation)',
+    pattern: 'T-<number>',
+    regex: '^T-\\d{3,}$',
+  },
+  {
+    key: 'readable',
+    example: 'TASK-001',
+    label: 'TASK-001 - explicit neutral sequential IDs (manual --id)',
+    pattern: 'TASK-<number>',
+    regex: '^TASK-\\d{3,}$',
+  },
+  {
+    key: 'phase',
+    example: 'P1-01',
+    label: 'P1-01 - phase-scoped sequential IDs (manual --id)',
+    pattern: 'P<phase>-<number>',
+    regex: '^P\\d+-\\d{2,}$',
+    groupingProfile: 'phase',
+  },
+];
 
 function isValidBackend(value) {
   return value === 'files' || value === 'github';
@@ -163,6 +191,149 @@ async function promptTaskBackend(prompts, write, currentValue) {
       return { value: selected, cancelled: false };
     }
     write(`  Invalid task backend '${answer}'. Enter 1 (files) or 2 (github).`);
+  }
+}
+
+function taskIdChoices(currentPattern, currentRegex, groupingProfile) {
+  const presets = TASK_ID_PRESETS.filter(
+    preset => !preset.groupingProfile || preset.groupingProfile === groupingProfile
+  );
+  const currentPresetIndex = presets.findIndex(
+    preset => preset.pattern === currentPattern && preset.regex === currentRegex
+  );
+  const choices = presets.map(preset => ({ ...preset, kind: 'preset' }));
+  let defaultChoice = currentPresetIndex + 1;
+
+  if (
+    currentPresetIndex === -1 &&
+    currentPattern &&
+    currentRegex &&
+    !customTaskIdPatternError(currentPattern) &&
+    !taskIdRegexError(currentRegex)
+  ) {
+    choices.unshift({
+      kind: 'current',
+      key: 'current',
+      label: `${currentPattern} - keep existing custom convention`,
+      pattern: currentPattern,
+      regex: currentRegex,
+      example: null,
+    });
+    defaultChoice = 1;
+  }
+
+  choices.push({
+    kind: 'custom',
+    key: 'custom',
+    label: 'Custom - advanced anchored regular expression (manual --id)',
+  });
+  if (defaultChoice < 1) defaultChoice = 1;
+  return { choices, defaultChoice };
+}
+
+function resolveTaskIdChoice(answer, choices) {
+  const normalized = answer.trim().toLowerCase();
+  if (/^\d+$/.test(normalized)) {
+    return choices[Number(normalized) - 1] ?? null;
+  }
+  return choices.find(choice =>
+    choice.key === normalized ||
+    String(choice.example ?? '').toLowerCase() === normalized
+  ) ?? null;
+}
+
+function customTaskIdPatternError(pattern) {
+  if (!pattern) return 'Custom task ID pattern is required.';
+  if (pattern.length > 80) return 'Custom task ID pattern must be at most 80 characters.';
+  if (/[\r\n"'`]/.test(pattern)) {
+    return 'Custom task ID pattern must not contain quote, backtick, or newline characters.';
+  }
+  return null;
+}
+
+async function promptCustomTaskIdConvention(prompts, write) {
+  let pattern;
+  while (true) {
+    pattern = (await prompts.ask(
+      '  Custom task ID display pattern (for example PROJ-<number>): '
+    )).trim();
+    if (!pattern) {
+      write('  Custom task ID configuration cancelled; a display pattern is required.');
+      return { cancelled: true };
+    }
+    const patternError = customTaskIdPatternError(pattern);
+    if (!patternError) break;
+    write(`  ${patternError}`);
+  }
+
+  let regex;
+  while (true) {
+    regex = (await prompts.ask(
+      '  Custom task ID regex (anchored with ^ and $, for example ^PROJ-\\d{3,}$): '
+    )).trim();
+    if (!regex) {
+      write('  Custom task ID configuration cancelled; a regex is required.');
+      return { cancelled: true };
+    }
+    const regexError = taskIdRegexError(regex);
+    if (!regexError) break;
+    write(`  Invalid custom task ID regex: ${regexError}.`);
+  }
+
+  while (true) {
+    const example = (await prompts.ask('  Example task ID that must match the custom regex: ')).trim();
+    if (!example) {
+      write('  Custom task ID configuration cancelled; a matching example is required.');
+      return { cancelled: true };
+    }
+    if (isValidTaskId(example, regex)) {
+      return {
+        cancelled: false,
+        value: {
+          task_id_pattern: pattern,
+          task_id_regex: regex,
+        },
+      };
+    }
+    write(`  Example task ID '${example}' is unsafe or does not match '${regex}'.`);
+  }
+}
+
+async function promptTaskIdConvention(
+  prompts,
+  write,
+  currentPattern,
+  currentRegex,
+  groupingProfile
+) {
+  const { choices, defaultChoice } = taskIdChoices(
+    currentPattern,
+    currentRegex,
+    groupingProfile
+  );
+  const menu = choices.map((choice, index) => `    ${index + 1}. ${choice.label}`).join('\n');
+
+  while (true) {
+    const answer = (await prompts.ask(
+      `  Task ID convention:\n${menu}\n  Choice [${defaultChoice}]: `
+    )).trim();
+    const selected = answer
+      ? resolveTaskIdChoice(answer, choices)
+      : choices[defaultChoice - 1];
+    if (!selected) {
+      write(`  Invalid task ID convention '${answer}'. Enter 1-${choices.length}.`);
+      continue;
+    }
+    if (selected.kind === 'custom') {
+      return promptCustomTaskIdConvention(prompts, write);
+    }
+    return {
+      cancelled: false,
+      value: {
+        task_id_pattern: selected.pattern,
+        task_id_regex: selected.regex,
+      },
+    };
   }
 }
 
@@ -665,15 +836,18 @@ export async function setup(options) {
             confirmValues.grouping_profile = groupingAnswer;
           }
 
-          const taskIdAnswer = (await prompts.ask(`  Task ID pattern (${detection.taskId.taskIdPattern}): `)).trim();
-          if (taskIdAnswer) {
-            confirmValues.task_id_pattern = taskIdAnswer;
+          const taskIdResult = await promptTaskIdConvention(
+            prompts,
+            write,
+            confirmValues.task_id_pattern,
+            confirmValues.task_id_regex,
+            confirmValues.grouping_profile
+          );
+          if (taskIdResult.cancelled) {
+            write('Setup cancelled. Edited project map values were not written.');
+            return { errors, warnings };
           }
-
-          const taskIdRegexAnswer = (await prompts.ask(`  Task ID regex (${detection.taskId.taskIdRegex}): `)).trim();
-          if (taskIdRegexAnswer) {
-            confirmValues.task_id_regex = taskIdRegexAnswer;
-          }
+          Object.assign(confirmValues, taskIdResult.value);
         }
 
         printProjectMapValues(write, '\nEdited project map values:', confirmValues);

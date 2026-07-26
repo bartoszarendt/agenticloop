@@ -1,4 +1,5 @@
 import { markdownLines, parseAtxHeading } from './markdown.js';
+import { isValidTaskId } from './task-id.js';
 
 export const VERIFICATION_OUTCOMES = Object.freeze(['passed', 'failed', 'timed_out', 'blocked']);
 export const VERIFICATION_STRATEGIES = Object.freeze(['foreground', 'background', 'focused', 'split', 'ci']);
@@ -117,11 +118,7 @@ function matchesTaskId(value, taskIdRegex) {
   const pattern = typeof taskIdRegex === 'string' && taskIdRegex.trim()
     ? taskIdRegex
     : '^T-[A-Za-z0-9._-]+$';
-  try {
-    return new RegExp(pattern).test(value);
-  } catch {
-    return false;
-  }
+  return isValidTaskId(value, pattern);
 }
 
 function isHttpUrl(value) {

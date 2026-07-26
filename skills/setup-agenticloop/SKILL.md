@@ -234,6 +234,18 @@ implementation-lane values. Reject and re-prompt invalid stage or budget input; 
 proposal as a fallback for a rejected correction. If they say "no", do not
 write anything and leave `setup_status: unconfirmed`.
 
+For task IDs, present a bounded convention selector rather than asking the
+human to edit `task_id_pattern` and `task_id_regex` independently. Offer the
+neutral `T-001` convention first, a small set of Agentic Loop-compatible
+examples such as `TASK-001`, and a grouping-specific example such as `P1-01`
+only when that grouping applies. Treat each preset as one atomic pattern/regex
+pair. A custom choice is advanced: require an anchored, compilable, bounded
+regex plus one filename-safe example that matches it before confirmation.
+Reject path separators, whitespace, unsafe filename characters, substring-only
+regexes, backreferences, nested quantifiers, and overlong expressions. State
+that automatic allocation supports `T-###` only; other conventions require an
+explicit task ID until a compatible allocator exists.
+
 For an existing confirmed project missing stage, present this as a one-time
 stage migration; do not silently assign a default or bundle document-selection,
 backend, naming, or grouping changes into that confirmation. For an existing

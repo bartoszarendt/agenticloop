@@ -286,10 +286,10 @@ describe('setup CLI', () => {
 
     const input = [
       'edit',
-      'github',
-      '',
-      '',
-      '',
+      '', '', '', '', '', '', '', // profile values before backend
+      '', // backend
+      '', // grouping
+      '', // task ID convention
       'no',
     ].join('\n');
     const result = run(['setup', '--target', d], { input });
@@ -317,10 +317,9 @@ describe('setup CLI', () => {
        '',
        'Release hardening is the current priority.',
       'The next capability roadmap is accepted.',
-         '',
-         '',
-         '',
-         '',
+      '', // backend
+      '', // grouping
+      '', // task ID convention
        'yes',
       '',
       '3',
@@ -353,8 +352,7 @@ describe('setup CLI', () => {
        '0', '6', // review budget: invalid, then valid
       '-1', '4', // audit budget: invalid, then valid
       '', '', // stage notes
-      '', '', '', // backend, grouping, task id pattern
-      '', // task id regex
+      '', '', '', // backend, grouping, task ID convention
       'yes',
       '', '3', 'y',
     ].join('\n');
@@ -374,7 +372,10 @@ describe('setup CLI', () => {
     const d = makeEmptyTarget();
     writeFileSync(join(d, 'README.md'), '# Project\n\nThis project is in maintenance mode.\n');
     const input = [
-      'edit', 'maintenance', '', '', '', '', '', '', '', 'no',
+      'edit',
+      'maintenance', '', '', '', '', '', '', // stage and remaining profile values
+      '', '', '', // backend, grouping, task ID convention
+      'no',
     ].join('\n');
 
     const result = run(['setup', '--target', d], { input });
@@ -416,19 +417,14 @@ describe('setup CLI', () => {
     writeFileSync(join(d, 'ROADMAP.md'), '# Roadmap\n\nThis is a greenfield project.\n');
 
     const input = [
-       'yes',
-       '3',
-       '',
-       '',
-       '',
-       '',
-       '',
-       '',
-        '',
-        '',
-        '',
-        '',
-       'yes',
+      'yes',
+      '3', // stabilization
+      '', '', '', '', // lanes and budgets
+      '', '', // stage notes
+      '', // backend
+      '', // grouping
+      '', // task ID convention
+      'yes',
       '',
       '3',
       'y',
@@ -616,8 +612,7 @@ describe('setup task backend selection', () => {
       '',      // no revisit trigger
       '2',     // Task backend: GitHub
       '',      // keep grouping
-      '',      // keep task ID pattern
-      '',      // keep task ID regex
+      '',      // keep task ID convention
       'yes',   // apply edited values
       '',      // keep event logging disabled
       '3',     // no host integration
@@ -637,7 +632,7 @@ describe('setup task backend selection', () => {
        'edit',
        '', '', '', '', '', '', '',
       '',      // Task backend: blank selects the default (files)
-      '', '', '',
+      '', '',  // grouping and task ID convention
       'yes',
       '',
       '3',
@@ -657,7 +652,7 @@ describe('setup task backend selection', () => {
        '', '', '', '', '', '', '',
       'banana', // invalid: must produce a useful message and reprompt
       '2',
-      '', '', '',
+      '', '', // grouping and task ID convention
       'yes',
       '',
       '3',
@@ -668,6 +663,60 @@ describe('setup task backend selection', () => {
     assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
     assert.match(result.stdout, /Invalid task backend 'banana'\. Enter 1 \(files\) or 2 \(github\)\./);
     assert.equal(readBackend(d), 'github');
+  });
+
+  it('selects a complete task ID preset instead of editing pattern and regex separately', () => {
+    const d = makeDocTarget();
+
+    const input = [
+      'edit',
+      '', '', '', '', '', '', '',
+      '',      // backend
+      '',      // grouping
+      '2',     // TASK-001 preset
+      'yes',
+      '',
+      '3',
+      'y',
+    ].join('\n');
+    const result = run(['setup', '--target', d], { input });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.match(result.stdout, /Task ID convention:/);
+    assert.match(result.stdout, /1\. T-001 - neutral sequential IDs/);
+    assert.match(result.stdout, /2\. TASK-001 - explicit neutral sequential IDs/);
+    const [fm] = parseFrontmatter(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'));
+    assert.equal(fm.task_id_pattern, 'TASK-<number>');
+    assert.equal(fm.task_id_regex, '^TASK-\\d{3,}$');
+  });
+
+  it('validates a custom task ID regex and matching example before writing', () => {
+    const d = makeDocTarget();
+
+    const input = [
+      'edit',
+      '', '', '', '', '', '', '',
+      '',                    // backend
+      '',                    // grouping
+      '3',                   // custom
+      'PROJ-<number>',
+      'PROJ-\\d+',           // invalid: not anchored
+      '^PROJ-\\d{3,}$',
+      'bad/id',              // invalid example
+      'PROJ-001',
+      'yes',
+      '',
+      '3',
+      'y',
+    ].join('\n');
+    const result = run(['setup', '--target', d], { input });
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.match(result.stdout, /must be anchored with \^ and \$/);
+    assert.match(result.stdout, /unsafe or does not match/);
+    const [fm] = parseFrontmatter(readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8'));
+    assert.equal(fm.task_id_pattern, 'PROJ-<number>');
+    assert.equal(fm.task_id_regex, '^PROJ-\\d{3,}$');
   });
 
   it('a confirmed project retains its backend when the profile update is declined', () => {
