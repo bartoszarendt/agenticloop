@@ -412,7 +412,10 @@ export function parseVerificationAttempts(content) {
         triageNumbers.add(number);
         triages.push(parseTriage(fields, checkId, number, entryHeading.index, errors));
       } else {
-        errors.push(`Verification attempt check '${checkId}' has unrecognized subsection '#### ${entryHeading.text}'`);
+        errors.push(
+          `Verification attempt check '${checkId}' has unrecognized subsection '#### ${entryHeading.text}'; ` +
+          "expected one of: '#### Attempt <positive integer>', '#### Foreground escalation prediction for attempt <positive integer>', or '#### Triage for attempt <positive integer>'"
+        );
       }
     }
   }
@@ -613,7 +616,7 @@ export function parseGitHubVerificationAttemptComments(comments, options = {}) {
       continue;
     }
     if (expectedLogin && !verificationCommentRole(body)) {
-      errors.push(`GitHub verification-attempt comment ${index + 1} is missing a final engineer or maintainer attribution trailer`);
+      errors.push(`GitHub verification-attempt comment ${index + 1} is missing a final attribution trailer; expected '[[agent: engineer]]' or '[[agent: maintainer]]' as the final live nonblank line`);
       continue;
     }
     const checkId = markers[0][1].toUpperCase();
@@ -624,11 +627,11 @@ export function parseGitHubVerificationAttemptComments(comments, options = {}) {
     seen.add(checkId);
     const parsed = parseVerificationAttempts(body);
     if (!parsed.present) {
-      errors.push(`GitHub verification-attempt comment for '${checkId}' is missing the canonical '## Verification Attempts' section`);
+      errors.push(`GitHub verification-attempt comment for '${checkId}' is missing the canonical '## Verification Attempts' section; expected '## Verification Attempts' followed by '### ${checkId}'`);
       continue;
     }
     if (parsed.checks.length !== 1 || parsed.checks[0] !== checkId) {
-      errors.push(`GitHub verification-attempt comment marker '${checkId}' must contain exactly one matching '### ${checkId}' subsection`);
+      errors.push(`GitHub verification-attempt comment marker '${checkId}' must contain exactly one matching '### ${checkId}' subsection under live '## Verification Attempts' content`);
     }
     records.push({ checkId, commentIndex: index, body, parsed });
   }

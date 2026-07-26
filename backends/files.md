@@ -384,33 +384,25 @@ When `needs_revision` rounds reach the task's `review_budget` (default 5 unless
 materialized from project policy otherwise), the
 orchestrator must record a durable checkpoint before routing the next revision.
 For files-backed, append review outcomes and the checkpoint to the one
-append-only `## Review History` section:
+append-only `## Review History` section. The checkpoint entry itself is:
 
+<!-- agenticloop:canonical-checkpoint files -->
 ```text
-## Review History
-
-### Review 3
-
-- Status: needs_revision
-- Mode: host_subagent
-- Artifact: commit:abc123
-- Findings: F-1, F-2
-- Maintainer: maintainer
-
 ### Review Round Checkpoint
 
-- Direction: targeted_revision | needs_context | blocked
-- Cause: <implementation_defect | evidence_drift | task_contract_ambiguity | scope_pollution | reviewer_engineer_disagreement | external_blocker>
-- Review count: <current needs_revision count>
-- Artifact: <implementation_artifact reference>
-- Target: <specific finding or decision>  (required for targeted_revision)
-- Reference: <Maintainer or human judgment reference>  (required for needs_context or blocked)
-- Orchestrator: <attribution>
+- Direction: targeted_revision
+- Cause: implementation_defect
+- Review count: 5
+- Artifact: commit:abc123
+- Target: F-2: refresh the local verification evidence
+- Orchestrator: orchestrator-bot
 ```
 
 The checkpoint schema requires:
 - `direction`: one of `targeted_revision`, `needs_context`, or `blocked`
-- `cause`: the canonical process cause
+- `cause`: one of `implementation_defect`, `evidence_drift`,
+  `task_contract_ambiguity`, `scope_pollution`, `reviewer_engineer_disagreement`,
+  or `external_blocker`
 - `review_count`: the current number of durable `needs_revision` outcomes
 - `artifact`: the latest reviewed artifact
 - `target`: required when direction is `targeted_revision`
@@ -428,8 +420,8 @@ reviewed artifact A and authorizes one next revision B; it does not reset the
 review budget.
 
 When prior `needs_revision` outcomes have recorded finding IDs, a
-`## Revision Resolution` section with exactly one row per finding is required
-before re-review. Each row must have a disposition of `resolved`, `disputed`,
+`## Revision Resolution` section with exactly one bullet entry per finding is required
+before re-review. Each bullet entry must have a disposition of `resolved`, `disputed`,
 or `blocked` with current evidence.
 
 ### Close Or Accept Task

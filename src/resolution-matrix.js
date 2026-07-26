@@ -8,10 +8,21 @@
  * Backend-neutral: used by GitHub preflight and files task validation.
  */
 
-import { markdownSection } from './markdown.js';
+import { markdownLines, markdownSection, topLevelListItems } from './markdown.js';
 
 export const VALID_DISPOSITIONS = new Set(['resolved', 'disputed', 'blocked']);
 export const FINDING_ID_RE = /^F-[1-9]\d*$/;
+export const RESOLUTION_ENTRY_SHAPE =
+  '"- [F-1] resolved|disputed|blocked: <evidence> [ref: <reference>]"';
+
+function resolutionShapeError() {
+  return 'revision resolution entries must be live top-level bullet entries outside fenced code, blockquotes, and indented code; ' +
+    `expected: ${RESOLUTION_ENTRY_SHAPE}`;
+}
+
+function emptyResolutionError() {
+  return `revision resolution section is empty; expected: ${RESOLUTION_ENTRY_SHAPE}`;
+}
 
 /**
  * Parse a resolution matrix from a Markdown section.
@@ -23,7 +34,7 @@ export const FINDING_ID_RE = /^F-[1-9]\d*$/;
  * - [F-3] blocked: <evidence> [ref: <reference>]
  *
  * @param {string} text Markdown text containing the matrix
- * @returns {{ found: boolean, entries: Array, errors: string[] }}
+ * @returns {{ status: 'absent'|'malformed'|'parsed', found: boolean, entries: Array, errors: string[] }}
  */
 export function parseResolutionMatrix(text) {
   const raw = String(text ?? '');
@@ -34,74 +45,90 @@ export function parseResolutionMatrix(text) {
     markdownSection(raw, '## Finding Resolution');
 
   if (!section) {
-    return { found: false, entries: [], errors: [] };
+    return { status: 'absent', found: false, entries: [], errors: [] };
   }
 
-  const body = section.body;
-  const trimmed = body.trim();
-  if (!trimmed || /^none\.?$/i.test(trimmed)) {
-    return { found: true, entries: [], errors: [] };
+  const sectionLines = section.lines ?? markdownLines(section.body);
+  const liveLines = sectionLines.filter(line => line.live && line.raw.trim());
+  if (liveLines.length === 1 && /^none\.?$/i.test(liveLines[0].raw.trim())) {
+    return { status: 'parsed', found: true, entries: [], errors: [] };
   }
 
   const entries = [];
   const errors = [];
-  const entryRe = /^[-*]\s*\[([^\]]+)\]\s+(resolved|disputed|blocked)\s*:\s*(.+?)\s*$/gim;
-  const lineEntryRe = /^[-*]\s*\[([^\]]+)\]\s+(resolved|disputed|blocked)\s*:\s*(.+?)\s*$/i;
-  let match;
+  const entryRe = /^\[([^\]]+)\][ \t]+([A-Za-z_]+)[ \t]*:[ \t]*(.*?)\s*$/i;
+  const malformed = [];
+  const items = /** @type {{ text: string, lineNumbers: number[], marker: string }[]} */ (
+    topLevelListItems('', { lines: sectionLines, includeMetadata: true })
+  );
+  const coveredLines = new Set(items.flatMap(item => item.lineNumbers));
+  for (const item of items) {
+    const match = item.text.match(entryRe);
+    if (item.marker !== '-' || !match) {
+      malformed.push({ text: item.text, disposition: null });
+      continue;
+    }
 
-  while ((match = entryRe.exec(body)) !== null) {
     const findingId = match[1].trim();
-    const disposition = match[2].trim().toLowerCase();
-    const evidence = match[3].trim();
+    const disposition = match[2].toLowerCase();
+    const evidenceWithReference = match[3].trim();
+    if (!VALID_DISPOSITIONS.has(disposition) || !evidenceWithReference) {
+      malformed.push({ text: item.text, disposition });
+      continue;
+    }
 
-    // Check for optional ref
-    const refMatch = evidence.match(/^(.*?)\s*\[ref:\s*(.+?)\s*\]\s*$/);
+    const refMatch = evidenceWithReference.match(/^(.*?)\s*\[ref:\s*(.+?)\s*\]\s*$/);
     const entry = {
       findingId,
       disposition,
-      evidence: refMatch ? refMatch[1].trim() : evidence,
+      evidence: refMatch ? refMatch[1].trim() : evidenceWithReference,
       reference: refMatch ? refMatch[2].trim() : null,
     };
-
     if (!entry.evidence) {
-      errors.push(`resolution entry for '${findingId}' has empty evidence`);
+      malformed.push({ text: item.text, disposition });
+      continue;
     }
-    if (!FINDING_ID_RE.test(findingId)) {
-      errors.push(`resolution finding identifier '${findingId}' is not canonical (expected F-<positive integer>)`);
-    }
-
     entries.push(entry);
   }
 
-  // Check for malformed lines (lines that look like they should be entries but aren't)
-  const lines = body.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
-  for (const line of lines) {
-    const trimmedLine = line.trim();
-    if (!trimmedLine.startsWith('-') && !trimmedLine.startsWith('*')) continue;
+  for (const line of liveLines) {
+    if (!coveredLines.has(line.line)) {
+      malformed.push({ text: line.raw.trim(), disposition: null });
+    }
+  }
 
-    // Any bullet with a bracketed identifier is a claimed matrix row. Do not
-    // silently ignore malformed rows because that can hide a duplicate or a
-    // disposition outside the three-value protocol.
-    if (/\[.+\]/.test(trimmedLine) && !lineEntryRe.test(trimmedLine)) {
-      // Check for unknown disposition
-      const dispMatch = trimmedLine.match(/\]\s+(\w+)\s*:/);
-      if (dispMatch && !VALID_DISPOSITIONS.has(dispMatch[1].toLowerCase())) {
-        errors.push(`unknown disposition '${dispMatch[1]}' in resolution entry`);
-      } else {
-        errors.push(`malformed resolution entry '${trimmedLine}'`);
-      }
+  // When no live entry parses, one canonical repair route is more useful than
+  // one downstream missing-finding error per required ID.
+  if (entries.length === 0) {
+    const hasNonblankContent = sectionLines.some(line => line.raw.trim());
+    return {
+      status: 'malformed',
+      found: true,
+      entries: [],
+      errors: [hasNonblankContent ? resolutionShapeError() : emptyResolutionError()],
+    };
+  }
+
+  for (const item of malformed) {
+    if (item.disposition && !VALID_DISPOSITIONS.has(item.disposition)) {
+      errors.push(`unknown disposition '${item.disposition}' in resolution bullet entry; expected one of: ${[...VALID_DISPOSITIONS].join(', ')}; expected: ${RESOLUTION_ENTRY_SHAPE}`);
+    } else {
+      errors.push(`malformed resolution bullet entry '${item.text}'; expected: ${RESOLUTION_ENTRY_SHAPE}`);
     }
   }
   // Check for duplicate finding IDs
   const seenIds = new Set();
   for (const entry of entries) {
+    if (!FINDING_ID_RE.test(entry.findingId)) {
+      errors.push(`resolution finding identifier '${entry.findingId}' is not canonical (expected F-<positive integer>)`);
+    }
     if (seenIds.has(entry.findingId)) {
       errors.push(`duplicate finding identifier '${entry.findingId}' in resolution matrix`);
     }
     seenIds.add(entry.findingId);
   }
 
-  return { found: true, entries, errors };
+  return { status: 'parsed', found: true, entries, errors };
 }
 
 /**
@@ -142,12 +169,12 @@ export function validateResolutionMatrix({
     seenEntries.add(entry.findingId);
   }
 
-  // Every prior finding must have exactly one row.
+  // Every prior finding must have exactly one bullet entry.
   const entryMap = new Map(entries.map(e => [e.findingId, e]));
   for (const id of requiredFindingIds) {
     const entry = entryMap.get(id);
     if (!entry) {
-      errors.push(`prior finding '${id}' has no row in the resolution matrix`);
+      errors.push(`prior finding '${id}' has no bullet entry in the resolution matrix; expected: ${RESOLUTION_ENTRY_SHAPE}`);
       continue;
     }
 

@@ -212,6 +212,8 @@ Persistence appends one history entry and rewrites the derived certification
 fields. It never edits an earlier history entry and never alters the report's
 substantive findings. Where the host supports path or operation restrictions,
 enforce the Auditor's read-only posture mechanically as well as in the prompt.
+`agenticloop/memory/audit-record.md` shows the parsed `### Run 1` recovery shape
+for diagnosis only; the CLI remains the sole writer for `## Audit History`.
 
 ## 9. Remediation routing
 

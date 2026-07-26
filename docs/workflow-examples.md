@@ -103,18 +103,25 @@ maintainer uses `[[review-and-accept]]`, checks for an existing review marker on
 the current artifact revision, and posts exactly one review outcome plus its
 provenance (`review_mode`):
 
+<!-- agenticloop:canonical-review-marker accepted -->
 ```text
 AGENT_REVIEW_STATUS: accepted
 AGENT_REVIEW_MODE: host_subagent
-AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+AGENT_REVIEW_ARTIFACT: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
+
+[[agent: maintainer]]
 ```
 
 or
 
+<!-- agenticloop:canonical-review-marker needs_revision -->
 ```text
 AGENT_REVIEW_STATUS: needs_revision
 AGENT_REVIEW_MODE: host_subagent
-AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+AGENT_REVIEW_ARTIFACT: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
+AGENT_REVIEW_FINDINGS: F-1
+
+[[agent: maintainer]]
 ```
 
 The examples above are fenced only for documentation. A live marker must be posted

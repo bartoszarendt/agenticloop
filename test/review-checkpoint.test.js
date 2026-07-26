@@ -4,6 +4,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   parseReviewCheckpoint,
   countNeedsRevisionRounds,
@@ -15,6 +16,18 @@ import {
 } from '../src/review-checkpoint.js';
 
 const HEAD = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0';
+
+function documentedCheckpoint(relativePath, carrier) {
+  const text = readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+  const marker = `<!-- agenticloop:canonical-checkpoint ${carrier} -->`;
+  const start = text.indexOf(marker);
+  assert.notEqual(start, -1, `${relativePath} must name its canonical checkpoint block`);
+  const fenceStart = text.indexOf('```text', start);
+  const contentStart = text.indexOf('\n', fenceStart) + 1;
+  const fenceEnd = text.indexOf('\n```', contentStart);
+  assert.notEqual(fenceEnd, -1, `${relativePath} canonical checkpoint block must close its fence`);
+  return text.slice(contentStart, fenceEnd).trim();
+}
 
 function checkpointText({
   direction = 'targeted_revision',
@@ -351,6 +364,56 @@ describe('evaluateReviewCheckpoint', () => {
     assert.equal(result.authorized, true);
     assert.ok(result.warnings.some(w => /within budget|not required/i.test(w)));
   });
+
+  it('counts legacy needs_revision outcomes against the review budget', () => {
+    const result = evaluateReviewCheckpoint({
+      reviewOutcomes: [
+        { status: 'needs_revision', artifact: HEAD, legacyMissingFindingIds: true },
+        { status: 'needs_revision', artifact: HEAD, legacyMissingFindingIds: true },
+      ],
+      budget: 2,
+      requireRevision: true,
+    });
+    assert.equal(result.authorized, false);
+    assert.match(result.errors.join('\n'), /budget.*exhausted|checkpoint.*required/i);
+  });
+
+  it('treats a legacy outcome after a checkpoint as checkpoint consumption', () => {
+    const checkpoint = {
+      type: 'checkpoint', sourceOrder: 1,
+      direction: 'targeted_revision', cause: 'implementation_defect', reviewCount: 1,
+      artifact: HEAD, target: 'repair F-1', orchestratorAttribution: 'orchestrator-bot',
+    };
+    const result = evaluateReviewCheckpoint({
+      reviewHistory: [
+        { type: 'outcome', status: 'needs_revision', artifact: HEAD, sourceOrder: 0 },
+        checkpoint,
+        { type: 'outcome', status: 'needs_revision', artifact: 'b'.repeat(40), sourceOrder: 2, legacyMissingFindingIds: true },
+      ],
+      budget: 1,
+      requireRevision: true,
+    });
+    assert.equal(result.authorized, false);
+    assert.match(result.errors.join('\n'), /checkpoint has been consumed/i);
+  });
+
+  it('keeps mixed canonical and legacy outcomes in chronological checkpoint accounting', () => {
+    const legacyArtifact = 'b'.repeat(40);
+    const result = evaluateReviewCheckpoint({
+      reviewHistory: [
+        { type: 'outcome', status: 'needs_revision', artifact: HEAD, sourceOrder: 0 },
+        { type: 'outcome', status: 'needs_revision', artifact: legacyArtifact, sourceOrder: 1, legacyMissingFindingIds: true },
+        {
+          type: 'checkpoint', sourceOrder: 2,
+          direction: 'targeted_revision', cause: 'implementation_defect', reviewCount: 2,
+          artifact: legacyArtifact, target: 'repair the reviewed artifact', orchestratorAttribution: 'orchestrator-bot',
+        },
+      ],
+      budget: 2,
+      requireRevision: true,
+    });
+    assert.equal(result.authorized, true, result.errors.join('\n'));
+  });
 });
 
 describe('validateCheckpointSchema', () => {
@@ -389,6 +452,19 @@ describe('validateCheckpointSchema', () => {
     assert.equal(result.valid, false);
     assert.ok(result.errors.some(e => /40-character/i.test(e)));
   });
+
+  it('lists canonical direction and cause values at both validation entry points', () => {
+    const parsed = parseReviewCheckpoint(checkpointText({ direction: 'continue', cause: 'unknown' }));
+    const schema = validateCheckpointSchema({
+      direction: 'continue', cause: 'unknown', reviewCount: 1, artifact: HEAD, orchestratorAttribution: 'orchestrator-bot',
+    });
+    for (const result of [parsed, schema]) {
+      const text = result.errors.join('\n');
+      for (const direction of VALID_DIRECTIONS) assert.match(text, new RegExp(direction));
+      assert.match(text, /implementation_defect/);
+      assert.match(text, /external_blocker/);
+    }
+  });
 });
 
 describe('formatCheckpoint', () => {
@@ -425,5 +501,39 @@ describe('formatCheckpoint', () => {
       orchestratorAttribution: 'orchestrator-bot',
     });
     assert.ok(formatted.includes('Orchestrator: orchestrator-bot'));
+  });
+});
+
+describe('published checkpoint contracts', () => {
+  const checkpoint = {
+    direction: 'targeted_revision',
+    cause: 'implementation_defect',
+    reviewCount: 5,
+    artifact: HEAD,
+    target: 'F-2: refresh the current-head verification evidence',
+    orchestratorAttribution: 'orchestrator-bot',
+  };
+
+  for (const relativePath of [
+    '../AGENTIC_LOOP.md',
+    '../skills/role-delegation/SKILL.md',
+    '../backends/github.md',
+  ]) {
+    it(`${relativePath} extracts and round-trips the canonical GitHub checkpoint`, () => {
+      const documented = documentedCheckpoint(relativePath, 'github');
+      assert.equal(documented, formatCheckpoint(checkpoint).trim());
+      assert.deepEqual(parseReviewCheckpoint(documented).errors, []);
+    });
+  }
+
+  it('backends/files.md extracts and round-trips the canonical files checkpoint', () => {
+    const documented = documentedCheckpoint('../backends/files.md', 'files');
+    const filesCheckpoint = {
+      ...checkpoint,
+      artifact: 'commit:abc123',
+      target: 'F-2: refresh the local verification evidence',
+    };
+    assert.equal(documented, formatCheckpoint(filesCheckpoint, { carrier: 'files' }).trim());
+    assert.deepEqual(parseReviewCheckpoint(documented, { carrier: 'files' }).errors, []);
   });
 });

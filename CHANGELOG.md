@@ -3,6 +3,27 @@
 ## Unreleased
 
 ### Changed
+- Tightened `parseReviewMarker()` so every `needs_revision` marker requires
+  exactly one `AGENT_REVIEW_FINDINGS` field containing unique canonical
+  `F-<positive integer>` IDs; accepted markers reject findings. Trusted stale
+  GitHub markers that only predate this field remain visible as legacy history,
+  while trusted current markers fail closed and untrusted carriers remain inert.
+  Legacy outcomes still count for chronological checkpoint authorization and
+  review-budget consumption, but never supply required resolution finding IDs.
+- Resolution entries, PR head markers, review markers, and fixup headings now
+  apply only from live Markdown. Fenced, quoted, and indented examples remain
+  inert; malformed live content reports the canonical repair shape without
+  weakening current-artifact, authorization, or provenance gates.
+- GitHub review-marker and Maintainer Review Fixup state is scoped to the expected
+  loop account. Outsider carriers can provide a repair diagnostic for a missing
+  current marker but cannot create, invalidate, or alter workflow state.
+- Published checkpoint, marker, resolution, PR-evidence, attribution, and audit
+  Run examples are executable contract fixtures. The audit Run 1 example now
+  requires exactly its eight ordered labeled bullets, and real audit history
+  rejects duplicate canonical Run fields instead of silently selecting one.
+- `github-preflight --json` now preserves its compatible `errors` and `warnings`
+  arrays while adding structured repair diagnostics with stable categories,
+  expected shapes or values, and required resolution finding IDs where relevant.
 - Centralized workflow budgets: equivalent attempts and review checkpoints default
   to 5, work-unit audits default to 3, and project maps can set
   `default_attempt_budget`, `default_review_budget`, `default_audit_budget`, and

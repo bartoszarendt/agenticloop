@@ -62,11 +62,15 @@ human or accepted decision that accepted it.
 
 ## Audit History
 
-Append one entry per completed substantive Auditor report. Never edit or remove
-an earlier entry. The run count is derived from the number of entries here.
+`agenticloop audit report` mechanically appends one entry per completed
+substantive Auditor report. Never hand-edit or remove an earlier entry; the run
+count is derived from the number of entries here. The following is a recovery
+shape for understanding parser diagnostics, not an instruction to author audit
+history directly.
 
 Entry shape:
 
+<!-- agenticloop:canonical-audit-run -->
 ```markdown
 ### Run 1
 

@@ -296,6 +296,64 @@ describe('parsePrEvidence', () => {
       evidence: 'roles and capabilities were compared; no inconsistencies remain.',
     });
   });
+
+  it('accepts an immediate four-space evidence continuation', () => {
+    const parsed = parsePrEvidence([
+      '## Evidence', `Current PR head: ${HEAD}`,
+      '- Required check: `npm test`',
+      '  Verdict: passed',
+      '  Evidence: 128 passing;',
+      '    exit status 0 on the current head.',
+    ].join('\n'));
+    assert.equal(parsed.entries[0].evidence, '128 passing; exit status 0 on the current head.');
+  });
+
+  it('does not append indented code after a blank evidence boundary', () => {
+    const parsed = parsePrEvidence([
+      '## Evidence', `Current PR head: ${HEAD}`,
+      '- Required check: `npm test`',
+      '  Verdict: passed',
+      '  Evidence: 128 passing.',
+      '',
+      '    standalone code must stay inert',
+    ].join('\n'));
+    assert.equal(parsed.entries[0].evidence, '128 passing.');
+  });
+
+  it('does not append fenced code or a following list item to evidence', () => {
+    const parsed = parsePrEvidence([
+      '## Evidence', `Current PR head: ${HEAD}`,
+      '- Required check: `npm test`',
+      '  Verdict: passed',
+      '  Evidence: 128 passing.',
+      '```text',
+      'fenced detail must stay inert',
+      '```',
+      '- Additional notes: not an evidence continuation',
+    ].join('\n'));
+    assert.equal(parsed.entries[0].evidence, '128 passing.');
+  });
+
+  it('reports a repair shape for a table-like evidence entry and keeps fenced entries inert', () => {
+    const table = parsePrEvidence([
+      '## Evidence',
+      `Current PR head: ${HEAD}`,
+      '| Required check: `npm test` | Verdict: passed | Evidence: pass |',
+    ].join('\n'));
+    assert.match(table.errors.join('\n'), /live bullet entry/i);
+
+    const fenced = parsePrEvidence([
+      '## Evidence',
+      `Current PR head: ${HEAD}`,
+      '```md',
+      '- Required check: `npm test`',
+      '  Verdict: passed',
+      '  Evidence: pass',
+      '```',
+    ].join('\n'));
+    assert.deepEqual(fenced.entries, []);
+    assert.deepEqual(fenced.errors, []);
+  });
 });
 
 describe('status check helpers', () => {
@@ -1288,6 +1346,28 @@ describe('runPreflight (injected gh runner)', () => {
     });
     assert.equal(result.ok, false, result.errors.join('\n'));
     assert.ok(result.errors.some(error => /checkpoint/i.test(error)));
+  });
+
+  it('counts legacy outcomes for authorization without requiring them to supply finding IDs', () => {
+    const artifact = 'b'.repeat(40);
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: artifact,
+        body: prBody({ head: artifact, entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }),
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']) },
+      reviewHistory: {
+        events: [
+          { type: 'outcome', status: 'needs_revision', artifact: HEAD, findingIds: [], legacyMissingFindingIds: true, sourceOrder: 0 },
+        ],
+        errors: [],
+      },
+      reviewBudget: 2,
+    });
+    assert.equal(result.ok, true, result.errors.join('\n'));
+    assert.ok(!result.errors.some(error => /resolution matrix|bullet entry/i.test(error)), result.errors.join('\n'));
   });
 });
 
@@ -2317,7 +2397,7 @@ describe('Phase 29 - Defect: checkpoint replay passes', () => {
   });
 });
 
-describe('Phase 29 - Defect: missing resolution-matrix row passes', () => {
+describe('Phase 29 - Defect: missing resolution-matrix bullet entry passes', () => {
   it('re-review without resolution matrix should fail', () => {
     const reviewOutcomes = [
       { status: 'needs_revision', artifact: HEAD, findingIds: ['F-1', 'F-2', 'F-3'] },
@@ -2331,6 +2411,10 @@ describe('Phase 29 - Defect: missing resolution-matrix row passes', () => {
     assert.ok(result.resolutionMatrixValidation === null, 'Should have no matrix validation because matrix is missing');
     assert.ok(result.errors.some(e => /resolution matrix/i.test(e)),
       `Expected resolution matrix error, got: ${result.errors.join('; ')}`);
+    const diagnostic = result.diagnostics.find(item => item.category === 'revision_resolution');
+    assert.deepEqual(diagnostic.requiredFindingIds, ['F-1', 'F-2', 'F-3']);
+    assert.deepEqual(diagnostic.expectedValues, ['resolved', 'disputed', 'blocked']);
+    assert.match(diagnostic.expectedShape, /^- \[F-1\] resolved\|disputed\|blocked:/);
   });
 
   it('first review without prior findings should pass without matrix', () => {
@@ -2359,6 +2443,44 @@ describe('Phase 29 - Defect: missing resolution-matrix row passes', () => {
       reviewOutcomes,
     });
     assert.equal(result.ok, true, 'Complete resolution matrix should allow re-review');
+  });
+
+  it('reports one parser-level repair shape for a malformed live resolution section', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) +
+          '\n\n## Revision Resolution\n\n| Finding | Disposition |\n| --- | --- |\n| F-1 | resolved |',
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+      reviewOutcomes: [{ status: 'needs_revision', artifact: HEAD, findingIds: ['F-1', 'F-2'] }],
+    });
+    const resolutionErrors = result.failureCategories
+      .find(category => category.category === 'revision_resolution')?.errors ?? [];
+    assert.equal(resolutionErrors.length, 1);
+    assert.match(resolutionErrors[0], /live top-level bullet entries/i);
+    assert.doesNotMatch(resolutionErrors.join('\n'), /no bullet entry/i);
+  });
+
+  it('does not activate a fenced canonical-looking resolution bullet', () => {
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody({ entries: [{ check: '`npm test`', verdict: 'passed', evidence: 'ok' }] }) +
+          `\n\n## Revision Resolution\n\n\`\`\`md\n- [F-1] resolved: repaired the evidence on ${HEAD}\n\`\`\``,
+        statusCheckRollup: [],
+      },
+      issueData: { number: 7, body: issueBody(['`npm test`']), comments: [] },
+      reviewOutcomes: [{ status: 'needs_revision', artifact: HEAD, findingIds: ['F-1'] }],
+    });
+    assert.equal(result.resolutionMatrixValidation, null);
+    const resolutionErrors = result.failureCategories
+      .find(category => category.category === 'revision_resolution')?.errors ?? [];
+    assert.equal(resolutionErrors.length, 1);
+    assert.match(resolutionErrors[0], /outside fenced code/i);
   });
 });
 

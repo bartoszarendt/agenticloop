@@ -130,7 +130,7 @@ export function parseReviewCheckpoint(text, options = {}) {
     errors.push('checkpoint marker is missing the Review Round Checkpoint section');
   }
 
-  const parsed = fieldsFromLiveLines(section?.body ?? '');
+  const parsed = fieldsFromLiveLines((section?.lines ?? []).map(line => line.raw).join('\n'));
   errors.push(...parsed.errors);
   const fields = parsed.fields;
   const direction = fields.direction?.toLowerCase() ?? null;
@@ -143,7 +143,9 @@ export function parseReviewCheckpoint(text, options = {}) {
 
   let reviewCount = null;
   if (!direction) errors.push('checkpoint is missing required field "direction"');
-  else if (!VALID_DIRECTIONS.has(direction)) errors.push(`checkpoint direction '${direction}' is not valid`);
+  else if (!VALID_DIRECTIONS.has(direction)) {
+    errors.push(`checkpoint direction '${direction}' is not valid; expected one of: ${[...VALID_DIRECTIONS].join(', ')}`);
+  }
 
   if (!cause) errors.push('checkpoint is missing required field "cause"');
   else if (!VALID_CHECKPOINT_CAUSES.has(cause)) {
@@ -222,8 +224,12 @@ export function validateCheckpointSchema(checkpoint, options = {}) {
   const errors = [];
   const direction = String(checkpoint.direction ?? '');
   const cause = String(checkpoint.cause ?? '');
-  if (!VALID_DIRECTIONS.has(direction)) errors.push(`checkpoint direction '${direction}' is not valid`);
-  if (!VALID_CHECKPOINT_CAUSES.has(cause)) errors.push(`checkpoint cause '${cause}' is not valid`);
+  if (!VALID_DIRECTIONS.has(direction)) {
+    errors.push(`checkpoint direction '${direction}' is not valid; expected one of: ${[...VALID_DIRECTIONS].join(', ')}`);
+  }
+  if (!VALID_CHECKPOINT_CAUSES.has(cause)) {
+    errors.push(`checkpoint cause '${cause}' is not valid; expected one of: ${[...VALID_CHECKPOINT_CAUSES].join(', ')}`);
+  }
   if (!Number.isInteger(checkpoint.reviewCount) || checkpoint.reviewCount < 1) {
     errors.push(`checkpoint review_count must be a positive integer, got ${checkpoint.reviewCount}`);
   }

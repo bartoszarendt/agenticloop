@@ -381,6 +381,38 @@ describe('validateFilesTaskRecord review provenance', () => {
     assert.ok(!errors.some(error => /checkpoint.*required|budget.*exhausted/i.test(error)), errors.join('\n'));
   });
 
+  it('reports one format error, not missing findings, for a malformed live files resolution section', () => {
+    const content = [
+      filesTaskRecord({ status: 'in-progress', implementationArtifact: 'commit:def456' }),
+      filesReviewHistory({ checkpoint: true }),
+      '## Revision Resolution',
+      '',
+      '| Finding | Disposition |',
+      '| --- | --- |',
+      '| F-1 | resolved |',
+    ].join('\n\n');
+    const errors = validateFilesTaskRecord(content, 'T-001.md', { activeTaskBackend: 'files' });
+    const resolutionErrors = errors.filter(error => /resolution|prior finding/i.test(error));
+    assert.equal(resolutionErrors.length, 1, errors.join('\n'));
+    assert.match(resolutionErrors[0], /live top-level bullet entries/i);
+    assert.doesNotMatch(resolutionErrors[0], /no bullet entry/i);
+  });
+
+  it('does not activate a fenced resolution bullet in files validation', () => {
+    const content = [
+      filesTaskRecord({ status: 'in-progress', implementationArtifact: 'commit:def456' }),
+      filesReviewHistory({ checkpoint: true }),
+      '## Revision Resolution',
+      '',
+      '```md',
+      '- [F-1] resolved: repaired the evidence on commit:def456',
+      '```',
+    ].join('\n\n');
+    const errors = validateFilesTaskRecord(content, 'T-001.md', { activeTaskBackend: 'files' });
+    assert.equal(errors.filter(error => /revision resolution|prior finding/i.test(error)).length, 1, errors.join('\n'));
+    assert.ok(errors.some(error => /outside fenced code/i.test(error)), errors.join('\n'));
+  });
+
   it('does not require a resolution matrix before the authorized revision starts', () => {
     const content = [
       filesTaskRecord({

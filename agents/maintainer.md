@@ -263,7 +263,11 @@ For an implementation-changing Lens 1 failure, retain the Lens 2 and Lens 3
 headings but state that full assessment is deferred because implementation
 revision is pending. Do not imply clean verdicts. Every `needs_revision` review
 uses this one body to carry its consolidated revision packet and exact-artifact
-reference.
+reference. Assign each required revision a stable `F-<positive integer>` ID,
+write that ID directly in `## Required Revisions`, and repeat the same unique IDs
+in the one `AGENT_REVIEW_FINDINGS: F-1, F-2` marker field. The Engineer preserves
+those IDs unchanged in `## Revision Resolution`; do not infer IDs from list order
+or renumber them during the episode.
 
 ## Composition
 

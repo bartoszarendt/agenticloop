@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import {
   FIXUP_FIELDS,
   detectFixupEpisodes,
+  detectFixupHeadingNearMisses,
   validateFixupEpisode,
   validateFilesFixup,
   commitHasMaintainerFixupTrailers,
@@ -140,6 +141,24 @@ describe('detectFixupEpisodes', () => {
   it('ignores an indented-code example subsection', () => {
     const body = ['# Task', '', `    ${MAINTAINER_FIXUP_HEADING}`, '    - Finding: indented'].join('\n');
     assert.deepEqual(detectFixupEpisodes(body), []);
+  });
+
+  it('reports live wrong-level or near-match headings without creating an episode', () => {
+    for (const heading of ['### Maintainer Review Fixup', '## maintainer review fixup']) {
+      assert.deepEqual(detectFixupEpisodes(heading), []);
+      assert.match(detectFixupHeadingNearMisses(heading).join('\n'), /expected '## Maintainer Review Fixup'/);
+    }
+  });
+
+  it('does not mistake a related prose heading for a fixup near miss', () => {
+    assert.deepEqual(
+      detectFixupHeadingNearMisses('## Maintainer Review Fixup Eligibility'),
+      []
+    );
+  });
+
+  it('keeps non-live near-match headings inert and silent', () => {
+    assert.deepEqual(detectFixupHeadingNearMisses('```md\n### Maintainer Review Fixup\n```'), []);
   });
 });
 
@@ -621,7 +640,7 @@ function fixupCommit({ oid = HEAD, task = 'T-001', agent = 'maintainer' } = {}) 
   return { oid, messageHeadline: 'Fix duplicated guard', messageBody: `Task: ${task}\nAgent: ${agent}` };
 }
 
-function auditData({ comments, commits = [baseCommit(), fixupCommit()], issueBody = '', taskPrData = [] } = {}) {
+function auditData({ comments, commits = [baseCommit(), fixupCommit()], issueBody = '---\ntask_id: T-001\n---', taskPrData = [] } = {}) {
   return {
     prData: { number: 42, headRefOid: HEAD, closingIssuesReferences: [{ number: 7 }], comments, reviews: [], commits },
     issueData: { number: 7, body: issueBody },
@@ -848,6 +867,15 @@ describe('GitHub review audit: Maintainer Review Fixup', () => {
     assert.equal(result.ok, true, result.errors.join('\n'));
   });
 
+  it('uses the linked issue number for legacy fixup attribution', () => {
+    const result = evaluateGitHubReviewAudit(auditData({
+      comments: [reviewMarker({ fixup: ghFixup() })],
+      commits: [baseCommit(), fixupCommit({ task: '#7' })],
+      issueBody: '# Legacy task',
+    }));
+    assert.equal(result.ok, true, result.errors.join('\n'));
+  });
+
   it('rejects a fixup whose resulting artifact is the head but not a PR commit', () => {
     const result = evaluateGitHubReviewAudit(auditData({
       comments: [reviewMarker({ fixup: ghFixup() })],
@@ -868,6 +896,46 @@ describe('GitHub review audit: Maintainer Review Fixup', () => {
     const result = evaluateGitHubReviewAudit(auditData({ comments: [{ body, author: LOOP_ACCOUNT }] }));
     assert.equal(result.maintainerFixup, false);
     assert.equal(result.ok, true, result.errors.join('\n'));
+  });
+
+  it('keeps an outsider canonical fixup heading inert on the current PR', () => {
+    const outsider = { login: 'outside-bot', type: 'User' };
+    const result = evaluateGitHubReviewAudit(auditData({
+      comments: [
+        reviewMarker({ mode: 'host_subagent' }),
+        { body: ghFixup(), author: outsider },
+      ],
+    }));
+    assert.equal(result.ok, true, result.errors.join('\n'));
+    assert.equal(result.maintainerFixup, false);
+    assert.equal(result.maintainerFixupEpisodeCount, 0);
+  });
+
+  it('keeps an outsider fixup near miss inert on current and related PRs', () => {
+    const outsider = { login: 'outside-bot', type: 'User' };
+    const outsiderNearMiss = { body: '### Maintainer Review Fixup\n- Finding: outsider text', author: outsider };
+    const result = evaluateGitHubReviewAudit(auditData({
+      comments: [reviewMarker({ mode: 'host_subagent' }), outsiderNearMiss],
+      taskPrData: [{
+        number: 41,
+        comments: [outsiderNearMiss, { body: ghFixup({ base: OLD_BASE, resulting: OLD_HEAD }), author: outsider }],
+        reviews: [],
+      }],
+    }));
+    assert.equal(result.ok, true, result.errors.join('\n'));
+    assert.equal(result.maintainerFixup, false);
+    assert.equal(result.maintainerFixupEpisodeCount, 0);
+  });
+
+  it('keeps a trusted malformed fixup heading actionable', () => {
+    const result = evaluateGitHubReviewAudit(auditData({
+      comments: [
+        reviewMarker({ mode: 'host_subagent' }),
+        { body: '### Maintainer Review Fixup\n- Finding: malformed', author: LOOP_ACCOUNT },
+      ],
+    }));
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /expected '## Maintainer Review Fixup'/);
   });
 
   it('a fallback review mode without a subsection does not count as a fixup (case 15)', () => {

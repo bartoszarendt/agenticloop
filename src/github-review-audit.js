@@ -4,8 +4,14 @@ import { spawnSync } from 'node:child_process';
 import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
 import { resolveIssueNumber } from './github-preflight.js';
 import { parseFrontmatter } from './frontmatter.js';
+import { githubAttributionShape, resolveGitHubTaskIdentity } from './github-task-identity.js';
 import { filterLiveLines } from './markdown.js';
-import { parseReviewMarker as parseSharedReviewMarker } from './review-history.js';
+import {
+  extractReviewAuthor,
+  isLegacyMissingFindingsMarker,
+  isTrustedReviewMarker,
+  parseReviewMarker as parseSharedReviewMarker,
+} from './review-history.js';
 import {
   REVIEW_MODES,
   satisfiesIndependentReview,
@@ -14,6 +20,7 @@ import {
 import {
   bareArtifactToken,
   commitHasMaintainerFixupTrailers,
+  detectFixupHeadingNearMisses,
   commitTaskTrailerValues,
   detectFixupEpisodes,
   validateFixupEpisode,
@@ -30,17 +37,22 @@ export class GitHubReviewAuditError extends Error {
 const PR_FIELDS = ['number', 'headRefOid', 'closingIssuesReferences', 'comments', 'reviews', 'commits'].join(',');
 const ISSUE_FIELDS = ['number', 'body'].join(',');
 
+/** @param {any} source @param {any} expectedAccount */
+function trustedCarrier(source, expectedAccount) {
+  return isTrustedReviewMarker({ author: extractReviewAuthor(source) }, expectedAccount);
+}
+
 /**
- * Detect live `## Maintainer Review Fixup` episodes across the PR's marker
- * sources (PR issue comments and PR review bodies -- the same set markers are
- * read from), retaining source metadata (comment/review ordinal) so validation
- * errors can identify where the episode was recorded. Fenced/quoted examples
- * are ignored by the shared detector.
+ * Detect live `## Maintainer Review Fixup` episodes across trusted PR marker
+ * sources, retaining source metadata so validation errors identify the carrier.
+ * Fenced and quoted examples are ignored by the shared detector.
  *
  * @param {any} prData
+ * @param {any} expectedAccount
+ * @param {string} [sourcePrefix]
  * @returns {Array<import('./maintainer-fixup.js').FixupEpisode & { source: string }>}
  */
-function collectFixupEpisodes(prData, sourcePrefix = `PR #${prData?.number ?? '?'}`) {
+function collectFixupEpisodes(prData, expectedAccount, sourcePrefix = `PR #${prData?.number ?? '?'}`) {
   const sources = [
     ...(Array.isArray(prData?.comments) ? prData.comments : [])
       .map((/** @type {any} */ entry, /** @type {number} */ index) => ({ entry, kind: 'comment', ordinal: index + 1 })),
@@ -50,12 +62,29 @@ function collectFixupEpisodes(prData, sourcePrefix = `PR #${prData?.number ?? '?
 
   const episodes = [];
   for (const { entry, kind, ordinal } of sources) {
+    if (!trustedCarrier(entry, expectedAccount)) continue;
     const body = typeof entry === 'string' ? entry : String(entry?.body ?? '');
     for (const episode of detectFixupEpisodes(body)) {
       episodes.push({ ...episode, source: `${sourcePrefix} ${kind} ${ordinal}` });
     }
   }
   return episodes;
+}
+
+/** @param {any} prData @param {any} expectedAccount @param {string} [sourcePrefix] */
+function collectFixupHeadingDiagnostics(prData, expectedAccount, sourcePrefix = `PR #${prData?.number ?? '?'}`) {
+  const sources = [
+    ...(Array.isArray(prData?.comments) ? prData.comments : [])
+      .map((/** @type {any} */ entry, /** @type {number} */ index) => ({ entry, kind: 'comment', ordinal: index + 1 })),
+    ...(Array.isArray(prData?.reviews) ? prData.reviews : [])
+      .map((/** @type {any} */ entry, /** @type {number} */ index) => ({ entry, kind: 'review', ordinal: index + 1 })),
+  ];
+  return sources.flatMap(({ entry, kind, ordinal }) => {
+    if (!trustedCarrier(entry, expectedAccount)) return [];
+    const body = typeof entry === 'string' ? entry : String(entry?.body ?? '');
+    return detectFixupHeadingNearMisses(body)
+      .map(error => `${sourcePrefix} ${kind} ${ordinal}: ${error}`);
+  });
 }
 
 /** @param {any} commit */
@@ -206,10 +235,10 @@ function collectPrCommits(prData) {
  *
  * @param {any} prData
  * @param {{ fields: Record<string, string> }} episode
- * @param {string|null} canonicalTaskId
+ * @param {{ taskId: string }|null} taskIdentity
  * @returns {string[]}
  */
-function validateCurrentFixupAttribution(prData, episode, canonicalTaskId) {
+function validateCurrentFixupAttribution(prData, episode, taskIdentity) {
   const { commits, error } = collectPrCommits(prData);
   if (error) return [error];
 
@@ -229,38 +258,27 @@ function validateCurrentFixupAttribution(prData, episode, canonicalTaskId) {
 
   const attributed = range.filter(commit => commitHasMaintainerFixupTrailers(commit.message));
   if (attributed.length === 0) {
+    const expected = taskIdentity ? githubAttributionShape(taskIdentity.taskId, 'maintainer') : null;
     return [
-      'a Maintainer Review Fixup is disclosed but no commit in the fixup range carries the Task: and Agent: maintainer attribution trailers',
+      expected
+        ? `a Maintainer Review Fixup is disclosed but no commit in the fixup range carries the Task: and Agent: maintainer attribution trailers; expected '${expected.taskTrailer}' and '${expected.agentTrailer}'`
+        : 'a Maintainer Review Fixup is disclosed but no commit in the fixup range carries the required Task: <task-id> and Agent: maintainer attribution trailers',
     ];
   }
 
-  if (canonicalTaskId) {
+  if (taskIdentity) {
+    const expected = githubAttributionShape(taskIdentity.taskId, 'maintainer');
     const matchesTask = attributed.some(commit =>
-      commitTaskTrailerValues(commit.message).some(value => value === canonicalTaskId)
+      commitTaskTrailerValues(commit.message).some(value => value === taskIdentity.taskId)
     );
     if (!matchesTask) {
       return [
-        `Maintainer Review Fixup commit attribution does not identify the task: no fixup-range commit carries a 'Task: ${canonicalTaskId}' trailer`,
+        `Maintainer Review Fixup commit attribution does not identify the task: no fixup-range commit carries a '${expected.taskTrailer}' trailer; expected '${expected.agentTrailer}'`,
       ];
     }
   }
 
   return [];
-}
-
-/**
- * Canonical task identity for trailer verification, when the linked task issue
- * declares one via YAML frontmatter `task_id`.
- *
- * @param {any} issueData
- * @returns {string|null}
- */
-function resolveCanonicalTaskId(issueData) {
-  const [frontmatter] = parseFrontmatter(String(issueData?.body ?? ''));
-  const taskId = frontmatter?.task_id;
-  if (typeof taskId !== 'string') return null;
-  const trimmed = taskId.trim();
-  return trimmed || null;
 }
 
 /**
@@ -564,10 +582,15 @@ export function evaluateGitHubReviewAudit({
   const errors = [];
   const headRefOid = String(prData?.headRefOid ?? '').toLowerCase();
   const markers = collectReviewMarkers(prData);
+  const trustedMarkers = markers.filter(marker => isTrustedReviewMarker(marker, expectedAccount));
+  const trustedOutcomeMarkers = trustedMarkers.filter(marker => marker.type === 'outcome');
   const requirement = taskRequiresIndependentReview(issueData?.body);
   if (!headRefOid) errors.push('PR head SHA is unavailable; cannot audit review provenance');
   if (requirement.error) errors.push(requirement.error);
-  for (const marker of markers) errors.push(...marker.errors);
+  for (const marker of trustedOutcomeMarkers) {
+    if (isLegacyMissingFindingsMarker(marker, headRefOid)) continue;
+    errors.push(...marker.errors);
+  }
 
   // Phase 29: expected artifact validation
   let normalizedExpectedArtifact = null;
@@ -583,26 +606,29 @@ export function evaluateGitHubReviewAudit({
 
   // Phase 2: Verify marker author identity
   const expectedLogin = expectedAccount?.login ? String(expectedAccount.login).toLowerCase() : null;
-  const current = markers.filter(marker => marker.artifact === headRefOid && marker.errors.length === 0);
-  if (current.length === 1) {
-    const marker = current[0];
-    if (!expectedLogin) {
-      errors.push('cannot verify marker author: expected loop account could not be resolved');
-    } else if (!marker.author) {
-      errors.push('marker author identity is missing; cannot verify loop account ownership');
-    } else {
-      const markerLogin = String(marker.author.login).toLowerCase();
-      if (markerLogin !== expectedLogin) {
-        errors.push(`marker author '${marker.author.login}' does not match expected loop account '${expectedAccount.login}'`);
-      }
-    }
-  }
+  const currentCandidates = trustedOutcomeMarkers.filter(marker => marker.artifact === headRefOid);
+  const current = currentCandidates.filter(marker => marker.errors.length === 0);
+  if (!expectedLogin) errors.push('cannot verify marker author: expected loop account could not be resolved');
 
   if (current.length === 0) {
-    if (markers.some(marker => marker.artifact && marker.artifact !== headRefOid)) {
-      errors.push('review provenance is stale: no valid marker reviews the current PR head');
-    } else {
-      errors.push('no valid review marker for the current PR head');
+    if (currentCandidates.length === 0) {
+      if (trustedMarkers.some(marker => marker.artifact && marker.artifact !== headRefOid)) {
+        errors.push('review provenance is stale: no valid marker reviews the current PR head');
+      } else {
+        errors.push('no valid review marker for the current PR head');
+      }
+      for (const marker of trustedMarkers.filter(marker => marker.nearMiss)) {
+        errors.push(...marker.errors);
+      }
+      for (const marker of markers.filter(marker =>
+        marker.type === 'outcome' && marker.artifact === headRefOid &&
+        !isTrustedReviewMarker(marker, expectedAccount)
+      )) {
+        const author = marker.author?.login ? `'${marker.author.login}'` : 'an unauthenticated author';
+        errors.push(
+          `non-authoritative review marker for the current PR head is authored by ${author}, not expected loop account '${expectedAccount?.login ?? '(unresolved)'}'; publish the marker from the expected account`
+        );
+      }
     }
   }
   if (current.length > 1) errors.push('contradictory or duplicate valid review markers for the current PR head');
@@ -631,11 +657,12 @@ export function evaluateGitHubReviewAudit({
   // current review mode; a later genuinely delegated review may use
   // host_subagent. Historical episodes are not attribution-checked because a
   // superseded revision may no longer be reachable from the PR commit list.
-  const currentPrFixupEpisodes = collectFixupEpisodes(prData);
+  const currentPrFixupEpisodes = collectFixupEpisodes(prData, expectedAccount);
+  errors.push(...collectFixupHeadingDiagnostics(prData, expectedAccount));
   const currentPrNumber = Number(prData?.number);
   const relatedPrFixupEpisodes = (Array.isArray(taskPrData) ? taskPrData : [])
     .filter(relatedPr => Number(relatedPr?.number) !== currentPrNumber)
-    .flatMap(relatedPr => collectFixupEpisodes(relatedPr));
+    .flatMap(relatedPr => collectFixupEpisodes(relatedPr, expectedAccount));
   const fixupEpisodes = [...relatedPrFixupEpisodes, ...currentPrFixupEpisodes];
   const fixupPresent = fixupEpisodes.length > 0;
   let currentFixup = null;
@@ -666,7 +693,7 @@ export function evaluateGitHubReviewAudit({
           `a Maintainer Review Fixup is disclosed for the current PR head but the current review mode is '${outcome.mode}'; a self-accepted fixup must record AGENT_REVIEW_MODE: single_agent_fallback`
         );
       }
-      errors.push(...validateCurrentFixupAttribution(prData, currentFixup, resolveCanonicalTaskId(issueData)));
+      errors.push(...validateCurrentFixupAttribution(prData, currentFixup, resolveGitHubTaskIdentity(issueData)));
     }
   }
 
@@ -909,7 +936,7 @@ export function runGitHubReviewAudit({ pr, issue, repo, expectedStatus, expected
   // fixup. Fail closed if that task history cannot be loaded.
   /** @type {Array<any>} */
   let taskPrData = [];
-  if (collectFixupEpisodes(prData).length > 0) {
+  if (collectFixupEpisodes(prData, expectedAccount).length > 0) {
     const ownerName = resolveRepoOwnerName(commandRunner, repo);
     const parts = String(ownerName).split('/');
     if (parts.length !== 2 || !parts[0] || !parts[1]) {
@@ -928,7 +955,12 @@ export function runGitHubReviewAudit({ pr, issue, repo, expectedStatus, expected
   // Determine whether the current valid marker requires live human review data.
   const headRefOid = String(prData?.headRefOid ?? '').toLowerCase();
   const markers = collectReviewMarkers(prData);
-  const current = markers.filter(marker => marker.artifact === headRefOid && marker.errors.length === 0);
+  const current = markers.filter(marker =>
+    isTrustedReviewMarker(marker, expectedAccount) && marker.artifact === headRefOid
+  );
+  // Preserve a malformed trusted marker for independent-human prefetch. The
+  // evaluator will fail it closed; this only prevents a valid mode from being
+  // erased before its external evidence can be checked.
   const currentMarker = current.length === 1 ? current[0] : null;
   const requirement = taskRequiresIndependentReview(issueData?.body);
 

@@ -1,9 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { parseFrontmatter } from './frontmatter.js';
+import { AUDIT_RUN_LABELS, parseAuditRecord } from './audit-record.js';
 import { hasMarkdownHeading, markdownLines, markdownSection, parseAtxHeading } from './markdown.js';
 import {
   AUDIT_RECORD_TEMPLATE_RELATIVE_PATH,
+  AUDIT_INVOCATION_MODES,
   AUDIT_REQUIRED_SECTION_HEADINGS,
+  AUDIT_VERDICTS,
   BACKENDS_SOURCE_DIRECTORY,
   DECISION_RECORD_TEMPLATE_RELATIVE_PATH,
   IMPROVEMENT_PROPOSAL_RISK_LEVELS,
@@ -226,6 +229,53 @@ function validateAuditRecordTemplateFrontmatter(content, relPath) {
   return errors;
 }
 
+function validateAuditTemplateRunExample(content, relPath) {
+  const errors = [];
+  const marker = '<!-- agenticloop:canonical-audit-run -->';
+  const markerIndex = content.indexOf(marker);
+  const fenceStart = markerIndex === -1 ? -1 : content.indexOf('```markdown', markerIndex);
+  const bodyStart = fenceStart === -1 ? -1 : content.indexOf('\n', fenceStart) + 1;
+  const fenceEnd = bodyStart === -1 ? -1 : content.indexOf('\n```', bodyStart);
+  if (markerIndex === -1 || fenceStart === -1 || fenceEnd === -1) {
+    return [`${relPath} must name and fence a canonical audit Run 1 example`];
+  }
+  const runExample = content.slice(bodyStart, fenceEnd);
+  const runs = parseAuditRecord(`## Audit History\n\n${runExample}`).history;
+  if (runs.length !== 1 || runs[0].runNumber !== 1) {
+    return [`${relPath} must contain one parseable '### Run 1' audit-history example`];
+  }
+  const run = runs[0];
+  const occurrences = run.fieldOccurrences ?? [];
+  const labels = occurrences.map(occurrence => occurrence.label);
+  for (const label of AUDIT_RUN_LABELS) {
+    const matching = occurrences.filter(occurrence => occurrence.label === label);
+    if (matching.length === 0) {
+      errors.push(`${relPath} audit Run 1 example is missing '${label}'`);
+    } else if (matching.length > 1) {
+      errors.push(`${relPath} audit Run 1 example repeats '${label}'; each canonical label appears exactly once`);
+    } else if (!matching[0].value) {
+      errors.push(`${relPath} audit Run 1 example is missing a value for '${label}'`);
+    }
+  }
+  for (const label of labels) {
+    if (!AUDIT_RUN_LABELS.includes(label)) {
+      errors.push(`${relPath} audit Run 1 example has unknown label '${label}'; expected one of: ${AUDIT_RUN_LABELS.join(', ')}`);
+    }
+  }
+  if (labels.length === AUDIT_RUN_LABELS.length &&
+      labels.every(label => AUDIT_RUN_LABELS.includes(label)) &&
+      labels.some((label, index) => label !== AUDIT_RUN_LABELS[index])) {
+    errors.push(`${relPath} audit Run 1 example labels must be ordered: ${AUDIT_RUN_LABELS.join(', ')}`);
+  }
+  if (!AUDIT_INVOCATION_MODES.includes(run.invocationMode)) {
+    errors.push(`${relPath} audit Run 1 invocation mode must be one of: ${AUDIT_INVOCATION_MODES.join(', ')}`);
+  }
+  if (!AUDIT_VERDICTS.includes(run.verdict)) {
+    errors.push(`${relPath} audit Run 1 verdict must be one of: ${AUDIT_VERDICTS.join(', ')}`);
+  }
+  return errors;
+}
+
 export function renderTaskRecordRequiredSectionBlock() {
   return renderHeadingBlock(TASK_REQUIRED_SECTION_HEADINGS);
 }
@@ -308,6 +358,7 @@ export function validateCanonicalTemplates(repoRoot, assetLayout = resolveToolki
     const text = readFileSync(auditTemplatePath, 'utf-8');
     errors.push(...validateAuditRecordTemplateFrontmatter(text, auditTemplateLabel));
     errors.push(...validateOrderedHeadings(text, AUDIT_REQUIRED_SECTION_HEADINGS, auditTemplateLabel));
+    errors.push(...validateAuditTemplateRunExample(text, auditTemplateLabel));
   }
 
   for (const relPath of TEMPLATE_CONSUMER_RELATIVE_PATHS) {

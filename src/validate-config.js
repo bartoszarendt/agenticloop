@@ -757,7 +757,8 @@ export function validateFilesReviewControls(content, filename, {
   errors.push(...checkpoint.errors.map(error => `Task record '${filename}' ${error}`));
 
   const priorOutcome = [...history.events].reverse().find(event =>
-    event.type === 'outcome' && event.status === 'needs_revision' && Array.isArray(event.findingIds)
+    !event.legacyMissingFindingIds && event.type === 'outcome' &&
+    event.status === 'needs_revision' && Array.isArray(event.findingIds)
   );
   const findingIds = priorOutcome?.findingIds ?? [];
   const laterReviewOutcome = priorOutcome
@@ -773,9 +774,9 @@ export function validateFilesReviewControls(content, filename, {
   if (findingIds.length > 0 && !authorizingRevision && (revisedArtifact || laterReviewOutcome)) {
     const matrix = parseResolutionMatrix(content);
     errors.push(...matrix.errors.map(error => `Task record '${filename}' ${error}`));
-    if (!matrix.found) {
+    if (matrix.status === 'absent') {
       errors.push(`Task record '${filename}' re-review requires a resolution matrix for ${findingIds.length} prior finding(s)`);
-    } else {
+    } else if (matrix.status === 'parsed') {
       const result = validateResolutionMatrix({
         requiredFindingIds: findingIds,
         entries: matrix.entries,

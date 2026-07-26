@@ -5,7 +5,7 @@
  */
 
 import { markdownLines, markdownSection, parseAtxHeading } from './markdown.js';
-import { isValidReviewMode } from './review-provenance.js';
+import { REVIEW_MODES, isValidReviewMode } from './review-provenance.js';
 import { parseReviewCheckpoint } from './review-checkpoint.js';
 import { FINDING_ID_RE } from './resolution-matrix.js';
 
@@ -47,36 +47,73 @@ export function parseFindingIds(raw) {
   return { findingIds: values, errors };
 }
 
+const MISSING_FINDINGS_ERROR = 'needs_revision review marker must contain exactly one AGENT_REVIEW_FINDINGS field';
+
+/** @param {object|null|undefined} marker @param {string} currentArtifact */
+export function isLegacyMissingFindingsMarker(marker, currentArtifact) {
+  return marker?.status === 'needs_revision' &&
+    Boolean(marker.artifact) &&
+    marker.artifact !== String(currentArtifact ?? '').toLowerCase() &&
+    marker.errors?.length === 1 && marker.errors[0] === MISSING_FINDINGS_ERROR;
+}
+
+/** @param {object|null|undefined} marker @param {object|null|undefined} expected */
+export function isTrustedReviewMarker(marker, expected) {
+  const expectedLogin = String(expected?.login ?? '').toLowerCase();
+  const markerLogin = String(marker?.author?.login ?? '').toLowerCase();
+  return Boolean(expectedLogin && markerLogin && markerLogin === expectedLogin);
+}
+
 /**
  * Parse a GitHub review marker without deciding whether its source is trusted.
  * `github-review-audit` re-exports this function to keep its public API stable.
+ * Needs-revision markers require exactly one findings field by default. This
+ * intentionally tightened the former caller-selectable contract.
  */
-export function parseReviewMarker(body, source = {}, { requireFindingIds = false } = {}) {
-  const liveBody = markdownLines(String(body ?? '')).filter(line => line.live).map(line => line.raw).join('\n');
+export function parseReviewMarker(body, source = {}) {
+  const rawBody = String(body ?? '');
+  const liveBody = markdownLines(rawBody).filter(line => line.live).map(line => line.raw).join('\n');
   const statuses = markerValues(liveBody, 'AGENT_REVIEW_STATUS');
   const modes = markerValues(liveBody, 'AGENT_REVIEW_MODE');
   const artifacts = markerValues(liveBody, 'AGENT_REVIEW_ARTIFACT');
   const findings = markerValues(liveBody, 'AGENT_REVIEW_FINDINGS');
   const humanRefs = markerValues(liveBody, 'AGENT_HUMAN_REVIEW_REF');
-  if (statuses.length + modes.length + artifacts.length + findings.length + humanRefs.length === 0) return null;
+  if (statuses.length + modes.length + artifacts.length + findings.length + humanRefs.length === 0) {
+    const hasMarkerLikeText = markdownLines(rawBody).some(line =>
+      /AGENT_(?:REVIEW_(?:STATUS|MODE|ARTIFACT|FINDINGS)|HUMAN_REVIEW_REF)\s*:/i.test(line.raw)
+    );
+    if (!hasMarkerLikeText) return null;
+    return {
+      type: 'near_miss', status: '', mode: '', artifact: '', findingIds: [], humanReviewRef: '',
+      source, author: extractReviewAuthor(source), nearMiss: true,
+      errors: ['review marker-like text is not a live marker; fields must be unbulleted column-zero lines outside fenced code, blockquotes, and indented code'],
+    };
+  }
   const errors = [];
   for (const [name, values] of [['status', statuses], ['mode', modes], ['artifact', artifacts]]) {
     if (values.length !== 1) errors.push(`review marker must contain exactly one ${name}`);
   }
-  if (findings.length > 1) errors.push('review marker must contain at most one findings field');
   if (humanRefs.length > 1) errors.push('review marker must contain at most one human review reference');
   const status = statuses[0] ?? '';
   const mode = modes[0] ?? '';
   const artifact = (artifacts[0] ?? '').toLowerCase();
-  if (status && !['accepted', 'needs_revision'].includes(status)) errors.push(`unsupported review status '${status}'`);
-  if (mode && !isValidReviewMode(mode)) errors.push(`unsupported review mode '${mode}'`);
+  if (status && !['accepted', 'needs_revision'].includes(status)) {
+    errors.push(`unsupported review status '${status}'; expected one of: accepted, needs_revision`);
+  }
+  if (mode && !isValidReviewMode(mode)) {
+    errors.push(`unsupported review mode '${mode}'; expected one of: ${REVIEW_MODES.join(', ')}`);
+  }
   if (artifact && !/^[0-9a-f]{40}$/.test(artifact)) errors.push('review artifact must be a full 40-character PR head SHA');
   const hasMaintainerTrailer = markdownLines(String(body ?? '')).some(line =>
     line.live && /^\s*\[\[agent:\s*maintainer\]\]\s*$/i.test(line.raw)
   );
-  if (!hasMaintainerTrailer) errors.push('agent review marker is missing the maintainer attribution trailer');
+  if (!hasMaintainerTrailer) {
+    errors.push("agent review marker is missing the maintainer attribution trailer; expected '[[agent: maintainer]]'");
+  }
   const parsedFindings = status === 'needs_revision'
-    ? (findings.length || requireFindingIds ? parseFindingIds(findings[0] ?? '') : { findingIds: [], errors: [] })
+    ? findings.length === 1
+      ? parseFindingIds(findings[0])
+      : { findingIds: [], errors: [MISSING_FINDINGS_ERROR] }
     : { findingIds: [], errors: findings.length ? ['accepted review marker must not declare required findings'] : [] };
   errors.push(...parsedFindings.errors);
   return {
@@ -167,18 +204,31 @@ export function collectGitHubReviewHistory(prData, expectedAccount) {
     const author = extractReviewAuthor(source);
     const trusted = trustedLoopAuthor(author, expectedAccount);
     const reference = durableSourceReference(source, sourceOrder + 1);
-    const marker = parseReviewMarker(body, source, { requireFindingIds: true });
+    const marker = parseReviewMarker(body, source);
     const checkpoint = parseReviewCheckpoint(body, { carrier: 'github' });
-    if (trusted && marker && checkpoint.found) {
+    if (trusted && marker?.type === 'outcome' && checkpoint.found) {
       errors.push(`${entry.kind} ${reference}: one carrier cannot contain both a review outcome and a checkpoint`);
       continue;
     }
-    if (marker && trusted) {
+    // Near misses are diagnostic-only and cannot alter durable history. Do not
+    // let one skip a co-located checkpoint, which remains independently valid.
+    if (marker && trusted && !marker.nearMiss) {
       if (!reference) errors.push(`trusted ${entry.kind} review marker has no durable source reference`);
       else if (finalLiveRole(body) !== 'maintainer') {
-        errors.push(`${entry.kind} ${reference}: review marker must end with the maintainer attribution trailer`);
+        errors.push(`${entry.kind} ${reference}: review marker must end with the maintainer attribution trailer '[[agent: maintainer]]'`);
+      } else if (marker.errors.length && !isLegacyMissingFindingsMarker(marker, prData?.headRefOid)) {
+        errors.push(...marker.errors.map(error => `${entry.kind} ${reference}: ${error}`));
+      } else if (isLegacyMissingFindingsMarker(marker, prData?.headRefOid)) {
+        events.push({
+          ...marker,
+          legacyMissingFindingIds: true,
+          sourceReference: reference,
+          sourceTimestamp: githubSourceTimestamp(source),
+          sourceKind: entry.kind,
+          discoveryOrder: sourceOrder,
+          author,
+        });
       }
-      else if (marker.errors.length) errors.push(...marker.errors.map(error => `${entry.kind} ${reference}: ${error}`));
       else events.push({
         ...marker,
         sourceReference: reference,
@@ -196,7 +246,7 @@ export function collectGitHubReviewHistory(prData, expectedAccount) {
       } else if (!reference) {
         errors.push(`trusted ${entry.kind} checkpoint has no durable source reference`);
       } else if (checkpointRole !== 'orchestrator') {
-        errors.push(`${entry.kind} ${reference}: checkpoint must end with the orchestrator attribution trailer`);
+        errors.push(`${entry.kind} ${reference}: checkpoint must end with the orchestrator attribution trailer '[[agent: orchestrator]]'`);
       } else if (String(checkpoint.checkpoint.orchestratorAttribution).toLowerCase() !== String(author?.login ?? '').toLowerCase()) {
         errors.push(`${entry.kind} ${reference}: checkpoint Orchestrator attribution does not match its authenticated author`);
       } else {
@@ -234,13 +284,17 @@ function parseFilesOutcome(body, sourceOrder, reference) {
   const status = fields.status?.toLowerCase() ?? '';
   const mode = fields.mode ?? '';
   const artifact = fields.artifact?.toLowerCase() ?? '';
-  if (!['accepted', 'needs_revision'].includes(status)) errors.push(`review history ${reference} has invalid Status '${status}'`);
-  if (!isValidReviewMode(mode)) errors.push(`review history ${reference} has invalid Mode '${mode}'`);
+  if (!['accepted', 'needs_revision'].includes(status)) {
+    errors.push(`review history ${reference} has invalid Status '${status}'; expected one of: accepted, needs_revision`);
+  }
+  if (!isValidReviewMode(mode)) {
+    errors.push(`review history ${reference} has invalid Mode '${mode}'; expected one of: ${REVIEW_MODES.join(', ')}`);
+  }
   if (!artifact || /\s/.test(artifact)) errors.push(`review history ${reference} has invalid Artifact '${artifact}'`);
   if (fields.maintainer?.toLowerCase() !== 'maintainer') errors.push(`review history ${reference} must declare Maintainer: maintainer`);
   const findings = status === 'needs_revision'
     ? parseFindingIds(fields.findings ?? '')
-    : { findingIds: [], errors: [] };
+    : { findingIds: [], errors: fields.findings ? ['accepted review history entry must not declare required findings'] : [] };
   errors.push(...findings.errors.map(error => `review history ${reference}: ${error}`));
   return { event: { type: 'outcome', status, mode, artifact, findingIds: findings.findingIds, sourceOrder, sourceReference: reference }, errors };
 }

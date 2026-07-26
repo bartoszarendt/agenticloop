@@ -310,18 +310,27 @@ The preflight gate also validates:
   latter three may explicitly say `None`.
 - **Attribution**: When cooperative attribution can be mechanically established
   (body role trailer + commit trailers), the `Task:` and `Agent:` trailers must
-  agree with the linked task and body role. Human-authored commits are not
-  rejected merely because attribution cannot be established.
+  agree with the linked task and body role. The expected task value is the
+  issue frontmatter `task_id` when non-empty, otherwise `#<issue-number>` for a
+  legacy issue. Use one final `[[agent: engineer]]`, `[[agent: maintainer]]`,
+  or `[[agent: orchestrator]]`
+  body trailer and the matching `Task: <resolved task id>` / `Agent: <role>`
+  commit pair. Human-authored commits are not rejected merely because attribution
+  cannot be established.
 - **Checkpoint enforcement**: When there are `needs_revision` review outcomes at
   or beyond the budget boundary, a current, non-stale checkpoint must be present
   in the PR comments.
 - **Resolution matrix**: When prior `needs_revision` outcomes have recorded
   finding IDs, the PR body must contain a `## Revision Resolution` section with
-  exactly one row per finding.
+  exactly one bullet entry per finding.
 
 Structured failure categories: `head_identity`, `summary_shape`,
 `scope_deviations`, `attribution`, `evidence`, `checks`, `review_checkpoint`,
 `revision_resolution`, `review_provenance`, `other`.
+JSON output retains the compatible string `errors` and `warnings` arrays and
+also provides `diagnostics` / `warningDiagnostics` entries. Repairable
+resolution diagnostics include `expectedShape`, `expectedValues`, and
+`requiredFindingIds`.
 
 ### Link Implementation Artifact
 
@@ -418,17 +427,23 @@ GitHub-backend deltas:
 Post exactly one valid review marker in a maintainer review comment or a PR review
 body, and record the review provenance alongside it:
 
+<!-- agenticloop:canonical-review-marker accepted -->
 ```text
 AGENT_REVIEW_STATUS: accepted
 AGENT_REVIEW_MODE: host_subagent
-AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+AGENT_REVIEW_ARTIFACT: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
+
+[[agent: maintainer]]
 ```
 
+<!-- agenticloop:canonical-review-marker needs_revision -->
 ```text
 AGENT_REVIEW_STATUS: needs_revision
 AGENT_REVIEW_MODE: host_subagent
-AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+AGENT_REVIEW_ARTIFACT: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
 AGENT_REVIEW_FINDINGS: F-1, F-2
+
+[[agent: maintainer]]
 ```
 
 `AGENT_REVIEW_ARTIFACT` is the full current PR head SHA. The audit discovers loop
@@ -549,25 +564,27 @@ orchestrator must record a durable checkpoint before routing the next revision.
 For GitHub, append the checkpoint to the PR conversation with Orchestrator
 attribution:
 
+<!-- agenticloop:canonical-checkpoint github -->
 ```text
 <!-- AGENTIC_LOOP_REVIEW_ROUND_CHECKPOINT -->
 
 ## Review Round Checkpoint
 
-- Direction: targeted_revision | needs_context | blocked
-- Cause: <implementation_defect | evidence_drift | task_contract_ambiguity | scope_pollution | reviewer_engineer_disagreement | external_blocker>
-- Review count: <current needs_revision count>
-- Artifact: <full 40-character SHA>
-- Target: <specific finding or decision>  (required for targeted_revision)
-- Reference: <Maintainer or human judgment reference>  (required for blocked)
-- Orchestrator: <attribution>
+- Direction: targeted_revision
+- Cause: implementation_defect
+- Review count: 5
+- Artifact: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
+- Target: F-2: refresh the current-head verification evidence
+- Orchestrator: orchestrator-bot
 
 [[agent: orchestrator]]
 ```
 
 The checkpoint schema requires:
 - `direction`: one of `targeted_revision`, `needs_context`, or `blocked`
-- `cause`: the canonical process cause
+- `cause`: one of `implementation_defect`, `evidence_drift`,
+  `task_contract_ambiguity`, `scope_pollution`, `reviewer_engineer_disagreement`,
+  or `external_blocker`
 - `review_count`: the current number of durable `needs_revision` outcomes
 - `artifact`: a full 40-character commit SHA matching the latest reviewed artifact
 - `target`: required when direction is `targeted_revision`
@@ -584,7 +601,7 @@ targeted A-to-B next step.
 
 `github-preflight` also validates the revision resolution matrix when there are
 prior `needs_revision` outcomes with recorded finding IDs. Every prior finding
-must have exactly one row in the `## Revision Resolution` section with a
+must have exactly one bullet entry in the `## Revision Resolution` section with a
 disposition of `resolved`, `disputed`, or `blocked` and current evidence.
 
 ### Close Or Accept Task
@@ -740,7 +757,8 @@ Verdict: needs_revision
 
 AGENT_REVIEW_STATUS: needs_revision
 AGENT_REVIEW_MODE: host_subagent
-AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+AGENT_REVIEW_ARTIFACT: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
+AGENT_REVIEW_FINDINGS: F-1
 
 [[agent: maintainer]]
 ```

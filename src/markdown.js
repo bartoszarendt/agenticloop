@@ -89,7 +89,7 @@ function requestedHeading(heading) {
 /**
  * @param {string} markdown
  * @param {string} heading
- * @returns {{ headingLine: number, startLine: number, endLine: number, body: string } | null}
+ * @returns {{ headingLine: number, startLine: number, endLine: number, body: string, lines: { raw: string, line: number, live: boolean }[] } | null}
  */
 export function markdownSection(markdown, heading) {
   const lines = markdownLines(markdown);
@@ -114,11 +114,13 @@ export function markdownSection(markdown, heading) {
       break;
     }
   }
+  const bodyLines = lines.slice(headingIndex + 1, endIndex);
   return {
     headingLine: headingIndex,
     startLine: headingIndex + 1,
     endLine: endIndex,
-    body: lines.slice(headingIndex + 1, endIndex).map(item => item.raw).join('\n').trim(),
+    body: bodyLines.map(item => item.raw).join('\n').trim(),
+    lines: bodyLines,
   };
 }
 
@@ -133,36 +135,48 @@ export function hasMarkdownHeading(markdown, heading) {
  * top-level records.
  *
  * @param {string} markdown
- * @returns {string[]}
+ * @param {{ lines?: { raw: string, line: number, live: boolean }[], includeMetadata?: boolean }} [options]
+ * @returns {string[]|{ text: string, lineNumbers: number[], marker: string }[]}
  */
-export function topLevelListItems(markdown) {
+export function topLevelListItems(markdown, options = {}) {
+  /** @type {{ text: string, lineNumbers: number[], marker: string }[]} */
   const items = [];
+  /** @type {{ parts: string[], lineNumbers: number[], marker: string }|null} */
   let current = null;
   let listIndent = null;
-  for (const item of markdownLines(markdown)) {
+  const finish = () => {
+    if (!current) return;
+    items.push({
+      text: current.parts.join(' ').replace(/\s+/g, ' ').trim(),
+      lineNumbers: current.lineNumbers,
+      marker: current.marker,
+    });
+    current = null;
+  };
+  for (const item of options.lines ?? markdownLines(markdown)) {
     if (!item.live) continue;
     const bullet = item.raw.match(/^( {0,3})[-+*][ \t]+(\S.*)$/);
     if (bullet && (listIndent === null || bullet[1].length === listIndent)) {
       if (listIndent === null) listIndent = bullet[1].length;
-      if (current) items.push(current.join(' ').replace(/\s+/g, ' ').trim());
-      current = [bullet[2].trim()];
+      finish();
+      current = { parts: [bullet[2].trim()], lineNumbers: [item.line], marker: item.raw[bullet[1].length] };
       continue;
     }
     if (!current) continue;
     if (!item.raw.trim()) {
-      items.push(current.join(' ').replace(/\s+/g, ' ').trim());
-      current = null;
+      finish();
       continue;
     }
     if (/^[ \t]+\S/.test(item.raw)) {
-      current.push(item.raw.trim());
+      current.parts.push(item.raw.trim());
+      current.lineNumbers.push(item.line);
       continue;
     }
-    items.push(current.join(' ').replace(/\s+/g, ' ').trim());
-    current = null;
+    finish();
   }
-  if (current) items.push(current.join(' ').replace(/\s+/g, ' ').trim());
-  return items.filter(Boolean);
+  finish();
+  const nonempty = items.filter(item => item.text);
+  return options.includeMetadata ? nonempty : nonempty.map(item => item.text);
 }
 
 /**

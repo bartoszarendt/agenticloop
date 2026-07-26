@@ -28,7 +28,9 @@ End every agent-authored issue, pull request, or comment body with one final lin
 [[agent: engineer]]
 ```
 
-Use the actual authoring role. Put the trailer after a blank line at the end of the body.
+Use exactly one actual authoring role. Put the trailer after a blank line at the
+end of the body. The accepted forms are `[[agent: engineer]]`,
+`[[agent: maintainer]]`, and `[[agent: orchestrator]]`.
 
 ## Commit trailer
 
@@ -39,7 +41,17 @@ Task: T-001
 Agent: engineer
 ```
 
-Use the real task id and role. This keeps git history understandable even when the GitHub task thread is not available.
+Use the linked issue's non-empty frontmatter `task_id` when it exists. For a
+legacy issue without `task_id`, use its number instead, for example:
+
+```text
+Task: #42
+Agent: engineer
+```
+
+The body role and `Agent:` value must agree exactly. The repair shape is always
+one final body trailer `[[agent: <role>]]` and one final commit trailer pair
+`Task: <resolved task id>` / `Agent: <role>`.
 
 ## Safe body posting
 

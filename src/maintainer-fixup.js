@@ -143,6 +143,28 @@ export function detectFixupEpisodes(content) {
 }
 
 /**
+ * Report live headings that look like a fixup carrier without promoting them to
+ * an episode. This keeps recovery guidance bounded while examples and malformed
+ * headings remain non-authoritative.
+ *
+ * @param {string} content
+ * @returns {string[]}
+ */
+export function detectFixupHeadingNearMisses(content) {
+  const errors = [];
+  for (const line of markdownLines(content)) {
+    if (!line.live) continue;
+    const heading = parseAtxHeading(line.raw);
+    if (!heading || heading.text === FIXUP_HEADING_TEXT && heading.level === 2) continue;
+    const normalized = heading.text.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (normalized === FIXUP_HEADING_TEXT.toLowerCase()) {
+      errors.push(`Maintainer Review Fixup heading '${line.raw.trim()}' is not canonical; expected '${MAINTAINER_FIXUP_HEADING}'`);
+    }
+  }
+  return errors;
+}
+
+/**
  * Shared durable-shape validation for one fixup episode, used by both the
  * files-backend validator and the GitHub review audit so the field rules cannot
  * drift apart.
@@ -250,9 +272,10 @@ function evidenceReferencesArtifact(evidenceBody, artifact) {
 export function validateFilesFixup(params) {
   const label = params.label;
   const episodes = detectFixupEpisodes(params.content ?? '');
-  if (episodes.length === 0) return [];
+  const nearMissErrors = detectFixupHeadingNearMisses(params.content ?? '');
+  if (episodes.length === 0) return nearMissErrors;
 
-  const errors = [];
+  const errors = [...nearMissErrors];
 
   if (episodes.length > 1) {
     errors.push(

@@ -180,6 +180,27 @@ cover the bounded window and match the retry.
 - Recorded at: YYYY-MM-DDTHH:MM:SSZ
 ```
 
+### GitHub PR evidence
+
+For GitHub-backed work, summarize final-state evidence once in the current PR
+body. Each required-check ID appears once, even when final-state verification
+ran more than once; aggregate the repeated run results in that one entry's
+`Evidence` value.
+
+<!-- agenticloop:canonical-pr-evidence -->
+```md
+## Evidence
+Current PR head: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
+
+- Required check: [RC-1] `npm test`
+  Verdict: passed
+  Evidence: final runs 1 and 2 passed: 128 passing, 0 failing (exit 0)
+```
+
+This PR-body entry is separate from exceptional `## Verification Attempts`
+history. Use the exact required-check text and one of `passed`, `failed`,
+`blocked`, or `not run` for `Verdict`.
+
 The maintainer appends triage. `pending` is allowed only while active; accepted
 or closed work cannot retain an exceptional episode whose latest attempt is
 failed, blocked, or timed out without final non-blocker triage.

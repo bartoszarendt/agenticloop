@@ -1,16 +1,19 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { evaluateGitHubReviewAudit, runGitHubReviewAudit, GitHubReviewAuditError, normalizeRestReview, taskRequiresIndependentReview, validateReviewWorkspace } from '../src/github-review-audit.js';
+import { collectGitHubReviewHistory, parseReviewMarker } from '../src/review-history.js';
 
 const HEAD = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0';
 const OLD_HEAD = 'b1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0';
 const LOOP_ACCOUNT = { login: 'loop-bot', type: 'User' };
 
-function marker({ status = 'accepted', mode = 'host_subagent', artifact = HEAD, humanRef = '', author = LOOP_ACCOUNT, includeTrailer = true } = {}) {
+function marker({ status = 'accepted', mode = 'host_subagent', artifact = HEAD, humanRef = '', findings, author = LOOP_ACCOUNT, includeTrailer = true } = {}) {
+  const requiredFindings = findings ?? (status === 'needs_revision' ? ['F-1'] : []);
   const body = [
     `AGENT_REVIEW_STATUS: ${status}`,
     `AGENT_REVIEW_MODE: ${mode}`,
     `AGENT_REVIEW_ARTIFACT: ${artifact}`,
+    ...(requiredFindings.length ? [`AGENT_REVIEW_FINDINGS: ${requiredFindings.join(', ')}`] : []),
     ...(humanRef ? [`AGENT_HUMAN_REVIEW_REF: ${humanRef}`] : []),
     ...(includeTrailer ? ['[[agent: maintainer]]'] : []),
   ].join('\n');
@@ -112,20 +115,38 @@ describe('GitHub review provenance audit', () => {
     assert.match(result.errors.join('\n'), /expected loop account could not be resolved/);
   });
 
-  it('fails when marker author is missing', () => {
+  it('treats marker text without an authenticated loop author as inert', () => {
     const d = data();
     d.prData.comments = [{ body: markerString(marker()), author: null }];
     const result = evaluateGitHubReviewAudit(d);
     assert.equal(result.ok, false);
-    assert.match(result.errors.join('\n'), /marker author identity is missing/);
+    assert.match(result.errors.join('\n'), /no valid review marker/);
   });
 
-  it('fails when marker author differs from expected account', () => {
+  it('treats a marker from another account as inert', () => {
     const result = evaluateGitHubReviewAudit(data({
       comments: [{ body: markerString(marker()), author: { login: 'other-bot', type: 'User' } }],
     }));
     assert.equal(result.ok, false);
-    assert.match(result.errors.join('\n'), /does not match expected loop account/);
+    assert.match(result.errors.join('\n'), /no valid review marker/);
+  });
+
+  it('explains the author mismatch for an untrusted current-head marker', () => {
+    const result = evaluateGitHubReviewAudit(data({
+      comments: [marker({ author: { login: 'outside-bot', type: 'User' } })],
+    }));
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /non-authoritative review marker.*outside-bot.*expected loop account 'loop-bot'/i);
+  });
+
+  it('does not let an unrelated untrusted marker poison a valid trusted marker', () => {
+    const result = evaluateGitHubReviewAudit(data({
+      comments: [
+        marker(),
+        marker({ author: { login: 'outside-bot', type: 'User' }, status: 'needs_revision' }),
+      ],
+    }));
+    assert.equal(result.ok, true, result.errors.join('\n'));
   });
 
   it('compares logins case-insensitively', () => {
@@ -140,7 +161,7 @@ describe('GitHub review provenance audit', () => {
     d.prData.comments = [{ body: `AGENT_REVIEW_STATUS: accepted\nAGENT_REVIEW_MODE: host_subagent\nAGENT_REVIEW_ARTIFACT: ${HEAD}`, author: LOOP_ACCOUNT }];
     const result = evaluateGitHubReviewAudit(d);
     assert.equal(result.ok, false);
-    assert.match(result.errors.join('\n'), /missing the maintainer attribution trailer/);
+    assert.match(result.errors.join('\n'), /missing the maintainer attribution trailer.*\[\[agent: maintainer\]\]/);
   });
 
   it('includes marker author in outcome JSON', () => {
@@ -169,6 +190,101 @@ describe('GitHub review provenance audit', () => {
       return { status: 0, stdout: JSON.stringify(args[0] === 'pr' ? fixture.prData : fixture.issueData), stderr: '' };
     };
     assert.throws(() => runGitHubReviewAudit({ pr: 42, commandRunner: runner }), /no login/);
+  });
+});
+
+describe('durable needs_revision marker contract', () => {
+  it('requires exactly one canonical findings field and rejects accepted findings', () => {
+    const missing = parseReviewMarker(markerString(marker({ status: 'needs_revision', findings: [] })), LOOP_ACCOUNT);
+    assert.match(missing.errors.join('\n'), /exactly one AGENT_REVIEW_FINDINGS/);
+
+    const duplicate = parseReviewMarker(markerString(marker({ status: 'needs_revision', findings: ['F-1', 'F-1'] })), LOOP_ACCOUNT);
+    assert.match(duplicate.errors.join('\n'), /duplicate review finding identifier/);
+
+    const accepted = parseReviewMarker(markerString(marker({ findings: ['F-1'] })), LOOP_ACCOUNT);
+    assert.match(accepted.errors.join('\n'), /accepted review marker must not declare/);
+  });
+
+  it('fails closed on a trusted malformed current marker without creating an outcome', () => {
+    const result = evaluateGitHubReviewAudit(data({
+      comments: [marker({ status: 'needs_revision', findings: [] })],
+    }));
+    assert.equal(result.outcome, null);
+    assert.match(result.errors.join('\n'), /exactly one AGENT_REVIEW_FINDINGS/);
+  });
+
+  it('keeps a trusted stale malformed live marker actionable', () => {
+    const result = evaluateGitHubReviewAudit(data({
+      comments: [marker({ artifact: OLD_HEAD, mode: 'unsupported_mode' })],
+    }));
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /unsupported review mode/i);
+  });
+
+  it('keeps a trusted stale omitted-findings marker as legacy history only', () => {
+    const legacy = {
+      ...marker({ status: 'needs_revision', artifact: OLD_HEAD, findings: [] }),
+      id: 101,
+      created_at: '2026-07-26T10:00:00Z',
+    };
+    const history = collectGitHubReviewHistory({ headRefOid: HEAD, comments: [legacy], reviews: [] }, LOOP_ACCOUNT);
+    assert.deepEqual(history.errors, []);
+    assert.equal(history.events.length, 1);
+    assert.equal(history.events[0].legacyMissingFindingIds, true);
+  });
+
+  it('does not let an untrusted malformed carrier add structural gate errors', () => {
+    const result = evaluateGitHubReviewAudit(data({
+      comments: [marker({ status: 'needs_revision', findings: [], author: { login: 'other', type: 'User' } })],
+    }));
+    assert.match(result.errors.join('\n'), /no valid review marker/);
+    assert.doesNotMatch(result.errors.join('\n'), /AGENT_REVIEW_FINDINGS/);
+  });
+
+  it('diagnoses a trusted noncanonical marker placement without activating state', () => {
+    const body = [
+      `- AGENT_REVIEW_STATUS: needs_revision`,
+      `  AGENT_REVIEW_MODE: host_subagent`,
+      `  AGENT_REVIEW_ARTIFACT: ${HEAD}`,
+      '  AGENT_REVIEW_FINDINGS: F-1',
+      '[[agent: maintainer]]',
+    ].join('\n');
+    const result = evaluateGitHubReviewAudit(data({ comments: [{ body, author: LOOP_ACCOUNT }] }));
+    assert.equal(result.outcome, null);
+    assert.match(result.errors.join('\n'), /unbulleted column-zero lines/);
+  });
+
+  it('does not let trusted marker-like prose poison a separate valid current marker', () => {
+    const result = evaluateGitHubReviewAudit(data({
+      comments: [
+        marker(),
+        { body: 'Documentation mentions AGENT_REVIEW_STATUS: accepted as an example.', author: LOOP_ACCOUNT },
+      ],
+    }));
+    assert.equal(result.ok, true, result.errors.join('\n'));
+  });
+
+  it('prefetches independent-human evidence for a malformed trusted current candidate', () => {
+    const fixture = data({
+      comments: [marker({ status: 'needs_revision', mode: 'independent_human', findings: [] })],
+    });
+    let restReviewFetches = 0;
+    const runner = (_command, args) => {
+      if (args[0] === 'api' && args[1] === 'user') {
+        return { status: 0, stdout: JSON.stringify(LOOP_ACCOUNT), stderr: '' };
+      }
+      if (args[0] === 'repo') {
+        return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'owner/repo' }), stderr: '' };
+      }
+      if (args[0] === 'api' && String(args.at(-1)).includes('/pulls/42/reviews')) {
+        restReviewFetches++;
+        return { status: 0, stdout: JSON.stringify([[]]), stderr: '' };
+      }
+      return { status: 0, stdout: JSON.stringify(args[0] === 'pr' ? fixture.prData : fixture.issueData), stderr: '' };
+    };
+    const result = runGitHubReviewAudit({ pr: 42, expectedStatus: 'needs_revision', commandRunner: runner });
+    assert.equal(restReviewFetches, 1);
+    assert.match(result.errors.join('\n'), /exactly one AGENT_REVIEW_FINDINGS/);
   });
 });
 
@@ -341,7 +457,7 @@ describe('Review marker sources from PR review bodies', () => {
       reviews: [marker({ author: { login: 'other-bot', type: 'User' } })],
     }));
     assert.equal(result.ok, false);
-    assert.match(result.errors.join('\n'), /does not match expected loop account/);
+    assert.match(result.errors.join('\n'), /no valid review marker/);
   });
 
   it('stale GraphQL review marker fails', () => {

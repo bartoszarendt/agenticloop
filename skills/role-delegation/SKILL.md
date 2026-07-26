@@ -256,21 +256,24 @@ next revision), run the Review Round Checkpoint in
 At the budget boundary, Orchestrator records a durable checkpoint bound to the
 current review count and latest reviewed artifact:
 
+<!-- agenticloop:canonical-checkpoint github -->
 ```text
 <!-- AGENTIC_LOOP_REVIEW_ROUND_CHECKPOINT -->
 
 ## Review Round Checkpoint
 
-- Direction: targeted_revision | needs_context | blocked
-- Cause: implementation_defect | evidence_drift | task_contract_ambiguity | scope_pollution | reviewer_engineer_disagreement | external_blocker
-- Review count: <current needs_revision count>
-- Artifact: <full 40-character SHA>
-- Target: <specific finding>                 # targeted_revision
-- Reference: <durable judgment reference>    # needs_context or blocked
-- Orchestrator: <authenticated orchestrator login>
+- Direction: targeted_revision
+- Cause: implementation_defect
+- Review count: 5
+- Artifact: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
+- Target: F-2: refresh the current-head verification evidence
+- Orchestrator: orchestrator-bot
 
 [[agent: orchestrator]]
 ```
+
+Choose one direction and one cause. `targeted_revision` requires `Target`;
+`needs_context` and `blocked` require `Reference` instead.
 
 A `targeted_revision` checkpoint binds reviewed artifact A and authorizes exactly
 one next Engineer revision B. If B receives another review outcome, require a new

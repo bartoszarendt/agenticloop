@@ -17,16 +17,23 @@ The maintainer reviews the implementation artifact against the task record.
 Review has exactly two outcomes, and every recorded outcome carries its
 provenance (`review_mode`):
 
+<!-- agenticloop:canonical-review-marker accepted -->
 ```text
 AGENT_REVIEW_STATUS: accepted
 AGENT_REVIEW_MODE: host_subagent
-AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+AGENT_REVIEW_ARTIFACT: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
+
+[[agent: maintainer]]
 ```
 
+<!-- agenticloop:canonical-review-marker needs_revision -->
 ```text
 AGENT_REVIEW_STATUS: needs_revision
 AGENT_REVIEW_MODE: host_subagent
-AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+AGENT_REVIEW_ARTIFACT: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
+AGENT_REVIEW_FINDINGS: F-1
+
+[[agent: maintainer]]
 ```
 
 `review_mode` records how the current artifact revision was reviewed. It is
@@ -351,9 +358,12 @@ event field solely for this classification.
 
 1. Complete Lens 1 and list all concrete findings.
 2. Classify the requested revision as `implementation-changing` or `record-only`.
-3. Issue one consolidated `needs_revision` packet containing every Lens 1 finding
+3. Assign a stable `F-<positive integer>` ID to every required finding, then
+   issue one consolidated `needs_revision` packet containing every Lens 1 finding
    and every applicable later finding. Lens 1 remains unclean and blocks
-   acceptance in both branches.
+   acceptance in both branches. Use each ID unchanged in `## Required Revisions`
+   and the single `AGENT_REVIEW_FINDINGS` line; do not derive IDs from list order
+   or renumber them during this review episode.
 
 Use `implementation-changing` when satisfying the packet requires source, test,
 dependency, generated contract artifact, implementation configuration, or any
@@ -448,14 +458,15 @@ Deferred -- full assessment deferred because implementation revision is pending.
 Deferred -- full assessment deferred because implementation revision is pending.
 
 ## Required Revisions
-1. Wire the deterministic schema through the public `app.openapi()` path and
-   refresh final-state evidence for the resulting artifact.
-2. Remove or justify the out-of-scope wrapper.
+- [F-1] Wire the deterministic schema through the public `app.openapi()` path
+  and refresh final-state evidence for the resulting artifact.
+- [F-2] Remove or justify the out-of-scope wrapper.
 
 Maintainer Review Fixup: ineligible -- Lens 1 not clean
 AGENT_REVIEW_STATUS: needs_revision
 AGENT_REVIEW_MODE: host_subagent
-AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+AGENT_REVIEW_ARTIFACT: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
+AGENT_REVIEW_FINDINGS: F-1, F-2
 
 [[agent: maintainer]]
 ```
@@ -477,12 +488,13 @@ Verdict: clean for artifact `<full-pr-head-sha>`.
 Verdict: clean for artifact `<full-pr-head-sha>`.
 
 ## Required Revisions
-1. Restore the current-head marker and complete current PR-body evidence.
+- [F-1] Restore the current-head marker and complete current PR-body evidence.
 
 Maintainer Review Fixup: ineligible -- Lens 1 not clean
 AGENT_REVIEW_STATUS: needs_revision
 AGENT_REVIEW_MODE: host_subagent
-AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+AGENT_REVIEW_ARTIFACT: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
+AGENT_REVIEW_FINDINGS: F-1
 
 [[agent: maintainer]]
 ```
@@ -506,7 +518,7 @@ Reused from review `<review-reference>`: clean. Artifact is unchanged:
 
 AGENT_REVIEW_STATUS: accepted
 AGENT_REVIEW_MODE: host_subagent
-AGENT_REVIEW_ARTIFACT: <full-pr-head-sha>
+AGENT_REVIEW_ARTIFACT: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
 
 [[agent: maintainer]]
 ```
@@ -528,7 +540,7 @@ Fresh full assessment for `<new-full-pr-head-sha>`: clean.
 
 AGENT_REVIEW_STATUS: accepted
 AGENT_REVIEW_MODE: host_subagent
-AGENT_REVIEW_ARTIFACT: <new-full-pr-head-sha>
+AGENT_REVIEW_ARTIFACT: b1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
 
 [[agent: maintainer]]
 ```
@@ -805,7 +817,9 @@ Do not hand back for review until all hold:
 ### Re-review addition: revision-resolution matrix
 
 A re-review handoff additionally requires one current resolution matrix keyed to
-the prior review's numbered required findings. Each item has exactly one
+the prior review's stable required-finding IDs. The Engineer copies those IDs
+unchanged from the Maintainer packet; never derives or renumbers them. Each
+bullet entry has exactly one
 disposition:
 
 - `resolved` -- the Engineer verified the correction on the dispatched artifact,
@@ -814,6 +828,22 @@ disposition:
   evidence; it is routed to the Maintainer.
 - `blocked` -- the finding uses the existing blocked-state path and cannot be
   presented as review-ready.
+
+Use the canonical live Markdown shape in the PR body or files task record:
+
+<!-- agenticloop:canonical-resolution -->
+```md
+## Revision Resolution
+
+- [F-1] resolved: Verified the correction on a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0 and reran the required check.
+- [F-2] disputed: The task contract excludes this behavior. [ref: maintainer comment 42]
+- [F-3] blocked: The external dependency has not published the required interface. [ref: issue #42]
+```
+
+`blocked` preserves the finding and routes it through [[blocked-state]]; it is
+not review-ready. A resolution matrix uses bullet entries, not a Markdown table
+or finding-specific subsections. Fenced, quoted, or indented examples are not
+workflow state.
 
 No prior required finding may silently disappear through summary replacement.
 

@@ -26,6 +26,7 @@ function matrixBody(entries) {
 describe('parseResolutionMatrix', () => {
   it('returns found=false when no matrix section present', () => {
     const result = parseResolutionMatrix('some text without a matrix');
+    assert.equal(result.status, 'absent');
     assert.equal(result.found, false);
     assert.deepEqual(result.entries, []);
     assert.deepEqual(result.errors, []);
@@ -39,6 +40,7 @@ describe('parseResolutionMatrix', () => {
     ]);
     const result = parseResolutionMatrix(text);
     assert.equal(result.found, true);
+    assert.equal(result.status, 'parsed');
     assert.equal(result.entries.length, 3);
     assert.equal(result.errors.length, 0);
     assert.equal(result.entries[0].findingId, 'F-1');
@@ -54,6 +56,7 @@ describe('parseResolutionMatrix', () => {
     const text = '## Revision Resolution\n\nNone.\n';
     const result = parseResolutionMatrix(text);
     assert.equal(result.found, true);
+    assert.equal(result.status, 'parsed');
     assert.equal(result.entries.length, 0);
     assert.deepEqual(result.errors, []);
   });
@@ -75,6 +78,98 @@ describe('parseResolutionMatrix', () => {
     assert.equal(result.found, true);
     assert.equal(result.entries.length, 1);
     assert.equal(result.entries[0].reference, null);
+  });
+
+  it('reports one canonical shape error for a non-empty table or subsection', () => {
+    for (const body of [
+      '## Revision Resolution\n\n| Finding | Disposition |\n| --- | --- |\n| F-1 | resolved |',
+      '## Revision Resolution\n\n### F-1\nResolved with current evidence.',
+    ]) {
+      const result = parseResolutionMatrix(body);
+      assert.equal(result.status, 'malformed');
+      assert.equal(result.errors.length, 1);
+      assert.match(result.errors[0], /live top-level bullet entries/i);
+    }
+  });
+
+  it('reports an empty-section repair without suggesting a placement mistake', () => {
+    const result = parseResolutionMatrix('## Revision Resolution\n');
+    assert.equal(result.status, 'malformed');
+    assert.equal(result.errors.length, 1);
+    assert.match(result.errors[0], /section is empty/i);
+    assert.match(result.errors[0], /expected:.*F-1/i);
+    assert.doesNotMatch(result.errors[0], /outside fenced code/i);
+  });
+
+  it('reports one repair shape for fence-only, quoted-only, and indented-only sections', () => {
+    for (const body of [
+      '## Revision Resolution\n\n```md\n- [F-1] resolved: Fixed on ' + HEAD + '\n```',
+      '## Revision Resolution\n\n> - [F-1] resolved: Fixed on ' + HEAD,
+      '## Revision Resolution\n\n    - [F-1] resolved: Fixed on ' + HEAD,
+    ]) {
+      const result = parseResolutionMatrix(body);
+      assert.equal(result.status, 'malformed');
+      assert.deepEqual(result.entries, []);
+      assert.equal(result.errors.length, 1);
+      assert.match(result.errors[0], /outside fenced code, blockquotes, and indented code/i);
+    }
+  });
+
+  it('joins wrapped evidence and nested supporting detail into one bullet entry', () => {
+    const result = parseResolutionMatrix([
+      '## Revision Resolution', '',
+      '- [F-1] resolved: repaired the current artifact',
+      `  ${HEAD} after rerunning the full verification suite.`,
+      '  - Supporting detail: command output is recorded in the PR evidence.',
+    ].join('\n'));
+    assert.equal(result.status, 'parsed');
+    assert.equal(result.entries.length, 1);
+    assert.match(result.entries[0].evidence, new RegExp(HEAD));
+    assert.match(result.entries[0].evidence, /Supporting detail/);
+  });
+
+  it('retains parsed entries and reports malformed sibling bullet entries', () => {
+    const result = parseResolutionMatrix([
+      '## Revision Resolution', '',
+      `- [F-1] resolved: repaired the current artifact ${HEAD}`,
+      '- [F-2] ignored: this is not an accepted disposition',
+    ].join('\n'));
+    assert.equal(result.status, 'parsed');
+    assert.equal(result.entries.length, 1);
+    assert.match(result.errors.join('\n'), /unknown disposition.*resolved, disputed, blocked/i);
+  });
+
+  it('requires the canonical hyphen bullet marker', () => {
+    const result = parseResolutionMatrix([
+      '## Revision Resolution', '',
+      `* [F-1] resolved: repaired the current artifact ${HEAD}`,
+    ].join('\n'));
+    assert.equal(result.status, 'malformed');
+    assert.match(result.errors.join('\n'), /expected: "- \[F-1\]/);
+  });
+
+  it('keeps a live blocked entry semantically blocking beside a malformed entry', () => {
+    const parsed = parseResolutionMatrix([
+      '## Revision Resolution', '',
+      '- [F-1] blocked: external dependency is unavailable [ref: issue #42]',
+      '- this is not a canonical resolution entry',
+    ].join('\n'));
+    const validation = validateResolutionMatrix({
+      requiredFindingIds: ['F-1'], entries: parsed.entries,
+    });
+    assert.equal(parsed.status, 'parsed');
+    assert.match(parsed.errors.join('\n'), /expected:/i);
+    assert.match(validation.errors.join('\n'), /blocked; review cannot proceed/i);
+  });
+
+  it('ignores fenced examples when a later live canonical entry exists', () => {
+    const result = parseResolutionMatrix([
+      '## Revision Resolution', '',
+      '```md', `- [F-99] resolved: example only ${HEAD}`, '```',
+      `- [F-1] resolved: repaired the current artifact ${HEAD}`,
+    ].join('\n'));
+    assert.equal(result.status, 'parsed');
+    assert.deepEqual(result.entries.map(entry => entry.findingId), ['F-1']);
   });
 });
 
@@ -110,7 +205,7 @@ describe('validateResolutionMatrix', () => {
       ],
     });
     assert.equal(result.valid, false);
-    assert.ok(result.errors.some(e => /F-3.*no row/i.test(e)));
+    assert.ok(result.errors.some(e => /F-3.*no bullet entry/i.test(e)));
   });
 
   it('fails when a finding has unknown disposition', () => {
@@ -167,6 +262,28 @@ describe('validateResolutionMatrix', () => {
     });
     assert.equal(result.valid, false);
     assert.ok(result.errors.some(error => /disputed.*no durable maintainer reference/i.test(error)));
+  });
+
+  it('continues semantic validation after a partial parser failure', () => {
+    const parsed = parseResolutionMatrix([
+      '## Revision Resolution', '',
+      '- [F-1] resolved: repaired a different artifact with full evidence',
+      '- [F-1] resolved: duplicate entry with different evidence',
+      '- [F-2] disputed: evidence is not sufficient to require this change',
+      '- [F-99] disputed: scope is unsupported [ref: maintainer comment 9]',
+      '- [F-3] ignored: malformed disposition',
+    ].join('\n'));
+    const result = validateResolutionMatrix({
+      requiredFindingIds: ['F-1', 'F-2', 'F-3'],
+      entries: parsed.entries,
+      currentArtifact: HEAD,
+    });
+    assert.match(parsed.errors.join('\n'), /unknown disposition/i);
+    assert.match(result.errors.join('\n'), /duplicate finding identifier 'F-1'/i);
+    assert.match(result.errors.join('\n'), /does not cite current artifact/i);
+    assert.match(result.errors.join('\n'), /F-2.*no durable maintainer reference/i);
+    assert.match(result.errors.join('\n'), /F-3.*no bullet entry/i);
+    assert.match(result.errors.join('\n'), /F-99.*does not match/i);
   });
 });
 

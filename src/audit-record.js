@@ -72,6 +72,18 @@ export const AUDIT_EMPTY_STATES = Object.freeze({
   certification: AUDIT_CERTIFICATION_EMPTY_STATE,
 });
 
+export const AUDIT_RUN_LABELS = Object.freeze([
+  'Invocation reference',
+  'Invocation mode',
+  'Audited artifact',
+  'Covered tasks',
+  'Verdict',
+  'Assessment',
+  'Findings',
+  'Evidence checked',
+]);
+const AUDIT_RUN_LABEL_KEYS = new Set(AUDIT_RUN_LABELS.map(label => label.toLowerCase()));
+
 /**
  * Work-unit identity kinds. Grouped projects reuse the existing grouping
  * profiles; flat projects must name the unit explicitly with `work-unit:<name>`.
@@ -318,16 +330,21 @@ export function findAuditRecord(repoRoot, selector) {
  * lowercased label.
  *
  * @param {string} body
- * @returns {Map<string, string>}
+ * @returns {{ fields: Map<string, string>, occurrences: { label: string, key: string, value: string }[] }}
  */
 function parseLabeledBullets(body) {
   const fields = new Map();
+  const occurrences = [];
   for (const item of topLevelListItems(body)) {
     const match = item.match(/^([^:]+):\s*(.*)$/);
     if (!match) continue;
-    fields.set(match[1].trim().toLowerCase(), match[2].trim());
+    const label = match[1].trim();
+    const key = label.toLowerCase();
+    const value = match[2].trim();
+    occurrences.push({ label, key, value });
+    if (!fields.has(key)) fields.set(key, value);
   }
-  return fields;
+  return { fields, occurrences };
 }
 
 /**
@@ -374,7 +391,7 @@ export function parseAuditRecord(content) {
 
   const history = subsectionsOf(content, '## Audit History')
     .map((entry, index) => {
-      const fields = parseLabeledBullets(entry.body);
+      const { fields, occurrences } = parseLabeledBullets(entry.body);
       const runMatch = entry.text.match(RUN_HEADING_PATTERN);
       return {
         heading: entry.text,
@@ -394,11 +411,12 @@ export function parseAuditRecord(content) {
           .map(value => value.trim())
           .filter(value => value && value.toLowerCase() !== 'none'),
         evidenceChecked: fields.get('evidence checked') ?? '',
+        fieldOccurrences: occurrences,
       };
     });
 
   const findings = subsectionsOf(content, '## Consolidated Findings').map(entry => {
-    const fields = parseLabeledBullets(entry.body);
+    const { fields } = parseLabeledBullets(entry.body);
     return {
       id: entry.text,
       severity: (fields.get('severity') ?? '').toLowerCase(),
@@ -603,6 +621,16 @@ function validateAuditHistoryEntries(record, label, errors) {
   const seenReferences = new Set();
   record.history.forEach((entry, index) => {
     const entryLabel = `Audit record '${label}' history entry ${index + 1}`;
+    const labelCounts = new Map();
+    for (const occurrence of entry.fieldOccurrences ?? []) {
+      if (!AUDIT_RUN_LABEL_KEYS.has(occurrence.key)) continue;
+      labelCounts.set(occurrence.key, (labelCounts.get(occurrence.key) ?? 0) + 1);
+      if (labelCounts.get(occurrence.key) === 2) {
+        errors.push(
+          `${entryLabel} repeats '${occurrence.label}'; each canonical audit Run field must appear exactly once`
+        );
+      }
+    }
     if (entry.runNumber === null) {
       errors.push(`${entryLabel} heading must be '### Run <n>' (got '${entry.heading}')`);
     } else if (entry.runNumber !== index + 1) {

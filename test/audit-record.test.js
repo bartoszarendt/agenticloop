@@ -363,6 +363,30 @@ describe('fresh invocation provenance', () => {
     );
   });
 
+  it('rejects duplicate canonical fields in a real audit Run entry', () => {
+    const recorded = appendAuditReport(
+      baseRecord(),
+      report({ invocationReference: 'ref-duplicate-field' })
+    ).content;
+    const tampered = recorded.replace(
+      '- Verdict: needs_remediation',
+      '- Verdict: needs_remediation\n- Verdict: certified'
+    );
+    const parsed = parseAuditRecord(tampered);
+    assert.equal(parsed.history[0].verdict, 'needs_remediation', 'first occurrence remains diagnostic input');
+    assert.equal(parsed.history[0].fieldOccurrences.filter(item => item.key === 'verdict').length, 2);
+    assert.match(
+      validateAuditRecord(tampered, 'AUD-001.md').join('\n'),
+      /history entry 1 repeats 'Verdict'.*exactly once/
+    );
+    const append = appendAuditReport(
+      tampered,
+      report({ invocationReference: 'ref-after-duplicate' })
+    );
+    assert.equal(append.ok, false);
+    assert.match(append.errors.join('\n'), /existing audit record is invalid:.*repeats 'Verdict'/);
+  });
+
   it('rejects a report bound to something other than the frozen candidate', () => {
     const result = appendAuditReport(baseRecord(), report({ auditedArtifact: 'commit:other' }));
     assert.equal(result.ok, false);

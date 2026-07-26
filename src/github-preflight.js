@@ -29,6 +29,7 @@ import { markdownSection, topLevelListItems, markdownLines } from './markdown.js
 import { validateGitHubVerificationAttempts } from './verification-learning.js';
 import { createLocalVerificationContext } from './verification-context.js';
 import { parseFrontmatter } from './frontmatter.js';
+import { githubAttributionShape, resolveGitHubTaskIdentity } from './github-task-identity.js';
 import {
   loadProjectMap,
   resolveProjectReviewBudget,
@@ -54,6 +55,8 @@ import {
 } from './review-checkpoint.js';
 import { collectGitHubReviewHistory } from './review-history.js';
 import {
+  RESOLUTION_ENTRY_SHAPE,
+  VALID_DISPOSITIONS,
   parseResolutionMatrix,
   validateResolutionMatrix,
 } from './resolution-matrix.js';
@@ -66,6 +69,9 @@ export class PreflightError extends Error {
 }
 
 const VALID_VERDICTS = new Set(['passed', 'failed', 'blocked', 'not run']);
+const PR_EVIDENCE_ENTRY_SHAPE =
+  '- Required check: <exact required check text>\n  Verdict: <passed|failed|blocked|not run>\n  Evidence: <excerpt>';
+const RESOLUTION_EXPECTED_SHAPE = RESOLUTION_ENTRY_SHAPE.replace(/^"|"$/g, '');
 
 const PR_FIELDS = [
   'number',
@@ -176,7 +182,8 @@ export function parseRequiredChecks(issueBody) {
  * @returns {string|null} lowercased SHA, or null when no marker is present.
  */
 export function extractHeadMarker(text) {
-  const match = String(text ?? '').match(
+  const liveText = markdownLines(String(text ?? '')).filter(line => line.live).map(line => line.raw).join('\n');
+  const match = liveText.match(
     /(?:current pr head|pr head|head commit|head ref oid|headrefoid)\s*[:=]\s*`?([0-9a-f]{7,40})`?/i
   );
   return match ? match[1].toLowerCase() : null;
@@ -192,12 +199,14 @@ export function extractHeadMarker(text) {
  *     Evidence: <concise output excerpt or status-check reference>
  *
  * @returns {{ section: string|null, headSha: string|null,
- *             entries: { check: string, verdict: string|null, evidence: string|null, id?: string|null }[] }}
+ *             entries: { check: string, verdict: string|null, evidence: string|null, id?: string|null }[], errors: string[] }}
  */
 export function parsePrEvidence(prBody) {
-  const section = extractSectionBody(prBody, '## Evidence');
+  const sectionData = markdownSection(String(prBody ?? ''), '## Evidence');
+  const section = sectionData?.body ?? null;
   const headSha = extractHeadMarker(prBody);
   const entries = [];
+  const errors = [];
   if (section !== null) {
     const reqRe = /^[-*]\s*Required check:\s*(.+?)\s*$/i;
     const verdictRe = /^Verdict:\s*(.+?)\s*$/i;
@@ -205,12 +214,31 @@ export function parsePrEvidence(prBody) {
     let current = null;
     let currentField = null;
     let entryIndent = null;
+    let continuationEligible = false;
     const append = value => {
       if (!current || !currentField) return;
       current[currentField] = `${current[currentField] ?? ''} ${value}`.replace(/\s+/g, ' ').trim();
     };
-    for (const rawLine of section.split('\n')) {
+    const sectionLines = sectionData?.lines ?? markdownLines(section);
+    const liveLines = sectionLines.filter(line => line.live);
+    for (const sourceLine of sectionLines) {
+      if (!sourceLine.live) {
+        // Four-space continuation is valid only directly after a live field.
+        // A blank line, fence, quote, or other non-live block ends that field.
+        if (continuationEligible && current && currentField && /^ {4,}\S/.test(sourceLine.raw)) {
+          append(sourceLine.raw.trim());
+        } else {
+          continuationEligible = false;
+        }
+        continue;
+      }
+      const rawLine = sourceLine.raw;
       const line = rawLine.trim();
+      if (!line) {
+        currentField = null;
+        continuationEligible = false;
+        continue;
+      }
       const rawRequest = rawLine.match(/^( {0,3})[-*]\s*Required check:\s*(.+?)\s*$/i);
       const reqMatch = rawRequest ? line.match(reqRe) : null;
       if (reqMatch && (entryIndent === null || rawRequest[1].length === entryIndent)) {
@@ -220,6 +248,7 @@ export function parsePrEvidence(prBody) {
         const id = extractCheckId(current.check);
         if (id) current.id = id;
         currentField = 'check';
+        continuationEligible = true;
         continue;
       }
       if (current) {
@@ -227,20 +256,30 @@ export function parsePrEvidence(prBody) {
         if (verdictMatch) {
           current.verdict = verdictMatch[1].trim();
           currentField = 'verdict';
+          continuationEligible = true;
           continue;
         }
         const evidenceMatch = line.match(evidenceRe);
         if (evidenceMatch) {
           current.evidence = evidenceMatch[1].trim();
           currentField = 'evidence';
+          continuationEligible = true;
           continue;
         }
-        if (/^[ \t]+\S/.test(rawLine)) append(line);
+        if (continuationEligible && currentField && /^[ \t]+\S/.test(rawLine)) {
+          append(line);
+          continue;
+        }
       }
+      currentField = null;
+      continuationEligible = false;
     }
     if (current) entries.push(current);
+    if (entries.length === 0 && liveLines.some(line => /required\s+check\s*:/i.test(line.raw))) {
+      errors.push('PR evidence entries must use a live bullet entry: - Required check: <exact required check text>, followed by Verdict: <passed|failed|blocked|not run> and Evidence: <excerpt>');
+    }
   }
-  return { section, headSha, entries };
+  return { section, headSha, entries, errors };
 }
 
 export function statusCheckName(check) {
@@ -322,7 +361,7 @@ export function compareRequiredChecksToEvidence(requiredChecks, evidenceEntries,
         continue;
       }
       if (!VALID_VERDICTS.has(verdict)) {
-        missing.push({ check: rc.text, reason: `unrecognized verdict '${entry.verdict}'` });
+        missing.push({ check: rc.text, reason: `unrecognized verdict '${entry.verdict}'; expected one of: ${[...VALID_VERDICTS].join(', ')}` });
         continue;
       }
       if (verdict === 'not run') {
@@ -571,8 +610,7 @@ export function validateAttribution(prBody, headCommitMessage, issueData) {
   const warnings = [];
   let attributionEstablished = false;
 
-  const [frontmatter] = parseFrontmatter(String(issueData?.body ?? ''));
-  const canonicalTaskId = frontmatter?.task_id?.trim() ?? null;
+  const taskIdentity = resolveGitHubTaskIdentity(issueData);
   const liveBodyLines = markdownLines(prBody ?? '').filter(line => line.live).map(line => line.raw);
   const bodyRoles = liveBodyLines
     .map(line => line.trim().match(/^\[\[agent:\s*([a-z_]+)\]\]$/i)?.[1].toLowerCase() ?? null)
@@ -580,11 +618,13 @@ export function validateAttribution(prBody, headCommitMessage, issueData) {
   const finalBodyLine = [...liveBodyLines].reverse().find(line => line.trim())?.trim() ?? '';
   const finalBodyRole = finalBodyLine.match(/^\[\[agent:\s*([a-z_]+)\]\]$/i)?.[1].toLowerCase() ?? null;
   if (!finalBodyRole) {
-    if (bodyRoles.length > 0) errors.push('body role trailer must be the final live nonblank line');
+    if (bodyRoles.length > 0) {
+      errors.push("body role trailer must be the final live nonblank line; expected '[[agent: engineer]]', '[[agent: maintainer]]', or '[[agent: orchestrator]]'");
+    }
     return { errors, warnings, attributionEstablished: false };
   }
   if (!['engineer', 'maintainer', 'orchestrator'].includes(finalBodyRole)) {
-    errors.push(`body role trailer references unknown role '${finalBodyRole}'`);
+    errors.push(`body role trailer references unknown role '${finalBodyRole}'; expected '[[agent: engineer]]', '[[agent: maintainer]]', or '[[agent: orchestrator]]'`);
     return { errors, warnings, attributionEstablished: false };
   }
   if (new Set(bodyRoles).size > 1) {
@@ -622,8 +662,16 @@ export function validateAttribution(prBody, headCommitMessage, issueData) {
   const taskMatches = [...trailerBlock.matchAll(/^Task:\s*(\S+)$/gmi)];
   const agentMatches = [...trailerBlock.matchAll(/^Agent:\s*(\S+)$/gmi)];
 
-  if (taskMatches.length === 0) errors.push('head commit is missing required Task: trailer');
-  if (agentMatches.length === 0) errors.push('head commit is missing required Agent: trailer');
+  const expectedTaskId = taskIdentity?.taskId ?? null;
+  const expectedShape = expectedTaskId ? githubAttributionShape(expectedTaskId, bodyRole) : null;
+  if (taskMatches.length === 0) {
+    errors.push(expectedShape
+      ? `head commit is missing required Task: trailer; expected '${expectedShape.taskTrailer}'`
+      : 'head commit is missing required Task: trailer; linked task identity is unresolved');
+  }
+  if (agentMatches.length === 0) {
+    errors.push(`head commit is missing required Agent: trailer; expected 'Agent: ${bodyRole}'`);
+  }
 
   // Check for duplicate trailers
   if (taskMatches.length > 1) {
@@ -635,20 +683,17 @@ export function validateAttribution(prBody, headCommitMessage, issueData) {
 
   attributionEstablished = true;
 
-  // Use canonical task_id if available, otherwise fall back to issue number
-  const expectedTaskId = canonicalTaskId ?? (issueData?.number ? `#${issueData.number}` : null);
-
   if (taskMatches.length === 1 && expectedTaskId) {
     const commitTask = taskMatches[0][1].trim();
     if (commitTask !== expectedTaskId) {
-      errors.push(`head commit Task: '${commitTask}' does not match canonical task '${expectedTaskId}'`);
+      errors.push(`head commit Task: '${commitTask}' does not match expected '${expectedShape.taskTrailer}'`);
     }
   }
 
   if (agentMatches.length === 1) {
     const commitAgent = agentMatches[0][1].toLowerCase();
     if (commitAgent !== bodyRole) {
-      errors.push(`head commit Agent: '${agentMatches[0][1]}' does not match body role trailer '${bodyRole}'`);
+      errors.push(`head commit Agent: '${agentMatches[0][1]}' does not match expected 'Agent: ${bodyRole}' for body trailer '${expectedShape?.bodyTrailer ?? `[[agent: ${bodyRole}]]`}'`);
     }
   }
 
@@ -707,6 +752,34 @@ export function categorizePreflightErrors(errors) {
   return Object.entries(categories)
     .filter(([, errors]) => errors.length > 0)
     .map(([category, errors]) => ({ category, errors }));
+}
+
+/**
+ * Preserve legacy string arrays while exposing stable repair metadata to
+ * `github-preflight --json` consumers.
+ *
+ * @param {Array<string|{ message: string, category?: string, expectedShape?: string, expectedValues?: string[], requiredFindingIds?: string[] }>} items
+ */
+function normalizePreflightDiagnostics(items) {
+  return items.map(item => {
+    const message = typeof item === 'string' ? item : item.message;
+    const inferredCategory = categorizePreflightErrors([item])[0]?.category ?? 'other';
+    /** @type {{ category: string, message: string, expectedShape?: string, expectedValues?: string[], requiredFindingIds?: string[] }} */
+    const diagnostic = {
+      category: typeof item === 'object' && item.category ? item.category : inferredCategory,
+      message,
+    };
+    if (typeof item === 'object' && typeof item.expectedShape === 'string') {
+      diagnostic.expectedShape = item.expectedShape;
+    }
+    if (typeof item === 'object' && Array.isArray(item.expectedValues)) {
+      diagnostic.expectedValues = [...item.expectedValues];
+    }
+    if (typeof item === 'object' && Array.isArray(item.requiredFindingIds)) {
+      diagnostic.requiredFindingIds = [...item.requiredFindingIds];
+    }
+    return diagnostic;
+  });
 }
 
 /**
@@ -788,6 +861,14 @@ export function evaluatePreflight({
   warnings.push(...verificationAttempts.warnings);
 
   const evidence = parsePrEvidence(prData?.body);
+  for (const error of evidence.errors) {
+    errors.push({
+      message: error,
+      category: 'evidence',
+      expectedShape: PR_EVIDENCE_ENTRY_SHAPE,
+      expectedValues: [...VALID_VERDICTS],
+    });
+  }
   if (evidence.section === null) {
     errors.push("PR body has no '## Evidence' section");
   } else if (evidence.entries.length === 0 && evidence.section.trim() === '') {
@@ -815,7 +896,10 @@ export function evaluatePreflight({
   );
 
   for (const item of comparison.missing) {
-    errors.push(`Required check '${item.check}' has no acceptable evidence: ${item.reason}`);
+    const message = `Required check '${item.check}' has no acceptable evidence: ${item.reason}`;
+    errors.push(item.reason.startsWith('unrecognized verdict ')
+      ? { message, category: 'evidence', expectedValues: [...VALID_VERDICTS] }
+      : message);
   }
   warnings.push(...comparison.warnings);
 
@@ -972,34 +1056,42 @@ export function evaluatePreflight({
 
   // Phase 29: every re-review resolves the stable finding IDs from the latest
   // valid `needs_revision` carrier. Parser errors are part of the gate; a
-  // duplicate matrix row cannot become valid merely because map lookup wins.
+  // duplicate matrix bullet entry cannot become valid merely because map lookup wins.
   let resolutionMatrixValidation = null;
   const reviewEvents = historyEvents.length > 0 ? historyEvents : reviewOutcomes;
   const priorOutcome = [...reviewEvents].reverse().find(outcome =>
-    outcome?.type !== 'checkpoint' && outcome?.status === 'needs_revision' && Array.isArray(outcome.findingIds)
+    !outcome?.legacyMissingFindingIds && outcome?.type !== 'checkpoint' &&
+    outcome?.status === 'needs_revision' && Array.isArray(outcome.findingIds)
   );
   const priorFindingIds = priorOutcome?.findingIds ?? [];
   if (priorOutcome && priorFindingIds.length > 0) {
+    /** @param {string} message */
+    const resolutionDiagnostic = message => ({
+      message,
+      category: 'revision_resolution',
+      expectedShape: RESOLUTION_EXPECTED_SHAPE,
+      expectedValues: [...VALID_DISPOSITIONS],
+      requiredFindingIds: [...priorFindingIds],
+    });
     const matrixResult = parseResolutionMatrix(prData?.body);
     for (const parserError of matrixResult.errors) {
-      errors.push({ message: parserError, category: 'revision_resolution' });
+      errors.push(resolutionDiagnostic(parserError));
     }
-    if (!matrixResult.found) {
-      errors.push({
-        message: `re-review requires a resolution matrix for ${priorFindingIds.length} prior finding(s)`,
-        category: 'revision_resolution',
-      });
-    } else {
+    if (matrixResult.status === 'absent') {
+      errors.push(resolutionDiagnostic(
+        `re-review requires a resolution matrix for finding IDs: ${priorFindingIds.join(', ')}`
+      ));
+    } else if (matrixResult.status === 'parsed') {
       resolutionMatrixValidation = validateResolutionMatrix({
         requiredFindingIds: priorFindingIds,
         entries: matrixResult.entries,
         currentArtifact: headRefOid,
       });
       for (const err of resolutionMatrixValidation.errors) {
-        errors.push({ message: err, category: 'revision_resolution' });
+        errors.push(resolutionDiagnostic(err));
       }
       for (const warn of resolutionMatrixValidation.warnings) {
-        warnings.push({ message: warn, category: 'revision_resolution' });
+        warnings.push(resolutionDiagnostic(warn));
       }
     }
   }
@@ -1013,6 +1105,8 @@ export function evaluatePreflight({
     ok,
     errors: errorStrings,
     warnings: warnings.map(w => typeof w === 'string' ? w : w.message),
+    diagnostics: normalizePreflightDiagnostics(errors),
+    warningDiagnostics: normalizePreflightDiagnostics(warnings),
     pr: prNumber,
     issue: issueNumber,
     headRefOid,

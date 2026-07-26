@@ -13,6 +13,14 @@ import {
 import { seedToolkitSource } from './helpers/layout-fixture.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const AUDIT_RUN_LABELS = [
+  'Invocation reference', 'Invocation mode', 'Audited artifact', 'Covered tasks',
+  'Verdict', 'Assessment', 'Findings', 'Evidence checked',
+];
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 describe('template contract validation', () => {
   it('rejects copied trace-summary bullet lists in backend docs', () => {
@@ -58,6 +66,89 @@ describe('template contract validation', () => {
         0,
         `task-record.md should include optional '## Proof Pressure' section, got warnings: ${JSON.stringify(proofPressureWarnings)}`
       );
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('parses the embedded audit Run 1 structure rather than checking its heading alone', () => {
+    const target = mkdtempSync(join(tmpdir(), 'al-template-audit-run-'));
+    try {
+      seedToolkitSource(REPO_ROOT, target);
+      const templatePath = join(target, 'agenticloop', 'memory', 'audit-record.md');
+      const corrupted = readFileSync(templatePath, 'utf-8').replace('- Verdict: needs_remediation', '- Verdict: unknown');
+      writeFileSync(templatePath, corrupted, 'utf-8');
+      const result = validateCanonicalTemplates(target);
+      assert.ok(result.errors.some(error => /audit Run 1 verdict/.test(error)), result.errors.join('\n'));
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('requires every canonical audit Run 1 label exactly once', () => {
+    const target = mkdtempSync(join(tmpdir(), 'al-template-audit-run-labels-'));
+    try {
+      seedToolkitSource(REPO_ROOT, target);
+      const templatePath = join(target, 'agenticloop', 'memory', 'audit-record.md');
+      const original = readFileSync(templatePath, 'utf-8');
+      for (const label of AUDIT_RUN_LABELS) {
+        const corrupted = original.replace(new RegExp(`^- ${escapeRegExp(label)}:.*\r?\n`, 'm'), '');
+        writeFileSync(templatePath, corrupted, 'utf-8');
+        const result = validateCanonicalTemplates(target);
+        assert.ok(
+          result.errors.some(error => error.includes(`audit Run 1 example is missing '${label}'`)),
+          `expected missing ${label} error, got: ${JSON.stringify(result.errors)}`
+        );
+      }
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects duplicate, unknown, out-of-order, and invalid enum audit Run 1 labels', () => {
+    const target = mkdtempSync(join(tmpdir(), 'al-template-audit-run-shape-'));
+    try {
+      seedToolkitSource(REPO_ROOT, target);
+      const templatePath = join(target, 'agenticloop', 'memory', 'audit-record.md');
+      const original = readFileSync(templatePath, 'utf-8');
+      const cases = [
+        {
+          name: 'duplicate',
+          content: original.replace('- Verdict: needs_remediation', '- Verdict: needs_remediation\n- Verdict: needs_remediation'),
+          expected: /repeats 'Verdict'/,
+        },
+        {
+          name: 'unknown',
+          content: original.replace('- Verdict: needs_remediation', '- Unexpected: value\n- Verdict: needs_remediation'),
+          expected: /unknown label 'Unexpected'/,
+        },
+        {
+          name: 'order',
+          content: original.replace(
+            '- Invocation reference: 9f1c2c8e-2c53-4c0b-9a2f-4c2b9f9c2a11\n- Invocation mode: host_subagent',
+            '- Invocation mode: host_subagent\n- Invocation reference: 9f1c2c8e-2c53-4c0b-9a2f-4c2b9f9c2a11'
+          ),
+          expected: /labels must be ordered/,
+        },
+        {
+          name: 'invocation mode',
+          content: original.replace('- Invocation mode: host_subagent', '- Invocation mode: unknown'),
+          expected: /invocation mode must be one of:/,
+        },
+        {
+          name: 'verdict',
+          content: original.replace('- Verdict: needs_remediation', '- Verdict: unknown'),
+          expected: /verdict must be one of:/,
+        },
+      ];
+      for (const scenario of cases) {
+        writeFileSync(templatePath, scenario.content, 'utf-8');
+        const result = validateCanonicalTemplates(target);
+        assert.ok(
+          result.errors.some(error => scenario.expected.test(error)),
+          `${scenario.name}: ${JSON.stringify(result.errors)}`
+        );
+      }
     } finally {
       rmSync(target, { recursive: true, force: true });
     }

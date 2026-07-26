@@ -164,7 +164,10 @@ task-record obligation.
   (first or re-review), confirm the handoff requirements in [[review-and-accept]]
   are met: the exact implementation artifact is current, required checks pass,
   the completion summary is complete, scope/deviation accounting is done, and
-   (for re-review) every prior required finding has a resolution matrix entry.
+   (for re-review) every prior required finding has a resolution matrix bullet
+   entry. Copy the Maintainer's stable `F-<n>` IDs exactly into
+   `## Revision Resolution`; do not derive or renumber them. A blocked entry is
+   not review-ready and must route through [[blocked-state]].
 - At the review-budget boundary, do not start another implementation revision
   unless the durable Review Round Checkpoint is `targeted_revision`, is bound to
   the latest reviewed artifact, and names the exact target. A checkpoint at
@@ -186,8 +189,11 @@ task-record obligation.
   concise fact, a proposed source, and a revisit trigger for maintainer triage.
   Use the cross-lane finding route only when the candidate affects sibling
   assumptions or current batch correctness.
-- Use the exact task id from the task record in branch names, pull request titles,
-  labels, and commit trailers when `task_backend: github` is set.
+- For `task_backend: github`, use the linked issue's non-empty `task_id` in
+  branch names, pull request titles, labels, and `Task:` commit trailers. For a
+  legacy issue without `task_id`, use `#<issue-number>`. End the PR body with
+  the matching final `[[agent: engineer]]` trailer and the commit with
+  `Task: <resolved task id>` plus `Agent: engineer`.
 - Honor any delegation lease from the orchestrator, including observable-step
   checkpoint cadence, no-progress budget, and stop condition.
 - At every parallel checkpoint/final return, declare `Cross-lane findings:
