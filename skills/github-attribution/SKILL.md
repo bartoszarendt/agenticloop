@@ -53,6 +53,33 @@ The body role and `Agent:` value must agree exactly. The repair shape is always
 one final body trailer `[[agent: <role>]]` and one final commit trailer pair
 `Task: <resolved task id>` / `Agent: <role>`.
 
+## Prospective commit flow
+
+Write the complete message to `.agenticloop/tmp/<task>-commit-message.txt`. End
+it with one contiguous final trailer block, then run:
+
+```text
+npx agenticloop commit-attribution check --task <task-id> --message-file .agenticloop/tmp/<task>-commit-message.txt
+git commit -F .agenticloop/tmp/<task>-commit-message.txt
+npx agenticloop commit-attribution check --task <task-id>
+```
+
+Push only after both checks pass. `Task:` and `Agent:` must not be separate
+`git commit -m` paragraphs. `Agent:` identifies the role responsible for the
+content; a different role does not mechanically amend when the owning role can
+be re-delegated.
+
+## Already-pushed repair
+
+The attribution CLI is diagnostic and read-only. When a malformed trailer is
+already pushed, it is a deterministic Engineer repair only when the branch is
+exclusively owned, clean, and neither default, integration, protected, shared,
+nor under active review lease. Follow the exact fetch-SHA, message-file validate,
+explicit amend, HEAD validate, explicit `--force-with-lease`, remote-refetch,
+evidence-rerun, and durable-record procedure in the GitHub backend's
+Already-Pushed Metadata Repair section. Otherwise route the failed safety
+condition as blocked; never use automatic amend or force push.
+
 ## Safe body posting
 
 Write multi-line GitHub bodies to a temporary Markdown file under the target

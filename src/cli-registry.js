@@ -251,6 +251,55 @@ export const COMMAND_REGISTRY = {
       jsonOption,
     ],
   },
+  'task-body': {
+    summary: 'Guarded GitHub task-record body fetch, lint, and transactional apply.',
+    usage: 'agenticloop task-body <fetch|lint|apply|set-field|establish-baseline|authorize-correction|transition> --issue <number> [options]',
+    details: [
+      'Closed-loop task-record editing:',
+      '  1. task-body fetch --issue <n> --output .agenticloop/tmp/issue-<n>.md',
+      '  2. edit the local body, then task-body lint --issue <n> --body-file <path>',
+      '  3. task-body apply --issue <n> --body-file <path> --expect-digest <fetch digest> --dry-run',
+      '  4. inspect the diff, then repeat apply with --yes.',
+      'Apply refetches immediately before and after one exact body write. It retains recovery files when verification fails and never overwrites concurrent remote state.',
+    ],
+    subcommands: {
+      fetch: {
+        summary: 'Fetch an issue body to an atomically written UTF-8 Markdown file.',
+        usage: 'agenticloop task-body fetch --issue <number> --output <path> [--repo <owner/name>] [--json]',
+        options: [opt('issue', 'string', 'GitHub task issue number. Required.'), opt('output', 'string', 'Local Markdown output file. Required.'), opt('repo', 'string', 'Target repository.'), jsonOption],
+      },
+      lint: {
+        summary: 'Live-context lint by default; use --offline only when GitHub provenance is intentionally unavailable.',
+        usage: 'agenticloop task-body lint --issue <number> --body-file <path> [--offline --trusted-records <snapshot.json>] [--base <ref>] [--base-paths <path>] [--json]',
+        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('body-file', 'string', 'Local task-body Markdown candidate. Required.'), opt('offline', 'boolean', 'Do not fetch live GitHub body or carrier provenance.'), opt('trusted-records', 'string', 'Validated offline carrier snapshot JSON.'), opt('base', 'string', 'Optional Git base ref for authoring readiness.'), opt('base-paths', 'string', 'Optional JSON base-tree path inventory.'), jsonOption],
+      },
+      apply: {
+        summary: 'Publish one linted issue-body candidate only after an optimistic digest check.',
+        usage: 'agenticloop task-body apply --issue <number> --body-file <path> --expect-digest <digest> (--dry-run|--yes) [--repo <owner/name>] [--base <ref>] [--base-paths <path>] [--json]',
+        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('body-file', 'string', 'Local linted task-body Markdown candidate. Required.'), opt('expect-digest', 'string', 'Exact digest printed by task-body fetch. Required.'), opt('repo', 'string', 'Target repository.'), opt('base', 'string', 'Optional Git base ref for authoring readiness.'), opt('base-paths', 'string', 'Optional JSON base-tree path inventory.'), dryRunOption, yesOption, jsonOption],
+      },
+      'set-field': {
+        summary: 'Set one top-level task frontmatter field through the guarded apply transaction.',
+        usage: 'agenticloop task-body set-field --issue <number> --field <name> --value <text> --expect-digest <digest> (--dry-run|--yes) [options]',
+        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('field', 'string', 'Top-level frontmatter field. Required.'), opt('value', 'string', 'One-line field value. Required.'), opt('expect-digest', 'string', 'Exact digest printed by task-body fetch. Required.'), opt('repo', 'string', 'Target repository.'), opt('base', 'string', 'Optional Git base ref.'), opt('base-paths', 'string', 'Optional JSON base-tree path inventory.'), dryRunOption, yesOption, jsonOption],
+      },
+      transition: {
+        summary: 'Transition a task status through one guarded field mutation.',
+        usage: 'agenticloop task-body transition --issue <number> --status <status> --expect-digest <digest> (--dry-run|--yes) [--base <ref>|--base-paths <path>] [options]',
+        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('status', 'string', 'Target status. Required.'), opt('expect-digest', 'string', 'Exact digest printed by task-body fetch. Required.'), opt('repo', 'string', 'Target repository.'), opt('base', 'string', 'Git base ref required for agent-ready transition.'), opt('base-paths', 'string', 'JSON base-tree path inventory required for agent-ready transition.'), dryRunOption, yesOption, jsonOption],
+      },
+      'establish-baseline': {
+        summary: 'Create a separately carried trusted task-contract baseline record.',
+        usage: 'agenticloop task-body establish-baseline --issue <number> --expect-digest <digest> --authority <ref> --actor <login> (--dry-run|--yes) [options]',
+        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('expect-digest', 'string', 'Exact current task-body digest. Required.'), opt('authority', 'string', 'Authorization reference. Required.'), opt('actor', 'string', 'Verified Maintainer login. Required.'), opt('repo', 'string', 'Target repository.'), dryRunOption, yesOption, jsonOption],
+      },
+      'authorize-correction': {
+        summary: 'Create a separately carried trusted task-contract correction record for one candidate.',
+        usage: 'agenticloop task-body authorize-correction --issue <number> --body-file <path> --expect-digest <digest> --reason <text> --authority <ref> --actor <login> (--dry-run|--yes) [options]',
+        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('body-file', 'string', 'Candidate task body. Required.'), opt('expect-digest', 'string', 'Exact current task-body digest. Required.'), opt('reason', 'string', 'Correction reason. Required.'), opt('authority', 'string', 'Authorization reference. Required.'), opt('actor', 'string', 'Verified Maintainer login. Required.'), opt('repo', 'string', 'Target repository.'), dryRunOption, yesOption, jsonOption],
+      },
+    },
+  },
   'commit-attribution': {
     summary: 'Read-only Engineer commit-trailer validation and canonical repair guidance.',
     usage: 'agenticloop commit-attribution check --task <id> [--commit <ref>] [--message-file <path>] [--json]',
@@ -258,6 +307,14 @@ export const COMMAND_REGISTRY = {
       check: {
         summary: 'Check Task/Agent trailers without amending, committing, pushing, or force-pushing.',
         options: [targetOption(), opt('task', 'string', 'Expected task id. Required.'), opt('commit', 'string', 'Commit ref (default: HEAD).'), opt('message-file', 'string', 'Read a commit message from a local file.'), jsonOption],
+      },
+      'repair-record-render': {
+        summary: 'Validate and render a durable attribution-repair record without mutating Git.',
+        options: [targetOption(), opt('record', 'string', 'Input JSON repair record. Required.'), opt('output', 'string', 'Optional rendered output file.'), jsonOption],
+      },
+      'repair-record-lint': {
+        summary: 'Read-only lint for a durable attribution-repair record JSON file.',
+        options: [targetOption(), opt('record', 'string', 'Input JSON repair record. Required.'), jsonOption],
       },
     },
   },
@@ -291,8 +348,8 @@ export const COMMAND_REGISTRY = {
     options: [targetOption('Directory containing agenticloop.json (default: current).')],
   },
   task: {
-    summary: 'Manage files-backed task records (list, lint, new, status).',
-    usage: 'agenticloop task <list|lint|new|status> [options]',
+    summary: 'Manage files-backed task records (list, lint, new, establish-baseline, authorize-correction, status).',
+    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|status> [options]',
     subcommands: {
       list: {
         summary: 'List task records.',
@@ -316,6 +373,25 @@ export const COMMAND_REGISTRY = {
         options: [
           targetOption(),
           opt('id', 'string', 'Explicit task id. Omit to allocate the next default T-### id.'),
+          jsonOption,
+        ],
+      },
+      'establish-baseline': {
+        summary: 'Append a files-backend baseline payload; it becomes trusted only after a separate commit.',
+        usage: 'agenticloop task establish-baseline <id> --actor <git-author> --authority <kind:reference> [--target <dir>]',
+        positionals: [{ name: 'id', required: true }],
+        options: [targetOption(), opt('actor', 'string', 'Expected committed Git author. Required.'), opt('authority', 'string', 'Durable authorization reference. Required.'), jsonOption],
+      },
+      'authorize-correction': {
+        summary: 'Append a files-backend correction payload against the committed trusted chain; it becomes trusted only after a separate commit.',
+        usage: 'agenticloop task authorize-correction <id> --expect-prior-digest <digest> --reason <text> --authority <kind:reference> --actor <git-author> [--target <dir>]',
+        positionals: [{ name: 'id', required: true }],
+        options: [
+          targetOption(),
+          opt('expect-prior-digest', 'string', 'Terminal digest of the committed trusted chain. Required.', { valueName: 'digest' }),
+          opt('reason', 'string', 'Human-readable correction reason. Required.'),
+          opt('authority', 'string', 'Durable authorization reference. Required.'),
+          opt('actor', 'string', 'Expected committed Git author. Required.'),
           jsonOption,
         ],
       },

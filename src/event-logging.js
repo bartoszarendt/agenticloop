@@ -11,6 +11,7 @@ import {
   resolveProjectReviewBudget,
 } from './project-map.js';
 import { DEFAULT_ATTEMPT_BUDGET, DEFAULT_REVIEW_BUDGET } from './layout.js';
+import { EVENT_ROLES } from './workflow-vocabulary.js';
 import {
   DELEGATION_MODES,
   FALLBACK_CAUSES,
@@ -49,7 +50,7 @@ export const VALID_EVENT_TYPES = new Set([
 ]);
 
 export const VALID_EVENT_BACKENDS = new Set(['files', 'github', 'unknown']);
-export const VALID_EVENT_ROLES = new Set(['orchestrator', 'maintainer', 'engineer', 'auditor', 'human', 'unknown']);
+export const VALID_EVENT_ROLES = new Set(EVENT_ROLES);
 export const VALID_EVENT_OUTCOMES = new Set([
   'success',
   'failure',

@@ -196,10 +196,11 @@ describe('github-ready composite gate', () => {
     });
     assert.deepEqual(result.errors, []);
     assert.deepEqual(result.identity, { ok: true, taskId: 'T-001', errors: [] });
-    // Ready uses the same JSON diagnostic envelope as preflight.
+    // Ready uses the same JSON diagnostic envelope as preflight; the CLI
+    // presentation layer derives firstSafeRepair on top of these facts.
     assert.deepEqual(
       Object.keys(result).sort(),
-      ['diagnostics', 'errors', 'failureCategories', 'firstSafeRepair', 'headRefOid', 'identity', 'issue', 'ok', 'pr', 'preflight', 'readyForMerge', 'reviewAudit', 'schemaVersion', 'warningDiagnostics', 'warnings'].sort()
+      ['diagnostics', 'errors', 'failureCategories', 'headRefOid', 'identity', 'issue', 'ok', 'pr', 'preflight', 'readyForMerge', 'reviewAudit', 'schemaVersion', 'warningDiagnostics', 'warnings'].sort()
     );
   });
 

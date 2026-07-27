@@ -19,6 +19,47 @@ prior active IDs and structured resolved references; history is append-only.
 Same-author checkpoint repair is bounded and no-progress remains separate from
 checkpoint direction and the global review budget.
 
+## Gate Ownership And Dispatched Contract
+
+A failing gate is a typed routing decision, never authorization for the
+Orchestrator to perform another role's repair. The Orchestrator may re-delegate
+to the diagnostic owner, escalate when named human authority is required, or
+stop at the applicable hard checkpoint. It must not edit Engineer-owned PR
+bodies or implementation commits, or Maintainer-owned task records, while a
+valid delegation path exists.
+
+When a task becomes `agent-ready` or implementation starts, its scope and
+out-of-scope sections, `allowed_paths`, `intended_creations`, acceptance
+criteria, required checks, independent-review requirement, and relevant locked
+decision references form the dispatched contract baseline. The Maintainer
+records it before dispatch in a separately verifiable carrier naming authority,
+author, actor, time, and artifact. The body may cache it but never authorizes it.
+Historical missing data warns; never invent history.
+
+Carrier trust is explicit, not inferred from payload content. Untrusted or
+excluded carriers are ignored noise; an edited authority carrier is rejected
+without poisoning the chain; a malformed record on a trusted carrier is fatal;
+missing carrier metadata fails safely as an adapter error. A legacy task that
+materially changes its contract, and any task entering `agent-ready`, requires
+a trusted baseline chain first; steady-state historical tasks only warn.
+Runtime diagnostics report facts (level, code, category, repair kind,
+escalation kind, evidence) and never choose a workflow role: role ownership
+is bound once from role capability declarations and derived only at the
+CLI/workflow presentation boundary. `agenticloop validate` checks those
+declarations. A complete installed legacy role set with no capability fields
+temporarily uses bundled bindings with a migration warning; partial,
+conflicting, or unknown declarations fail validation.
+
+
+An unmatched implementation path is either an exact Engineer-authored PR
+`## Deviations` entry with a non-empty reason when it remains within accepted
+intent, or `needs_context` followed by a visible Maintainer correction. Never
+widen `allowed_paths` after the fact merely to describe the current diff. A
+correction records old value, new value, reason, authority, and affected
+artifact; a hidden scope or task-contract correction blocks review. Detailed
+carrier, readiness, and recovery rules live in [[task-record-contract]] and the
+selected backend document.
+
 Agentic Loop is a supervised implementation workflow for AI coding agents. It
 turns a vague request into a durable task record, a scoped implementation,
 evidence, review, and closeout.
@@ -1388,6 +1429,11 @@ issue and one pull request per implementation task:
    GitHub shows the task issue closed, not merely because a local event was
    written or the PR was merged.
 
+Before applying the `agent-ready` label, the Maintainer runs
+`task-readiness --mode authoring` with the current base-tree inventory, resolves
+or explicitly dispositions every warning, and records the dispatched contract
+baseline. This is an executable authoring gate, not optional advice.
+
 For automated work, this path applies to code, docs, configuration, workflow,
 and infrastructure changes alike. Once a task is delegated to an agent role in a
 GitHub-backed project, the agent must not commit task work directly to the
@@ -1698,6 +1744,15 @@ Agent: engineer
 
 Attribution is cooperative, not cryptographic. It helps humans and later agents
 understand who produced which artifact.
+
+For a prospective commit, write the complete message to
+`.agenticloop/tmp/<task>-commit-message.txt`, end it with one contiguous
+`Task:`/`Agent:` block, run `commit-attribution check --task <id> --message-file
+<path>`, commit with `git commit -F <path>`, then run the HEAD-based check before
+pushing. `Agent:` names the role responsible for the committed content, not a
+mechanical repair operator. Do not compose the trailers as separate `-m`
+paragraphs. The GitHub backend owns the narrow already-pushed metadata-repair
+exception and its durable repair record.
 
 ## Closeout
 

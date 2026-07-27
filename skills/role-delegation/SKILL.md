@@ -66,6 +66,12 @@ Apply this skill when the orchestrator:
 
 The orchestrator does not create task records, implement, review, or accept.
 
+A gate failure names an owner; it does not transfer that owner's edit authority
+to Orchestrator. Orchestrator re-delegates to the diagnostic owner, escalates to
+the human when named authority is required, or stops at the hard checkpoint. It
+must not repair Engineer-owned PR bodies or commits, or Maintainer-owned task
+records, while a legal delegation path exists.
+
 Work-unit certification is auditor-owned and is a fresh, separate invocation
 every time; see [[work-unit-audit]]. The auditor never implements, never accepts
 a task, and never accepts a limitation or risk. A non-certifying report routes
@@ -217,6 +223,7 @@ The Maintainer delegation packet must include:
 Repository:          <owner/name>
 PR:                  <number>
 Linked task issue:   <number>
+Task contract digest: <sha256:v1:...>
 Expected artifact:   <full 40-char SHA>
 Expected review outcome protocol: accepted | needs_revision
 Independent review:  required | not required
@@ -227,6 +234,10 @@ A supplied workspace must resolve to the exact expected artifact before use.
 GitHub remains authoritative for PR metadata, comments, reviews, checks, and
 head identity; absence of a reusable workspace is explicit and does not itself
 authorize or prohibit review.
+
+The packet is stale when the exact head, task-contract digest, or readiness
+result changes. Orchestrator rejects it and re-dispatches; it does not edit the
+task record or PR to make the packet pass.
 
 After Maintainer returns, Orchestrator must:
 

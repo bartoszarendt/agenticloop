@@ -1,9 +1,61 @@
 /** Read-only validation and canonical repair guidance for commit attribution. */
 
 import { markdownLines } from './markdown.js';
+import { createDiagnostic } from './repair-policy.js';
+import { WORKFLOW_ROLE_SET } from './workflow-vocabulary.js';
 
 const TRAILER_LINE_RE = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\s*:\s*(.+?)\s*$/;
 const NAMED_TRAILER_RE = /^(Task|Agent)\s*:\s*(.+?)\s*$/i;
+const SHA_RE = /^[0-9a-f]{40}$/i;
+
+export const ATTRIBUTION_REPAIR_RECORD_KIND = 'agenticloop.attribution-repair';
+
+/** Validate the durable record required after an exceptional metadata rewrite. */
+export function validateAttributionRepairRecord(record) {
+  const errors = [];
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return { ok: false, errors: ['attribution repair record must be an object'] };
+  if (record.kind !== ATTRIBUTION_REPAIR_RECORD_KIND) errors.push(`attribution repair record requires kind '${ATTRIBUTION_REPAIR_RECORD_KIND}'`);
+  for (const field of ['originalSha', 'resultingSha']) {
+    if (!SHA_RE.test(String(record[field] ?? ''))) errors.push(`attribution repair record requires ${field} as a full 40-character SHA`);
+  }
+  if (record.originalSha && record.resultingSha && String(record.originalSha).toLowerCase() === String(record.resultingSha).toLowerCase()) {
+    errors.push('attribution repair record originalSha and resultingSha must differ');
+  }
+  for (const field of ['branchRef', 'contentOwnerRole', 'repairOperator', 'reason', 'authority', 'timestamp']) {
+    if (!String(record[field] ?? '').trim()) errors.push(`attribution repair record requires ${field}`);
+  }
+  if (record.contentOwnerRole && !WORKFLOW_ROLE_SET.has(record.contentOwnerRole)) {
+    errors.push('attribution repair record contentOwnerRole must be a workflow role');
+  }
+  if (record.branchRef && !/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(record.branchRef)) {
+    errors.push('attribution repair record branchRef must be a refs/heads/<branch> reference');
+  }
+  if (record.authority && !/^[a-z][a-z0-9_-]*:\s*\S/i.test(record.authority)) {
+    errors.push('attribution repair record authority must be a durable <kind>:<reference>');
+  }
+  if (record.timestamp && Number.isNaN(Date.parse(record.timestamp))) errors.push('attribution repair record timestamp must be ISO-compatible');
+  for (const field of ['invalidatedEvidence', 'rerunEvidence']) {
+    if (!Array.isArray(record[field]) || record[field].length === 0 || record[field].some(value => !String(value ?? '').trim())) errors.push(`attribution repair record requires non-empty ${field} array`);
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+/** Render one canonical read-only candidate for the durable backend carrier. */
+export function renderAttributionRepairRecord(record) {
+  const validation = validateAttributionRepairRecord(record);
+  if (!validation.ok) throw new Error(validation.errors.join('; '));
+  return `${JSON.stringify(record, null, 2)}\n`;
+}
+
+export function lintAttributionRepairRecord(text) {
+  try {
+    const record = JSON.parse(String(text ?? ''));
+    const validation = validateAttributionRepairRecord(record);
+    return { ...validation, record };
+  } catch {
+    return { ok: false, errors: ['attribution repair record must be valid JSON'], record: null };
+  }
+}
 
 /**
  * The one canonical final-trailer-block parser, shared by the local
@@ -92,8 +144,7 @@ export function evaluateCommitAttribution({ message, taskId, role = 'engineer' }
     ok: errors.length === 0,
     errors,
     warnings: [],
-    diagnostics: errors.map(message => ({ message, category: 'attribution', owner: 'engineer', nextAction: 'replace the final contiguous Task/Agent trailer block in the commit message; do not amend automatically' })),
+    diagnostics: errors.map(message => createDiagnostic({ code: 'attribution.trailer', message })),
     repairPlan: errors.length ? `Replace the final contiguous trailer block with one final pair:\n${repair}\nThen create or amend the commit explicitly as Engineer. This command never amends or publishes.` : null,
-    firstSafeRepair: errors.length ? 'Engineer must replace the final contiguous Task/Agent trailer block explicitly.' : null,
   };
 }

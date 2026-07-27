@@ -28,6 +28,7 @@ import {
   warningCount,
 } from './validate-skills.js';
 import { validateLinks, formatLinkErrors } from './link-validator.js';
+import { validateProjectRoleCapabilities } from './role-capabilities.js';
 
 /**
  * @param {{ write(s: string): void }} output
@@ -70,6 +71,8 @@ function formatValidationOptions(options = {}) {
  *   activationWarnings: string[],
  *   configErrors: string[],
  *   configWarnings: string[],
+ *   roleCapabilityErrors: string[],
+ *   roleCapabilityWarnings: string[],
  *   eventLogErrors: string[],
  *   eventLogWarnings: string[],
  *   linkErrors: object[],
@@ -170,6 +173,20 @@ export function runValidation(target, options = {}) {
     writeLine(output);
   }
 
+  const {
+    errors: roleCapabilityErrors,
+    warnings: roleCapabilityWarnings,
+  } = validateProjectRoleCapabilities(target);
+  const hasRoleCapabilityIssues = roleCapabilityErrors.length > 0 || roleCapabilityWarnings.length > 0;
+  if (hasRoleCapabilityIssues) {
+    writeLine(output, '='.repeat(70));
+    writeLine(output, ' Role Capability Validation');
+    writeLine(output, '='.repeat(70));
+    for (const e of roleCapabilityErrors) writeLine(output, `  ERROR: ${e}`);
+    for (const w of roleCapabilityWarnings) writeLine(output, `  WARN:  ${w}`);
+    writeLine(output);
+  }
+
   const eventLogResult = validateEventLogs(target);
   const eventLogErrors = eventLogResult.exists ? eventLogResult.errors : [];
   const eventLogWarnings = eventLogResult.exists ? eventLogResult.warnings : [];
@@ -188,8 +205,10 @@ export function runValidation(target, options = {}) {
     writeLine(output);
   }
 
-  const totalErrors = errorCount(skillReport) + configErrors.length + activationErrors.length + eventLogErrors.length;
-  const totalWarnings = warningCount(skillReport) + configWarnings.length + activationWarnings.length + eventLogWarnings.length;
+  const totalErrors = errorCount(skillReport) + configErrors.length + activationErrors.length + eventLogErrors.length +
+    roleCapabilityErrors.length;
+  const totalWarnings = warningCount(skillReport) + configWarnings.length + activationWarnings.length + eventLogWarnings.length +
+    roleCapabilityWarnings.length;
 
   return {
     totalErrors: totalErrors + linkErrors.length,
@@ -199,6 +218,8 @@ export function runValidation(target, options = {}) {
     activationWarnings,
     configErrors,
     configWarnings,
+    roleCapabilityErrors,
+    roleCapabilityWarnings,
     eventLogErrors,
     eventLogWarnings,
     linkErrors,

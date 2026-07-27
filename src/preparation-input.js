@@ -7,6 +7,8 @@
  * existing verification validators expect.
  */
 
+import { createDiagnostic } from './repair-policy.js';
+
 export const PREPARATION_INPUT_SCHEMA_VERSION = 1;
 
 const PR_ARRAY_FIELDS = ['files', 'statusCheckRollup', 'commits', 'comments', 'reviews'];
@@ -20,8 +22,8 @@ function arrayOfStrings(value) {
   return Array.isArray(value) && value.every(item => typeof item === 'string');
 }
 
-function diagnostic(message, category = 'preparation_input') {
-  return { message, category, owner: 'engineer', nextAction: 'complete the serialized preparation input before rerunning the gate' };
+function diagnostic(message) {
+  return createDiagnostic({ code: 'pr_body.input', message, repairHint: 'complete the serialized preparation input before rerunning the gate' });
 }
 
 /**
@@ -143,17 +145,14 @@ export function evaluatePreparationInput(raw, evaluator, options = {}) {
       diagnostics: normalized.errors,
       warningDiagnostics: [],
       failureCategories: ['preparation_input'],
-      firstSafeRepair: normalized.errors[0]?.nextAction ?? null,
       inputComplete: false,
     };
   }
   const result = evaluator(normalized.value);
-  const diagnostics = Array.isArray(result.diagnostics) ? result.diagnostics : [];
   return {
     ...result,
     schemaVersion: PREPARATION_INPUT_SCHEMA_VERSION,
     inputComplete: true,
-    firstSafeRepair: result.ok ? null : (diagnostics[0]?.nextAction ?? 'repair the first diagnostic and rerun the gate'),
   };
 }
 

@@ -198,6 +198,58 @@ Optional frontmatter conventions:
 
 ## Operations
 
+### Trusted task-contract records
+
+The carrier is `.agenticloop/task-contract-history/<task-id>.jsonl`, verified
+against first-parent committed Git history. `task establish-baseline` and
+`task authorize-correction` only append; a record becomes trusted only after a
+separate commit, its Git author matching the record actor, validated by the
+shared digest-linked validator.
+
+Append-only verification walks the first-parent commits touching the history
+path from introduction to HEAD:
+
+- The path must be clean at HEAD: staged or unstaged changes are rejected,
+  and a history that existed but is absent at HEAD is a rejected committed
+  deletion.
+- Every successive committed blob must be an exact byte-prefix extension of
+  the previous blob. Rewriting, replacing, truncating, or reordering a
+  committed line fails; the appended suffix must consist only of complete
+  newline-terminated JSONL records.
+- Each appended line is bound to the commit that introduced it: commit SHA,
+  path, line/record index, Git author, and commit timestamp. When a merge
+  touches the path, the first-parent merge commit is the introducing carrier
+  and its author is the bound author.
+- A record actor matches its introducing commit when, after trimming and
+  case-folding, it equals the Git author name (`%an`) or the full
+  `Name <email>` identity.
+
+This is committed Git provenance — evidence of which commit introduced a
+line — not authenticated identity or signed authorship. The latest commit
+touching the file is never treated as provenance for every line.
+
+The mutable task file cannot authorize its own dispatched contract. For a new
+task or transition to `agent-ready`, store a versioned
+`agenticloop.task-contract-record` in the append-only task-history projection
+that is committed separately from the task-file edit. Its stable carrier id is
+the committed history artifact (`commit:<full-sha>:<path>:<line>`), and its verified
+author is the introducing commit's author as checked by the repository's normal
+review/commit provenance. It records task id, digest, authority, actor,
+timestamp, and affected artifact. A correction record additionally records
+prior/resulting digest, changed fields with old/new values, and reason. Body
+markers may cache record references only. Historical baseline-less task files
+warn until their next material contract edit or readiness transition; do not
+synthesize past records.
+
+`task authorize-correction <id> --expect-prior-digest <digest> --reason <text>
+--authority <kind:reference> --actor <git-author>` loads and validates the
+committed trusted chain, requires its terminal digest to equal
+`--expect-prior-digest`, computes the current task file's projection and
+exact canonical changed fields, validates the correction prospectively
+against the chain, and appends it. The correction becomes trusted only after
+a separate commit. `task establish-baseline` refuses to create a second
+baseline when trusted history already contains one.
+
 ### CLI Support
 
 The files backend remains Markdown-first; the CLI is a convenience and
@@ -213,6 +265,11 @@ Operation mapping:
   --note <text>` or `agenticloop task status <id> blocked --block-category
   <category> --note <text>`.
 - Lint task records: `agenticloop task lint [<task-id>] [--json]`.
+- Establish a contract baseline: `agenticloop task establish-baseline <id>
+  --actor <git-author> --authority <kind:reference>`, then commit separately.
+- Authorize a contract correction: `agenticloop task authorize-correction <id>
+  --expect-prior-digest <digest> --reason <text> --authority <kind:reference>
+  --actor <git-author>`, then commit separately.
 
 ### Create Task Record
 

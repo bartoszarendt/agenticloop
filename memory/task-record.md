@@ -1,5 +1,6 @@
 ---
 task_id: T-001
+task_contract_schema: 2
 status: agent-ready
 backend: files
 implementation_artifact:
@@ -41,6 +42,16 @@ minimalism: none
 # deliberately-tighter no-progress guards.
 attempt_budget: 5
 review_budget: 5
+ # When a Maintainer transitions this record to agent-ready, establish a trusted
+ # external task-contract baseline record first. An in-body baseline/correction
+ # marker may cache its record id and digest for review, but is never authority.
+ # Subsequent material changes require a separately verified correction record;
+ # do not edit allowed_paths post hoc merely to match an implementation diff.
+ # Files tasks append the record with `task establish-baseline` and corrections
+ # with `task authorize-correction`; commit each history artifact separately
+ # before transition. `task_contract_schema: 2` makes this a required lifecycle
+ # gate rather than a historical warning; entering agent-ready requires the
+ # trusted chain regardless of schema version.
 # Context overflow risk: stored values are medium | high. Omit for ordinary
 # low-risk tasks; do not write "low". Add context_note only when medium/high
 # changes delegation or stop behavior.

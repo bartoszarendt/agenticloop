@@ -7,6 +7,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { dirname, join, relative, resolve } from 'node:path';
 import { parseFrontmatter } from './frontmatter.js';
 import { markdownSection } from './markdown.js';
@@ -37,6 +38,9 @@ import {
 } from './review-provenance.js';
 import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.js';
 import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
+import { evaluateTaskReadiness } from './task-readiness.js';
+import { createTaskContractBaselineRecord, createTaskContractCorrectionRecord, taskContractDigest, trustedChainTerminal, validateTaskContractBaseline } from './task-contract-baseline.js';
+import { appendFilesTaskContractRecord, loadFilesTaskContractRecords } from './files-task-contract.js';
 
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -150,7 +154,25 @@ function lintTaskFile(filePath, target, projectConfig, verificationContext) {
       warnings,
     }),
   ];
+  const frontmatter = parseFrontmatter(content)[0] ?? {};
+  const status = frontmatterString(frontmatter.status);
+  if (status && status !== 'draft') {
+    const history = loadFilesTaskContractRecords(target, frontmatterString(frontmatter.task_id));
+    const baseline = validateTaskContractBaseline(content, {
+      lifecycle: Number(frontmatter.task_contract_schema) >= 2 ? 'new' : 'legacy',
+      trustedRecords: history.trustedRecords,
+      trustedRecordErrors: history.errors,
+    });
+    errors.push(...baseline.errors);
+    warnings.push(...baseline.warnings);
+  }
   return { file: filename, errors, warnings };
+}
+
+function baseTreePaths(target) {
+  const result = spawnSync('git', ['ls-tree', '-r', '--name-only', 'HEAD'], { cwd: target, encoding: 'utf8' });
+  if (result.status !== 0) return [];
+  return String(result.stdout ?? '').split(/\r?\n/).filter(Boolean);
 }
 
 function nextDefaultTaskId(files) {
@@ -362,7 +384,7 @@ export async function cmdTask(args, io = createIo()) {
     const suggestion = sub ? suggestName(sub, Object.keys(TASK_SUBCOMMANDS)) : null;
     io.err(suggestion
       ? `task: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
-      : 'task requires a subcommand: list, lint, new, status.');
+      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, status.');
     io.err('Run "agenticloop help task" for usage.');
     return EXIT_USAGE;
   }
@@ -453,9 +475,133 @@ export async function cmdTask(args, io = createIo()) {
       );
       newContent = replaceFrontmatterField(newContent, 'attempt_budget', String(attemptBudget.budget));
       newContent = replaceFrontmatterField(newContent, 'review_budget', String(reviewBudget.budget));
+      newContent = replaceFrontmatterField(newContent, 'task_contract_schema', '2');
       writeFileSync(filePath, newContent, 'utf-8');
       if (opts.json) io.out(JSON.stringify({ task_id: taskId, file: relative(target, filePath).replace(/\\/g, '/') }, null, 2));
       else io.out(`Created ${relative(target, filePath).replace(/\\/g, '/')}`);
+      return 0;
+    }
+
+    if (sub === 'establish-baseline') {
+      const taskId = positional[0];
+      if (!taskId || !opts.actor || !opts.authority) {
+        io.err('task establish-baseline requires <id>, --actor, and --authority');
+        return EXIT_USAGE;
+      }
+      const filePath = taskPathForId(target, projectConfig, taskId);
+      if (!existsSync(filePath)) {
+        io.err(`Task record not found: ${relative(target, filePath).replace(/\\/g, '/')}`);
+        return 1;
+      }
+      const body = readFileSync(filePath, 'utf8');
+      const contract = taskContractDigest(body);
+      if (!contract.ok) {
+        io.err(contract.error);
+        return 1;
+      }
+      const history = loadFilesTaskContractRecords(target, taskId);
+      if (history.errors.length) {
+        for (const error of history.errors) io.err(error);
+        return 1;
+      }
+      const record = createTaskContractBaselineRecord({
+        recordId: `files-task-contract:${randomUUID()}`,
+        taskId,
+        digest: contract.digest,
+        projection: contract.projection,
+        authority: String(opts.authority),
+        actor: String(opts.actor),
+        timestamp: new Date().toISOString(),
+        affectedArtifact: relative(target, filePath).replace(/\\/g, '/'),
+      });
+      // A second baseline is never created over trusted history: validate the
+      // prospective record against the committed chain before writing.
+      const prospective = validateTaskContractBaseline(body, {
+        lifecycle: 'legacy',
+        trustedRecords: history.trustedRecords,
+        prospectiveRecords: [record],
+      });
+      if (!prospective.ok) {
+        for (const error of prospective.errors) io.err(error);
+        return 1;
+      }
+      const historyPath = appendFilesTaskContractRecord(target, record);
+      const message = `Wrote ${relative(target, historyPath).replace(/\\/g, '/')}; commit it separately before it can become a trusted baseline.`;
+      if (opts.json) io.out(JSON.stringify({ ok: true, record, historyPath, warning: message }));
+      else io.out(message);
+      return 0;
+    }
+
+    if (sub === 'authorize-correction') {
+      const taskId = positional[0];
+      if (!taskId || !opts.expectPriorDigest || !opts.reason || !opts.authority || !opts.actor) {
+        io.err('task authorize-correction requires <id>, --expect-prior-digest, --reason, --authority, and --actor');
+        return EXIT_USAGE;
+      }
+      const filePath = taskPathForId(target, projectConfig, taskId);
+      if (!existsSync(filePath)) {
+        io.err(`Task record not found: ${relative(target, filePath).replace(/\\/g, '/')}`);
+        return 1;
+      }
+      const body = readFileSync(filePath, 'utf8');
+      const contract = taskContractDigest(body);
+      if (!contract.ok) {
+        io.err(contract.error);
+        return 1;
+      }
+      const history = loadFilesTaskContractRecords(target, taskId);
+      if (history.errors.length) {
+        for (const error of history.errors) io.err(error);
+        return 1;
+      }
+      const chain = trustedChainTerminal(history.trustedRecords, { taskId });
+      if (!chain.ok) {
+        for (const error of chain.errors) io.err(error);
+        return 1;
+      }
+      if (chain.terminalDigest !== String(opts.expectPriorDigest).trim()) {
+        io.err(`stale trusted chain: expected prior digest ${opts.expectPriorDigest}, committed chain terminal digest is ${chain.terminalDigest}`);
+        return 1;
+      }
+      const changes = [];
+      for (const field of new Set([...Object.keys(chain.terminalProjection ?? {}), ...Object.keys(contract.projection)])) {
+        if (JSON.stringify(chain.terminalProjection?.[field]) !== JSON.stringify(contract.projection[field])) {
+          changes.push({ field, oldValue: chain.terminalProjection?.[field], newValue: contract.projection[field] });
+        }
+      }
+      if (changes.length === 0) {
+        io.err('task-contract correction candidate does not change the protected contract');
+        return 1;
+      }
+      const record = createTaskContractCorrectionRecord({
+        recordId: `files-task-contract:${randomUUID()}`,
+        taskId,
+        priorDigest: chain.terminalDigest,
+        resultingDigest: contract.digest,
+        priorProjection: chain.terminalProjection,
+        resultingProjection: contract.projection,
+        changes,
+        reason: String(opts.reason),
+        authority: String(opts.authority),
+        actor: String(opts.actor),
+        affectedArtifact: relative(target, filePath).replace(/\\/g, '/'),
+        timestamp: new Date().toISOString(),
+      });
+      // Validate the prospective correction against the committed chain
+      // before writing; it becomes trusted only after a separate commit.
+      const prospective = validateTaskContractBaseline(body, {
+        lifecycle: 'transition',
+        trustedRecords: history.trustedRecords,
+        prospectiveRecords: [record],
+      });
+      if (!prospective.ok) {
+        for (const error of prospective.errors) io.err(error);
+        return 1;
+      }
+      const historyPath = appendFilesTaskContractRecord(target, record);
+      const message = `Wrote ${relative(target, historyPath).replace(/\\/g, '/')}; commit it separately before it can become a trusted correction.`;
+      if (opts.json) io.out(JSON.stringify({ ok: true, record, historyPath, warning: message }));
+      else io.out(message);
       return 0;
     }
 
@@ -503,6 +649,51 @@ export async function cmdTask(args, io = createIo()) {
         }
       }
 
+      if (nextStatus === 'agent-ready' && currentStatus !== 'agent-ready') {
+        const readiness = evaluateTaskReadiness({
+          taskBody: parsedContent,
+          basePaths: baseTreePaths(target),
+          mode: 'authoring',
+        });
+        // Blocking is represented structurally: readiness facts stay verbatim
+        // and the gate outcome is the blocking signal, never role prose
+        // prepended to a factual warning.
+        if (readiness.errors.length > 0 || readiness.warnings.length > 0) {
+          if (opts.json) {
+            io.out(JSON.stringify({
+              ok: false,
+              task_id: taskId,
+              status: nextStatus,
+              blocking: {
+                kind: 'task_readiness',
+                errors: readiness.errors,
+                warnings: readiness.warnings,
+                diagnostics: readiness.diagnostics,
+              },
+            }));
+          } else {
+            for (const error of readiness.errors) io.err(error);
+            for (const warning of readiness.warnings) io.err(warning);
+            if (readiness.warnings.length > 0 && readiness.errors.length === 0) {
+              io.err('task-readiness warnings block agent-ready until they are corrected or dispositioned');
+            }
+          }
+          return 1;
+        }
+        // Entering agent-ready is always a lifecycle transition: even a
+        // schema-less legacy task requires a trusted baseline chain first.
+        const history = loadFilesTaskContractRecords(target, taskId);
+        const baseline = validateTaskContractBaseline(content, {
+          lifecycle: 'transition',
+          trustedRecords: history.trustedRecords,
+          trustedRecordErrors: history.errors,
+        });
+        if (!baseline.ok) {
+          for (const error of baseline.errors) io.err(`Task cannot become agent-ready: ${error}`);
+          return 1;
+        }
+      }
+
       // --- Acceptance gate for accepted/closed ---
       if ((nextStatus === 'accepted' || nextStatus === 'closed') &&
           currentStatus !== nextStatus) {
@@ -526,7 +717,7 @@ export async function cmdTask(args, io = createIo()) {
       return 0;
     }
 
-    io.err(`Unknown task subcommand '${sub}'. Expected: list, lint, new, status.`);
+    io.err(`Unknown task subcommand '${sub}'. Expected: list, lint, new, establish-baseline, authorize-correction, status.`);
     return EXIT_USAGE;
   } catch (error) {
     if (error instanceof CliUsageError) throw error;

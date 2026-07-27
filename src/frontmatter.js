@@ -4,7 +4,8 @@
  * Minimal YAML-ish frontmatter parser for Markdown files.
  * Parses indentation-based nested mappings, scalar sequences, inline arrays,
  * quoted values, and YAML literal/folded block scalars.
- * Returns [frontmatterDict | null, bodyString].
+ * Returns [frontmatterDict | null, bodyString]. `parseFrontmatter` is retained
+ * for compatibility; contract-sensitive callers use `parseFrontmatterStrict`.
  */
 
 /**
@@ -102,21 +103,17 @@ function blockScalar(lines, index, parentIndent, style) {
 }
 
 /**
- * @param {string} content
- * @returns {[Record<string, unknown> | null, string]}
+ * @typedef {{ data: Record<string, unknown> | null, reason: string | null }} StrictFrontmatterData
  */
-export function parseFrontmatter(content) {
-  if (!content.startsWith('---')) {
-    return [null, content];
-  }
 
-  const match = content.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n([\s\S]*))?$/);
-  if (!match) {
-    return [null, content];
-  }
-
-  const fmText = match[1];
-  const body = match[2] ?? '';
+/**
+ * Parse a frontmatter payload strictly. Unlike the legacy parser this rejects
+ * malformed lines instead of silently ignoring them.
+ *
+ * @param {string} fmText
+ * @returns {StrictFrontmatterData}
+ */
+function parseFrontmatterData(fmText) {
 
   /** @type {Record<string, unknown>} */
   const data = {};
@@ -136,13 +133,14 @@ export function parseFrontmatter(content) {
     const parent = stack[stack.length - 1].value;
     if (Array.isArray(parent)) {
       const item = raw.match(/^\s*-\s+(.+?)\s*$/);
-      if (item) parent.push(parseScalar(item[1]).value);
+      if (!item) return { data: null, reason: `invalid_yaml_line:${index + 1}` };
+      parent.push(parseScalar(item[1]).value);
       continue;
     }
-    if (!parent || typeof parent !== 'object') continue;
+    if (!parent || typeof parent !== 'object') return { data: null, reason: `invalid_yaml_line:${index + 1}` };
 
     const parsedLine = parseKeyValueLine(raw);
-    if (!parsedLine) continue;
+    if (!parsedLine) return { data: null, reason: `invalid_yaml_line:${index + 1}` };
 
     const { key, rawValue } = parsedLine;
     const scalarStyle = rawValue.trim();
@@ -160,11 +158,135 @@ export function parseFrontmatter(content) {
       continue;
     }
 
+    const value = rawValue.trim();
+    if ((value.startsWith('"') && !value.endsWith('"')) ||
+        (value.startsWith("'") && !value.endsWith("'")) ||
+        (value.startsWith('[') && !value.endsWith(']'))) {
+      return { data: null, reason: `invalid_yaml_value:${index + 1}` };
+    }
     const parsedValue = parseScalar(rawValue);
     parent[key] = parsedValue.value;
     if (parsedValue.isObject) {
       stack.push({ indent, value: /** @type {Record<string, unknown>} */ (parent[key]) });
     }
+  }
+
+  return { data, reason: null };
+}
+
+/**
+ * Parse leading Markdown frontmatter without converting malformed structure
+ * into an absent block. Exactly one leading BOM is normalized; leading
+ * whitespace is not, because it changes the document shape.
+ *
+ * @param {string} content
+ * @returns {{ state: 'absent', data: null, body: string, reason: null }|{ state: 'valid', data: Record<string, unknown>, body: string, reason: null }|{ state: 'malformed', data: null, body: string, reason: string }}
+ */
+export function parseFrontmatterStrict(content) {
+  const original = String(content ?? '');
+  const normalized = original.startsWith('\uFEFF') ? original.slice(1) : original;
+  if (!normalized.startsWith('---')) {
+    return { state: 'absent', data: null, body: original, reason: null };
+  }
+
+  const opening = normalized.match(/^---[ \t]*\r?\n/);
+  if (!opening) {
+    return {
+      state: 'malformed',
+      data: null,
+      body: normalized,
+      reason: 'invalid_opening_delimiter',
+    };
+  }
+
+  const afterOpening = normalized.slice(opening[0].length);
+  const immediateClosing = afterOpening.match(/^---[ \t]*(?=\r?\n|$)/);
+  const closing = /\r?\n---[ \t]*(?=\r?\n|$)/g;
+  closing.lastIndex = opening[0].length;
+  const closingMatch = immediateClosing ? null : closing.exec(normalized);
+  if (!immediateClosing && !closingMatch) {
+    return {
+      state: 'malformed',
+      data: null,
+      body: normalized,
+      reason: 'missing_closing_delimiter',
+    };
+  }
+
+  const closingIndex = immediateClosing ? opening[0].length : /** @type {RegExpExecArray} */ (closingMatch).index;
+  const closingLength = immediateClosing ? immediateClosing[0].length : /** @type {RegExpExecArray} */ (closingMatch)[0].length;
+  const fmText = normalized.slice(opening[0].length, closingIndex);
+  let bodyOffset = closingIndex + closingLength;
+  if (normalized.startsWith('\r\n', bodyOffset)) bodyOffset += 2;
+  else if (normalized.startsWith('\n', bodyOffset)) bodyOffset += 1;
+  const parsed = parseFrontmatterData(fmText);
+  if (!parsed.data) {
+    return {
+      state: 'malformed',
+      data: null,
+      body: normalized.slice(bodyOffset),
+      reason: parsed.reason ?? 'invalid_frontmatter_shape',
+    };
+  }
+  return { state: 'valid', data: parsed.data, body: normalized.slice(bodyOffset), reason: null };
+}
+
+/**
+ * Compatibility parser for callers that historically accepted partial
+ * YAML-ish content. Contract-sensitive callers must use
+ * `parseFrontmatterStrict()` instead.
+ *
+ * @param {string} content
+ * @returns {[Record<string, unknown> | null, string]}
+ */
+export function parseFrontmatter(content) {
+  if (!content.startsWith('---')) return [null, content];
+
+  const match = content.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n([\s\S]*))?$/);
+  if (!match) return [null, content];
+
+  const fmText = match[1];
+  const body = match[2] ?? '';
+  /** @type {Record<string, unknown>} */
+  const data = {};
+  /** @type {{ indent: number, value: Record<string, unknown> | unknown[] }[]} */
+  const stack = [{ indent: -1, value: data }];
+
+  const lines = fmText.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index++) {
+    const raw = lines[index];
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const indent = indentation(raw);
+    while (stack.length > 1 && indent <= stack[stack.length - 1].indent) stack.pop();
+
+    const parent = stack[stack.length - 1].value;
+    if (Array.isArray(parent)) {
+      const item = raw.match(/^\s*-\s+(.+?)\s*$/);
+      if (item) parent.push(parseScalar(item[1]).value);
+      continue;
+    }
+    if (!parent || typeof parent !== 'object') continue;
+
+    const parsedLine = parseKeyValueLine(raw);
+    if (!parsedLine) continue;
+    const { key, rawValue } = parsedLine;
+    const scalarStyle = rawValue.trim();
+    if (/^[>|][+-]?$/.test(scalarStyle)) {
+      const parsedBlock = blockScalar(lines, index, indent, scalarStyle);
+      parent[key] = parsedBlock.value;
+      index = parsedBlock.nextIndex;
+      continue;
+    }
+    if (rawValue.trim() === '') {
+      const container = nestedContainer(lines, index, indent);
+      parent[key] = container;
+      stack.push({ indent, value: container });
+      continue;
+    }
+    const parsedValue = parseScalar(rawValue);
+    parent[key] = parsedValue.value;
+    if (parsedValue.isObject) stack.push({ indent, value: /** @type {Record<string, unknown>} */ (parent[key]) });
   }
 
   return [data, body];

@@ -12,6 +12,10 @@ metadata:
 
 The loop must fail loudly and durably, never silently. A blocked task is not a failed task; it is a paused task with enough evidence for a human or later agent to resume.
 
+For ownership when a gate fails, follow the canonical **Gate Ownership And
+Dispatched Contract** section in `agenticloop/AGENTIC_LOOP.md`: a failing gate
+routes work but does not transfer another role's mutation authority.
+
 Use backend-neutral language first:
 
 - **task record**: the durable record for the work,

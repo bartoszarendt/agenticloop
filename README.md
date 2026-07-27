@@ -361,7 +361,9 @@ Agentic Loop supports two task-record backends.
 | Files | Default | `.agenticloop/tasks/<TASK-ID>.md` | You want the lowest-friction local workflow with no external dependency. |
 | GitHub | Optional | GitHub issues and pull requests | Your project already uses GitHub issues and PRs as durable implementation artifacts. |
 
-The active backend is selected in `.agenticloop/project.md`.
+The active backend is selected in `.agenticloop/project.md`. The GitHub
+backend optionally narrows task-contract trust with
+`trusted_task_contract_actors`; see [backends/github.md](backends/github.md).
 
 ## What it is not
 
@@ -417,6 +419,9 @@ npx agenticloop validate                             Validate skills, config, li
 npx agenticloop status                               Show configured adapters, artifacts, and next steps
 npx agenticloop github-preflight --pr <number>       Verify a GitHub PR body carries final-state evidence
 npx agenticloop github-ready --pr <number>           Read-only pre-merge gate: evidence preflight + review audit
+npx agenticloop task-body <fetch|lint|apply|set-field|transition|establish-baseline|authorize-correction>
+                                                        Guarded GitHub task-record transaction and trusted contract records
+npx agenticloop commit-attribution check --task <id>  Validate prospective or HEAD commit attribution
 npx agenticloop task list [--status <s>] [--json]    List files-backed task records
 npx agenticloop task lint [<task-id>] [--json]       Lint task frontmatter and lifecycle state
 npx agenticloop task new <title> [--id <id>]         Create a new task record

@@ -907,6 +907,9 @@ delegation rules:
 | Case | Owner | Rule |
 |---|---|---|
 | Mechanical preflight defect | Engineer | Correct and re-preflight before review |
+| Scope deviation within accepted intent | Engineer | Add exact PR `## Deviations` path/reason; never widen `allowed_paths` |
+| Material scope or task-contract change | Maintainer | Route `needs_context`, reconcile visibly, issue correction |
+| Malformed task record, path intent, or baseline mismatch | Maintainer | Repair through guarded record path; Orchestrator read-only |
 | Dispatched/current artifact mismatch | Orchestrator | Reject the handoff or returned result; re-route without interpreting findings |
 | Disputed review finding | Maintainer | Sustain or withdraw with evidence |
 | Task-contract ambiguity | Maintainer | Resolve; use change-request-gate and human authority when the contract changes |

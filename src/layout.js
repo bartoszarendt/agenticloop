@@ -22,6 +22,7 @@ export const MEMORY_SCAFFOLD_RELATIVE_PATH = 'agenticloop/memory/scaffold';
 export const PROJECT_SCAFFOLD_RELATIVE_PATH = 'agenticloop/memory/scaffold/project.md';
 export const DECISION_RECORD_TEMPLATE_RELATIVE_PATH = 'agenticloop/memory/decision-record.md';
 export const TASK_RECORD_TEMPLATE_RELATIVE_PATH = 'agenticloop/memory/task-record.md';
+export const FILES_TASK_CONTRACT_HISTORY_DIRECTORY = '.agenticloop/task-contract-history';
 export const AUDIT_RECORD_TEMPLATE_RELATIVE_PATH = 'agenticloop/memory/audit-record.md';
 export const WORK_UNIT_SUMMARY_TEMPLATE_RELATIVE_PATH = 'agenticloop/memory/work-unit-summary.md';
 export const IMPROVEMENT_PROPOSAL_TEMPLATE_RELATIVE_PATH = 'agenticloop/memory/improvement-proposal.md';

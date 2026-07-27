@@ -9,6 +9,14 @@ import { renderPrBodyScaffold, lintPrBody } from '../src/pr-body.js';
 import { validateFindingIdLifecycle, parseNoProgressDisposition, formatNoProgressDisposition } from '../src/review-history.js';
 import { evaluateNoProgress, applyCheckpointRepairs, parseCheckpointRepair, formatCheckpointRepair, deriveCheckpointState } from '../src/review-checkpoint.js';
 import { validateReviewPacket } from '../src/github-review-prepare.js';
+import { presentDiagnostic } from '../src/diagnostic-presentation.js';
+import { getProjectRoleCapabilities } from '../src/role-capabilities.js';
+
+const REPO_ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+
+function presentedOwner(diagnostic) {
+  return presentDiagnostic(diagnostic, getProjectRoleCapabilities(REPO_ROOT)).owner ?? null;
+}
 
 const HEAD = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0';
 const BASE = 'b'.repeat(40);
@@ -631,7 +639,7 @@ describe('review preparation contract - typed proof semantics', () => {
     const result = evaluatePreparationInput(baseInput({ issueCheck, prBody: body }), evaluatePreflight);
     assert.equal(result.ok, false);
     assert.match(result.errors.join('\n'), /share semantic identity 'npm test'; assign distinct RC-N ids/);
-    assert.ok(result.diagnostics.some(item => item.category === 'task_policy' && item.owner === 'maintainer'));
+    assert.ok(result.diagnostics.some(item => item.category === 'task_policy' && presentedOwner(item) === 'maintainer'));
   });
 
   it('validates malformed task contracts before status or PR-body satisfaction', () => {
@@ -667,7 +675,7 @@ describe('review preparation contract - typed proof semantics', () => {
       assert.equal(result.ok, false, `malformed contract passed: ${check}`);
       assert.match(result.errors.join('\n'), expected);
       assert.equal(result.evidenceMatches.length, 0);
-      assert.ok(result.diagnostics.some(item => item.category === 'task_policy' && item.owner === 'maintainer'));
+      assert.ok(result.diagnostics.some(item => item.category === 'task_policy' && presentedOwner(item) === 'maintainer'));
     }
 
     const proseCommand = 'run the suite [Kind: command] [Source: pr_body]';
@@ -684,7 +692,7 @@ describe('review preparation contract - typed proof semantics', () => {
       currentHead: HEAD,
       statusChecks: [{ name: 'npm test', status: 'COMPLETED', conclusion: 'SUCCESS' }],
     });
-    assert.ok(lint.diagnostics.some(item => item.category === 'task_policy' && item.owner === 'maintainer'));
+    assert.ok(lint.diagnostics.some(item => item.category === 'task_policy' && presentedOwner(item) === 'maintainer'));
   });
 
   it('a stable id cannot substitute a disallowed satisfaction source', () => {

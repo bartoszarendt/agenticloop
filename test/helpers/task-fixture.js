@@ -11,6 +11,7 @@
  */
 
 import { copyFileSync, mkdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -32,5 +33,9 @@ export function createTaskProjectFixture(target) {
     TASK_RECORD_TEMPLATE,
     join(target, 'agenticloop', 'memory', 'task-record.md')
   );
+  for (const args of [['init'], ['config', 'user.name', 'Agentic Loop Test'], ['config', 'user.email', 'loop@example.test'], ['add', '.'], ['commit', '-m', 'fixture']]) {
+    const result = spawnSync('git', args, { cwd: target, encoding: 'utf8' });
+    if (result.status !== 0) throw new Error(`fixture git ${args.join(' ')} failed: ${result.stderr}`);
+  }
   return target;
 }

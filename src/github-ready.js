@@ -17,6 +17,7 @@
  */
 
 import { defaultGhCommandRunner } from './gh-helpers.js';
+import { createDiagnostic } from './repair-policy.js';
 import { runPreflight, PreflightError } from './github-preflight.js';
 import { runGitHubReviewAudit, GitHubReviewAuditError } from './github-review-audit.js';
 import { fetchGitHubTaskInventory } from './closeout-github.js';
@@ -130,11 +131,12 @@ export function runGitHubReady({
   // carrier for its materialized task identity across open and closed issues.
   // One inventory snapshot serves this command; incomplete state fails closed.
   const linkedIssue = reviewAudit.issue ?? preflight.issue ?? null;
-  const identity = { ok: true, taskId: null, errors: /** @type {string[]} */ ([]) };
+  const identity = { ok: true, taskId: null, errors: /** @type {string[]} */ ([]), diagnostics: /** @type {object[]} */ ([]) };
   if (linkedIssue !== null) {
     const inventory = taskInventory ?? fetchGitHubTaskInventory(commandRunner, { repo, taskIdRegex });
     if (inventory.state !== 'ok') {
       identity.ok = false;
+      identity.diagnostics.push(...(inventory.diagnostics ?? []));
       identity.errors.push(
         ...(inventory.errors.length > 0
           ? inventory.errors
@@ -181,15 +183,17 @@ export function runGitHubReady({
     errors,
     warnings: [],
     diagnostics: [
-      ...(preflight.errors ?? []).map(message => ({ message, category: 'preflight', owner: 'engineer' })),
-      ...(reviewAudit.errors ?? []).map(message => ({ message, category: 'review_audit', owner: 'maintainer' })),
-      ...(identity.errors ?? []).map(message => ({ message, category: 'task_identity', owner: 'maintainer' })),
+      ...(preflight.errors ?? []).map(message => createDiagnostic({ code: 'ready.preflight', message })),
+      ...(reviewAudit.errors ?? []).map(message => createDiagnostic({ code: 'ready.review_audit', message })),
+      ...(identity.diagnostics ?? []),
+      ...(identity.errors ?? [])
+        .filter(message => !(identity.diagnostics ?? []).some(diagnostic => diagnostic.message === message || message.includes(diagnostic.message)))
+        .map(message => createDiagnostic({ code: 'ready.task_identity', message })),
       ...errors.filter(message => !(identity.errors ?? []).includes(message))
-        .map(message => ({ message, category: 'cross_gate_identity', owner: 'orchestrator' })),
+        .map(message => createDiagnostic({ code: 'ready.cross_gate_identity', message })),
     ],
     warningDiagnostics: [],
     failureCategories: readyForMerge ? [] : ['preflight_or_review_audit'],
-    firstSafeRepair: readyForMerge ? null : 'repair the first failed component gate and rerun github-ready',
   };
 }
 

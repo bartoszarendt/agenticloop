@@ -31,11 +31,14 @@ import {
   parseAttemptBudget,
   parseReviewBudget,
   PREFLIGHT_DIAGNOSTIC_CATEGORIES,
-  PREFLIGHT_DIAGNOSTIC_OWNERS,
   runPreflight,
   PreflightError,
 } from '../src/github-preflight.js';
 import { evaluateGitHubReviewAudit } from '../src/github-review-audit.js';
+import { preflightDiagnosticCode, repairPolicyFor } from '../src/repair-policy.js';
+import { getProjectRoleCapabilities } from '../src/role-capabilities.js';
+
+const REPO_ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 
 const HEAD = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0';
 const LOOP_ACCOUNT = { login: 'loop-bot', type: 'User' };
@@ -1759,11 +1762,19 @@ describe('attribution validation', () => {
 });
 
 describe('structured failure categories', () => {
-  it('has an intentional owner route for every canonical category', () => {
+  it('has a resolvable repair kind and primary owner for every canonical category', () => {
+    const capabilities = getProjectRoleCapabilities(REPO_ROOT);
+    const owners = Object.fromEntries(
+      PREFLIGHT_DIAGNOSTIC_CATEGORIES.map(category => [
+        category,
+        capabilities.primaryOwnerByRepairKind[repairPolicyFor(preflightDiagnosticCode(category)).repairKind],
+      ])
+    );
     assert.deepEqual(
-      [...Object.keys(PREFLIGHT_DIAGNOSTIC_OWNERS)].sort(),
+      [...Object.keys(owners)].sort(),
       [...PREFLIGHT_DIAGNOSTIC_CATEGORIES].sort(),
     );
+    for (const owner of Object.values(owners)) assert.ok(owner, 'every category resolves to a primary owner');
   });
 
   it('returns categorized errors on failure', () => {

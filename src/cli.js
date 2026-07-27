@@ -41,7 +41,8 @@
  *   agenticloop generate all          [--target <dir>] [--output-dir <dir>]
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { join, resolve, isAbsolute } from 'node:path';
 import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.js';
@@ -75,7 +76,27 @@ import { deepMerge, loadAgenticLoopConfig } from './json.js';
 import { loadProjectMap } from './project-map.js';
 import { resolveTaskBackend } from './task-backend.js';
 import { cmdTask } from './task-cli.js';
+import {
+  GitHubTaskBodyError,
+  applyGitHubTaskBody,
+  atomicWriteUtf8,
+  fetchGitHubTaskBody,
+  lintGitHubTaskBody,
+  setTaskBodyFrontmatterField,
+} from './github-task-body.js';
+import {
+  createTaskContractBaselineRecord,
+  createTaskContractCorrectionRecord,
+  parseTaskContractRecords,
+  renderTaskContractRecord,
+  taskContractDigest,
+  validateTaskContractBaseline,
+  validateTrustedTaskContractRecords,
+} from './task-contract-baseline.js';
 import { cmdAudit } from './audit-cli.js';
+import { presentDiagnostic, presentDiagnostics, presentGateResultForTarget } from './diagnostic-presentation.js';
+import { getProjectRoleCapabilities } from './role-capabilities.js';
+import { createDiagnostic } from './repair-policy.js';
 import { cmdCloseout } from './closeout-cli.js';
 import { cmdImprovement } from './improvement-cli.js';
 import {
@@ -121,7 +142,7 @@ import {
 } from './pr-body-context.js';
 import { atomicWriteFile } from './fs-mutation-kernel.js';
 import { evaluateTaskReadiness } from './task-readiness.js';
-import { evaluateCommitAttribution } from './commit-attribution.js';
+import { evaluateCommitAttribution, lintAttributionRepairRecord, renderAttributionRepairRecord } from './commit-attribution.js';
 import { planGitHubCheckpointRepair, renderGitHubCheckpoint } from './github-checkpoint.js';
 import { runGitHubReviewPrepare } from './github-review-prepare.js';
 import {
@@ -763,7 +784,12 @@ async function cmdGithubPreflight(args, io) {
 
   let result;
   try {
-    result = runPreflight({ pr: opts.pr, issue: opts.issue, repo: opts.repo });
+    result = runPreflight({
+      pr: opts.pr,
+      issue: opts.issue,
+      repo: opts.repo,
+      commandRunner: io.ghCommandRunner ?? defaultGhCommandRunner,
+    });
   } catch (error) {
     if (error instanceof PreflightError) {
       if (asJson) {
@@ -775,6 +801,7 @@ async function cmdGithubPreflight(args, io) {
     }
     throw error;
   }
+  result = presentGateResultForTarget(result, resolveCliTarget(io, opts.target));
 
   if (asJson) {
     io.out(JSON.stringify(result));
@@ -808,7 +835,13 @@ async function cmdGithubPreflight(args, io) {
   }
 
   io.out('  preflight FAILED:');
-  for (const error of result.errors) io.err(`    ERROR: ${error}`);
+  for (const diagnostic of result.diagnostics ?? []) {
+    io.err(`    ERROR [${diagnostic.category}]`);
+    io.err(`      owner: ${diagnostic.owner}`);
+    io.err(`      error: ${diagnostic.message}`);
+    io.err(`      next action: ${diagnostic.nextAction}`);
+  }
+  if (result.firstSafeRepair) io.out(`  first safe repair: ${result.firstSafeRepair}`);
   io.out();
   return 1;
 }
@@ -875,8 +908,10 @@ async function cmdGithubReady(args, io) {
   }
 
   let result;
+  let readyTarget;
   try {
     const target = resolveCliTarget(io, opts.target);
+    readyTarget = target;
     const projectConfig = loadProjectMap(target)?.config ?? null;
     result = runGitHubReady({
       pr: opts.pr,
@@ -892,6 +927,7 @@ async function cmdGithubReady(args, io) {
     else io.err(`github-ready failed: ${error.message}`);
     return 1;
   }
+  result = presentGateResultForTarget(result, readyTarget);
 
   if (asJson) {
     io.out(JSON.stringify(result));
@@ -928,16 +964,21 @@ function printGateResult(command, result, asJson, io, exitCode = null) {
 
 function commandFailure(command, error, category = 'operational_error') {
   const message = error instanceof Error ? error.message : String(error);
+  const diagnostic = presentDiagnostic(createDiagnostic({
+    code: category === 'usage' ? 'cli.usage' : 'cli.operational',
+    message,
+    repairHint: 'Correct the command input or unavailable dependency, then rerun.',
+  }), getProjectRoleCapabilities(process.cwd()));
   return {
     schemaVersion: 1,
     command,
     ok: false,
     errors: [message],
     warnings: [],
-    diagnostics: [{ message, category, owner: category === 'usage' ? 'engineer' : 'human_authority', nextAction: 'correct the command input or unavailable dependency, then rerun' }],
+    diagnostics: [diagnostic],
     warningDiagnostics: [],
     failureCategories: [category],
-    firstSafeRepair: 'correct the reported operational error and rerun the command',
+    firstSafeRepair: diagnostic.nextAction,
   };
 }
 
@@ -945,8 +986,17 @@ function commandFailure(command, error, category = 'operational_error') {
 // These helpers are deliberately PR-body-scoped: shared commandFailure() and
 // printGateResult() keep their existing behavior for every other consumer.
 
-function prBodyDiagnostic(message, nextAction, category, owner = 'engineer') {
-  return { message, category, owner, nextAction };
+function prBodyDiagnostic(message, nextAction, category) {
+  const code = {
+    pr_body: 'pr_body.structural',
+    deprecation: 'pr_body.deprecation',
+    usage: 'cli.usage',
+    local_file: 'pr_body.local_file',
+    input_format: 'pr_body.input_format',
+    operational_error: 'cli.operational',
+    snapshot_context: 'pr_body.snapshot',
+  }[category] ?? 'pr_body.input';
+  return createDiagnostic({ code, message, repairHint: nextAction });
 }
 
 /** PR-body-scoped failure envelope with explicit evaluated-state fields. */
@@ -981,6 +1031,17 @@ function prBodyFailure(command, diagnostics, { nextCommand = null, contextMode =
 /** Human renderer for PR-body results: context identity/mode, evaluated state, owner routing, first repair, and next command. */
 function printPrBodyResult(command, result, asJson, io, exitCode = null) {
   const status = exitCode ?? ((result.publicationReady ?? result.ok) ? 0 : 1);
+  const capabilities = getProjectRoleCapabilities(io.cwd);
+  const diagnostics = presentDiagnostics(result.diagnostics, capabilities);
+  const warningDiagnostics = presentDiagnostics(result.warningDiagnostics, capabilities);
+  result = {
+    ...result,
+    diagnostics,
+    warningDiagnostics,
+    firstSafeRepair: (result.publicationReady ?? result.ok)
+      ? null
+      : (diagnostics[0]?.nextAction ?? result.firstSafeRepair ?? null),
+  };
   if (asJson) {
     io.out(JSON.stringify(result));
     return status;
@@ -1076,20 +1137,21 @@ function mergePrBodyLintResult({
   deprecated = false,
   lintCommand = null,
   scaffoldCommand = null,
+  capabilities,
 }) {
   const inputComplete = gate.inputComplete !== false;
   const contextDiagnostics = Array.isArray(gate.diagnostics) ? gate.diagnostics : [];
-  const diagnostics = inputComplete
+  const diagnostics = presentDiagnostics(inputComplete
     ? [...structural.diagnostics, ...contextDiagnostics]
-    : [...contextDiagnostics, ...structural.diagnostics];
+    : [...contextDiagnostics, ...structural.diagnostics], capabilities);
   const contextErrors = Array.isArray(gate.errors) ? gate.errors : [];
   const errors = inputComplete
     ? [...structural.errors, ...contextErrors]
     : [...contextErrors, ...structural.errors];
-  const warningDiagnostics = [
+  const warningDiagnostics = presentDiagnostics([
     ...(structural.warnings ?? []).map(message => prBodyDiagnostic(message, 'address the structural warning before publication', 'pr_body')),
     ...(gate.warningDiagnostics ?? []),
-  ];
+  ], capabilities);
   const warnings = [...(structural.warnings ?? []), ...(gate.warnings ?? [])];
   if (deprecated) {
     warnings.push(PR_BODY_DEPRECATION);
@@ -1108,11 +1170,12 @@ function mergePrBodyLintResult({
   const gateEvaluated = inputComplete;
   const gatePassed = gateEvaluated && Boolean(gate.ok);
   const publicationReady = lintReady && gatePassed;
+  const firstAction = diagnostics[0]?.nextAction ?? null;
   const firstSafeRepair = publicationReady
     ? null
     : (!inputComplete
-      ? (gate.firstSafeRepair ?? 'regenerate the evaluation context before rerunning pr-body lint')
-      : (!lintReady ? structural.firstSafeRepair : (gate.firstSafeRepair ?? null)));
+      ? (firstAction ?? 'regenerate the evaluation context before rerunning pr-body lint')
+      : firstAction);
   const nextCommand = publicationReady
     ? null
     : (prBodyRepairNeedsFreshContext({ contextMode, inputComplete, firstSafeRepair, diagnostics })
@@ -1214,6 +1277,7 @@ async function cmdPrBodyLint(opts, io, asJson) {
     const structural = lintPrBody(parsed?.prData?.body ?? '', prBodyStructuralContext(parsed));
     const gate = evaluatePreparationInput(parsed, evaluatePreflight);
     const merged = mergePrBodyLintResult({
+      capabilities: getProjectRoleCapabilities(io.cwd),
       structural,
       gate,
       contextMode: 'legacy',
@@ -1265,6 +1329,7 @@ async function cmdPrBodyLint(opts, io, asJson) {
     const structural = lintPrBody(body, prBodyStructuralContext(input));
     const gate = evaluatePreparationInput(input, evaluatePreflight);
     const merged = mergePrBodyLintResult({
+      capabilities: getProjectRoleCapabilities(io.cwd),
       structural,
       gate,
       contextMode: 'snapshot',
@@ -1302,7 +1367,6 @@ async function cmdPrBodyLint(opts, io, asJson) {
         `pr-body lint could not load live GitHub context: ${error.message}`,
         'correct the GitHub access or dependency problem and rerun, or use --snapshot <path> --body-file <path> offline',
         'operational_error',
-        'human_authority',
       ), { contextMode: 'live' }), asJson, io);
     }
     throw error;
@@ -1311,6 +1375,7 @@ async function cmdPrBodyLint(opts, io, asJson) {
   const structural = lintPrBody(body, prBodyStructuralContext(liveInput));
   const gate = evaluatePreparationInput(liveInput, evaluatePreflight, { referenceResolvers: loaded.referenceResolvers });
   const merged = mergePrBodyLintResult({
+      capabilities: getProjectRoleCapabilities(io.cwd),
     structural,
     gate,
     contextMode: 'live',
@@ -1409,7 +1474,6 @@ async function cmdPrBodyScaffold(opts, io, asJson) {
         `pr-body scaffold could not load live GitHub context: ${error.message}`,
         'correct the GitHub access or dependency problem and rerun',
         'operational_error',
-        'human_authority',
       ), {}), asJson, io);
     }
     throw error;
@@ -1458,20 +1522,272 @@ async function cmdTaskReadiness(args, io) {
     const taskBody = taskReadinessBody(opts, target);
     const basePaths = readBasePaths(opts.base, opts.basePaths, target);
     const result = evaluateTaskReadiness({ taskBody, basePaths, mode: opts.mode, dependencies: opts.dependencies ? JSON.parse(readFileSync(resolveCliTarget(io, opts.dependencies), 'utf8')) : {} });
-    return printGateResult('task-readiness', result, asJson, io);
+    return printGateResult('task-readiness', presentGateResultForTarget(result, target), asJson, io);
   } catch (error) {
     if (error instanceof CliUsageError) return asJson ? printGateResult('task-readiness', commandFailure('task-readiness', error, 'usage'), true, io) : Promise.reject(error);
     return printGateResult('task-readiness', commandFailure('task-readiness', error), asJson, io);
   }
 }
 
+function authenticatedGitHubLogin(commandRunner) {
+  const result = commandRunner('gh', ['api', 'user'], { encoding: 'utf8' });
+  if (result?.error || result?.status !== 0) throw new GitHubTaskBodyError('cannot resolve the authenticated GitHub publisher');
+  try {
+    const login = String(JSON.parse(String(result.stdout ?? '')).login ?? '').trim();
+    if (!login) throw new Error('missing login');
+    return login;
+  } catch {
+    throw new GitHubTaskBodyError('authenticated GitHub account has no login');
+  }
+}
+
+function taskBodyCommentRecord({ issue, repo, commandRunner, target, record, dryRun, yes, projectMapConfig, expectedBody, expectedDigest }) {
+  if (Boolean(dryRun) === Boolean(yes)) throw new GitHubTaskBodyError('task-body record operation requires exactly one of --dry-run or --yes');
+  const rendered = renderTaskContractRecord(record);
+  const patchPlan = { carrier: 'github_issue_comment', record, body: rendered };
+  if (dryRun) return { ok: true, dryRun: true, applied: false, patchPlan, record, warnings: ['Carrier authority is prospective in dry-run mode and cannot be verified without publication.'] };
+  const publisher = authenticatedGitHubLogin(commandRunner);
+  if (publisher.toLowerCase() !== String(record.actor).toLowerCase()) throw new GitHubTaskBodyError(`declared actor '${record.actor}' does not match authenticated GitHub publisher '${publisher}'`);
+  const temporary = join(target, '.agenticloop', 'tmp', `task-contract-record-${randomUUID()}.md`);
+  atomicWriteUtf8(temporary, rendered);
+  try {
+    const args = ['issue', 'comment', String(issue), '--body-file', temporary];
+    if (repo) args.push('--repo', repo);
+    const result = commandRunner('gh', args, { encoding: 'utf8' });
+    if (result?.error || result?.status !== 0) throw new GitHubTaskBodyError(`failed to publish task-contract record: ${(result?.stderr ?? result?.error?.message ?? '').trim()}`);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+  const verified = fetchGitHubTaskBody({ issue, repo, commandRunner, projectMapConfig });
+  const matches = verified.parsedRecords.filter(item => item.recordId === record.recordId);
+  if (matches.length !== 1) throw new GitHubTaskBodyError(`published task-contract record '${record.recordId}' refetched ${matches.length} matching carrier(s); preserve the carrier and recover by publishing a new valid versioned record`);
+  const trusted = verified.trustedRecords.find(item => item.recordId === record.recordId);
+  if (!trusted) {
+    const rejected = verified.rejectedRecords.find(item => item.record?.recordId === record.recordId);
+    throw new GitHubTaskBodyError(`published task-contract record '${record.recordId}' is not trusted on carrier '${matches[0]?.carrier?.id ?? 'unknown'}': ${(rejected?.errors ?? verified.trustedRecordErrors).join('; ')}`);
+  }
+  if (trusted.carrier.author.toLowerCase() !== publisher.toLowerCase() || trusted.carrier.author.toLowerCase() !== String(record.actor).toLowerCase()) throw new GitHubTaskBodyError(`published carrier '${trusted.carrier.id}' author does not match the authenticated declared actor`);
+  if (verified.digest !== expectedDigest) throw new GitHubTaskBodyError(`issue body changed during comment publication: expected ${expectedDigest}, found ${verified.digest}`);
+  const chain = validateTaskContractBaseline(expectedBody, { lifecycle: 'new', trustedRecords: verified.trustedRecords, trustedRecordErrors: verified.trustedRecordErrors });
+  if (!chain.ok) throw new GitHubTaskBodyError(`published record does not complete a trusted contract chain: ${chain.errors.join('; ')}`);
+  return { ok: true, dryRun: false, applied: true, patchPlan, record: trusted, verified, carrier: trusted.carrier };
+}
+
+function taskContractChanges(before, after) {
+  const previous = taskContractDigest(before);
+  const next = taskContractDigest(after);
+  if (!previous.ok || !next.ok) throw new GitHubTaskBodyError(previous.error ?? next.error ?? 'cannot project task-contract correction');
+  const changes = [];
+  for (const field of new Set([...Object.keys(previous.projection), ...Object.keys(next.projection)])) {
+    if (JSON.stringify(previous.projection[field]) !== JSON.stringify(next.projection[field])) {
+      changes.push({ field, oldValue: previous.projection[field], newValue: next.projection[field] });
+    }
+  }
+  if (changes.length === 0) throw new GitHubTaskBodyError('task-contract correction candidate does not change the protected contract');
+  return { previous, next, changes };
+}
+
+async function cmdTaskBody(args, io) {
+  const sub = args[0];
+  const spec = sub && COMMAND_REGISTRY['task-body'].subcommands[sub];
+  if (!spec) throw new CliUsageError('task-body requires a subcommand: fetch | lint | apply | set-field | establish-baseline | authorize-correction | transition');
+  const { opts } = parseCommandArgs(`task-body ${sub}`, spec, args.slice(1));
+  const asJson = Boolean(opts.json);
+  if (!opts.issue) return printGateResult(`task-body ${sub}`, commandFailure(`task-body ${sub}`, new CliUsageError('--issue <number> is required'), 'usage'), asJson, io, EXIT_USAGE);
+  try {
+    const commandRunner = io.ghCommandRunner ?? defaultGhCommandRunner;
+    const target = resolveCliTarget(io, opts.target);
+    const projectMapConfig = loadProjectMap(target)?.config ?? null;
+    const basePaths = opts.base || opts.basePaths ? readBasePaths(opts.base, opts.basePaths, target) : undefined;
+    if (sub === 'fetch') {
+      if (!opts.output) throw new CliUsageError('task-body fetch requires --output <path>');
+      const fetched = fetchGitHubTaskBody({ issue: opts.issue, repo: opts.repo, commandRunner, projectMapConfig });
+      const output = resolveCliTarget(io, opts.output);
+      atomicWriteUtf8(output, fetched.body);
+      const sanitizedOutput = fetched.body.startsWith('\uFEFF') ? `${output}.sanitized.md` : null;
+      if (sanitizedOutput) atomicWriteUtf8(sanitizedOutput, fetched.body.slice(1));
+      const result = { schemaVersion: 1, ok: true, issue: fetched.issue, digest: fetched.digest, output, sanitizedOutput };
+      if (asJson) io.out(JSON.stringify(result));
+      else {
+        io.out(`Fetched issue #${fetched.issue} task body`);
+        io.out(`  digest: ${fetched.digest}`);
+        io.out(`  output: ${output}`);
+        if (sanitizedOutput) io.out(`  sanitized candidate (leading BOM removed): ${sanitizedOutput}`);
+      }
+      return 0;
+    }
+    if (sub === 'establish-baseline' || sub === 'authorize-correction') {
+      if (!opts.expectDigest || !opts.authority || !opts.actor) throw new CliUsageError(`task-body ${sub} requires --expect-digest, --authority, and --actor`);
+      const current = fetchGitHubTaskBody({ issue: opts.issue, repo: opts.repo, commandRunner, projectMapConfig });
+      if (current.digest !== opts.expectDigest) throw new GitHubTaskBodyError(`stale task body: expected ${opts.expectDigest}, current remote digest is ${current.digest}`);
+      const currentContract = taskContractDigest(current.body);
+      if (!currentContract.ok) throw new GitHubTaskBodyError(currentContract.error);
+      const recordId = `task-contract-record:${randomUUID()}`;
+      const common = {
+        recordId,
+        taskId: currentContract.projection.task_id,
+        authority: opts.authority,
+        actor: opts.actor,
+        timestamp: new Date().toISOString(),
+        affectedArtifact: `issue:${opts.issue}`,
+      };
+      const record = sub === 'establish-baseline'
+        ? createTaskContractBaselineRecord({ ...common, digest: currentContract.digest, projection: currentContract.projection })
+        : (() => {
+          if (!opts.bodyFile || !opts.reason) throw new CliUsageError('task-body authorize-correction requires --body-file and --reason');
+          const candidate = readFileSync(resolveCliTarget(io, opts.bodyFile), 'utf8');
+          const changes = taskContractChanges(current.body, candidate);
+          return createTaskContractCorrectionRecord({
+            ...common,
+            priorDigest: changes.previous.digest,
+            resultingDigest: changes.next.digest,
+            priorProjection: changes.previous.projection,
+            resultingProjection: changes.next.projection,
+            changes: changes.changes,
+            reason: opts.reason,
+          });
+        })();
+      const candidateLint = sub === 'authorize-correction'
+        ? lintGitHubTaskBody({
+          issue: opts.issue,
+          body: readFileSync(resolveCliTarget(io, opts.bodyFile), 'utf8'),
+          projectMapConfig,
+          trustedRecords: current.trustedRecords,
+          prospectiveRecords: [record],
+          trustedRecordErrors: current.trustedRecordErrors,
+          currentBody: current.body,
+        })
+        : lintGitHubTaskBody({
+          issue: opts.issue,
+          body: current.body,
+          projectMapConfig,
+          trustedRecords: current.trustedRecords,
+          prospectiveRecords: [record],
+          trustedRecordErrors: current.trustedRecordErrors,
+          currentBody: current.body,
+        });
+      if (!candidateLint.ok) return printGateResult(`task-body ${sub}`, presentGateResultForTarget(candidateLint, target), asJson, io);
+      const expectedBody = sub === 'authorize-correction' ? readFileSync(resolveCliTarget(io, opts.bodyFile), 'utf8') : current.body;
+      const result = taskBodyCommentRecord({ issue: opts.issue, repo: opts.repo, commandRunner, target, record, dryRun: Boolean(opts.dryRun), yes: Boolean(opts.yes), projectMapConfig, expectedBody, expectedDigest: current.digest });
+      result.candidateLint = candidateLint;
+      if (asJson) io.out(JSON.stringify(result));
+      else {
+        io.out(`agenticloop task-body ${sub}: ${result.dryRun ? 'dry-run passed' : 'published and verified'}`);
+        io.out(`  record: ${record.recordId}`);
+      }
+      return 0;
+    }
+
+    let bodyFile = null;
+    let body;
+    if (sub === 'set-field' || sub === 'transition') {
+      if (!opts.expectDigest) throw new CliUsageError(`task-body ${sub} requires --expect-digest <digest>`);
+      const field = sub === 'transition' ? 'status' : opts.field;
+      const value = sub === 'transition' ? opts.status : opts.value;
+      if (!field || value === undefined) throw new CliUsageError(`task-body ${sub} requires --${sub === 'transition' ? 'status' : 'field'} and --${sub === 'transition' ? 'status' : 'value'}`);
+      if (sub === 'transition' && value === 'agent-ready' && !Array.isArray(basePaths)) {
+        throw new CliUsageError('task-body transition --status agent-ready requires --base <ref> or --base-paths <path>');
+      }
+      const current = fetchGitHubTaskBody({ issue: opts.issue, repo: opts.repo, commandRunner });
+      if (current.digest !== opts.expectDigest) throw new GitHubTaskBodyError(`stale task body: expected ${opts.expectDigest}, current remote digest is ${current.digest}`);
+      body = setTaskBodyFrontmatterField(current.body, field, value).body;
+    } else {
+      if (!opts.bodyFile) throw new CliUsageError(`task-body ${sub} requires --body-file <path>`);
+      bodyFile = resolveCliTarget(io, opts.bodyFile);
+      body = readFileSync(bodyFile, 'utf8');
+    }
+    if (sub === 'lint') {
+      let context = { trustedRecords: [], trustedRecordErrors: [], currentBody: null, warnings: [] };
+      if (opts.offline) {
+        if (opts.trustedRecords) {
+          const snapshot = JSON.parse(readFileSync(resolveCliTarget(io, opts.trustedRecords), 'utf8'));
+          if (!Array.isArray(snapshot?.carriers)) throw new CliUsageError('--trusted-records snapshot requires a carriers array');
+          const parsed = parseTaskContractRecords(snapshot.carriers);
+          const taskId = taskContractDigest(body).projection?.task_id;
+          const trusted = validateTrustedTaskContractRecords(parsed.parsedRecords, { taskId });
+          context = { trustedRecords: trusted.trustedRecords, trustedRecordErrors: [...parsed.parseErrors, ...trusted.errors], currentBody: null, warnings: ['Offline lint cannot verify live carrier authority or transition history.'] };
+        } else {
+          context.warnings.push('Offline lint has no trusted-record snapshot; carrier authority and transition history are unavailable.');
+        }
+      } else {
+        const live = fetchGitHubTaskBody({ issue: opts.issue, repo: opts.repo, commandRunner, projectMapConfig });
+        context = { trustedRecords: live.trustedRecords, trustedRecordErrors: live.trustedRecordErrors, currentBody: live.body, warnings: live.warnings ?? [] };
+      }
+      const result = lintGitHubTaskBody({ issue: opts.issue, body, basePaths, projectMapConfig, ...context });
+      result.warnings.push(...context.warnings);
+      if (opts.offline) {
+        // Offline lint is explicitly non-authoritative: snapshot records are
+        // asserted inputs, not verified live carriers. The envelope never
+        // claims provenance verification or publication readiness; the exit
+        // status reflects lint validity only.
+        const graph = validateTaskContractBaseline(body, {
+          lifecycle: 'legacy',
+          trustedRecords: context.trustedRecords,
+          trustedRecordErrors: context.trustedRecordErrors,
+        });
+        result.contextMode = 'offline';
+        result.lintValid = result.ok;
+        result.graphConsistent = graph.errors.length === 0;
+        result.provenanceVerified = false;
+        result.publicationReady = false;
+        result.warnings.push('Offline lint validates payload syntax and graph consistency only; it does not verify live carrier provenance and never implies publication readiness.');
+      }
+      return printGateResult('task-body lint', presentGateResultForTarget(result, target), asJson, io);
+    }
+    if (!opts.expectDigest) throw new CliUsageError(`task-body ${sub} requires --expect-digest <digest>`);
+    const result = applyGitHubTaskBody({
+      issue: opts.issue,
+      repo: opts.repo,
+      body,
+      bodyFile,
+      expectDigest: opts.expectDigest,
+      dryRun: Boolean(opts.dryRun),
+      yes: Boolean(opts.yes),
+      commandRunner,
+      recoveryDir: join(target, '.agenticloop', 'tmp'),
+      basePaths,
+      projectMapConfig,
+    });
+    if (asJson) io.out(JSON.stringify(result));
+    else {
+      io.out(`agenticloop task-body ${sub}: ${result.ok ? (result.dryRun ? 'dry-run passed' : 'applied') : 'FAILED'}`);
+      if (result.diff) io.out(result.diff);
+      for (const error of result.errors ?? []) io.err(`  ERROR: ${error}`);
+      if (result.recovery) {
+        io.err(`  recovery original: ${result.recovery.originalPath}`);
+        io.err(`  recovery candidate: ${result.recovery.candidatePath}`);
+        io.err(`  recovery retained: ${result.recovery.retained ? 'yes' : 'no'}`);
+      }
+    }
+    return result.ok ? 0 : 1;
+  } catch (error) {
+    if (error instanceof CliUsageError || error instanceof GitHubTaskBodyError) {
+      return printGateResult(`task-body ${sub}`, commandFailure(`task-body ${sub}`, error, error instanceof CliUsageError ? 'usage' : 'task_contract'), asJson, io, error instanceof CliUsageError ? EXIT_USAGE : 1);
+    }
+    throw error;
+  }
+}
+
 async function cmdCommitAttribution(args, io) {
   const sub = args[0];
   const spec = sub && COMMAND_REGISTRY['commit-attribution'].subcommands[sub];
-  if (!spec) throw new CliUsageError('commit-attribution requires subcommand: check');
+  if (!spec) throw new CliUsageError('commit-attribution requires subcommand: check | repair-record-render | repair-record-lint');
   const { opts } = parseCommandArgs(`commit-attribution ${sub}`, spec, args.slice(1));
   const asJson = Boolean(opts.json);
   try {
+    if (sub === 'repair-record-render') {
+      if (!opts.record) throw new CliUsageError('commit-attribution repair-record-render requires --record <json-file>');
+      const record = JSON.parse(readFileSync(resolveCliTarget(io, opts.record), 'utf8'));
+      const rendered = renderAttributionRepairRecord(record);
+      if (opts.output) atomicWriteUtf8(resolveCliTarget(io, opts.output), rendered);
+      const result = { ok: true, record, rendered: opts.output ? undefined : rendered, output: opts.output ? resolveCliTarget(io, opts.output) : null, carrier: 'backend attribution-repair history; this command never publishes' };
+      return printGateResult('commit-attribution repair-record-render', result, asJson, io);
+    }
+    if (sub === 'repair-record-lint') {
+      if (!opts.record) throw new CliUsageError('commit-attribution repair-record-lint requires --record <json-file>');
+      const result = lintAttributionRepairRecord(readFileSync(resolveCliTarget(io, opts.record), 'utf8'));
+      return printGateResult('commit-attribution repair-record-lint', { ...result, warnings: [], diagnostics: [], warningDiagnostics: [], failureCategories: result.ok ? [] : ['attribution'], firstSafeRepair: result.ok ? null : 'repair the durable attribution-repair record and rerun' }, asJson, io);
+    }
     if (!opts.task) return printGateResult('commit-attribution check', commandFailure('commit-attribution check', new CliUsageError('commit-attribution check requires --task <id>'), 'usage'), asJson, io, EXIT_USAGE);
     if (opts.commit && opts.messageFile) return printGateResult('commit-attribution check', commandFailure('commit-attribution check', new CliUsageError('use either --commit or --message-file, not both'), 'usage'), asJson, io, EXIT_USAGE);
     const target = resolveCliTarget(io, opts.target);
@@ -1482,7 +1798,7 @@ async function cmdCommitAttribution(args, io) {
         if (result.status !== 0) throw new Error(`cannot read commit message: ${(result.stderr || result.error?.message || '').trim()}`);
         return result.stdout;
       })();
-    return printGateResult('commit-attribution check', evaluateCommitAttribution({ message, taskId: opts.task }), asJson, io);
+    return printGateResult('commit-attribution check', presentGateResultForTarget(evaluateCommitAttribution({ message, taskId: opts.task }), target), asJson, io);
   } catch (error) {
     if (error instanceof CliUsageError) return asJson ? printGateResult('commit-attribution check', commandFailure('commit-attribution check', error, 'usage'), true, io) : Promise.reject(error);
     return printGateResult('commit-attribution check', commandFailure('commit-attribution check', error), asJson, io);
@@ -2371,6 +2687,7 @@ const COMMAND_HANDLERS = {
   'github-ready': cmdGithubReady,
   'pr-body': cmdPrBody,
   'task-readiness': cmdTaskReadiness,
+  'task-body': cmdTaskBody,
   'commit-attribution': cmdCommitAttribution,
   'github-checkpoint': cmdGithubCheckpoint,
   'github-review-prepare': cmdGithubReviewPrepare,

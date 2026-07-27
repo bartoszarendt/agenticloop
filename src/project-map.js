@@ -20,6 +20,11 @@ import {
 } from './layout.js';
 import { parseVerificationOperatingFacts } from './verification-learning.js';
 import { taskIdRegexError } from './task-id.js';
+import {
+  resolveTrustedTaskContractActors,
+  TRUSTED_ACTORS_DEPRECATED_ALIAS,
+  TRUSTED_ACTORS_FIELD,
+} from './trusted-actors.js';
 
 export { isValidTaskId } from './task-id.js';
 
@@ -375,6 +380,15 @@ export function validateProjectMap(config, raw, repoRoot) {
     errors.push(
       `project.md: work_unit_audit must be ${[...VALID_WORK_UNIT_AUDIT_VALUES].map(v => `'${v}'`).join(' or ')}, got: ${JSON.stringify(config.work_unit_audit)}`
     );
+  }
+
+  const trustedActors = resolveTrustedTaskContractActors(raw);
+  for (const error of trustedActors.errors) errors.push(`project.md: ${error}`);
+  const trustedActorConfigPresent =
+    raw[TRUSTED_ACTORS_FIELD] !== undefined ||
+    raw[TRUSTED_ACTORS_DEPRECATED_ALIAS] !== undefined;
+  if (config.task_backend === 'github' || trustedActorConfigPresent) {
+    for (const warning of trustedActors.warnings) warnings.push(`project.md: ${warning}`);
   }
 
   // Planning-only convention consumed by role instructions; it does not route

@@ -45,6 +45,14 @@ function taskPath(target, taskId) {
   return join(target, '.agenticloop', 'tasks', `${taskId}.md`);
 }
 
+async function establishBaseline(target, taskId = 'T-001') {
+  git(target, ['add', '.agenticloop/tasks']);
+  git(target, ['commit', '-m', `task ${taskId}`]);
+  assertOk(await run(['task', 'establish-baseline', taskId, '--actor', 'Agentic Loop Test', '--authority', `task:${taskId}`, '--target', target]));
+  git(target, ['add', '.agenticloop/task-contract-history']);
+  git(target, ['commit', '-m', `baseline ${taskId}`]);
+}
+
 function verificationHistory(classification, reference) {
   return `## Verification Attempts
 
@@ -199,6 +207,7 @@ describe('task CLI', () => {
     assertOk(lint);
     assert.match(lint.stdout, /T-001\.md: ok/);
 
+    await establishBaseline(target);
     const status = await run(['task', 'status', 'T-001', 'agent-ready', '--target', target]);
     assertOk(status);
     const status2 = await run(['task', 'status', 'T-001', 'in-progress', '--note', 'Started implementation', '--target', target]);
@@ -499,6 +508,7 @@ describe('task CLI', () => {
   it('allows draft -> agent-ready', async () => {
     const target = makeTarget('trans-dr-ar');
     assertOk(await run(['task', 'new', 'Test', '--target', target]));
+    await establishBaseline(target);
     const result = await run(['task', 'status', 'T-001', 'agent-ready', '--target', target]);
     assertOk(result);
   });
@@ -536,6 +546,7 @@ describe('task CLI', () => {
   it('allows agent-ready -> in-progress', async () => {
     const target = makeTarget('trans-ar-ip');
     assertOk(await run(['task', 'new', 'Test', '--target', target]));
+    await establishBaseline(target);
     assertOk(await run(['task', 'status', 'T-001', 'agent-ready', '--target', target]));
     const result = await run(['task', 'status', 'T-001', 'in-progress', '--note', 'Starting', '--target', target]);
     assertOk(result);
@@ -544,6 +555,7 @@ describe('task CLI', () => {
   it('allows in-progress -> accepted with proper evidence', async () => {
     const target = makeTarget('trans-ip-ac');
     assertOk(await run(['task', 'new', 'Test', '--target', target]));
+    await establishBaseline(target);
     assertOk(await run(['task', 'status', 'T-001', 'agent-ready', '--target', target]));
     assertOk(await run(['task', 'status', 'T-001', 'in-progress', '--target', target]));
 
@@ -593,6 +605,7 @@ describe('task CLI', () => {
   it('rejects agent-ready -> closed', async () => {
     const target = makeTarget('trans-ar-cl');
     assertOk(await run(['task', 'new', 'Test', '--target', target]));
+    await establishBaseline(target);
     assertOk(await run(['task', 'status', 'T-001', 'agent-ready', '--target', target]));
     const result = await run(['task', 'status', 'T-001', 'closed', '--target', target]);
     assert.notEqual(result.status, 0);

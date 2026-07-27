@@ -14,6 +14,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { loadProjectMap, PROJECT_MAP_DEFAULTS } from './project-map.js';
+import { createDiagnostic } from './repair-policy.js';
 
 export const PR_BODY_SNAPSHOT_KIND = 'agenticloop.pr-body-context';
 export const PR_BODY_SNAPSHOT_SCHEMA_VERSION = 1;
@@ -43,11 +44,9 @@ function isValidUtcTimestamp(value) {
     date.getUTCSeconds() === Number(parts[6]);
 }
 
-function diagnostic(message, nextAction, category = 'snapshot_context') {
-  return { message, category, owner: 'engineer', nextAction };
+function diagnostic(message) {
+  return createDiagnostic({ code: 'pr_body.snapshot', message });
 }
-
-const REGENERATE = 'regenerate the snapshot with pr-body scaffold --pr <n> --snapshot-output <path> and rerun pr-body lint --snapshot <path> --body-file <path>';
 
 function insideRoot(root, candidate) {
   const rel = relative(root, candidate);
@@ -176,67 +175,67 @@ export function createPrBodySnapshot({ input, repository = null, capturedAt } = 
 export function normalizePrBodySnapshot(raw, options = {}) {
   const errors = [];
   if (!isObject(raw)) {
-    return { ok: false, errors: [diagnostic('snapshot must be a JSON object', REGENERATE)], value: null };
+    return { ok: false, errors: [diagnostic('snapshot must be a JSON object')], value: null };
   }
   if (raw.kind !== PR_BODY_SNAPSHOT_KIND) {
-    errors.push(diagnostic(`snapshot kind must be '${PR_BODY_SNAPSHOT_KIND}', got '${raw.kind ?? 'missing'}'`, REGENERATE));
+    errors.push(diagnostic(`snapshot kind must be '${PR_BODY_SNAPSHOT_KIND}', got '${raw.kind ?? 'missing'}'`));
   }
   if (raw.snapshotSchemaVersion !== PR_BODY_SNAPSHOT_SCHEMA_VERSION) {
-    errors.push(diagnostic(`snapshot snapshotSchemaVersion must be ${PR_BODY_SNAPSHOT_SCHEMA_VERSION}, got '${raw.snapshotSchemaVersion ?? 'missing'}'`, REGENERATE));
+    errors.push(diagnostic(`snapshot snapshotSchemaVersion must be ${PR_BODY_SNAPSHOT_SCHEMA_VERSION}, got '${raw.snapshotSchemaVersion ?? 'missing'}'`));
   }
   if (!isValidUtcTimestamp(raw.capturedAt)) {
-    errors.push(diagnostic('snapshot capturedAt must be a valid UTC ISO timestamp', REGENERATE));
+    errors.push(diagnostic('snapshot capturedAt must be a valid UTC ISO timestamp'));
   }
   if (typeof raw.repository !== 'string' || !REPOSITORY_RE.test(raw.repository.trim())) {
-    errors.push(diagnostic("snapshot repository must use nonempty 'owner/name' identity", REGENERATE));
+    errors.push(diagnostic("snapshot repository must use nonempty 'owner/name' identity"));
   }
   if (!Number.isInteger(raw.pr) || raw.pr <= 0) {
-    errors.push(diagnostic('snapshot pr must be a positive integer', REGENERATE));
+    errors.push(diagnostic('snapshot pr must be a positive integer'));
   }
   if (!Number.isInteger(raw.issue) || raw.issue <= 0) {
-    errors.push(diagnostic('snapshot issue must be a positive integer', REGENERATE));
+    errors.push(diagnostic('snapshot issue must be a positive integer'));
   }
   if (!SHA_RE.test(String(raw.head ?? ''))) {
-    errors.push(diagnostic('snapshot head must be a full 40-character commit SHA', REGENERATE));
+    errors.push(diagnostic('snapshot head must be a full 40-character commit SHA'));
   }
   if (!SHA_RE.test(String(raw.base ?? ''))) {
-    errors.push(diagnostic('snapshot base must be a full 40-character commit SHA', REGENERATE));
+    errors.push(diagnostic('snapshot base must be a full 40-character commit SHA'));
   }
   if (raw.mode !== 'review') {
-    errors.push(diagnostic("snapshot mode must be 'review'; PR-body lint never evaluates authoring-mode snapshots", REGENERATE));
+    errors.push(diagnostic("snapshot mode must be 'review'; PR-body lint never evaluates authoring-mode snapshots"));
   }
   if (!isObject(raw.input)) {
-    errors.push(diagnostic('snapshot is missing the nested complete preparation input object', REGENERATE));
+    errors.push(diagnostic('snapshot is missing the nested complete preparation input object'));
   }
 
   if (isObject(raw.input)) {
     const input = raw.input;
     if (input.mode !== 'review') {
-      errors.push(diagnostic("snapshot nested input mode must be 'review'", REGENERATE));
+      errors.push(diagnostic("snapshot nested input mode must be 'review'"));
     }
     if (Number.isInteger(raw.pr) && input.prData?.number !== raw.pr) {
-      errors.push(diagnostic(`snapshot pr #${raw.pr} disagrees with nested input prData.number ${input.prData?.number ?? 'missing'}`, REGENERATE));
+      errors.push(diagnostic(`snapshot pr #${raw.pr} disagrees with nested input prData.number ${input.prData?.number ?? 'missing'}`));
     }
     if (Number.isInteger(raw.issue) && input.issueData?.number !== raw.issue) {
-      errors.push(diagnostic(`snapshot issue #${raw.issue} disagrees with nested input issueData.number ${input.issueData?.number ?? 'missing'}`, REGENERATE));
+      errors.push(diagnostic(`snapshot issue #${raw.issue} disagrees with nested input issueData.number ${input.issueData?.number ?? 'missing'}`));
     }
     if (SHA_RE.test(String(raw.head ?? '')) && String(input.prData?.headRefOid ?? '').toLowerCase() !== String(raw.head).toLowerCase()) {
-      errors.push(diagnostic('snapshot head disagrees with nested input prData.headRefOid', REGENERATE));
+      errors.push(diagnostic('snapshot head disagrees with nested input prData.headRefOid'));
     }
     if (SHA_RE.test(String(raw.base ?? '')) && String(input.prData?.baseRefOid ?? '').toLowerCase() !== String(raw.base).toLowerCase()) {
-      errors.push(diagnostic('snapshot base disagrees with nested input prData.baseRefOid', REGENERATE));
+      errors.push(diagnostic('snapshot base disagrees with nested input prData.baseRefOid'));
     }
   }
 
   const expected = options.expected ?? {};
   if (expected.pr !== undefined && expected.pr !== null && Number(expected.pr) !== raw.pr) {
-    errors.push(diagnostic(`snapshot was captured for PR #${raw.pr}, not expected PR #${expected.pr}`, 're-scaffold the snapshot for the intended PR or correct --pr'));
+    errors.push(diagnostic(`snapshot was captured for PR #${raw.pr}, not expected PR #${expected.pr}`));
   }
   if (expected.issue !== undefined && expected.issue !== null && Number(expected.issue) !== raw.issue) {
-    errors.push(diagnostic(`snapshot was captured for issue #${raw.issue}, not expected issue #${expected.issue}`, 're-scaffold the snapshot for the intended issue or correct --issue'));
+    errors.push(diagnostic(`snapshot was captured for issue #${raw.issue}, not expected issue #${expected.issue}`));
   }
   if (expected.repo && raw.repository && String(expected.repo).toLowerCase() !== String(raw.repository).toLowerCase()) {
-    errors.push(diagnostic(`snapshot was captured for repository '${raw.repository}', not expected repository '${expected.repo}'`, 're-scaffold the snapshot for the intended repository or correct --repo'));
+    errors.push(diagnostic(`snapshot was captured for repository '${raw.repository}', not expected repository '${expected.repo}'`));
   }
 
   if (errors.length > 0) return { ok: false, errors, value: null };

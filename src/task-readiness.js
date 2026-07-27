@@ -1,7 +1,8 @@
 /** Read-only task readiness and explicit base-tree path-intent evaluation. */
 
-import { parseFrontmatter } from './frontmatter.js';
-import { fileMatchesScopePattern, parseScopePatterns, validatePathsAgainstDeviations } from './scope-matcher.js';
+import { parseFrontmatterStrict } from './frontmatter.js';
+import { fileMatchesScopePattern, isSafeScopePattern, parseScopePatterns, validatePathsAgainstDeviations } from './scope-matcher.js';
+import { createDiagnostic } from './repair-policy.js';
 
 const GLOB = /[*?]/;
 const GLOB_SAMPLE_LIMIT = 5;
@@ -10,53 +11,86 @@ function normalize(path) {
   return String(path ?? '').replace(/\\/g, '/').trim();
 }
 
-function issue(level, message, category, owner = 'maintainer') {
-  return { level, message, category, owner, nextAction: level === 'error' ? 'repair the declared task contract and rerun task-readiness' : 'confirm or correct the declaration before review' };
+function issue(level, code, evidence) {
+  return createDiagnostic({ level, code, evidence });
 }
 
 function asStringList(value, field, diagnostics) {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value) || !value.every(item => typeof item === 'string' && normalize(item))) {
-    diagnostics.push(issue('error', `'${field}' must be a YAML list of repo-relative paths`, 'path_intent'));
+    diagnostics.push(issue('error', 'scope.declaration.invalid', { field }));
     return [];
   }
-  return value.map(normalize);
+  const values = value.map(normalize);
+  const seen = new Set();
+  for (const item of values) {
+    if (seen.has(item)) diagnostics.push(issue('error', 'scope.declaration.duplicate', { field, paths: [item] }));
+    seen.add(item);
+  }
+  return values;
 }
 
 /** Parse path and dependency declarations from an existing task record. */
 export function parseTaskReadinessDeclaration(taskBody) {
   const diagnostics = [];
-  const [frontmatter] = parseFrontmatter(String(taskBody ?? ''));
-  if (!frontmatter) {
-    return { diagnostics: [issue('error', 'task readiness requires YAML frontmatter', 'task_contract')], declaration: null };
+  const parsedFrontmatter = parseFrontmatterStrict(String(taskBody ?? ''));
+  if (parsedFrontmatter.state !== 'valid') {
+    return {
+      diagnostics: [issue('error', parsedFrontmatter.state === 'malformed' ? 'task.contract.malformed' : 'task.contract.absent', {
+        reason: parsedFrontmatter.reason,
+      })],
+      declaration: null,
+    };
   }
+  const frontmatter = parsedFrontmatter.data;
   const scope = parseScopePatterns(taskBody);
-  if (scope?.error) diagnostics.push(issue('error', scope.error, 'path_intent'));
+  if (scope?.error) diagnostics.push(issue('error', 'scope.declaration.invalid', { reason: scope.error, field: scope.fieldName }));
+  if (!scope) diagnostics.push(issue('warning', 'scope.declaration.missing', {}));
+  if (Array.isArray(scope?.patterns)) {
+    const seenPaths = new Set();
+    for (const path of scope.patterns) {
+      if (seenPaths.has(path)) diagnostics.push(issue('error', 'scope.declaration.duplicate', { field: scope.fieldName, paths: [path] }));
+      seenPaths.add(path);
+    }
+  }
   const intendedCreations = asStringList(frontmatter.intended_creations, 'intended_creations', diagnostics);
   const dependsOn = asStringList(frontmatter.depends_on ?? frontmatter.dependsOn, 'depends_on', diagnostics);
   const generated = new Map();
   if (frontmatter.generated_paths !== undefined) {
     if (!frontmatter.generated_paths || typeof frontmatter.generated_paths !== 'object' || Array.isArray(frontmatter.generated_paths)) {
-      diagnostics.push(issue('error', "'generated_paths' must map an exact path to generator, source, and verification metadata", 'generated_paths'));
+      diagnostics.push(issue('error', 'generated.path.invalid', { field: 'generated_paths' }));
     } else {
       for (const [rawPath, raw] of Object.entries(frontmatter.generated_paths)) {
         const path = normalize(rawPath);
         if (!path || GLOB.test(path) || path.endsWith('/')) {
-          diagnostics.push(issue('error', `generated path '${rawPath}' must be an exact repo-relative path`, 'generated_paths'));
+          diagnostics.push(issue('error', 'generated.path.invalid', { field: 'generated_paths', paths: [String(rawPath)], reason: 'invalid_path' }));
           continue;
         }
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-          diagnostics.push(issue('error', `generated path '${path}' must declare generator, source, and verification`, 'generated_paths'));
+          diagnostics.push(issue('error', 'generated.path.invalid', { field: 'generated_paths', paths: [path], reason: 'missing_metadata' }));
           continue;
         }
         const generator = String(raw.generator ?? '').trim();
         const source = String(raw.source ?? '').trim();
         const verification = String(raw.verification ?? raw.parity ?? '').trim();
         if (!generator || !source || !verification) {
-          diagnostics.push(issue('error', `generated path '${path}' requires generator, source, and verification (parity or regeneration)`, 'generated_paths'));
+          diagnostics.push(issue('error', 'generated.path.invalid', { field: 'generated_paths', paths: [path], reason: 'missing_metadata' }));
           continue;
         }
         generated.set(path, { generator, source, verification });
+      }
+    }
+  }
+  for (const path of intendedCreations) {
+    if (!isSafeScopePattern(path) || GLOB.test(path) || path.endsWith('/')) {
+      diagnostics.push(issue('error', 'scope.intent.invalid', { field: 'intended_creations', paths: [path] }));
+    }
+  }
+  if (Object.hasOwn(frontmatter, 'allowed_paths')) {
+    const allowedPaths = scope?.patterns ?? [];
+    for (const path of intendedCreations) {
+      if (!allowedPaths.some(pattern => fileMatchesScopePattern(path, pattern))) {
+        diagnostics.push(issue('error', 'scope.intended_creation.uncovered', { paths: [path] }));
       }
     }
   }
@@ -86,16 +120,17 @@ export function evaluateTaskReadiness({
   mode,
   changedPaths = [],
   deviationEntries = [],
+  deviationErrors = [],
   dependencies = {},
   dependencyEvaluator,
   projectFacts = [],
 } = {}) {
   const diagnostics = [];
   if (!Array.isArray(basePaths)) {
-    diagnostics.push(issue('error', 'basePaths inventory is unavailable; readiness cannot classify path intent', 'path_intent'));
+    diagnostics.push(issue('error', 'readiness.base_inventory.missing', {}));
   }
   if (!['authoring', 'review'].includes(mode)) {
-    diagnostics.push(issue('error', "mode must be explicitly 'authoring' or 'review'", 'path_intent'));
+    diagnostics.push(issue('error', 'readiness.mode.invalid', { mode }));
   }
   const parsed = parseTaskReadinessDeclaration(taskBody);
   diagnostics.push(...parsed.diagnostics);
@@ -112,7 +147,7 @@ export function evaluateTaskReadiness({
       // instead of dumping every match into the result object.
       const sortedMatches = [...matches].sort();
       const sample = sortedMatches.slice(0, GLOB_SAMPLE_LIMIT);
-      if (matches.length === 0) diagnostics.push(issue('warning', `scope glob '${pattern}' matches no base-tree paths and is not creation-capable`, 'path_intent'));
+      if (matches.length === 0) diagnostics.push(issue('warning', 'scope.glob.unmatched', { paths: [pattern] }));
       paths.push({ pattern, classification: 'glob', matchCount: matches.length, sample });
       continue;
     }
@@ -124,7 +159,7 @@ export function evaluateTaskReadiness({
       paths.push({ pattern, classification: 'generated', provenance: declaration.generated.get(pattern) });
     } else {
       const level = mode === 'review' ? 'error' : 'warning';
-      diagnostics.push(issue(level, `literal allowed path '${pattern}' is absent from the base tree and is not declared as an intended creation or generated output`, 'path_intent'));
+      diagnostics.push(issue(level, 'scope.intended_creation.missing', { paths: [pattern] }));
       paths.push({ pattern, classification: 'unmatched' });
     }
   }
@@ -134,15 +169,20 @@ export function evaluateTaskReadiness({
   // changes; the shared deviation validator owns every other changed path and
   // its diagnostics are reported verbatim exactly once.
   const normalizedChanged = changedPaths.map(normalize).filter(Boolean);
+  if (deviationErrors.length) {
+    diagnostics.push(issue('error', 'scope.deviation.malformed', { errors: [...deviationErrors] }));
+  }
   const generatedAuthorized = new Set(declaration.generated.keys());
   const deviationCheck = validatePathsAgainstDeviations(
     normalizedChanged.filter(path => !generatedAuthorized.has(path)),
     declaration.allowedPaths,
     deviationEntries,
   );
-  for (const message of deviationCheck.errors ?? []) {
-    diagnostics.push(issue('error', message, 'scope_deviations', 'engineer'));
+  if (deviationCheck.missingDeviations.length) {
+    diagnostics.push(issue('error', 'scope.deviation.missing', { paths: deviationCheck.missingDeviations }));
   }
+  if (deviationCheck.staleDeviations.length) diagnostics.push(issue('error', 'scope.deviation.malformed', { paths: deviationCheck.staleDeviations, kind: 'stale' }));
+  if (deviationCheck.inScopeDeviations.length) diagnostics.push(issue('error', 'scope.deviation.malformed', { paths: deviationCheck.inScopeDeviations, kind: 'in_scope' }));
 
   const dependencyResults = [];
   for (const id of declaration.dependsOn) {
@@ -150,7 +190,7 @@ export function evaluateTaskReadiness({
     const status = typeof result === 'string' ? result : result?.status;
     dependencyResults.push({ id, status: status ?? 'unresolved' });
     if (status !== 'resolved' && status !== 'accepted' && status !== 'closed') {
-      diagnostics.push(issue('error', `declared dependency '${id}' is unresolved`, 'dependencies', 'orchestrator'));
+      diagnostics.push(issue('error', 'dependency.unresolved', { dependencies: [id], status: status ?? 'unresolved' }));
     }
   }
   return finish(diagnostics, {
@@ -174,7 +214,6 @@ function finish(diagnostics, detail) {
     errors: errors.map(item => item.message),
     warnings: warnings.map(item => item.message),
     diagnostics,
-    firstSafeRepair: errors[0]?.nextAction ?? null,
     ...detail,
   };
 }

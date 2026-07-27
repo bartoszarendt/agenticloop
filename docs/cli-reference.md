@@ -26,7 +26,7 @@ All commands:
 | `update` (alias `upgrade`) | Refresh toolkit-owned assets and regenerate adapters |
 | `doctor` | Read-only setup checklist, adapter state, next steps |
 | `status` | Configured adapters, generated artifacts, next steps |
-| `validate` | Validate skills, config, links, and host setup |
+| `validate` | Validate skills, config, links, role-capability bindings, and host setup |
 | `remove` | Remove Agentic Loop assets (`--dry-run` or `--yes` required) |
 | `guidance` | Manage the activation-guidance block (`apply`, `check`, `remove`) |
 | `generate` | Generate adapter artifacts (`opencode`, `codex`, `claude-code`, `copilot`, `cursor`, `all`) |
@@ -42,6 +42,7 @@ All commands:
 | `github-ready` | Read-only merge-readiness verdict |
 | `pr-body scaffold` / `pr-body lint` | Scaffold a canonical body (plus optional offline context snapshot) and lint a local candidate body against live or snapshotted context |
 | `task-readiness` | Read-only explicit base-tree, path-intent, and dependency readiness check |
+| `task-body fetch` / `lint` / `apply` | Guarded GitHub task-record body fetch, validation, dry-run diff, and transactional publication |
 | `commit-attribution check` | Read-only Engineer trailer check with repair guidance only |
 | `github-checkpoint render` / `repair-plan` | Render a checkpoint or one bounded append-only repair carrier without posting |
 | `github-review-prepare` | Fail-closed exact-head Maintainer delegation packet |
@@ -264,6 +265,84 @@ or force-pushes.
 Every review-preparation gate supports `--json`. Normal, usage, loader, and operational
 failures use a versioned envelope with diagnostics, categories, ownership, and a
 first safe repair; human output is rendered from the same result.
+
+## Task-body editing and attribution
+
+For a GitHub task record, use the closed loop below instead of editing an issue
+body inline:
+
+```text
+npx agenticloop task-body fetch --issue <n> --output .agenticloop/tmp/issue-<n>.md
+npx agenticloop task-body lint --issue <n> --body-file .agenticloop/tmp/issue-<n>.md
+npx agenticloop task-body apply --issue <n> --body-file .agenticloop/tmp/issue-<n>.md --expect-digest <digest> --dry-run
+npx agenticloop task-body apply --issue <n> --body-file .agenticloop/tmp/issue-<n>.md --expect-digest <digest> --yes
+```
+
+Routine edits avoid a whole-body rewrite:
+
+```text
+npx agenticloop task-body set-field --issue <n> --field review_budget --value 3 --expect-digest <digest> --dry-run
+npx agenticloop task-body transition --issue <n> --status agent-ready --expect-digest <digest> --base <base-ref> --dry-run
+npx agenticloop task-body establish-baseline --issue <n> --expect-digest <digest> --authority <ref> --actor <login> --dry-run
+npx agenticloop task-body authorize-correction --issue <n> --body-file <candidate.md> --expect-digest <digest> --reason <text> --authority <ref> --actor <login> --dry-run
+```
+
+Repeat any dry run with `--yes` only after inspecting its patch plan. The first
+two commands make one bounded body change through the same lint/refetch/expected
+digest transaction. The latter two create and refetch a separate verified
+task-contract record carrier; body markers are only caches. An `agent-ready`
+transition fails closed without a base tree inventory.
+
+`fetch` preserves a live leading BOM exactly and writes a separately labelled
+sanitized candidate. `apply` refuses the BOM-bearing candidate, stale remote
+bodies, and post-write digest/contract mismatches. It reports a unified diff and
+structured change summary. Recovery paths are unique; verified success retains
+them by default and failure retains them for evidence. Do not delete recovery
+artifacts until their reported policy permits it.
+
+`task-body lint` fetches the live issue body and comments by default so it can
+validate lifecycle transitions and trusted carriers. `--offline` explicitly
+reports unavailable live provenance; optional `--trusted-records <snapshot>`
+must contain validated carrier data and never claims live verification. The
+offline JSON envelope reports `contextMode: "offline"`, `lintValid`,
+`graphConsistent`, `provenanceVerified: false`, and `publicationReady: false`;
+the exit status reflects lint validity only, and offline lint never satisfies
+an authority-dependent readiness or publication gate.
+
+GitHub task-contract trust is configured in `.agenticloop/project.md` with
+`trusted_task_contract_actors` (see `agenticloop/backends/github.md`). The
+deprecated `github_trusted_actors` alias is honored with a warning.
+
+Files-backed current tasks use `task_contract_schema: 2`. Run
+`task establish-baseline <id> --actor <git-author> --authority <kind:reference>`
+and commit the task history artifact separately before moving to `agent-ready`.
+A material contract change after the baseline uses
+`task authorize-correction <id> --expect-prior-digest <digest> --reason <text>
+--authority <kind:reference> --actor <git-author>`, also committed separately.
+Files history is verified append-only against first-parent Git history with
+per-record commit provenance (see `agenticloop/backends/files.md`).
+
+Attribution rewrite records are read-only CLI surfaces:
+
+```text
+npx agenticloop commit-attribution repair-record-render --record repair.json --output record.json
+npx agenticloop commit-attribution repair-record-lint --record record.json
+```
+
+They render and validate provenance only; they never amend, push, force-push,
+or publish a record.
+
+Before committing GitHub-backed work, use a message file and one contiguous
+final trailer block:
+
+```text
+npx agenticloop commit-attribution check --task T-001 --message-file .agenticloop/tmp/T-001-commit-message.txt
+git commit -F .agenticloop/tmp/T-001-commit-message.txt
+npx agenticloop commit-attribution check --task T-001
+```
+
+Push only after both checks pass. Separate `git commit -m` paragraphs for
+`Task:` and `Agent:` fail prospective validation.
 
 ## Workflow budgets
 

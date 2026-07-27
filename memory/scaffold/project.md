@@ -32,6 +32,14 @@ setup_confirmed_by: ""
 # backend_confirmed_by: "maintainer"
 # backend_evidence_summary: "No durable GitHub task workflow evidence found; files backend confirmed."
 
+# Optional trusted-actor allowlist for GitHub task-contract records. When
+# present it must be a non-empty list of GitHub logins; comparisons are
+# case-insensitive. Without it, repository OWNER, MEMBER, and COLLABORATOR
+# associations are trusted for task-contract carriers with an explicit
+# compatibility warning.
+# trusted_task_contract_actors:
+#   - "maintainer-login"
+
 # Optional typed document selections. Leave commented when the target project
 # uses conventional names or when a role is not relevant.
 # documents:

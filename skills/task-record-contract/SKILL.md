@@ -392,6 +392,49 @@ Task-file frontmatter carries machine-readable current state. Required fields:
 by [[review-and-accept]]. Select `independent_review_required: true` before
 implementation when required by task assurance or project policy.
 
+### Dispatched contract baseline
+
+Before applying `agent-ready`, Maintainer runs `task-readiness --mode authoring`
+against the current base-tree path inventory. Every warning is corrected or
+explicitly dispositioned by Maintainer. Exact intended creations must be safe
+repo-relative paths, covered by `allowed_paths` when that field exists, and
+consistent with `## Expected Files or Areas`; a glob matching no base-tree path
+needs deliberate treatment.
+
+The Maintainer then records a `sha256:v1:<hex>` baseline covering task identity,
+Scope, Out of Scope, `allowed_paths`, `intended_creations`, Acceptance Criteria,
+Required Checks, independent-review requirement, and locked decision references.
+The record must be in a separately verifiable backend carrier, not the mutable
+task body: GitHub uses a verified-author issue-comment
+`agenticloop.task-contract-record`; files uses separately committed append-only
+task history. It includes a stable carrier id, actor, authority, timestamp, and
+affected artifact. Body markers may cache the record id/digest but are never the
+root of trust. Do not invent a baseline for historical work: report the migration
+warning and establish it at the next material edit or readiness transition.
+Baseline migration becomes mandatory when a legacy task materially changes its
+contract or enters `agent-ready`, including schema-less tasks; steady-state
+historical inspection remains warning-only.
+
+Carrier trust follows explicit states: untrusted-association and not-allowlisted
+carriers are ignored noise, an edited authority carrier is rejected without
+poisoning the chain, a malformed record on a trusted carrier is fatal, and
+missing carrier metadata fails safely as an adapter error. Files history is
+verified append-only against first-parent commits with per-record commit
+provenance; a record becomes trusted only after its own separate commit.
+Recovery from an edited or invalid authority carrier never edits the carrier:
+publish a new versioned record on a fresh carrier and revalidate the chain.
+
+After dispatch, never widen `allowed_paths` merely to make a current diff pass.
+Use an exact PR `## Deviations` path plus reason for directly connected work, or
+return `needs_context` for a material change. A Maintainer correction marker
+may cache the separate correction record, which must name prior/resulting digest,
+changed fields with old/new values, concise reason, authority/reference, actor,
+affected artifact, timestamp, and stable carrier id. It is visible review
+evidence, not an inline hidden edit. Corrections are authorized with
+`task-body authorize-correction` (GitHub) or `task authorize-correction`
+(files); both validate the correction prospectively against the trusted chain
+before it is published or committed.
+
 `integrated_by` is exact managed-join provenance recorded only after validated
 integration. GitHub uses `pr:<number>@<full-40-sha>`; files uses
 `commit:<full-40-sha>` or `range:<full-40-sha>..<full-40-sha>`. It does not
@@ -484,6 +527,9 @@ If `task_backend` is `github`:
   labeled as an exception in the task file with a short reason (for example GitHub auth
   unavailable, labels not bootstrapped, human-approved fallback). Silence is not an
   acceptable exception.
+  - Author, lint, dry-run, and publish task body changes through `task-body`.
+    Preserve the temporary body and context snapshot until live refetch,
+    validation, and preflight succeed; clean up only after that verification.
 
 ## GitHub projection: labels and title
 

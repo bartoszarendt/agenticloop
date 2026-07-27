@@ -1,6 +1,37 @@
 ---
 name: maintainer
 description: Owns task records, planning, review, acceptance, follow-up triage, and closeout for Agentic Loop.
+primary_repair_capabilities:
+  - repair_task_contract
+  - create_task_contract
+  - declare_scope
+  - deduplicate_scope
+  - repair_scope_declaration
+  - classify_existing_path
+  - declare_intended_creation
+  - cover_intended_creation
+  - repair_path_intent
+  - repair_generated_path_declaration
+  - confirm_scope_glob
+  - establish_baseline
+  - repair_baseline_record
+  - authorize_contract_correction
+  - remove_mutable_record_marker
+  - preserve_and_sanitize_body
+  - repair_task_identity
+  - repair_task_record
+  - repair_task_attribution
+  - supply_base_inventory
+  - select_readiness_mode
+  - repair_required_checks
+  - repair_task_policy
+  - repair_review_checkpoint
+  - repair_review_provenance
+  - repair_preflight_input
+  - repair_review_audit
+escalation_capabilities:
+  - contract_reconciliation
+  - record_recovery
 ---
 
 # Maintainer
@@ -22,6 +53,8 @@ acting.
 - For a multi-task unit, fill [[task-record-contract]] `## Parallel Safety` with owned paths/backend objects, dependencies, shared/generated and writable test surfaces, decision scope, shared design questions, eligibility/reason, knowledge coupling (`independent | coupled | unknown`), shared assumptions, and sibling-affecting discoveries. Coupled work uses read-only diagnosis, join reconciliation, then serial or newly justified parallel implementation. Resolve code/collision/knowledge unknowns with one bounded read-only pass; remaining unknowns recommend serial. Host/lane unknowns stay with orchestrator. For a managed join, Maintainer alone classifies code/collision joinability and exact operations; [[parallel-delegation]] owns the full law.
 - After the ready set for a bounded multi-task unit exists, return source proposals and a batch-level recommendation for the orchestrator: eligible groupings with collision and knowledge-coupling rationale, the two-wave recommendation for coupled groupings, or concrete serial reasons. This recommendation is input only; the orchestrator owns the current scan decision.
 - Create or refine task records with concrete scope, out of scope, acceptance criteria, required checks, proof pressure when the work is ambiguous or long-running, and expected files or areas.
+- Before `agent-ready`, run readiness and establish the trusted baseline. Own
+  correction/recovery provenance; never widen `allowed_paths`.
 - Use the confirmed development stage to shape task boundaries, expected core areas,
   compatibility posture, and implementation notes. Stage never relaxes evidence,
   safety, authorization, or accepted scope; propose rather than silently apply a

@@ -1,6 +1,7 @@
 /** Canonical, intentionally incomplete PR-body scaffold and structural offline lint. */
 
 import { formatResolutionMatrix, parseResolutionMatrix, validateResolutionMatrix } from './resolution-matrix.js';
+import { createDiagnostic } from './repair-policy.js';
 import { markdownLines, markdownSection } from './markdown.js';
 import { isFileInScope, parseDeviations, parseScopePatterns } from './scope-matcher.js';
 import { parseTaskReadinessDeclaration } from './task-readiness.js';
@@ -119,8 +120,8 @@ export function renderPrBodyScaffold(input) {
   return lines.join('\n');
 }
 
-function diagnostic(message, nextAction, category = 'pr_body', owner = 'engineer') {
-  return { message, category, owner, nextAction };
+function diagnostic(message, code = 'pr_body.structural', repairHint = null) {
+  return createDiagnostic({ code, message, ...(repairHint ? { repairHint } : {}) });
 }
 
 /**
@@ -156,45 +157,45 @@ export function lintPrBody(body, context = {}) {
       hasPlaceholder = true;
       const section = [...liveLines.slice(0, liveLines.indexOf(line))].reverse().find(candidate => candidate.raw.match(/^##\s+/));
       const where = section ? ` in section '${section.raw.replace(/^##\s+/, '').trim().toLowerCase()}'` : '';
-      errors.push(diagnostic(`canonical placeholder remains${where}: ${line.raw.trim()}`, 'replace every REPLACE/TODO placeholder with concrete evidence before publication'));
+      errors.push(diagnostic(`canonical placeholder remains${where}: ${line.raw.trim()}`));
     }
   }
   if (text.trim().length === 0) {
-    errors.push(diagnostic('PR body is empty; scaffold required fields are absent', 'run pr-body scaffold first'));
+    errors.push(diagnostic('PR body is empty; scaffold required fields are absent'));
   }
 
   for (const heading of REQUIRED_SECTIONS) {
     if (!markdownSection(text, heading)) {
-      errors.push(diagnostic(`PR body is missing the '${heading}' section`, 'render the canonical scaffold sections before publication'));
+      errors.push(diagnostic(`PR body is missing the '${heading}' section`));
     }
   }
   const scopeBody = markdownSection(text, '## Scope Completed')?.body ?? null;
   if (scopeBody !== null && !scopeBody.trim()) {
-    errors.push(diagnostic("PR body '## Scope Completed' section must contain a nonempty scope summary", 'summarize the final implemented state'));
+    errors.push(diagnostic("PR body '## Scope Completed' section must contain a nonempty scope summary"));
   }
 
   const currentHead = String(context.currentHead ?? '').toLowerCase() || null;
   const marker = extractHeadMarker(text);
   if (currentHead) {
     if (!marker || !headMatches(marker, currentHead)) {
-      errors.push(diagnostic(`PR body must carry the exact current-head marker 'Current PR head: ${currentHead}'`, 're-scaffold against the current head before publication'));
+      errors.push(diagnostic(`PR body must carry the exact current-head marker 'Current PR head: ${currentHead}'`, 'pr_body.structural', 're-scaffold against the current head before publication'));
     }
     if (!text.includes(`Current implementation artifact: commit:${currentHead}`)) {
-      errors.push(diagnostic(`PR body must record the exact implementation artifact 'Current implementation artifact: commit:${currentHead}'`, 'record the exact current artifact in ## Artifacts'));
+      errors.push(diagnostic(`PR body must record the exact implementation artifact 'Current implementation artifact: commit:${currentHead}'`));
     }
   } else if (!marker) {
-    errors.push(diagnostic("PR body is missing a 'Current PR head: <sha>' marker", 'record the current head marker in ## Evidence'));
+    errors.push(diagnostic("PR body is missing a 'Current PR head: <sha>' marker"));
   }
 
   const evidence = parsePrEvidence(text);
   for (const parseError of evidence.errors) {
-    errors.push(diagnostic(parseError, 'repair the evidence entry shape'));
+    errors.push(diagnostic(parseError));
   }
   for (const entry of evidence.entries) {
     const finality = validateEvidenceEntryFinality(entry);
     const label = String(entry.check ?? '').trim() || '<unnamed evidence entry>';
     for (const error of finality.errors) {
-      errors.push(diagnostic(`evidence entry '${label}' is incomplete: ${error}`, 'record a final verdict and substantive evidence excerpt'));
+      errors.push(diagnostic(`evidence entry '${label}' is incomplete: ${error}`));
     }
     warnings.push(...finality.warnings);
   }
@@ -212,36 +213,34 @@ export function lintPrBody(body, context = {}) {
         taskContractFailure
           ? `required-check contract '${item.check}' is invalid: ${item.reason}`
           : `required check '${item.check}' has no acceptable evidence: ${item.reason}`,
-        item.nextAction ?? 'complete the evidence entry with a final verdict and substantive, current-artifact evidence',
-        item.category ?? 'pr_body',
-        item.owner ?? 'engineer',
+        taskContractFailure ? 'preflight.task_policy' : 'pr_body.structural',
       ));
     }
   }
 
   for (const deviationError of parseDeviations(text).errors) {
-    errors.push(diagnostic(deviationError, 'repair the ## Deviations entries'));
+    errors.push(diagnostic(deviationError));
   }
 
   const priorFindingIds = context.priorFindingIds ?? [];
   if (priorFindingIds.length > 0) {
     const matrix = parseResolutionMatrix(text);
     if (matrix.status !== 'parsed') {
-      errors.push(diagnostic(`re-review requires a resolution matrix for finding IDs: ${priorFindingIds.join(', ')}`, 'resolve every prior finding in ## Revision Resolution'));
+      errors.push(diagnostic(`re-review requires a resolution matrix for finding IDs: ${priorFindingIds.join(', ')}`));
     } else {
       const validation = validateResolutionMatrix({
         requiredFindingIds: priorFindingIds,
         entries: matrix.entries,
         currentArtifact: currentHead ?? '',
       });
-      for (const error of validation.errors) errors.push(diagnostic(error, 'repair the resolution matrix entries'));
+      for (const error of validation.errors) errors.push(diagnostic(error));
       warnings.push(...validation.warnings);
     }
   }
 
   const finalLine = liveLines.filter(line => line.live && line.raw.trim()).at(-1)?.raw.trim() ?? '';
   if (finalLine !== '[[agent: engineer]]') {
-    errors.push(diagnostic("PR body must end with the final Engineer attribution '[[agent: engineer]]'", 'restore the final Engineer attribution as the last live line'));
+    errors.push(diagnostic("PR body must end with the final Engineer attribution '[[agent: engineer]]'"));
   }
 
   // `scaffolded` records canonical scaffold shape/provenance, not
@@ -258,6 +257,5 @@ export function lintPrBody(body, context = {}) {
     errors: errors.map(item => item.message),
     warnings,
     diagnostics: errors,
-    firstSafeRepair: errors.length ? (errors[0].nextAction ?? 'repair the first structural lint failure') : null,
   };
 }

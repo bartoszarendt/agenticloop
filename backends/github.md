@@ -768,6 +768,139 @@ Use GitHub-specific values inside the canonical template. Keep the summary
 concise. Cite command output, issue/PR numbers, and task ids. Do not copy raw
 agent exchanges.
 
+## Task-Record Body Transaction And Recovery
+
+Maintainer owns GitHub task-record body edits. Orchestrator may inspect a failed
+gate read-only, but must not repair task frontmatter, scope, readiness, or
+baseline fields inline. Use the guarded command family:
+
+```text
+npx agenticloop task-body fetch --issue <n> --output .agenticloop/tmp/issue-<n>.md
+npx agenticloop task-body lint --issue <n> --body-file .agenticloop/tmp/issue-<n>.md
+npx agenticloop task-body apply --issue <n> --body-file .agenticloop/tmp/issue-<n>.md --expect-digest <digest> --dry-run
+npx agenticloop task-body apply --issue <n> --body-file .agenticloop/tmp/issue-<n>.md --expect-digest <digest> --yes
+```
+
+Use `set-field` for one field, `transition --status agent-ready` with `--base`
+or `--base-paths` for readiness, and full-body `apply` only for recovery or a
+reviewed compound edit. `fetch` preserves a BOM exactly and emits a separately
+labelled sanitized candidate. `lint` validates the contract record chain.
+`apply` checks the digest before and after publication. Recovery names include a
+digest, timestamp, and operation id; success retains and reports them by default.
+Rollback needs a fresh exact-candidate lease and never overwrites concurrent
+state. Results carry a unified diff and changed-field/section summary.
+
+### Trusted task-contract records
+
+REST/GraphQL comments share one immutable carrier model. Every carrier is
+classified into exactly one authority state before any record is promoted:
+
+- `trusted_immutable`: trusted repository association (OWNER, MEMBER, or
+  COLLABORATOR), allowlist accepted, required metadata complete, unedited.
+  Only these carriers promote records.
+- `trusted_but_invalid`: the carrier is eligible, but its record payload is
+  malformed or violates the record contract. This is fatal for validation.
+- `edited_authority`: an otherwise trusted authority whose comment was edited.
+  The carrier is rejected but not fatal; a chain whose only baseline carrier
+  is edited fails naturally as missing/invalid.
+- `untrusted_association`: the author is not OWNER, MEMBER, or COLLABORATOR.
+  Non-authoritative noise: recorded as a structured rejected-carrier
+  diagnostic, never a chain failure, and a duplicate record ID on such a
+  carrier cannot invalidate a trusted record.
+- `not_allowlisted`: trusted association, but the configured
+  `trusted_task_contract_actors` allowlist excludes the author. Also
+  non-authoritative noise.
+- `incomplete_carrier`: the backend response lacks metadata needed to decide
+  authority (including a missing stable comment id or URL). Fails safely as
+  an adapter/provenance error.
+
+A trusted GitHub carrier requires a stable comment id and URL. Login
+comparison is case-insensitive while the canonical display casing is
+preserved. Two independent guards reject edited carriers: the normalizer
+marks them non-authoritative, and the record validator rejects any record
+whose carrier reports `edited: true`, even alongside self-asserted
+`verifiedAuthority: true`. Embedded/self-attested carrier data inside a
+record payload is always ignored; trust comes only from the independently
+fetched carrier. Author must match `--actor` and the authenticated publisher;
+allowlists narrow collaborator trust. Duplicate, fork, orphan, cycle, and
+replay checks run on promoted trusted records only. Refetch requires one
+valid carrier, unchanged body, and digest chain. Schema 2 requires a
+baseline. Mutable RECORD markers are forbidden.
+
+The body cannot authorize its baseline. Before a new task or `agent-ready`
+transition, `establish-baseline` posts and refetches a separate verified-author
+`agenticloop.task-contract-record` comment with carrier id, actor, authority,
+timestamp, task id, digest, and artifact. `authorize-correction` records prior/
+resulting digest, old/new fields, reason, authority, actor, artifact, timestamp,
+and carrier id before body apply. Markers only cache record references. Historical
+baseline-less records warn until a material edit or readiness transition; never
+invent authority from an in-body role claim.
+
+Trusted actors are configured once in `.agenticloop/project.md` as
+`trusted_task_contract_actors`: a non-empty list of GitHub logins, validated
+for empty entries, case-insensitive duplicates, and malformed login shapes.
+The deprecated `github_trusted_actors` alias is honored everywhere with a
+deprecation warning. Without an allowlist, OWNER, MEMBER, and COLLABORATOR
+associations remain trusted and every resolver invocation emits an explicit
+compatibility warning.
+
+Offline lint (`task-body lint --offline [--trusted-records <snapshot>]`)
+validates payload syntax and graph consistency only. Snapshot records are
+asserted inputs, not verified live carriers: the result envelope reports
+`contextMode: "offline"`, `lintValid`, `graphConsistent`,
+`provenanceVerified: false`, and `publicationReady: false`, and its exit
+status reflects lint validity only. Offline lint never satisfies an
+authority-dependent readiness or publication gate, even when snapshot data
+fabricates `verifiedAuthority: true`.
+
+Recovery from an edited or invalid authority carrier: preserve the rejected
+carrier; never edit a comment to repair a record. Publish a new versioned
+record (baseline or correction) through `task-body` on a fresh immutable
+carrier, refetch, and validate the completed chain. An edited sole baseline
+carrier leaves the chain without a baseline until a replacement baseline
+record is published.
+
+After a post-write structural regression, stop all automated writes. Preserve
+the invalid live body, pre-write body, candidate, digests, and exact failed
+validation. Do not reconstruct a record from memory, terminal excerpts, or
+partial prose. Route recovery to Maintainer, recover from a known-good source or
+GitHub edit history, lint offline, compare against both the invalid live body and
+the dispatched baseline, publish through `task-body`, refetch, validate, and
+record the repair/correction visibly. Then rerun downstream scaffold, lint,
+attribution, preflight, and review preparation against the resulting artifact.
+If a published write makes task identity, frontmatter, or required sections
+disappear, this circuit breaker remains in effect until Maintainer completes that
+recovery; do not issue another automated body write.
+
+## Already-Pushed Metadata Repair
+
+Metadata-only repair of an already-pushed task branch is an exceptional
+Engineer-owned repair. The attribution CLI remains read-only. A malformed trailer
+is a deterministic repair failure: the owning Engineer may repair it only when
+all conditions below pass; otherwise it is blocked pending the missing authority
+or safety condition. `Agent:` identifies content ownership, never the mechanical
+repair operator.
+
+1. Confirm the current role is Engineer or an explicitly authorized repair operator.
+2. Confirm the task branch is exclusively owned.
+3. Confirm the worktree is clean.
+4. Confirm the exact local branch and remote ref.
+5. Fetch and record the expected old remote SHA.
+6. Reject default, integration, protected, shared, and active-review-lease branches.
+7. Build the corrected complete message in a file.
+8. Run `commit-attribution check --message-file <path>`.
+9. Amend explicitly with `git commit --amend -F <path>`.
+10. Run the HEAD-based attribution check.
+11. Push only with `git push --force-with-lease=<ref>:<expected-old-sha> <remote> <branch>:<ref>`.
+12. Refetch and verify the resulting remote SHA.
+13. Invalidate and rerun artifact-bound checks, snapshots, preflight, and review preparation.
+14. Record the metadata rewrite durably.
+
+The durable attribution-repair record must include original SHA, resulting SHA,
+branch/ref, content-owner role, repair operator, reason, authority, timestamp,
+invalidated evidence, and rerun evidence. Never use unrestricted force push or
+an automatic amend command.
+
 ## Review Preparation And Recovery
 
 Before a first or repaired PR-body write, render `pr-body scaffold --pr <n>

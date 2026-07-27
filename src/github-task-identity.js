@@ -1,4 +1,35 @@
-import { parseFrontmatter } from './frontmatter.js';
+import { parseFrontmatterStrict } from './frontmatter.js';
+import { createDiagnostic } from './repair-policy.js';
+
+function malformedTaskContract(reason) {
+  return createDiagnostic({
+    code: 'task.body.identity',
+    message: `task frontmatter is malformed (${reason}); repair the GitHub task record before using its identity`,
+    evidence: { reason },
+  });
+}
+
+/**
+ * Resolve GitHub task identity without allowing malformed frontmatter to become
+ * a legacy issue-number identity.
+ *
+ * @param {any} issueData
+ * @returns {{ ok: boolean, identity: { taskId: string, source: 'frontmatter'|'issue-number' }|null, diagnostic: object|null }}
+ */
+export function resolveGitHubTaskIdentityStrict(issueData) {
+  const frontmatter = parseFrontmatterStrict(String(issueData?.body ?? ''));
+  if (frontmatter.state === 'malformed') {
+    return { ok: false, identity: null, diagnostic: malformedTaskContract(frontmatter.reason) };
+  }
+  const taskId = typeof frontmatter.data?.task_id === 'string' ? frontmatter.data.task_id.trim() : '';
+  if (taskId) return { ok: true, identity: { taskId, source: 'frontmatter' }, diagnostic: null };
+
+  const issueNumber = Number(issueData?.number);
+  if (frontmatter.state === 'absent' && Number.isInteger(issueNumber) && issueNumber > 0) {
+    return { ok: true, identity: { taskId: `#${issueNumber}`, source: 'issue-number' }, diagnostic: null };
+  }
+  return { ok: true, identity: null, diagnostic: null };
+}
 
 /**
  * Resolve the one GitHub task identity used in commit attribution.
@@ -11,15 +42,7 @@ import { parseFrontmatter } from './frontmatter.js';
  * @returns {{ taskId: string, source: 'frontmatter'|'issue-number' }|null}
  */
 export function resolveGitHubTaskIdentity(issueData) {
-  const [frontmatter] = parseFrontmatter(String(issueData?.body ?? ''));
-  const taskId = typeof frontmatter?.task_id === 'string' ? frontmatter.task_id.trim() : '';
-  if (taskId) return { taskId, source: 'frontmatter' };
-
-  const issueNumber = Number(issueData?.number);
-  if (Number.isInteger(issueNumber) && issueNumber > 0) {
-    return { taskId: `#${issueNumber}`, source: 'issue-number' };
-  }
-  return null;
+  return resolveGitHubTaskIdentityStrict(issueData).identity;
 }
 
 /** @param {string} taskId @param {string} role */
@@ -39,7 +62,8 @@ export function githubAttributionShape(taskId, role) {
 // AND closed issues. Legacy issue-number identities (`#12`) and materialized
 // task IDs (`T-012`) occupy distinct namespaces; once any materialized
 // identity is present on a carrier, the issue-number fallback cannot mask a
-// contradiction between frontmatter, title, and task label. A partial or
+// contradiction between frontmatter, title, and task label. Only genuinely
+// absent frontmatter is eligible for issue-number identity. A partial or
 // truncated inventory is a non-passing `inventory_incomplete` result, never a
 // false uniqueness pass.
 
@@ -93,6 +117,7 @@ export function buildGitHubTaskIdentityInventory(issues, options = {}) {
   const carriers = new Map();
   const contradictions = [];
   const errors = [];
+  const diagnostics = [];
 
   const addCarrier = (taskId, carrier) => {
     if (!taskId) return;
@@ -105,9 +130,14 @@ export function buildGitHubTaskIdentityInventory(issues, options = {}) {
     const number = Number(issue?.number);
     if (!Number.isInteger(number) || number <= 0) continue;
     const state = String(issue?.state ?? '').toUpperCase() === 'CLOSED' ? 'closed' : 'open';
-    const [frontmatter] = parseFrontmatter(String(issue?.body ?? ''));
-    const frontmatterId = typeof frontmatter?.task_id === 'string' && isTaskId(frontmatter.task_id, pattern)
-      ? frontmatter.task_id.trim()
+    const parsed = parseFrontmatterStrict(String(issue?.body ?? ''));
+    if (parsed.state === 'malformed') {
+      const diagnostic = malformedTaskContract(parsed.reason);
+      diagnostics.push({ ...diagnostic, issue: number });
+      errors.push(`issue #${number}: ${diagnostic.message}`);
+    }
+    const frontmatterId = typeof parsed.data?.task_id === 'string' && isTaskId(parsed.data.task_id, pattern)
+      ? parsed.data.task_id.trim()
       : '';
     const titleId = identityFromTitle(issue?.title, pattern);
     const labelIds = identityFromLabels(issue?.labels, pattern);
@@ -135,9 +165,10 @@ export function buildGitHubTaskIdentityInventory(issues, options = {}) {
     if (taskId) {
       addCarrier(taskId, { number, state, source: frontmatterId ? 'frontmatter' : (titleId ? 'title' : 'label') });
     }
-    // The legacy issue-number identity occupies a distinct namespace and is
-    // always tracked, so `#12` and `T-012` never collide.
-    addCarrier(`#${number}`, { number, state, source: 'issue-number' });
+    // Only a genuinely absent frontmatter block can use the legacy issue-number
+    // namespace. A malformed or materialized record must never be obscured by
+    // an issue-number fallback.
+    if (parsed.state === 'absent') addCarrier(`#${number}`, { number, state, source: 'issue-number' });
   }
 
   const duplicates = [];
@@ -163,6 +194,7 @@ export function buildGitHubTaskIdentityInventory(issues, options = {}) {
     duplicates,
     contradictions,
     errors,
+    diagnostics,
   };
 }
 

@@ -98,12 +98,19 @@ const TOLERANCE = 0.05;
 // referenceLibrary because those surfaces package the same canonical contract.
 // These are measured multi-surface baselines, not a Claude-only "+37 words"
 // adjustment and not duplicate workflow teaching.
+// The task-contract trust model and diagnostic architecture deliberately
+// rebases generatedPayload for Codex, Copilot, and Cursor: role files now
+// declare primary_repair_capabilities/escalation_capabilities (packaged into
+// every generated role definition), and the backend docs carry the explicit
+// carrier-state, append-only provenance, and offline-lint contracts. This is
+// new canonical contract delivered through the existing role/backend sources,
+// not adapter duplication.
 const ADAPTERS = [
   { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 11005, agentDefinitions: 10727, activationSurface: 687 } },
-  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 62199, agentDefinitions: 11303, activationSurface: 977, referenceLibrary: 49672 } },
+  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 65335, agentDefinitions: 11303, activationSurface: 977, referenceLibrary: 52930 } },
   { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 50201, agentDefinitions: 10084, activationSurface: 1568, referenceLibrary: 38456 } },
-  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 60057, agentDefinitions: 10913, activationSurface: 978, referenceLibrary: 47919 } },
-  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 59845, agentDefinitions: 10899, activationSurface: 786, referenceLibrary: 47919 } },
+  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 63204, agentDefinitions: 10913, activationSurface: 978, referenceLibrary: 51177 } },
+  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 62992, agentDefinitions: 10899, activationSurface: 786, referenceLibrary: 51177 } },
 ];
 
 let tmpDir;

@@ -2,8 +2,9 @@
 
 import { spawnSync } from 'node:child_process';
 import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
+import { createDiagnostic } from './repair-policy.js';
 import { resolveIssueNumber } from './github-preflight.js';
-import { parseFrontmatter } from './frontmatter.js';
+import { parseFrontmatterStrict } from './frontmatter.js';
 import { githubAttributionShape, resolveGitHubTaskIdentity } from './github-task-identity.js';
 import { filterLiveLines } from './markdown.js';
 import {
@@ -485,15 +486,15 @@ export function taskRequiresIndependentReview(issueBody) {
   const raw = String(issueBody ?? '');
 
   // Canonical YAML frontmatter representation.
-  const [frontmatter] = parseFrontmatter(raw);
-  const startsWithFrontmatter = /^---[ \t]*\r?\n/.test(raw);
-  const fieldCount = independentReviewFrontmatterCount(raw);
-  if (startsWithFrontmatter && frontmatter === null && /^independent_review_required[ \t]*:/m.test(raw)) {
+  const parsedFrontmatter = parseFrontmatterStrict(raw);
+  const frontmatter = parsedFrontmatter.data;
+  if (parsedFrontmatter.state === 'malformed') {
     return {
       value: false,
-      error: 'task issue has malformed YAML frontmatter containing independent_review_required',
+      error: `task issue has malformed YAML frontmatter (${parsedFrontmatter.reason})`,
     };
   }
+  const fieldCount = independentReviewFrontmatterCount(raw);
   if (fieldCount !== null && fieldCount > 1) {
     return {
       value: false,
@@ -731,6 +732,10 @@ export function evaluateGitHubReviewAudit({
     maintainerFixupEpisodeCount: fixupEpisodes.length,
     maintainerFixupCurrent: currentFixup !== null,
     outcome: outcome && { status: outcome.status, mode: outcome.mode, artifact: outcome.artifact, humanReviewRef: outcome.humanReviewRef, author: outcome.author?.login ?? null },
+    diagnostics: errors.map(message => createDiagnostic({
+      code: message === requirement.error ? 'review_audit.task_contract' : 'review_audit.failure',
+      message,
+    })),
   };
 }
 

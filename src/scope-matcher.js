@@ -12,7 +12,7 @@
  */
 
 import { markdownSection } from './markdown.js';
-import { parseFrontmatter } from './frontmatter.js';
+import { parseFrontmatterStrict } from './frontmatter.js';
 
 const SCOPE_MAP_FIELD_NAMES = ['allowed_paths', 'expected_files'];
 
@@ -61,7 +61,11 @@ export function isFileInScope(file, patterns) {
 }
 
 export function parseScopePatterns(issueBody) {
-  const [frontmatter] = parseFrontmatter(String(issueBody ?? ''));
+  const parsed = parseFrontmatterStrict(String(issueBody ?? ''));
+  if (parsed.state === 'malformed') {
+    return { fieldName: null, patterns: null, error: `task frontmatter is malformed (${parsed.reason})` };
+  }
+  const frontmatter = parsed.data;
   if (!frontmatter) return null;
 
   for (const fieldName of SCOPE_MAP_FIELD_NAMES) {

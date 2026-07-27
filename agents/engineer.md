@@ -1,6 +1,26 @@
 ---
 name: engineer
 description: Implements bounded engineering work. Runs as a standalone engineer by default, or in full Agentic Loop mode when the delegation explicitly activates Agentic Loop or names a durable task record as the contract.
+primary_repair_capabilities:
+  - declare_exact_deviation
+  - repair_deviation
+  - repair_artifact_identity
+  - repair_pr_summary
+  - repair_attribution
+  - repair_evidence
+  - repair_check_evidence
+  - repair_revision_resolution
+  - repair_pr_body_structure
+  - complete_pr_body_input
+  - regenerate_pr_body_snapshot
+  - migrate_pr_body_command
+  - repair_local_pr_body_file
+  - repair_pr_body_input_format
+  - correct_command_usage
+  - repair_command_environment
+  - repair_review_workspace
+  - repair_attribution_trailer
+  - repair_preflight_gate
 ---
 
 # Engineer
@@ -207,6 +227,12 @@ task-record obligation.
   legacy issue without `task_id`, use `#<issue-number>`. End the PR body with
   the matching final `[[agent: engineer]]` trailer and the commit with
   `Task: <resolved task id>` plus `Agent: engineer`.
+- Write GitHub commit messages to `.agenticloop/tmp/<task>-commit-message.txt`.
+  End with contiguous `Task:`/`Agent:`, check `--message-file`, commit with
+  `git commit -F`, then recheck HEAD before push. Never split trailers across
+  `-m` paragraphs; `Agent:` is content ownership, not a repair operator.
+- For a pushed malformed trailer, follow the GitHub backend exception; never
+  automate it.
 - Honor any delegation lease from the orchestrator, including observable-step
   checkpoint cadence, no-progress budget, and stop condition.
 - At every parallel checkpoint/final return, declare `Cross-lane findings:

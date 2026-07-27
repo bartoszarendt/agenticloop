@@ -28,8 +28,8 @@ import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
 import { markdownSection, topLevelListItems, markdownLines } from './markdown.js';
 import { validateGitHubVerificationAttempts } from './verification-learning.js';
 import { createLocalVerificationContext } from './verification-context.js';
-import { parseFrontmatter } from './frontmatter.js';
-import { githubAttributionShape, resolveGitHubTaskIdentity } from './github-task-identity.js';
+import { parseFrontmatterStrict } from './frontmatter.js';
+import { githubAttributionShape, resolveGitHubTaskIdentity, resolveGitHubTaskIdentityStrict } from './github-task-identity.js';
 import {
   loadProjectMap,
   resolveProjectReviewBudget,
@@ -67,6 +67,10 @@ import {
   createPreparationInput,
   evaluatePreparationInput,
 } from './preparation-input.js';
+import { deriveTaskContractLifecycle, parseTaskContractRecords, taskContractDigest, validateTaskContractBaseline, validateTrustedTaskContractRecords } from './task-contract-baseline.js';
+import { normalizeGitHubCommentCarriers } from './github-comment-carrier.js';
+import { resolveTrustedTaskContractActors } from './trusted-actors.js';
+import { createDiagnostic, preflightDiagnosticCode, repairPolicyFor } from './repair-policy.js';
 
 export class PreflightError extends Error {
   constructor(message) {
@@ -111,9 +115,13 @@ export function extractSectionBody(markdown, heading) {
  */
 export function parseReviewBudget(taskBody, projectMapConfig = null) {
   const raw = String(taskBody ?? '');
-  const [frontmatter] = parseFrontmatter(raw);
+  const strict = parseFrontmatterStrict(raw);
+  const frontmatter = strict.data;
   const occurrences = countTaskBudgetFieldOccurrences(raw, 'review_budget');
   const projectBudget = resolveProjectReviewBudget(projectMapConfig);
+  if (strict.state === 'malformed') {
+    return { ...projectBudget, error: `task frontmatter is malformed (${strict.reason})` };
+  }
   if (occurrences > 1) return { budget: projectBudget.budget, error: 'task record has duplicate review_budget frontmatter fields' };
   if (!frontmatter || !Object.hasOwn(frontmatter, 'review_budget')) {
     return projectBudget;
@@ -126,6 +134,11 @@ export function parseReviewBudget(taskBody, projectMapConfig = null) {
 
 /** Read the equivalent-attempt budget from GitHub task metadata. */
 export function parseAttemptBudget(taskBody, projectMapConfig = null) {
+  const strict = parseFrontmatterStrict(String(taskBody ?? ''));
+  if (strict.state === 'malformed') {
+    const fallback = resolveTaskAttemptBudget('', projectMapConfig);
+    return { ...fallback, error: `task frontmatter is malformed (${strict.reason})` };
+  }
   return resolveTaskAttemptBudget(taskBody, projectMapConfig);
 }
 
@@ -273,8 +286,7 @@ export function parseRequiredChecks(issueBody) {
  * Validate task-owned required-check declarations before any evidence or
  * status-check satisfaction path runs.
  *
- * @returns {{ index: number, check: string, reason: string, category: 'task_policy',
- *             owner: 'maintainer', nextAction: string }[]}
+ * @returns {{ index: number, check: string, reason: string, category: 'task_policy' }[]}
  */
 export function validateRequiredCheckContracts(requiredChecks) {
   const checks = Array.isArray(requiredChecks) ? requiredChecks : [];
@@ -284,8 +296,6 @@ export function validateRequiredCheckContracts(requiredChecks) {
     check: checks[index]?.text ?? '<unknown required check>',
     reason,
     category: 'task_policy',
-    owner: 'maintainer',
-    nextAction: 'repair the linked task required-check contract before collecting implementation evidence',
   });
 
   for (const [index, check] of checks.entries()) {
@@ -1145,31 +1155,11 @@ export function categorizePreflightErrors(errors) {
     .map(([category, errors]) => ({ category, errors }));
 }
 
-export const PREFLIGHT_DIAGNOSTIC_OWNERS = Object.freeze({
-  head_identity: 'engineer',
-  summary_shape: 'engineer',
-  scope_deviations: 'engineer',
-  task_contract: 'maintainer',
-  path_intent: 'maintainer',
-  generated_paths: 'maintainer',
-  dependencies: 'orchestrator',
-  attribution: 'engineer',
-  evidence: 'engineer',
-  // Most check-evidence failures belong to the Engineer. The missing task-owned
-  // Required Checks section is reassigned to the Maintainer below.
-  checks: 'engineer',
-  task_policy: 'maintainer',
-  review_checkpoint: 'maintainer',
-  revision_resolution: 'engineer',
-  review_provenance: 'maintainer',
-  other: 'maintainer',
-});
-
 const UNMAPPED_PREFLIGHT_DIAGNOSTIC_CATEGORIES = PREFLIGHT_DIAGNOSTIC_CATEGORIES.filter(
-  category => !Object.hasOwn(PREFLIGHT_DIAGNOSTIC_OWNERS, category)
+  category => !repairPolicyFor(preflightDiagnosticCode(category)).repairKind
 );
 if (UNMAPPED_PREFLIGHT_DIAGNOSTIC_CATEGORIES.length > 0) {
-  throw new Error(`preflight diagnostic categories lack owner routing: ${UNMAPPED_PREFLIGHT_DIAGNOSTIC_CATEGORIES.join(', ')}`);
+  throw new Error(`preflight diagnostic categories lack repair kinds: ${UNMAPPED_PREFLIGHT_DIAGNOSTIC_CATEGORIES.join(', ')}`);
 }
 
 /**
@@ -1183,20 +1173,18 @@ function normalizePreflightDiagnostics(items) {
     const message = typeof item === 'string' ? item : item.message;
     const inferredCategory = categorizePreflightErrors([item])[0]?.category ?? 'other';
     const category = typeof item === 'object' && item.category ? item.category : inferredCategory;
-    const owner = category === 'checks'
-      ? (/has no non-empty '## Required Checks' section/.test(message) ? 'maintainer' : 'engineer')
-      // This fallback is defensive for an externally supplied explicit
-      // category. Canonical categories are exhaustively checked above.
-      : (PREFLIGHT_DIAGNOSTIC_OWNERS[category] ?? 'maintainer');
-    /** @type {{ category: string, message: string, owner?: string, nextAction?: string, expectedShape?: string, expectedValues?: string[], requiredFindingIds?: string[] }} */
-    const diagnostic = {
-      category,
+    const code = typeof item === 'object' && typeof item.code === 'string'
+      ? item.code
+      : category === 'checks' && /has no non-empty '## Required Checks' section/.test(message)
+        ? 'preflight.checks.task_contract'
+        : preflightDiagnosticCode(category);
+    const diagnostic = createDiagnostic({
+      code,
       message,
-      owner: typeof item === 'object' && typeof item.owner === 'string'
-        ? item.owner
-        : owner,
-    };
-    if (typeof item === 'object' && typeof item.nextAction === 'string') diagnostic.nextAction = item.nextAction;
+      evidence: typeof item === 'object' && item.evidence && typeof item.evidence === 'object'
+        ? item.evidence
+        : {},
+    });
     if (typeof item === 'object' && typeof item.expectedShape === 'string') {
       diagnostic.expectedShape = item.expectedShape;
     }
@@ -1269,6 +1257,38 @@ export function evaluatePreflight({
   if (attemptBudget.error) {
     errors.push({ message: attemptBudget.error, category: 'task_policy' });
   }
+  const strictTaskIdentity = resolveGitHubTaskIdentityStrict(issueData);
+  if (!strictTaskIdentity.ok) errors.push(strictTaskIdentity.diagnostic);
+  const trustedActorConfig = resolveTrustedTaskContractActors(projectMapConfig);
+  for (const message of trustedActorConfig.errors) errors.push({ message, category: 'task_contract' });
+  for (const message of trustedActorConfig.warnings) warnings.push(message);
+  const trustedActors = trustedActorConfig.actors;
+  const parsedCarrierRecords = parseTaskContractRecords(normalizeGitHubCommentCarriers(issueData?.comments, { trustedActors }));
+  const trustedCarrierRecords = validateTrustedTaskContractRecords(parsedCarrierRecords.parsedRecords, {
+    taskId: taskContractDigest(issueData?.body).projection?.task_id,
+    trustedActors,
+  });
+  const contractBaseline = validateTaskContractBaseline(issueData?.body, {
+    lifecycle: deriveTaskContractLifecycle(issueData?.body),
+    trustedRecords: trustedCarrierRecords.trustedRecords,
+    trustedRecordErrors: [...parsedCarrierRecords.parseErrors, ...trustedCarrierRecords.errors],
+  });
+  for (const message of [...(parsedCarrierRecords.parseWarnings ?? []), ...(trustedCarrierRecords.warnings ?? [])]) {
+    warnings.push(message);
+  }
+  for (const message of contractBaseline.errors) {
+    errors.push(createDiagnostic({
+      code: message.includes('differs from the trusted baseline')
+        ? 'contract.baseline.stale'
+        : message.includes('trusted task-contract baseline record')
+          ? 'contract.baseline.missing'
+          : 'contract.baseline.invalid',
+      message,
+    }));
+  }
+  for (const message of contractBaseline.warnings) {
+    warnings.push(createDiagnostic({ code: 'contract.baseline.missing', message, level: 'warning' }));
+  }
 
   if (!headRefOid) {
     errors.push('PR head commit (headRefOid) is unavailable; cannot verify evidence freshness');
@@ -1340,8 +1360,6 @@ export function evaluatePreflight({
       errors.push({
         message,
         category: item.category,
-        owner: item.owner,
-        nextAction: item.nextAction,
       });
     } else {
       errors.push(item.reason.startsWith('unrecognized verdict ')
@@ -1381,7 +1399,7 @@ export function evaluatePreflight({
   if (scopePatterns) {
     if (scopePatterns.error) {
       errors.push({ message: scopePatterns.error, category: 'scope_deviations' });
-    } else if (scopePatterns.patterns) {
+    } else if (scopePatterns.patterns && !pathInventoryRequired) {
       for (const err of deviations.errors) {
         errors.push({ message: err, category: 'scope_deviations' });
       }
@@ -1395,11 +1413,12 @@ export function evaluatePreflight({
       mode: mode ?? 'review',
       changedPaths: prFiles,
       deviationEntries: deviations.entries,
+      deviationErrors: deviations.errors,
       projectFacts,
     });
     for (const diagnostic of taskReadiness.diagnostics) {
       const target = diagnostic.level === 'error' ? errors : warnings;
-      target.push({ message: diagnostic.message, category: diagnostic.category, owner: diagnostic.owner, nextAction: diagnostic.nextAction });
+      target.push(diagnostic);
     }
   }
   if (scopePatterns?.patterns && prFiles.length > 0 && !taskReadiness?.deviations) {
@@ -1413,7 +1432,7 @@ export function evaluatePreflight({
   // into structured ownership, the exact current PR file list must also stay
   // inside its exclusive ownership or its declared exact shared mutations.
   const ownership = parseOwnershipDeclaration(issueData?.body);
-  const [taskFrontmatter] = parseFrontmatter(String(issueData?.body ?? ''));
+  const taskFrontmatter = parseFrontmatterStrict(String(issueData?.body ?? '')).data;
   const integratedBy = typeof taskFrontmatter?.integrated_by === 'string'
     ? taskFrontmatter.integrated_by.trim()
     : '';
@@ -1610,6 +1629,11 @@ export function evaluatePreflight({
     summaryValidation: { errors: summaryValidation.errors.map(e => typeof e === 'string' ? e : e.message) },
     attributionValidation: { established: attributionValidation.attributionEstablished, errors: attributionValidation.errors },
     attemptBudget: { budget: attemptBudget.budget, source: attemptBudget.source ?? 'task' },
+    contractBaseline: {
+      ok: contractBaseline.ok,
+      digest: contractBaseline.digest,
+      baseline: contractBaseline.baseline,
+    },
     reviewHistory: { events: historyEvents.length, errors: durableHistory?.errors ?? [] },
     checkpointValidation: checkpointValidation ? { authorized: checkpointValidation.authorized, errors: checkpointValidation.errors } : null,
     noProgressValidation: {
@@ -1620,7 +1644,6 @@ export function evaluatePreflight({
       errors: noProgressValidation.errors,
     },
     resolutionMatrixValidation: resolutionMatrixValidation ? { valid: resolutionMatrixValidation.valid, errors: resolutionMatrixValidation.errors } : null,
-    firstSafeRepair: ok ? null : (normalizePreflightDiagnostics(errors)[0]?.nextAction ?? 'repair the first diagnostic and rerun github-preflight'),
   };
 }
 

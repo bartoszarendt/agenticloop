@@ -4,6 +4,9 @@ import { readFileSync } from 'node:fs';
 import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
 import { loadPreflightInput, evaluatePreflight } from './github-preflight.js';
 import { evaluatePreparationInput } from './preparation-input.js';
+import { presentDiagnostics } from './diagnostic-presentation.js';
+import { createDiagnostic } from './repair-policy.js';
+import { getProjectRoleCapabilities } from './role-capabilities.js';
 import { taskRequiresIndependentReview, validateReviewWorkspace } from './github-review-audit.js';
 
 const REVIEW_PACKET_TYPE = 'agenticloop.github_review_preparation';
@@ -115,6 +118,18 @@ function validateReviewPacketShape(packet, expectedPr) {
   if (!String(packet.lease ?? '').trim()) {
     errors.push('packet lease must be nonempty');
   }
+  if (Object.hasOwn(packet, 'taskContract')) {
+    const contract = packet.taskContract;
+    if (!contract || typeof contract !== 'object' || Array.isArray(contract)) {
+      errors.push('packet taskContract must be an object when present');
+    } else {
+      for (const key of ['digest', 'baseline']) {
+        if (contract[key] !== null && contract[key] !== undefined && typeof contract[key] !== 'string') {
+          errors.push(`packet taskContract ${key} must be a string or null`);
+        }
+      }
+    }
+  }
   return {
     valid: errors.length === 0,
     stale: false,
@@ -124,60 +139,66 @@ function validateReviewPacketShape(packet, expectedPr) {
   };
 }
 
-function ownerFor(category) {
-  if (category === 'review_checkpoint') return 'orchestrator';
-  if (category === 'task_policy' || category === 'preparation_input') return 'maintainer';
-  if (category === 'attribution' || category === 'evidence' || category === 'checks' || category === 'scope_deviations' || category === 'revision_resolution') return 'engineer';
-  return 'maintainer';
-}
-
-function routeDiagnostics(result) {
+function routeDiagnostics(facts, capabilities) {
+  const diagnostics = presentDiagnostics(facts, capabilities);
   const grouped = new Map();
-  for (const diagnostic of result.diagnostics ?? []) {
-    const owner = diagnostic.owner ?? ownerFor(diagnostic.category);
+  for (const diagnostic of diagnostics) {
+    const owner = diagnostic.owner;
+    if (!owner) {
+      throw new GitHubReviewPrepareError(
+        `diagnostic '${String(diagnostic.code ?? diagnostic.category ?? 'unknown')}' has no capability-derived owner`
+      );
+    }
     if (!grouped.has(owner)) grouped.set(owner, []);
-    grouped.get(owner).push({ ...diagnostic, owner, nextAction: diagnostic.nextAction ?? 'repair this deterministic gate failure and rerun github-review-prepare' });
+    grouped.get(owner).push(diagnostic);
   }
-  return Object.fromEntries([...grouped].map(([owner, diagnostics]) => [owner, diagnostics]));
+  return {
+    diagnostics,
+    ownerRouting: Object.fromEntries([...grouped].map(([owner, owned]) => [owner, owned])),
+  };
 }
 
 export function runGitHubReviewPrepare({ pr, workspace, packet: packetPath, ...options } = {}) {
   if (packetPath) return verifyReviewPacket({ pr, packet: packetPath, ...options });
   const loaded = loadPreflightInput({ pr, ...options, includeBasePaths: true });
   const result = evaluatePreparationInput(loaded.input, evaluatePreflight, { referenceResolvers: loaded.referenceResolvers });
+  const capabilities = getProjectRoleCapabilities(options.target ?? process.cwd());
   // The exact head is resolved from the complete current PR state immediately
   // before packet creation and stamped on every result.
   const head = String(loaded.input.prData.headRefOid ?? '').toLowerCase();
   const workspaceResult = workspace
     ? validateReviewWorkspace({ workspace, expectedArtifact: head })
     : { provided: false, valid: true, workspace: null, head: null };
-  const workspaceDiagnostics = workspaceResult.error
-    ? [{ message: workspaceResult.error, category: 'workspace', owner: 'engineer', nextAction: 'repair the workspace so it matches the exact review head before dispatch' }]
+  const workspaceFacts = workspaceResult.error
+    ? [createDiagnostic({
+      code: 'review_prepare.workspace',
+      message: workspaceResult.error,
+      repairHint: 'Repair the workspace so it matches the exact review head before dispatch.',
+    })]
     : [];
   if (!result.ok || workspaceResult.error) {
-    const errors = [...(result.errors ?? []), ...workspaceDiagnostics.map(d => d.message)];
-    const routed = routeDiagnostics(result);
-    // Workspace failures are part of structured diagnostics and owner routing,
-    // never silently dropped.
-    if (workspaceDiagnostics.length) {
-      const existing = routed.engineer ?? [];
-      routed.engineer = [...existing, ...workspaceDiagnostics];
-    }
+    const errors = [...(result.errors ?? []), ...workspaceFacts.map(d => d.message)];
+    const routed = routeDiagnostics([...(result.diagnostics ?? []), ...workspaceFacts], capabilities);
     return {
       schemaVersion: 1, ok: false, pr: loaded.input.prData.number, issue: loaded.input.issueData.number,
-      headRefOid: head, errors, warnings: result.warnings ?? [], diagnostics: [...(result.diagnostics ?? []), ...workspaceDiagnostics],
-      ownerRouting: routed, packet: null,
-      firstSafeRepair: workspaceDiagnostics[0]?.nextAction ?? result.firstSafeRepair ?? 'repair the deterministic gate failures before any Maintainer dispatch',
+      headRefOid: head, errors, warnings: result.warnings ?? [], diagnostics: routed.diagnostics,
+      ownerRouting: routed.ownerRouting, packet: null,
+      firstSafeRepair: routed.diagnostics[0]?.nextAction ?? null,
     };
   }
   const independence = taskRequiresIndependentReview(loaded.input.issueData.body);
   if (independence.errors?.length) {
+    const facts = independence.errors.map(message => createDiagnostic({
+      code: 'preflight.task_policy',
+      message,
+      repairHint: 'Repair the independent-review task contract before review dispatch.',
+    }));
+    const routed = routeDiagnostics(facts, capabilities);
     return {
       schemaVersion: 1, ok: false, pr: loaded.input.prData.number, issue: loaded.input.issueData.number,
       headRefOid: head, errors: independence.errors, warnings: result.warnings ?? [],
-      diagnostics: independence.errors.map(message => ({ message, category: 'task_policy', owner: 'maintainer' })),
-      ownerRouting: { maintainer: independence.errors.map(message => ({ message, category: 'task_policy', owner: 'maintainer' })) }, packet: null,
-      firstSafeRepair: 'Maintainer must repair the independent-review task contract before review dispatch.',
+      diagnostics: routed.diagnostics, ownerRouting: routed.ownerRouting, packet: null,
+      firstSafeRepair: routed.diagnostics[0]?.nextAction ?? null,
     };
   }
   // Immediately before packet emission, refetch the current PR head through
@@ -187,16 +208,19 @@ export function runGitHubReviewPrepare({ pr, workspace, packet: packetPath, ...o
   const freshHead = refetchCurrentHead(commandRunner, loaded.input.prData.number, options.repo);
   const freshness = validateHeadFreshness(head, freshHead);
   if (!freshness.valid) {
-    const diagnostic = {
+    const fact = createDiagnostic({
+      code: 'review_prepare.stale_head',
       message: freshness.stale
         ? `evaluated head ${head} differs from the current PR head ${freshHead}; the preparation is stale and no packet is emitted`
         : `cannot confirm packet freshness: ${freshness.reason}`,
-      category: 'stale_head', owner: 'orchestrator', nextAction: 'rerun github-review-prepare against the current head before any Maintainer dispatch',
-    };
+      repairHint: 'Rerun github-review-prepare against the current head before review dispatch.',
+    });
+    const routed = routeDiagnostics([fact], capabilities);
+    const diagnostic = routed.diagnostics[0];
     return {
       schemaVersion: 1, ok: false, pr: loaded.input.prData.number, issue: loaded.input.issueData.number,
       headRefOid: head, errors: [diagnostic.message], warnings: result.warnings ?? [],
-      diagnostics: [diagnostic], ownerRouting: { orchestrator: [diagnostic] }, packet: null,
+      diagnostics: routed.diagnostics, ownerRouting: routed.ownerRouting, packet: null,
       firstSafeRepair: diagnostic.nextAction,
     };
   }
@@ -209,11 +233,15 @@ export function runGitHubReviewPrepare({ pr, workspace, packet: packetPath, ...o
     workspace: workspaceResult.provided ? { path: workspaceResult.workspace, head: workspaceResult.head, verified: true } : null,
     currentFindingIds: prior?.findingIds ?? [],
     preflight: { ok: true, digest: { requiredChecks: result.requiredChecks.length, evidenceMatches: result.evidenceMatches.length, headRefOid: head } },
+    taskContract: {
+      digest: result.contractBaseline?.digest ?? null,
+      baseline: result.contractBaseline?.baseline ?? null,
+    },
     lease: 'Review this exact head read-only. Do not mutate the branch, PR body, comments, task contract, or GitHub state while reviewing. A head change invalidates this packet.',
   };
   return {
     schemaVersion: 1, ok: true, pr: packet.pr, issue: packet.task, headRefOid: head,
-    errors: [], warnings: result.warnings ?? [], diagnostics: result.warningDiagnostics ?? [], ownerRouting: {}, packet,
+    errors: [], warnings: result.warnings ?? [], diagnostics: presentDiagnostics(result.warningDiagnostics ?? [], capabilities), ownerRouting: {}, packet,
     firstSafeRepair: null,
   };
 }
@@ -235,7 +263,7 @@ export function validateReviewPacket(packet, currentHead, options = {}) {
  * current PR head read-only, and rejects stale, missing, malformed, or
  * mismatched packets. It never writes GitHub or local state.
  */
-export function verifyReviewPacket({ pr, packet, commandRunner = defaultGhCommandRunner, repo } = {}) {
+export function verifyReviewPacket({ pr, packet, commandRunner = defaultGhCommandRunner, repo, target = process.cwd() } = {}) {
   const prNumber = Number(pr);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
     throw new GitHubReviewPrepareError(`--pr must be a positive integer, got '${pr}'`);
@@ -247,40 +275,54 @@ export function verifyReviewPacket({ pr, packet, commandRunner = defaultGhComman
   } catch (error) {
     parseError = error.message;
   }
+  const capabilities = getProjectRoleCapabilities(target);
   if (parseError) {
-    const diagnostic = { message: `review packet is not readable JSON: ${parseError}`, category: 'review_packet', owner: 'orchestrator', nextAction: 'regenerate the packet with github-review-prepare before dispatch' };
+    const routed = routeDiagnostics([createDiagnostic({
+      code: 'review_prepare.packet',
+      message: `review packet is not readable JSON: ${parseError}`,
+      repairHint: 'Regenerate the packet with github-review-prepare before dispatch.',
+    })], capabilities);
+    const diagnostic = routed.diagnostics[0];
     return {
       schemaVersion: 1, ok: false, pr: prNumber, headRefOid: null,
-      errors: [diagnostic.message], warnings: [], diagnostics: [diagnostic],
-      ownerRouting: { orchestrator: [diagnostic] },
+      errors: [diagnostic.message], warnings: [], diagnostics: routed.diagnostics,
+      ownerRouting: routed.ownerRouting,
       packetCheck: { valid: false, stale: false, reason: 'packet is malformed' },
       packet: null, firstSafeRepair: diagnostic.nextAction,
     };
   }
   const shape = validateReviewPacketShape(parsed, prNumber);
   if (!shape.valid) {
-    const diagnostic = { message: `review packet rejected before dispatch: ${shape.reason}`, category: 'review_packet', owner: 'orchestrator', nextAction: 'regenerate the packet with github-review-prepare before dispatch' };
+    const routed = routeDiagnostics([createDiagnostic({
+      code: 'review_prepare.packet',
+      message: `review packet rejected before dispatch: ${shape.reason}`,
+      repairHint: 'Regenerate the packet with github-review-prepare before dispatch.',
+    })], capabilities);
+    const diagnostic = routed.diagnostics[0];
     return {
       schemaVersion: 1, ok: false, pr: prNumber, headRefOid: null,
-      errors: [diagnostic.message], warnings: [], diagnostics: [diagnostic],
-      ownerRouting: { orchestrator: [diagnostic] },
+      errors: [diagnostic.message], warnings: [], diagnostics: routed.diagnostics,
+      ownerRouting: routed.ownerRouting,
       packetCheck: shape, packet: null, firstSafeRepair: diagnostic.nextAction,
     };
   }
   const currentHead = refetchCurrentHead(commandRunner, prNumber, repo);
   const check = validateReviewPacket(parsed, currentHead, { expectedPr: prNumber });
-  const diagnostics = [];
+  const facts = [];
   if (!check.valid) {
-    diagnostics.push({
+    facts.push(createDiagnostic({
+      code: 'review_prepare.stale_head',
       message: `review packet rejected before dispatch: ${check.reason}`,
-      category: 'stale_head', owner: 'orchestrator', nextAction: 'regenerate the packet with github-review-prepare before dispatch',
-    });
+      repairHint: 'Regenerate the packet with github-review-prepare before dispatch.',
+    }));
   }
+  const routed = routeDiagnostics(facts, capabilities);
+  const diagnostics = routed.diagnostics;
   const ok = diagnostics.length === 0;
   return {
     schemaVersion: 1, ok, pr: prNumber, headRefOid: currentHead,
     errors: diagnostics.map(item => item.message), warnings: [], diagnostics,
-    ownerRouting: ok ? {} : { orchestrator: diagnostics },
+    ownerRouting: routed.ownerRouting,
     packetCheck: check, packet: ok ? parsed : null,
     firstSafeRepair: ok ? null : diagnostics[0].nextAction,
   };

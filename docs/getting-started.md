@@ -307,6 +307,15 @@ Agents use the typed selections from `.agenticloop/project.md`. When a role is
 not selected, they use the bounded candidate names from the canonical registry.
 They do not scan the whole repository at runtime.
 
+For the GitHub backend, `trusted_task_contract_actors` optionally lists the
+GitHub logins whose task-contract record comments are trusted. When present it
+must be a non-empty list of valid logins; comparison is case-insensitive and
+duplicates, empty entries, and malformed logins fail validation. Without it,
+repository OWNER, MEMBER, and COLLABORATOR associations are trusted with an
+explicit compatibility warning. The
+legacy `github_trusted_actors` key is deprecated and honored with a
+deprecation warning; prefer the canonical field.
+
 `setup_status: unconfirmed` means the project map still needs review.
 `setup_status: confirmed` requires a human-confirmed `development_stage` of
 `greenfield`, `expansion`, `stabilization`, or `maintenance`; it means the

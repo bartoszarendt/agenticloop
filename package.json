@@ -75,6 +75,7 @@
   ],
   "devDependencies": {
     "@types/node": "^22.20.1",
+    "ts5": "npm:typescript@^5.9.2",
     "typescript": "^7.0.2"
   }
 }
