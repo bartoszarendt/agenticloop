@@ -18,12 +18,16 @@ This skill is **parked and optional**. It is not part of [[task-closeout]] and d
 ## Workflow
 
 1. **Gather signals.** Read the local `.agenticloop/logs/<TASK-ID>.jsonl` event log entries (when event logging is enabled and files exist), blocked and needs_context events, recorded block categories, review-result events across rounds, and recurring follow-up task topics. Do not reconstruct friction from task completion summaries or copy raw agent exchanges into docs.
-2. **Find recurring patterns.** Treat repeated check failures, repeated block categories, repeated review rounds, and repeated follow-up themes as candidates. Do not turn one-off noise into new process.
+2. **Find recurring patterns.** Treat repeated check failures, repeated block categories, repeated review rounds, and repeated follow-up themes as candidates. Do not turn one-off noise into new process. One directly evidenced required-gate bypass, fabrication, or material misordering is the narrow serious-incident exception: create one durable improvement proposal without waiting for repetition.
 3. **Choose one durable artifact per pattern.**
    - Update a skill when the pattern is a recurring agent behavior or rationalization.
    - Add a docs entry when the pattern is a durable out-of-scope decision, known limitation, or operational note.
    - File a follow-up task record when the pattern requires implementation or human decision.
 4. **Keep provenance visible.** Cite grouping ids when relevant, task ids, artifact references, and command evidence. Do not promote interpretation into fact without evidence.
+
+For the serious-incident exception, use `npx agenticloop improvement new` with
+both the audit reference and the erroneous marker/carrier reference. Proposal
+creation is collision-safe and proposal-only; it never changes the target surface.
 
 ## Anti-pattern
 

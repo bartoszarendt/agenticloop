@@ -89,12 +89,21 @@ const TOLERANCE = 0.05;
 // Claude Code's narrow reference-library headroom predates this workflow and
 // remains a separate consolidation concern rather than being hidden by this
 // rebase.
+// The auditor wire-format completion pass deliberately rebases the
+// agentDefinitions baseline for all five adapters: every host's generated
+// orchestrator guidance now requires persisting the returned
+// `auditor_report_v1` object through `agenticloop audit report` without
+// rewriting findings, alongside the existing fresh-delegation and
+// no-same-session audit rules. Claude Code also moves on generatedPayload and
+// referenceLibrary because those surfaces package the same canonical contract.
+// These are measured multi-surface baselines, not a Claude-only "+37 words"
+// adjustment and not duplicate workflow teaching.
 const ADAPTERS = [
-  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 11005, agentDefinitions: 10185, activationSurface: 687 } },
-  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 62199, agentDefinitions: 10757, activationSurface: 977, referenceLibrary: 49672 } },
-  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 47775, agentDefinitions: 9542, activationSurface: 1568, referenceLibrary: 36244 } },
-  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 60057, agentDefinitions: 10371, activationSurface: 978, referenceLibrary: 47919 } },
-  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 59845, agentDefinitions: 10357, activationSurface: 786, referenceLibrary: 47919 } },
+  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 11005, agentDefinitions: 10727, activationSurface: 687 } },
+  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 62199, agentDefinitions: 11303, activationSurface: 977, referenceLibrary: 49672 } },
+  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 50201, agentDefinitions: 10084, activationSurface: 1568, referenceLibrary: 38456 } },
+  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 60057, agentDefinitions: 10913, activationSurface: 978, referenceLibrary: 47919 } },
+  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 59845, agentDefinitions: 10899, activationSurface: 786, referenceLibrary: 47919 } },
 ];
 
 let tmpDir;

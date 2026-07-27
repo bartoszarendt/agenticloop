@@ -665,8 +665,8 @@ comment before or during closeout.
 Closeout is a verify-and-mark gate; it does not publish a separate summary
 artifact. When a human-identified task set or configured group finishes, confirm
 each task's inline PR-body summary and evidence are complete, then post the
-closeout status marker as a comment on the last task issue or PR in the work unit
-(or on the tracking issue when one exists), citing the covered task ids:
+closeout status marker through `closeout prepare` then `closeout record` as a
+comment on the resolved covered-task issue carrier, citing the covered task ids:
 
 ```text
 AGENT_CLOSEOUT_STATUS: complete
@@ -675,6 +675,26 @@ AGENT_CLOSEOUT_STATUS: follow_up_required
 
 An exceptional verification episode that does not end in a pass or final
 non-blocker maintainer triage blocks `AGENT_CLOSEOUT_STATUS: complete`.
+
+The adapter inventories open and closed issues with configured task identity
+rules, requires one trusted authenticated Agentic Loop account for marker
+publication, and treats only that account's current non-fenced marker as
+idempotent. It retains historical comments and posts a superseding correction
+instead of editing history away. Immediately before the one remote mutation it
+re-fetches task inventory, carrier comments, and marker resolution. GitHub cannot
+make that cross-resource recheck atomic; a residual remote TOCTOU window remains
+visible in command output.
+
+Task identity is globally unique across open and closed issues: duplicate or
+contradictory carriers fail validation, `github-ready`, audit, and closeout
+with every conflicting issue number, and an incomplete inventory is an explicit
+`inventory_incomplete` state, never a partial pass. Terminal closeout also
+proves the pull-request lifecycle for every covered task: one review-accepted,
+merged PR that carries the closing relationship to the correct issue and lands
+the certified candidate merge artifact. A merely closed issue without that
+relationship cannot complete, and a merged PR closing the wrong issue cannot
+complete. Each command fetches one issue-inventory snapshot and reuses it for
+every evaluator; only the intentional final pre-mutation refresh reads again.
 
 Before the final audit freeze, route conditional selected-plan progress
 synchronization to the single-writer Maintainer closeout lane under

@@ -84,6 +84,7 @@ if (isMain || isGhBinary) {
   const out = value => { process.stdout.write(JSON.stringify(value)); process.exit(0); };
   const fail = message => { process.stderr.write(message); process.exit(1); };
   if (args[0] === 'pr' && args[1] === 'view') out(fx.prData);
+  if (args[0] === 'issue' && args[1] === 'list') out(fx.issues || []);
   if (args[0] === 'issue' && args[1] === 'view') out(fx.issueData);
   if (args[0] === 'repo' && args[1] === 'view') out({ nameWithOwner: fx.repo });
   if (args[0] === 'api') {
@@ -382,5 +383,185 @@ describe('packed package smoke tests', () => {
     const result = runPacked(['init', '--target', target, '--unknown-flag']);
     assert.equal(result.status, 2);
     assert.deepEqual(readdirSync(target), ['README.md'], 'invalid usage must not mutate');
+  });
+});
+
+describe('packed audit, closeout, and improvement flows', () => {
+  const FULL = 'a'.repeat(40);
+
+  function git(target, args) {
+    const result = spawnSync('git', args.split(' '), { cwd: target, encoding: 'utf-8' });
+    if (result.status !== 0) throw new Error(`git ${args} failed: ${result.stderr}`);
+    return result.stdout.trim();
+  }
+
+  // A files-backend target in a path containing spaces, exercising Windows
+  // quoting through the packed binary.
+  function makeFlowTarget(name) {
+    const parent = mkdtempSync(join(tmpBase, `${name} dir with spaces-`));
+    const target = join(parent, 'target project');
+    mkdirSync(join(target, '.agenticloop', 'audits'), { recursive: true });
+    mkdirSync(join(target, '.agenticloop', 'tasks'), { recursive: true });
+    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
+    writeFileSync(join(target, '.agenticloop', 'project.md'), [
+      '---',
+      'setup_status: confirmed',
+      'development_stage: expansion',
+      'task_backend: files',
+      'work_unit_audit: enabled',
+      'grouping_profile: milestone',
+      '---',
+      '',
+      '# Project',
+      '',
+    ].join('\n'), 'utf-8');
+    git(target, 'init -q');
+    git(target, 'config user.email test@example.com');
+    git(target, 'config user.name Test');
+    writeFileSync(join(target, 'app.js'), 'export const v = 1;\n', 'utf-8');
+    writeFileSync(join(target, '.gitignore'), '.agenticloop/tmp/\n', 'utf-8');
+    git(target, 'add -A');
+    git(target, 'commit -qm init');
+    writeFileSync(join(target, '.agenticloop', 'tasks', 'T-001.md'), [
+      '---', 'task_id: T-001', 'status: accepted', '---', '',
+      '# T-001', '', '## Grouping', '', 'milestone:M00', '', '## Comments', '', '',
+    ].join('\n'), 'utf-8');
+    git(target, 'add -A');
+    git(target, 'commit -qm task');
+    return target;
+  }
+
+  function wireReport(artifact, coveredTasks, reference) {
+    return {
+      report_schema: 'auditor_report_v1',
+      artifact,
+      covered_tasks: coveredTasks,
+      invocation: { mode: 'host_subagent', reference, provenance: 'asserted' },
+      perspectives: Object.fromEntries(
+        ['outcome', 'completeness', 'integration_coherence', 'engineering_quality', 'verification', 'risk']
+          .map(key => [key, `${key} body.`])
+      ),
+      assessment: 'Consolidated.',
+      evidence_checked: 'npm test (pass)',
+      verdict: 'certified',
+      findings: [],
+    };
+  }
+
+  it('persists Auditor reports from --file and --stdin through the packed binary', () => {
+    const target = makeFlowTarget('report-flow');
+    const artifact = `commit:${git(target, 'rev-parse HEAD')}`;
+    const created = runPacked([
+      'audit', 'new', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
+      '--artifact', artifact, '--goal', 'g', '--completion-oracle', 'o',
+      '--evidence', 'npm test', '--target', target,
+    ]);
+    assert.equal(created.status, 0, `${created.stdout}${created.stderr}`);
+
+    const reportFile = join(target, '.agenticloop', 'tmp', 'run 1.json');
+    writeFileSync(reportFile, JSON.stringify({
+      ...wireReport(artifact, ['T-001'], 'packed-ref-1'),
+      verdict: 'needs_remediation',
+    }), 'utf-8');
+    const fromFile = runPacked(['audit', 'report', 'AUD-001', '--file', reportFile, '--target', target]);
+    assert.equal(fromFile.status, 0, `${fromFile.stdout}${fromFile.stderr}`);
+    assert.match(fromFile.stdout, /Recorded run 1/);
+
+    const fromStdin = spawnSync(process.execPath, [
+      packedBin, 'audit', 'report', 'AUD-001', '--stdin', '--target', target,
+    ], { encoding: 'utf-8', input: JSON.stringify(wireReport(artifact, ['T-001'], 'packed-ref-2')) });
+    assert.equal(fromStdin.status, 0, `${fromStdin.stdout}${fromStdin.stderr}`);
+    assert.match(fromStdin.stdout, /Recorded run 2/);
+
+    const status = runPacked(['audit', 'status', 'AUD-001', '--json', '--target', target]);
+    assert.equal(status.status, 0, `${status.stdout}${status.stderr}`);
+    assert.equal(JSON.parse(status.stdout).completed_audits, 2);
+  });
+
+  it('runs closeout prepare, record, and status through the packed binary', () => {
+    const target = makeFlowTarget('closeout-flow');
+    const artifact = `commit:${git(target, 'rev-parse HEAD')}`;
+    assert.equal(runPacked([
+      'audit', 'new', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
+      '--artifact', artifact, '--goal', 'g', '--completion-oracle', 'o',
+      '--evidence', 'npm test', '--target', target,
+    ]).status, 0);
+    git(target, 'add -A');
+    git(target, 'commit -qm record-audit');
+    const reportFile = join(target, '.agenticloop', 'tmp', 'run.json');
+    writeFileSync(reportFile, JSON.stringify(wireReport(artifact, ['T-001'], 'packed-closeout-ref')), 'utf-8');
+    assert.equal(runPacked(['audit', 'report', 'AUD-001', '--file', reportFile, '--target', target]).status, 0);
+
+    const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
+    const prepared = runPacked([
+      'closeout', 'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact,
+      '--output', packetPath, '--target', target,
+    ]);
+    assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
+    const recorded = runPacked(['closeout', 'record', '--packet', packetPath, '--yes', '--target', target]);
+    assert.equal(recorded.status, 0, `${recorded.stdout}${recorded.stderr}`);
+    const status = runPacked(['closeout', 'status', '--work-unit', 'milestone:M00', '--target', target]);
+    assert.equal(status.status, 0, `${status.stdout}${status.stderr}`);
+    assert.match(status.stdout, /complete \(current\)/);
+  });
+
+  it('runs improvement new, lint, and status through the packed binary', () => {
+    const target = makeFlowTarget('improvement-flow');
+    const artifact = `commit:${git(target, 'rev-parse HEAD')}`;
+    assert.equal(runPacked([
+      'audit', 'new', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
+      '--artifact', artifact, '--goal', 'g', '--completion-oracle', 'o',
+      '--evidence', 'npm test', '--target', target,
+    ]).status, 0);
+
+    const bad = runPacked([
+      'improvement', 'new', '--title', 'Fabricated', '--source-ref', 'not-a-real-artifact',
+      '--target-surface', 'core-methodology', '--target-path', 'agenticloop/AGENTIC_LOOP.md',
+      '--risk-level', 'low', '--target', target,
+    ]);
+    assert.equal(bad.status, 1);
+    assert.ok(!existsSync(join(target, '.agenticloop', 'improvements')), 'invalid creation leaves no residue');
+
+    const created = runPacked([
+      'improvement', 'new', '--title', 'Real incident', '--source-ref', 'AUD-001',
+      '--target-surface', 'core-methodology', '--target-path', 'agenticloop/AGENTIC_LOOP.md',
+      '--risk-level', 'medium', '--target', target,
+    ]);
+    assert.equal(created.status, 0, `${created.stdout}${created.stderr}`);
+    const lint = runPacked(['improvement', 'lint', '--target', target]);
+    assert.equal(lint.status, 0, `${lint.stdout}${lint.stderr}`);
+    const status = runPacked(['improvement', 'status', '--json', '--target', target]);
+    assert.equal(status.status, 0);
+    assert.equal(JSON.parse(status.stdout).length, 1);
+  });
+
+  it('runs a GitHub-backed audit new through the packed binary with a PATH-shimmed fake gh', { timeout: 120000 }, () => {
+    const target = mkdtempSync(join(tmpBase, 'gh-audit-'));
+    mkdirSync(join(target, '.agenticloop', 'audits'), { recursive: true });
+    mkdirSync(join(target, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(join(target, '.agenticloop', 'project.md'), [
+      '---',
+      'setup_status: confirmed',
+      'development_stage: expansion',
+      'task_backend: github',
+      'work_unit_audit: enabled',
+      'grouping_profile: milestone',
+      '---',
+      '',
+      '# Project',
+      '',
+    ].join('\n'), 'utf-8');
+    const { env, logPath } = installFakeGh(tmpBase, {
+      issues: [{ number: 1, state: 'CLOSED', title: '', labels: [], body: '---\ntask_id: T-001\n---\n' }],
+    });
+    const created = runPacked([
+      'audit', 'new', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
+      '--artifact', `commit:${FULL}`, '--goal', 'g', '--completion-oracle', 'o',
+      '--evidence', 'npm test', '--target', target,
+    ], { env });
+    assert.equal(created.status, 0, `${created.stdout}${created.stderr}`);
+    const invocations = readGhInvocations(logPath).map(args => args.join(' '));
+    assert.ok(invocations.length > 0 && invocations.every(call => call.startsWith('issue list')),
+      `GitHub audit must only read the issue inventory, got: ${invocations.join('; ')}`);
   });
 });

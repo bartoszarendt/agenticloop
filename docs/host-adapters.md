@@ -322,6 +322,10 @@ Codex MVP support is repo-local and skill-first.
 - The main Codex session stays the coordinator/orchestrator. Role work is routed
   through the generated custom agents under `.codex/agents/`, especially
   `maintainer`, `engineer`, and `auditor`.
+- Generated-host smoke checks must delegate one fresh Auditor execution after
+  covered work is integrated, capture its `auditor_report_v1` JSON through a file
+  or stdin, and persist it with `audit report`. Maintainer/Engineer delegation
+  alone does not prove the audit path; an inline same-session audit is invalid.
 - Optional plugin distribution is separate from repo-local use. Set
   `adapters.codex.plugin.enabled: true` only when you intentionally want
   generated `plugins/agenticloop/` packaging plus

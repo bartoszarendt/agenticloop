@@ -204,12 +204,20 @@ describe('audit record validation', () => {
     assert.ok(append.errors.some(e => e.includes('existing audit record is invalid')));
   });
 
-  it('requires packet evidence to name the exact candidate artifact', () => {
-    const staleEvidence = baseRecord({
-      evidence: 'Integrated verification results for commit:older.',
+  it('binds evidence structurally to the exact candidate without prose repetition', () => {
+    // The CLI owns the structural artifact binding: concise prose evidence no
+    // longer fails for omitting the exact candidate string.
+    const concise = baseRecord({
+      evidence: 'npm test (pass), integration suite (pass).',
     });
-    const errors = validateAuditRecord(staleEvidence, 'AUD-001.md');
-    assert.ok(errors.some(error => error.includes("'## Evidence Available'")));
+    assert.deepEqual(validateAuditRecord(concise, 'AUD-001.md'), []);
+    // Tampering with the rendered binding is still rejected.
+    const tampered = concise
+      .split('- Candidate artifact: commit:abc123')
+      .join('- Candidate artifact: commit:other');
+    const errors = validateAuditRecord(tampered, 'AUD-001.md');
+    assert.ok(errors.some(error => error.includes("'## Evidence Available'")), errors.join('\n'));
+    assert.ok(errors.some(error => error.includes("'## Frozen Baseline'")), errors.join('\n'));
   });
 
   it('derives the run count from history rather than a stored counter', () => {

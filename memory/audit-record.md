@@ -1,11 +1,12 @@
 ---
+audit_schema_version: 2
 audit_id: AUD-001
 work_unit: phase:1
 audit_state: active
 human_resolution_ref:
 covered_tasks:
   - T-001
-candidate_artifact: commit:0000000
+candidate_artifact: commit:0000000000000000000000000000000000000000
 certified_artifact:
 certified_covered_tasks: []
 latest_verdict:
@@ -76,13 +77,24 @@ Entry shape:
 
 - Invocation reference: 9f1c2c8e-2c53-4c0b-9a2f-4c2b9f9c2a11
 - Invocation mode: host_subagent
-- Audited artifact: commit:0000000
+- Invocation provenance: asserted
+- Audited artifact: commit:0000000000000000000000000000000000000000
 - Covered tasks: T-001
 - Verdict: needs_remediation
 - Assessment: consolidated assessment across all six audit perspectives.
 - Findings: A-01
 - Evidence checked: npm test (pass), npx agenticloop validate (pass)
+- Report format: legacy_inline_v1
 ```
+
+A wire-format run (`Report format: auditor_report_v1`) additionally persists
+the complete normalized report - all six perspective bodies, invocation
+provenance, and every finding field - as a fenced JSON payload inside the run
+block, so the durable record reparses losslessly. `verified` provenance means a
+host verifier checked the role, work unit, artifact, task set, reference, and
+receipt. Without that capability, receipt claims are stored as `asserted`; they
+are never described as verified. Invocation references and receipts are globally
+unique across audit records.
 
 No audit runs are currently recorded.
 
@@ -106,6 +118,31 @@ Finding shape:
 ```
 
 No findings are currently open.
+
+## Finding Dispositions
+
+One typed, run-qualified, append-only disposition per finding, recorded with
+`agenticloop audit disposition`. A disposition never changes blocking status,
+never certifies the work unit, and never consumes `audit_budget`.
+
+`remediation_task`, `change_request`, `human_decision`, `accepted_limitation`,
+and `follow_up` require a durable `Ref`. `rejected_with_counter_evidence`
+requires a counter-evidence reference and note. `no_action` requires a reason
+and Maintainer or human authority. Missing ownership is never defaulted.
+
+Disposition shape:
+
+```markdown
+### Run 1 / A-01
+
+- Type: follow_up
+- Ref: T-002
+- Note: bounded reason or ownership note.
+- Authority: maintainer
+- Date: 2026-07-27
+```
+
+No finding dispositions are currently recorded.
 
 ## Remediation Tasks
 

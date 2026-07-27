@@ -31,16 +31,23 @@ import { markdownLines, markdownSection, parseAtxHeading, topLevelListItems } fr
 import { decisionReferenceId } from './verification-learning.js';
 import { isValidTaskId } from './task-id.js';
 import {
+  AUDIT_DISPOSITION_TYPES,
+  AUDIT_PERSPECTIVES,
+  AUDIT_REPORT_SCHEMA_VERSION,
+  AUDIT_SCHEMA_VERSION,
   AUDITS_DIRECTORY_RELATIVE_PATH,
   AUDIT_BLOCKED_REASON_BUDGET_EXHAUSTED,
   AUDIT_FINDING_SEVERITIES,
   AUDIT_INVOCATION_MODES,
   AUDIT_RECORD_ID_PATTERN,
   AUDIT_REQUIRED_SECTION_HEADINGS,
+  LEGACY_AUDIT_REQUIRED_SECTION_HEADINGS,
   AUDIT_STATES,
   AUDIT_VERDICTS,
   CERTIFYING_AUDIT_VERDICTS,
   DEFAULT_AUDIT_BUDGET,
+  LEGACY_AUDIT_SCHEMA_VERSION,
+  LEGACY_INLINE_REPORT_VERSION,
 } from './layout.js';
 
 /**
@@ -59,6 +66,7 @@ export const FORBIDDEN_AUDIT_FRONTMATTER_KEYS = Object.freeze([
 
 const AUDIT_HISTORY_EMPTY_STATE = 'No audit runs are currently recorded.';
 const AUDIT_FINDINGS_EMPTY_STATE = 'No findings are currently open.';
+const AUDIT_DISPOSITIONS_EMPTY_STATE = 'No finding dispositions are currently recorded.';
 const AUDIT_CERTIFICATION_EMPTY_STATE = 'This work unit is not currently certified.';
 const AUDIT_GOAL_PLACEHOLDER =
   'Record the intended work-unit outcome and its durable source reference.';
@@ -70,20 +78,31 @@ const AUDIT_EVIDENCE_PLACEHOLDER =
 export const AUDIT_EMPTY_STATES = Object.freeze({
   history: AUDIT_HISTORY_EMPTY_STATE,
   findings: AUDIT_FINDINGS_EMPTY_STATE,
+  dispositions: AUDIT_DISPOSITIONS_EMPTY_STATE,
   certification: AUDIT_CERTIFICATION_EMPTY_STATE,
 });
 
+// Canonical run labels. The first eight are the original labels and stay
+// required; the current schema adds 'Report format' and 'Invocation
+// provenance', which are required for audit_schema_version 2 runs only.
 export const AUDIT_RUN_LABELS = Object.freeze([
   'Invocation reference',
   'Invocation mode',
+  'Invocation provenance',
   'Audited artifact',
   'Covered tasks',
   'Verdict',
   'Assessment',
   'Findings',
   'Evidence checked',
+  'Report format',
 ]);
 const AUDIT_RUN_LABEL_KEYS = new Set(AUDIT_RUN_LABELS.map(label => label.toLowerCase()));
+
+export const AUDIT_REPORT_FORMATS = Object.freeze([
+  AUDIT_REPORT_SCHEMA_VERSION,
+  LEGACY_INLINE_REPORT_VERSION,
+]);
 
 /**
  * Work-unit identity kinds. Grouped projects reuse the existing grouping
@@ -100,7 +119,19 @@ export const WORK_UNIT_KINDS = Object.freeze([
 const WORK_UNIT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const FINDING_ID_PATTERN = /^A-\d{2,}$/;
 const RUN_HEADING_PATTERN = /^Run\s+(\d+)$/;
+const DISPOSITION_HEADING_PATTERN = /^Run\s+(\d+)\s*\/\s*(A-\d{2,})$/;
 const HUMAN_AUTHORITY_PATTERN = /^human:\s*\S(?:.*\S)?$/i;
+
+/** Typed disposition requirements and allowed audit states for UI/CLI consumers. */
+export const AUDIT_DISPOSITION_TRANSITIONS = Object.freeze({
+  remediation_task: Object.freeze({ ref: true, note: false, authority: false, states: ['active', 'blocked', 'awaiting_human', 'certified'] }),
+  change_request: Object.freeze({ ref: true, note: false, authority: false, states: ['active', 'blocked', 'awaiting_human', 'certified'] }),
+  human_decision: Object.freeze({ ref: true, note: false, authority: false, states: ['active', 'blocked', 'awaiting_human', 'certified'] }),
+  accepted_limitation: Object.freeze({ ref: true, note: false, authority: false, states: ['active', 'blocked', 'awaiting_human', 'certified'] }),
+  follow_up: Object.freeze({ ref: true, note: false, authority: false, states: ['active', 'blocked', 'awaiting_human', 'certified'] }),
+  rejected_with_counter_evidence: Object.freeze({ ref: true, note: true, authority: false, states: ['active', 'blocked', 'awaiting_human', 'certified'] }),
+  no_action: Object.freeze({ ref: false, note: true, authority: true, states: ['active', 'blocked', 'awaiting_human', 'certified'] }),
+});
 
 // ---------------------------------------------------------------------------
 // Small value helpers
@@ -381,6 +412,30 @@ function subsectionsOf(content, heading) {
 }
 
 /**
+ * Extract the fenced JSON report payload from one run body, when present.
+ * Wire-format runs persist the complete normalized report so every
+ * perspective body and substantive string reparses from durable history.
+ *
+ * @param {string} body
+ * @returns {object|null}
+ */
+function parseRunReportPayload(body) {
+  const text = String(body ?? '');
+  const fenceStart = text.indexOf('```json');
+  if (fenceStart === -1) return null;
+  const bodyStart = text.indexOf('\n', fenceStart);
+  if (bodyStart === -1) return null;
+  const fenceEnd = text.indexOf('\n```', bodyStart);
+  if (fenceEnd === -1) return null;
+  try {
+    const payload = JSON.parse(text.slice(bodyStart + 1, fenceEnd));
+    return payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Parse an audit record into its durable shape.
  *
  * @param {string} content
@@ -400,6 +455,7 @@ export function parseAuditRecord(content) {
         runNumber: runMatch ? Number(runMatch[1]) : null,
         invocationReference: fields.get('invocation reference') ?? '',
         invocationMode: fields.get('invocation mode') ?? '',
+        invocationProvenance: fields.get('invocation provenance') ?? '',
         auditedArtifact: fields.get('audited artifact') ?? '',
         coveredTasks: (fields.get('covered tasks') ?? '')
           .split(',')
@@ -412,6 +468,8 @@ export function parseAuditRecord(content) {
           .map(value => value.trim())
           .filter(value => value && value.toLowerCase() !== 'none'),
         evidenceChecked: fields.get('evidence checked') ?? '',
+        reportFormat: fields.get('report format') ?? '',
+        reportPayload: parseRunReportPayload(entry.body),
         fieldOccurrences: occurrences,
       };
     });
@@ -430,6 +488,21 @@ export function parseAuditRecord(content) {
     };
   });
 
+  const dispositions = subsectionsOf(content, '## Finding Dispositions').map(entry => {
+    const { fields } = parseLabeledBullets(entry.body);
+    const match = entry.text.match(DISPOSITION_HEADING_PATTERN);
+    return {
+      heading: entry.text,
+      run: match ? Number(match[1]) : null,
+      findingId: match ? match[2] : '',
+      type: (fields.get('type') ?? '').toLowerCase(),
+      ref: fields.get('ref') ?? '',
+      note: fields.get('note') ?? '',
+      authority: fields.get('authority') ?? '',
+      date: fields.get('date') ?? '',
+    };
+  });
+
   const budgetRaw = fm.audit_budget;
   const budget = typeof budgetRaw === 'number'
     ? budgetRaw
@@ -437,9 +510,17 @@ export function parseAuditRecord(content) {
       ? Number(auditFrontmatterString(budgetRaw))
       : null;
 
+  const schemaVersionRaw = auditFrontmatterString(fm.audit_schema_version);
+  const auditSchemaVersion = schemaVersionRaw === ''
+    ? null
+    : /^\d+$/.test(schemaVersionRaw)
+      ? Number(schemaVersionRaw)
+      : Number.NaN;
+
   return {
     frontmatterPresent: frontmatter !== null,
     frontmatter: fm,
+    auditSchemaVersion,
     auditId: auditFrontmatterString(fm.audit_id),
     workUnit: auditFrontmatterString(fm.work_unit),
     auditState: auditFrontmatterString(fm.audit_state),
@@ -453,6 +534,7 @@ export function parseAuditRecord(content) {
     auditBudget: budget,
     history,
     findings,
+    dispositions,
     sections: Object.fromEntries(
       AUDIT_REQUIRED_SECTION_HEADINGS.map(heading => [
         heading,
@@ -507,6 +589,60 @@ export function auditBudgetState(record) {
  */
 export function openBlockingFindings(record) {
   return (record?.findings ?? []).filter(finding => finding.blocking === 'true');
+}
+
+/**
+ * True when the record predates the current schema (no audit_schema_version
+ * or a legacy version). Legacy records receive an explicit migration
+ * diagnostic and are never silently reinterpreted as current-schema records.
+ *
+ * @param {object} record
+ * @returns {boolean}
+ */
+export function isLegacyAuditRecord(record) {
+  return record?.auditSchemaVersion !== AUDIT_SCHEMA_VERSION;
+}
+
+/**
+ * Derive per-finding disposition state. Identity is run-qualified so a later
+ * `A-01` can never overwrite an earlier run's `A-01`. The last disposition for
+ * one run/finding pair is current; earlier entries remain append-only history.
+ *
+ * @param {object} record
+ * @returns {{ findings: { run: number, findingId: string, blocking: boolean, disposition: object|null }[], undisposed: object[] }}
+ */
+export function findingDispositionState(record) {
+  const byFinding = new Map();
+  for (const finding of record?.findings ?? []) {
+    byFinding.set(finding.id, finding.blocking === 'true');
+  }
+  const currentDisposition = new Map();
+  for (const entry of record?.dispositions ?? []) {
+    if (entry.run === null || !entry.findingId) continue;
+    currentDisposition.set(`${entry.run}/${entry.findingId}`, entry);
+  }
+  const findings = [];
+  for (const run of record?.history ?? []) {
+    if (run.runNumber === null) continue;
+    for (const findingId of run.findings ?? []) {
+      const payloadFindings = Array.isArray(run?.reportPayload?.findings) ? run.reportPayload.findings : null;
+      const payloadEntry = payloadFindings?.find(item => String(item?.id ?? '') === findingId);
+      const blocking = payloadEntry
+        ? payloadEntry.blocking === true || payloadEntry.blocking === 'true'
+        : (byFinding.get(findingId) ?? false);
+      const disposition = currentDisposition.get(`${run.runNumber}/${findingId}`) ?? null;
+      findings.push({
+        run: run.runNumber,
+        findingId,
+        blocking,
+        disposition,
+      });
+    }
+  }
+  return {
+    findings,
+    undisposed: findings.filter(entry => entry.disposition === null),
+  };
 }
 
 /**
@@ -596,10 +732,13 @@ export function parseKnownLimitations(content) {
 // Validation
 // ---------------------------------------------------------------------------
 
-function validateOrderedAuditHeadings(content, label, errors) {
+function validateOrderedAuditHeadings(content, label, errors, record) {
+  const headings = isLegacyAuditRecord(record)
+    ? LEGACY_AUDIT_REQUIRED_SECTION_HEADINGS
+    : AUDIT_REQUIRED_SECTION_HEADINGS;
   const lines = markdownLines(content);
   let cursor = 0;
-  for (const heading of AUDIT_REQUIRED_SECTION_HEADINGS) {
+  for (const heading of headings) {
     const wanted = parseAtxHeading(heading);
     let found = -1;
     for (let index = cursor; index < lines.length; index++) {
@@ -620,6 +759,8 @@ function validateOrderedAuditHeadings(content, label, errors) {
 
 function validateAuditHistoryEntries(record, label, errors) {
   const seenReferences = new Set();
+  const seenReceipts = new Set();
+  const requirePhase34Labels = !isLegacyAuditRecord(record);
   record.history.forEach((entry, index) => {
     const entryLabel = `Audit record '${label}' history entry ${index + 1}`;
     const labelCounts = new Map();
@@ -676,6 +817,47 @@ function validateAuditHistoryEntries(record, label, errors) {
     }
     if (!entry.evidenceChecked) {
       errors.push(`${entryLabel} is missing 'Evidence checked'`);
+    }
+
+    if (requirePhase34Labels) {
+      if (!entry.reportFormat) {
+        errors.push(`${entryLabel} is missing 'Report format'`);
+      } else if (!AUDIT_REPORT_FORMATS.includes(entry.reportFormat)) {
+        errors.push(
+          `${entryLabel} report format '${entry.reportFormat}' must be one of: ${AUDIT_REPORT_FORMATS.join(', ')}`
+        );
+      }
+      if (!entry.invocationProvenance) {
+        errors.push(`${entryLabel} is missing 'Invocation provenance'`);
+      } else if (!['verified', 'asserted'].includes(entry.invocationProvenance)) {
+        errors.push(
+          `${entryLabel} invocation provenance '${entry.invocationProvenance}' must be 'verified' or 'asserted'`
+        );
+      }
+      if (entry.reportFormat === AUDIT_REPORT_SCHEMA_VERSION) {
+        const payload = entry.reportPayload;
+        if (!payload) {
+          errors.push(
+            `${entryLabel} declares report format '${AUDIT_REPORT_SCHEMA_VERSION}' but has no parseable JSON report payload; six-perspective reports are persisted losslessly`
+          );
+        } else {
+          for (const key of AUDIT_PERSPECTIVES) {
+            if (typeof payload?.perspectives?.[key] !== 'string' || !payload.perspectives[key].trim()) {
+              errors.push(`${entryLabel} report payload is missing perspective body '${key}'`);
+            }
+          }
+        }
+      }
+      if (entry.invocationProvenance === 'verified') {
+        const receipt = String(entry.reportPayload?.invocation?.receipt ?? '').trim();
+        if (!receipt) {
+          errors.push(`${entryLabel} claims verified invocation provenance without a receipt`);
+        } else if (seenReceipts.has(receipt)) {
+          errors.push(`${entryLabel} reuses invocation receipt '${receipt}'`);
+        } else {
+          seenReceipts.add(receipt);
+        }
+      }
     }
   });
 }
@@ -749,6 +931,51 @@ function validateConcreteAuditPacket(record, label, errors) {
   }
 }
 
+function validateAuditDispositions(record, label, errors) {
+  const runFindingPairs = new Set();
+  for (const run of record.history) {
+    for (const findingId of run.findings ?? []) {
+      runFindingPairs.add(`${run.runNumber}/${findingId}`);
+    }
+  }
+  const seen = new Set();
+  for (const entry of record.dispositions ?? []) {
+    const entryLabel = `Audit record '${label}' disposition '${entry.heading}'`;
+    if (entry.run === null || !entry.findingId) {
+      errors.push(`${entryLabel} heading must be 'Run <n> / A-0x' (got '${entry.heading}')`);
+      continue;
+    }
+    if (!runFindingPairs.has(`${entry.run}/${entry.findingId}`)) {
+      errors.push(
+        `${entryLabel} names finding '${entry.findingId}' which run ${entry.run} did not report; dispositions are run-qualified`
+      );
+    }
+    const key = `${entry.run}/${entry.findingId}/${entry.type}/${entry.date}`;
+    if (seen.has(key)) {
+      errors.push(`${entryLabel} duplicates an earlier disposition entry`);
+    }
+    seen.add(key);
+    if (!AUDIT_DISPOSITION_TYPES.includes(entry.type)) {
+      errors.push(
+        `${entryLabel} type '${entry.type || '(missing)'}' must be one of: ${AUDIT_DISPOSITION_TYPES.join(', ')}`
+      );
+    }
+    const requirements = AUDIT_DISPOSITION_TRANSITIONS[entry.type];
+    if (requirements?.ref && (!entry.ref || entry.ref === 'none')) {
+      errors.push(`${entryLabel} type '${entry.type}' requires a durable reference in 'Ref'`);
+    }
+    if (requirements?.note && (!entry.note || entry.note === 'none')) {
+      errors.push(`${entryLabel} type '${entry.type}' requires a recorded reason in 'Note'`);
+    }
+    if (requirements?.authority && !/^(maintainer|human:\s*\S)/i.test(entry.authority)) {
+      errors.push(`${entryLabel} type '${entry.type}' requires Maintainer or human provenance in 'Authority'`);
+    }
+    if (!entry.date || !/^\d{4}-\d{2}-\d{2}$/.test(entry.date)) {
+      errors.push(`${entryLabel} requires a 'Date' in YYYY-MM-DD form`);
+    }
+  }
+}
+
 function authorityValidationError(authority, options = {}) {
   if (isHumanAuthorityReference(authority)) return '';
   const decisionId = limitationDecisionReference(authority);
@@ -772,6 +999,10 @@ function authorityValidationError(authority, options = {}) {
  * @param {(taskId: string) => boolean} [options.taskExists]
  * @param {(decisionId: string) => boolean} [options.decisionExists]
  * @param {(decisionId: string) => boolean} [options.decisionAccepted]
+ * @param {string} [options.inventoryError]  Explicit covered-task inventory failure
+ *   (for example `inventory_incomplete` or an identity conflict naming every
+ *   carrier). When set, covered-task existence cannot be proven and the record
+ *   fails closed with this diagnostic instead of per-task "unknown task" noise.
  * @returns {string[]}
  */
 export function validateAuditRecord(content, label, options = {}) {
@@ -780,6 +1011,30 @@ export function validateAuditRecord(content, label, options = {}) {
 
   if (!record.frontmatterPresent) {
     return [`Audit record '${label}' is missing YAML frontmatter`];
+  }
+
+  // Current records carry an explicit audit_schema_version. Legacy records
+  // parse, but they receive a deterministic migration diagnostic and are
+  // never silently reinterpreted as current-schema records.
+  if (record.auditSchemaVersion === null) {
+    if (options.allowLegacy !== true) {
+      errors.push(
+        `Audit record '${label}' is a legacy record (missing audit_schema_version); ` +
+        `migrate it with 'agenticloop audit baseline ${record.auditId || '<AUD-ID>'} --canonicalize ` +
+        `--evidence "<current integrated evidence for the resolved full candidate>"'`
+      );
+    }
+  } else if (!Number.isSafeInteger(record.auditSchemaVersion) ||
+      (record.auditSchemaVersion !== AUDIT_SCHEMA_VERSION && record.auditSchemaVersion !== LEGACY_AUDIT_SCHEMA_VERSION)) {
+    errors.push(
+      `Audit record '${label}' has unsupported audit_schema_version '${record.frontmatter?.audit_schema_version}'; expected ${AUDIT_SCHEMA_VERSION}`
+    );
+  } else if (record.auditSchemaVersion === LEGACY_AUDIT_SCHEMA_VERSION && options.allowLegacy !== true) {
+    errors.push(
+      `Audit record '${label}' is a legacy record (audit_schema_version: ${LEGACY_AUDIT_SCHEMA_VERSION}); ` +
+      `migrate it with 'agenticloop audit baseline ${record.auditId || '<AUD-ID>'} --canonicalize ` +
+      `--evidence "<current integrated evidence for the resolved full candidate>"'`
+    );
   }
 
   for (const key of FORBIDDEN_AUDIT_FRONTMATTER_KEYS) {
@@ -823,6 +1078,10 @@ export function validateAuditRecord(content, label, options = {}) {
 
   if (record.coveredTasks.length === 0) {
     errors.push(`Audit record '${label}' requires a non-empty 'covered_tasks' boundary`);
+  } else if (options.inventoryError) {
+    errors.push(
+      `Audit record '${label}' cannot verify covered tasks (inventory_incomplete): ${options.inventoryError}`
+    );
   } else if (options.taskIdRegex) {
     for (const taskId of record.coveredTasks) {
       if (!isValidTaskId(taskId, options.taskIdRegex)) {
@@ -851,9 +1110,12 @@ export function validateAuditRecord(content, label, options = {}) {
     errors.push(`Audit record '${label}' audit_budget must be a positive integer`);
   }
 
-  validateOrderedAuditHeadings(content, label, errors);
+  validateOrderedAuditHeadings(content, label, errors, record);
   validateAuditHistoryEntries(record, label, errors);
   validateAuditFindings(record, label, errors);
+  if (!isLegacyAuditRecord(record)) {
+    validateAuditDispositions(record, label, errors);
+  }
   validateConcreteAuditPacket(record, label, errors);
 
   // --- History / frontmatter consistency ---------------------------------
@@ -1014,6 +1276,10 @@ export function validateAuditRecords(repoRoot, options = {}) {
   const entries = listAuditRecordFiles(repoRoot);
   const seenIds = new Map();
   const seenWorkUnits = new Map();
+  // Repository-wide invocation registry: a host receipt or caller-supplied
+  // invocation reference can never be reused within or across audit records.
+  const seenInvocationRefs = new Map();
+  const seenReceipts = new Map();
 
   for (const entry of entries) {
     errors.push(...validateAuditRecord(entry.content, entry.relPath, options));
@@ -1036,6 +1302,27 @@ export function validateAuditRecords(repoRoot, options = {}) {
         seenWorkUnits.set(record.workUnit, entry.relPath);
       }
     }
+    for (const run of record.history) {
+      if (run.invocationReference) {
+        if (seenInvocationRefs.has(run.invocationReference)) {
+          errors.push(
+            `Audit record '${entry.relPath}' reuses invocation reference '${run.invocationReference}' already recorded in '${seenInvocationRefs.get(run.invocationReference)}'`
+          );
+        } else {
+          seenInvocationRefs.set(run.invocationReference, entry.relPath);
+        }
+      }
+      const receipt = String(run.reportPayload?.invocation?.receipt ?? '').trim();
+      if (receipt) {
+        if (seenReceipts.has(receipt)) {
+          errors.push(
+            `Audit record '${entry.relPath}' reuses invocation receipt '${receipt}' already recorded in '${seenReceipts.get(receipt)}'`
+          );
+        } else {
+          seenReceipts.set(receipt, entry.relPath);
+        }
+      }
+    }
   }
 
   return { errors, warnings };
@@ -1055,8 +1342,24 @@ const AUDIT_PREAMBLE_LINES = Object.freeze([
   'their task records; this store never duplicates them.',
 ]);
 
+/**
+ * Render `## Evidence Available` with the CLI-owned structural artifact binding
+ * followed by the human-supplied substantive evidence.
+ *
+ * @param {string} candidateArtifact
+ * @param {string} [evidence]
+ * @returns {string}
+ */
+export function renderEvidenceSection(candidateArtifact, evidence) {
+  const binding = `- Candidate artifact: ${String(candidateArtifact ?? '').trim()}`;
+  const prose = String(evidence ?? '').trim();
+  if (!prose) return `${binding}\n\n${AUDIT_EVIDENCE_PLACEHOLDER}`;
+  return `${binding}\n\n${prose}`;
+}
+
 function renderFrontmatterLines(fields) {
   const lines = ['---'];
+  lines.push(`audit_schema_version: ${AUDIT_SCHEMA_VERSION}`);
   lines.push(`audit_id: ${fields.auditId}`);
   lines.push(`work_unit: ${fields.workUnit}`);
   lines.push(`audit_state: ${fields.auditState}`);
@@ -1108,7 +1411,10 @@ export function readAuditRecordParts(content) {
   }
   const preamble = lines.slice(0, firstSectionIndex).map(item => item.raw).join('\n').trim();
   const sections = {};
-  for (const heading of AUDIT_REQUIRED_SECTION_HEADINGS) {
+  const headings = isLegacyAuditRecord(record)
+    ? LEGACY_AUDIT_REQUIRED_SECTION_HEADINGS
+    : AUDIT_REQUIRED_SECTION_HEADINGS;
+  for (const heading of headings) {
     sections[heading] = markdownSection(content, heading)?.body ?? '';
   }
   return {
@@ -1164,11 +1470,14 @@ export function createAuditRecordContent(options) {
     '## Completion Oracle': options.completionOracle?.trim() || AUDIT_ORACLE_PLACEHOLDER,
     '## Covered Tasks': coveredTasks.map(taskId => `- ${taskId}`).join('\n'),
     '## Frozen Baseline': options.frozenBaseline?.trim() || `- Candidate artifact: ${options.candidateArtifact}`,
-    '## Evidence Available': options.evidence?.trim() || AUDIT_EVIDENCE_PLACEHOLDER,
+    // The CLI owns the structural artifact binding; human evidence describes
+    // checks and results without duplicating an exact magic substring.
+    '## Evidence Available': renderEvidenceSection(options.candidateArtifact, options.evidence),
     '## Accepted Decisions': options.acceptedDecisions?.trim() || 'none',
     '## Known Limitations': options.knownLimitations?.trim() || 'none',
     '## Audit History': AUDIT_HISTORY_EMPTY_STATE,
     '## Consolidated Findings': AUDIT_FINDINGS_EMPTY_STATE,
+    '## Finding Dispositions': AUDIT_DISPOSITIONS_EMPTY_STATE,
     '## Remediation Tasks': 'none',
     '## Final Certification': AUDIT_CERTIFICATION_EMPTY_STATE,
     '## Comments': '',
@@ -1215,7 +1524,10 @@ export function updateAuditBaseline(content, updates) {
   }
   parts.sections['## Frozen Baseline'] = `- Candidate artifact: ${parts.fields.candidateArtifact}`;
   if (updates.evidence) {
-    parts.sections['## Evidence Available'] = String(updates.evidence).trim();
+    parts.sections['## Evidence Available'] = renderEvidenceSection(
+      parts.fields.candidateArtifact,
+      updates.evidence
+    );
   }
 
   const stale = parts.fields.certifiedArtifact !== parts.fields.candidateArtifact ||
@@ -1333,18 +1645,65 @@ function renderFindingBlock(finding) {
 }
 
 function renderHistoryBlock(entry, runNumber) {
-  return [
+  const reportFormat = entry.reportFormat || AUDIT_REPORT_SCHEMA_VERSION;
+  const lines = [
     `### Run ${runNumber}`,
     '',
     `- Invocation reference: ${entry.invocationReference}`,
     `- Invocation mode: ${entry.invocationMode}`,
+    `- Invocation provenance: ${entry.invocationProvenance || 'asserted'}`,
     `- Audited artifact: ${entry.auditedArtifact}`,
     `- Covered tasks: ${normalizeCoveredTasks(entry.coveredTasks).join(', ')}`,
     `- Verdict: ${entry.verdict}`,
     `- Assessment: ${entry.assessment}`,
     `- Findings: ${(entry.findings ?? []).length > 0 ? entry.findings.join(', ') : 'none'}`,
     `- Evidence checked: ${entry.evidenceChecked}`,
-  ].join('\n');
+    `- Report format: ${reportFormat}`,
+  ];
+  if (entry.reportPayload) {
+    lines.push('', '```json', JSON.stringify(entry.reportPayload, null, 2), '```');
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Build the durable report payload persisted inside one run block. The payload
+ * is the lossless reparse source for wire-format runs; legacy inline runs
+ * persist exactly the fields that interface supplied.
+ */
+function buildRunReportPayload(entry, reportFormat) {
+  if (reportFormat === AUDIT_REPORT_SCHEMA_VERSION) {
+    return {
+      report_schema: AUDIT_REPORT_SCHEMA_VERSION,
+      artifact: entry.auditedArtifact,
+      covered_tasks: normalizeCoveredTasks(entry.coveredTasks),
+      invocation: {
+        mode: entry.invocationMode,
+        reference: entry.invocationReference,
+        provenance: entry.invocationProvenance || 'asserted',
+        ...(entry.invocationReceipt ? { receipt: entry.invocationReceipt } : {}),
+      },
+      perspectives: entry.perspectives,
+      assessment: entry.assessment,
+      evidence_checked: entry.evidenceChecked,
+      verdict: entry.verdict,
+      findings: entry.reportFindings ?? [],
+    };
+  }
+  return {
+    report_schema: LEGACY_INLINE_REPORT_VERSION,
+    artifact: entry.auditedArtifact,
+    covered_tasks: normalizeCoveredTasks(entry.coveredTasks),
+    invocation: {
+      mode: entry.invocationMode,
+      reference: entry.invocationReference,
+      provenance: 'asserted',
+    },
+    assessment: entry.assessment,
+    evidence_checked: entry.evidenceChecked,
+    verdict: entry.verdict,
+    findings: entry.reportFindings ?? [],
+  };
 }
 
 /**
@@ -1431,6 +1790,33 @@ export function appendAuditReport(content, report, validationOptions = {}) {
     );
   }
 
+  const reportFormat = AUDIT_REPORT_FORMATS.includes(report?.reportFormat)
+    ? report.reportFormat
+    : LEGACY_INLINE_REPORT_VERSION;
+  const invocationProvenance = ['verified', 'asserted'].includes(report?.invocationProvenance)
+    ? report.invocationProvenance
+    : 'asserted';
+  const invocationReceipt = normalizedSingleLine(
+    report?.invocationReceipt,
+    'invocation receipt',
+    errors,
+    false
+  );
+  if (invocationProvenance === 'verified' && !invocationReceipt) {
+    errors.push("invocation provenance 'verified' requires a host receipt");
+  }
+  if (reportFormat === AUDIT_REPORT_SCHEMA_VERSION) {
+    if (!report?.perspectives || typeof report.perspectives !== 'object') {
+      errors.push(`report format '${AUDIT_REPORT_SCHEMA_VERSION}' requires all six perspective bodies`);
+    } else {
+      for (const key of AUDIT_PERSPECTIVES) {
+        if (typeof report.perspectives[key] !== 'string' || !report.perspectives[key].trim()) {
+          errors.push(`report is missing perspective body '${key}'`);
+        }
+      }
+    }
+  }
+
   const findings = normalizeReportFindings(report?.findings ?? [], errors);
   const blockingFindings = findings.filter(f => f.blocking === true || f.blocking === 'true');
   if (report?.verdict === 'certified' && blockingFindings.length > 0) {
@@ -1460,15 +1846,23 @@ export function appendAuditReport(content, report, validationOptions = {}) {
   const runNumber = record.history.length + 1;
   const historyBody = parts.sections['## Audit History'].trim();
   const priorHistory = historyBody === AUDIT_HISTORY_EMPTY_STATE ? '' : historyBody;
-  parts.sections['## Audit History'] = [priorHistory, renderHistoryBlock({
+  const runEntry = {
     ...report,
     invocationReference: reference,
+    invocationProvenance,
+    invocationReceipt,
     auditedArtifact,
     coveredTasks: reportCoveredTasks,
     assessment,
     evidenceChecked,
     findings: findings.map(f => f.id),
-  }, runNumber)].filter(Boolean).join('\n\n');
+    reportFindings: findings,
+    reportFormat,
+  };
+  runEntry.reportPayload = buildRunReportPayload(runEntry, reportFormat);
+  parts.sections['## Audit History'] = [priorHistory, renderHistoryBlock(runEntry, runNumber)]
+    .filter(Boolean)
+    .join('\n\n');
 
   parts.sections['## Consolidated Findings'] = findings.length > 0
     ? findings.map(renderFindingBlock).join('\n\n')
@@ -1646,10 +2040,212 @@ export function applyAuditHumanResolution(content, options, validationOptions = 
   return { ok: true, content: rendered, errors: [] };
 }
 
+/**
+ * Record a typed disposition for one run-qualified finding. Disposition is
+ * Maintainer-owned durable state: it never changes a finding's blocking
+ * classification, never certifies the work unit, never resolves a blocking
+ * finding by itself, and never consumes audit_budget. It is allowed while the
+ * audit is `blocked` or `awaiting_human` after a completed report.
+ *
+ * @param {string} content
+ * @param {{ run: number, findingId: string, type: string, ref?: string, note?: string, authority?: string }} options
+ * @param {object} [validationOptions]
+ * @returns {{ ok: boolean, content?: string, errors: string[] }}
+ */
+export function applyAuditDisposition(content, options, validationOptions = {}) {
+  const errors = [];
+  const record = parseAuditRecord(content);
+  errors.push(...validateAuditRecord(
+    content,
+    `${record.auditId || 'audit'}.md`,
+    validationOptions
+  ).map(error => `existing audit record is invalid: ${error}`));
+
+  const run = Number(options?.run);
+  if (!Number.isSafeInteger(run) || run <= 0) {
+    errors.push('disposition requires --run <n> naming the report run');
+  }
+  const findingId = String(options?.findingId ?? '').trim();
+  if (!FINDING_ID_PATTERN.test(findingId)) {
+    errors.push(`disposition requires --finding <A-0x>; got '${findingId || '(empty)'}'`);
+  }
+  const type = String(options?.type ?? '').trim().toLowerCase();
+  if (!AUDIT_DISPOSITION_TYPES.includes(type)) {
+    errors.push(`disposition --type must be one of: ${AUDIT_DISPOSITION_TYPES.join(', ')}`);
+  }
+  const note = String(options?.note ?? '').trim();
+  if (/[\r\n]/.test(note)) {
+    errors.push('disposition --note must be a single line');
+  }
+  const ref = String(options?.ref ?? '').trim();
+  if (/[\r\n]/.test(ref)) {
+    errors.push('disposition --ref must be a single line');
+  }
+  const authority = String(options?.authority ?? '').trim();
+  if (/[\r\n]/.test(authority)) {
+    errors.push('disposition --authority must be a single line');
+  }
+  const requirements = AUDIT_DISPOSITION_TRANSITIONS[type];
+  if (requirements?.ref && !ref) {
+    errors.push(`disposition type '${type}' requires --ref naming a durable reference`);
+  }
+  if (requirements?.note && !note) {
+    errors.push(`disposition type '${type}' requires --note recording the reason`);
+  }
+  if (requirements?.authority && !/^(maintainer|human:\s*\S)/i.test(authority)) {
+    errors.push(`disposition type '${type}' requires --authority naming Maintainer or human provenance`);
+  }
+
+  const historyRun = record.history.find(entry => entry.runNumber === run);
+  if (Number.isSafeInteger(run) && run > 0 && !historyRun) {
+    errors.push(`audit has no completed run ${run}; dispositions are run-qualified`);
+  }
+  if (historyRun && findingId && !historyRun.findings.includes(findingId)) {
+    errors.push(`run ${run} did not report finding '${findingId}'; dispositions are run-qualified`);
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+
+  const parts = readAuditRecordParts(content);
+  const date = new Date().toISOString().slice(0, 10);
+  const block = [
+    `### Run ${run} / ${findingId}`,
+    '',
+    `- Type: ${type}`,
+    `- Ref: ${ref || 'none'}`,
+    `- Note: ${note || 'none'}`,
+    `- Authority: ${authority || 'none'}`,
+    `- Date: ${date}`,
+  ].join('\n');
+  const existing = parts.sections['## Finding Dispositions'].trim();
+  parts.sections['## Finding Dispositions'] = [
+    existing === AUDIT_DISPOSITIONS_EMPTY_STATE ? '' : existing,
+    block,
+  ].filter(Boolean).join('\n\n');
+
+  const rendered = renderAuditRecord(parts);
+  const renderedErrors = validateAuditRecord(
+    rendered,
+    `${record.auditId || 'audit'}.md`,
+    validationOptions
+  );
+  if (renderedErrors.length > 0) {
+    return {
+      ok: false,
+      errors: renderedErrors.map(error => `dispositioned audit record is invalid: ${error}`),
+    };
+  }
+  return { ok: true, content: rendered, errors: [] };
+}
+
+/**
+ * Canonicalize a legacy audit record into the current schema shape.
+ *
+ * Resolves the record's existing candidate to its full canonical identity,
+ * upgrades the record shape, preserves append-only history, clears stale
+ * certification, validates the complete prospective record, and returns the
+ * rendered content. The caller writes it through the shared atomic mutation
+ * path. `--canonicalize` never accepts a replacement `--artifact`.
+ *
+ * @param {string} content
+ * @param {{ evidence: string, resolveArtifact: (artifact: string) => { ok: boolean, canonical?: string, error?: string } }} options
+ * @param {object} [validationOptions]
+ * @returns {{ ok: boolean, content?: string, errors: string[] }}
+ */
+export function canonicalizeAuditRecord(content, options, validationOptions = {}) {
+  const errors = [];
+  const record = parseAuditRecord(content);
+  if (!isLegacyAuditRecord(record)) {
+    errors.push('audit record already uses the current schema; use audit baseline without --canonicalize');
+    return { ok: false, errors };
+  }
+  const evidence = String(options?.evidence ?? '').trim();
+  if (!evidence) {
+    errors.push('audit baseline --canonicalize requires --evidence bound to the resolved full candidate');
+  }
+  const resolution = typeof options?.resolveArtifact === 'function'
+    ? options.resolveArtifact(record.candidateArtifact)
+    : { ok: false, error: 'no artifact resolver was supplied' };
+  if (!resolution.ok) {
+    errors.push(
+      `cannot canonicalize legacy candidate '${record.candidateArtifact || '(empty)'}': ${resolution.error}`
+    );
+  }
+  if (errors.length > 0) return { ok: false, errors };
+
+  const parts = readAuditRecordParts(content);
+  parts.fields.candidateArtifact = resolution.canonical;
+  parts.sections['## Frozen Baseline'] = `- Candidate artifact: ${resolution.canonical}`;
+  parts.sections['## Evidence Available'] = renderEvidenceSection(resolution.canonical, evidence);
+  parts.sections['## Finding Dispositions'] =
+    parts.sections['## Finding Dispositions']?.trim() || AUDIT_DISPOSITIONS_EMPTY_STATE;
+
+  // Backfill current run labels on legacy history. Runs that predate the
+  // wire format keep exactly the fields they supplied as legacy_inline_v1;
+  // no perspective bodies are fabricated.
+  if (record.history.length > 0) {
+    const blocks = record.history.map(entry => {
+      const reportFormat = AUDIT_REPORT_FORMATS.includes(entry.reportFormat)
+        ? entry.reportFormat
+        : LEGACY_INLINE_REPORT_VERSION;
+      const runEntry = {
+        invocationReference: entry.invocationReference,
+        invocationMode: entry.invocationMode,
+        invocationProvenance: ['verified', 'asserted'].includes(entry.invocationProvenance)
+          ? entry.invocationProvenance
+          : 'asserted',
+        invocationReceipt: String(entry.reportPayload?.invocation?.receipt ?? ''),
+        auditedArtifact: entry.auditedArtifact,
+        coveredTasks: entry.coveredTasks,
+        verdict: entry.verdict,
+        assessment: entry.assessment,
+        findings: entry.findings,
+        evidenceChecked: entry.evidenceChecked,
+        reportFindings: Array.isArray(entry.reportPayload?.findings) ? entry.reportPayload.findings : [],
+        perspectives: entry.reportPayload?.perspectives ?? null,
+        reportFormat,
+      };
+      runEntry.reportPayload = reportFormat === AUDIT_REPORT_SCHEMA_VERSION && entry.reportPayload
+        ? entry.reportPayload
+        : buildRunReportPayload(runEntry, reportFormat);
+      return renderHistoryBlock(runEntry, entry.runNumber);
+    });
+    parts.sections['## Audit History'] = blocks.join('\n\n');
+  }
+
+  // Legacy certification predates digest-bound provenance: clear it.
+  parts.fields.certifiedArtifact = '';
+  parts.fields.certifiedCoveredTasks = [];
+  if (parts.fields.auditState === 'certified' || parts.fields.auditState === 'awaiting_human') {
+    parts.fields.auditState = 'active';
+    parts.fields.auditBlockedReason = '';
+  }
+  parts.fields.humanResolutionRef = '';
+  parts.sections['## Final Certification'] = AUDIT_CERTIFICATION_EMPTY_STATE;
+  const budget = auditBudgetState(record);
+  if (budget.exhausted && parts.fields.auditState === 'active') {
+    parts.fields.auditState = 'blocked';
+    parts.fields.auditBlockedReason = AUDIT_BLOCKED_REASON_BUDGET_EXHAUSTED;
+  }
+
+  const rendered = renderAuditRecord(parts);
+  const renderedErrors = validateAuditRecord(
+    rendered,
+    `${record.auditId || 'audit'}.md`,
+    validationOptions
+  );
+  if (renderedErrors.length > 0) {
+    return {
+      ok: false,
+      errors: renderedErrors.map(error => `canonicalized audit record is invalid: ${error}`),
+    };
+  }
+  return { ok: true, content: rendered, errors: [] };
+}
+
 // ---------------------------------------------------------------------------
 // Closeout gate
 // ---------------------------------------------------------------------------
-
 /**
  * Evaluate whether work-unit closeout may publish
  * `AGENT_CLOSEOUT_STATUS: complete` for one work unit.
@@ -1663,6 +2259,7 @@ export function applyAuditHumanResolution(content, options, validationOptions = 
  * @param {(taskId: string) => boolean} [params.taskExists]
  * @param {(decisionId: string) => boolean} [params.decisionExists]
  * @param {(decisionId: string) => boolean} [params.decisionAccepted]
+ * @param {string} [params.inventoryError]  Explicit inventory failure forwarded to record validation.
  * @returns {{ allowed: boolean, state: string, reasons: string[], auditId: string|null, optOut: boolean }}
  */
 export function evaluateAuditCloseoutGate(repoRoot, params) {
@@ -1713,6 +2310,7 @@ export function evaluateAuditCloseoutGate(repoRoot, params) {
     taskExists: params?.taskExists,
     decisionExists: params?.decisionExists,
     decisionAccepted: params?.decisionAccepted,
+    inventoryError: params?.inventoryError,
   });
   if (validationErrors.length > 0) {
     return {

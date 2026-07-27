@@ -19,10 +19,19 @@ requires_change_request: true
 `core-methodology`, `permission-policy`, `decision-record`).
 
 ## Failure pattern
-The recurring pattern observed across multiple tasks.
+The recurring pattern observed across multiple tasks. One directly evidenced
+required-gate bypass, fabrication, or material misordering is also sufficient;
+ordinary one-off inconvenience is not.
 
 ## Evidence
-- <task-id>: specific observation (cite check failures / review rounds / event-log entries).
+- <audit-id>: specific audit evidence.
+- <erroneous-marker-or-carrier-ref>: the associated gate-bypass evidence.
+
+Every `source_refs` entry must resolve against live durable state when the
+proposal is created or linted: an audit ID or run, a task ID, a decision ID, a
+recorded closeout marker digest, or another proposal ID. A chat-only claim or a
+reference to a nonexistent artifact fails validation before any file is
+created; references are recorded exactly and never silently rewritten.
 
 ## Inferred mechanism
 Why the agent erred – the agent-side cause, separate from what happened.

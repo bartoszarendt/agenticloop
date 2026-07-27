@@ -453,8 +453,11 @@ Only after scope, quality, evidence, and follow-up triage pass review. Use
 Closeout is a verify-and-mark gate; it does not write a separate summary file.
 When a human-identified task set or configured group finishes, confirm each
 task's inline `## Scope Completed` summary and evidence are complete, then record
-the closeout status marker on the last accepted task record (see
-[[task-closeout]]).
+the closeout status marker through `closeout prepare` then `closeout record` on
+the last accepted task record (see [[task-closeout]]). The files projection
+appends a new superseding correction marker rather than erasing history; retrying
+an exact current digest is idempotent. Packets are transient and may be written
+only below `.agenticloop/tmp/`.
 
 Before the final audit freeze, the single-writer Maintainer closeout lane follows
 the conditional selected-plan progress procedure in [[task-closeout]]. Record its

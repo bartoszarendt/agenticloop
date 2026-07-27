@@ -33,6 +33,8 @@ All commands:
 | `configure models` | Set per-host role model settings in `agenticloop.json` |
 | `task` | Files-backed task records (`list`, `lint`, `new`, `status`) |
 | `audit` | Work-unit audit certificates (`new`, `baseline`, `report`, `status`, `gate`, `lint`, `override`, `resolve`) |
+| `closeout` | Composite closeout packets (`prepare`, `status`, `record`) |
+| `improvement` | Bounded improvement proposals (`new`, `lint`, `status`) |
 | `worktree` | Guarded worktrees (`add`, `guard`, `list`, `remove`, `cleanup`, `resolve-state`, `prune`) |
 | `event-logging` (alias `event`) | Write, validate, audit, and report workflow event logs |
 | `github-preflight` | Pre-review evidence gate for a GitHub PR |
@@ -274,6 +276,73 @@ project's `default_review_budget`, then the built-in `5`; this is a Review Round
 Checkpoint threshold, not a review cap. `audit new --budget <n>` is an explicit override;
 without it, the command materializes `default_audit_budget`, then the built-in
 `3`. Existing task and audit records keep their stored values.
+
+## Audit report and closeout
+
+The Auditor emits exactly one `auditor_report_v1` JSON object described in
+`agenticloop/agents/auditor.md`. Persist it without rewriting its findings:
+
+```text
+npx agenticloop audit report AUD-001 --file .agenticloop/tmp/AUD-001-run-1.json
+Get-Content -Raw '.agenticloop/tmp/AUD-001-run-1.json' |
+  npx agenticloop audit report AUD-001 --stdin
+```
+
+`--file`, `--stdin`, and legacy inline fields are mutually exclusive. The wire
+format requires all six perspectives and every finding field (`id`, `severity`,
+`blocking`, `claim`, `evidenceRefs`, `consequence`, `requiredOutcome`, and
+`verificationRequired`). Unknown fields fail rather than being dropped. A host
+receipt is `verified` only when an available host verifier validates it; otherwise
+the durable provenance is `asserted`.
+
+Closeout is two-stage and packets are restricted to `.agenticloop/tmp/`:
+
+```text
+npx agenticloop closeout prepare --work-unit milestone:M00 \
+  --artifact commit:<full-sha> --output .agenticloop/tmp/milestone-M00-closeout.json
+npx agenticloop closeout record --packet .agenticloop/tmp/milestone-M00-closeout.json --dry-run
+npx agenticloop closeout record --packet .agenticloop/tmp/milestone-M00-closeout.json --yes
+```
+
+`prepare` exit 0 means `completion_eligible: true`; exit 1 emits a truthful
+non-complete or unevaluable packet. `status` exits 0 only for one current,
+reconstructable `complete` marker. `record` exits 0 for a current applied or
+idempotent marker, including a truthful non-complete correction and a
+same-packet retry whose exact digest is already the one current marker.
+Packets expose `publishable`, `completion_eligible`, `recommended_status`,
+and structured reasons. Marker states are `complete`, `follow_up_required`,
+`needs_context`, and `blocked`; corrections supersede exact prior references
+without deleting history.
+
+Plan synchronization is mechanical. When a selected source plan
+(`documents.plan`) applies, an omitted `--plan-sync` never completes:
+`--plan-sync not_required` is the explicit visible opt-out, and
+`--plan-sync synced [--plan-ref <path>] [--plan-revision sha256:<hash>]`
+verifies that the plan exists, that its task table covers the work items past
+`planned`/`in-progress`, and binds the exact plan content revision into the
+packet digest. Unrelated Markdown tables may precede the task table, but the
+selected plan must resolve inside the target repository. A plan edit after
+certification stales the packet and marker.
+
+`--improvement-ref <id>` must name an existing, valid improvement proposal
+(`improvement lint` clean) that relates to the work unit. Improvement
+`--source-ref` values must resolve against live durable state: audit IDs and
+runs, task IDs, decision IDs, closeout marker digests, or proposal IDs;
+fabricated references fail before any file is created.
+
+After certification only specifically validated workflow deltas survive: the
+bound audit record, the exact marker mutation, a covered-task
+`accepted -> closed` terminal transition, an append-only schema-valid
+`task.closed` event whose task ID and `files` backend match the applicable
+event-log path and whose event ID is unique, an exact valid referenced
+proposal whose source references resolve against the same command-local live
+state, and transient `.agenticloop/tmp/` activity. Everything else is product
+drift. GitHub closeout additionally proves, per covered task, one merged PR
+whose current aggregate review decision is approved, that closes the correct
+issue, and that lands the certified candidate; historical approvals never
+override a current change request. `github-ready` fails closed when the linked
+issue is not the unique carrier of its task identity across open and closed
+issues.
 
 ## Exit statuses
 

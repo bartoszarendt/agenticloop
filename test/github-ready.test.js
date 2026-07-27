@@ -149,7 +149,7 @@ function makeIssue(overrides = {}) {
  * absence of mutation commands. `prFor` may return a different PR object based
  * on the requested JSON fields, to model head/issue disagreement.
  */
-function makeRunner({ prData, issueData, prFor, record } = {}) {
+function makeRunner({ prData, issueData, prFor, record, issues } = {}) {
   return (_command, args) => {
     if (record) record.push(args);
     if (args[0] === 'api' && args[1] === 'user') {
@@ -165,6 +165,10 @@ function makeRunner({ prData, issueData, prFor, record } = {}) {
     }
     if (args[0] === 'issue' && args[1] === 'view') {
       return { status: 0, stdout: JSON.stringify(issueData), stderr: '' };
+    }
+    if (args[0] === 'issue' && args[1] === 'list') {
+      const list = issues ?? [{ number: issueData?.number, state: 'OPEN', title: issueData?.title, labels: [], body: issueData?.body }];
+      return { status: 0, stdout: JSON.stringify(list), stderr: '' };
     }
     if (args[0] === 'repo' && args[1] === 'view') {
       return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'o/r' }), stderr: '' };
@@ -191,10 +195,11 @@ describe('github-ready composite gate', () => {
       errors: [],
     });
     assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.identity, { ok: true, taskId: 'T-001', errors: [] });
     // Ready uses the same JSON diagnostic envelope as preflight.
     assert.deepEqual(
       Object.keys(result).sort(),
-      ['diagnostics', 'errors', 'failureCategories', 'firstSafeRepair', 'headRefOid', 'issue', 'ok', 'pr', 'preflight', 'readyForMerge', 'reviewAudit', 'schemaVersion', 'warningDiagnostics', 'warnings'].sort()
+      ['diagnostics', 'errors', 'failureCategories', 'firstSafeRepair', 'headRefOid', 'identity', 'issue', 'ok', 'pr', 'preflight', 'readyForMerge', 'reviewAudit', 'schemaVersion', 'warningDiagnostics', 'warnings'].sort()
     );
   });
 
@@ -446,6 +451,65 @@ describe('github-ready composite gate', () => {
     const failReport = formatGitHubReadyReport(failResult);
     assert.match(failReport.summary.join('\n'), /ready for merge: no/);
     assert.ok(failReport.errors.length > 0);
+  });
+});
+
+describe('github-ready task identity gate', () => {
+  function issueSummary(number, { state = 'OPEN', title = '', body = '', labels = [] } = {}) {
+    return { number, state, title, body, labels: labels.map(name => ({ name })) };
+  }
+
+  it('fails closed naming every carrier when a duplicate task identity exists', () => {
+    const runner = makeRunner({
+      prData: makePr(),
+      issueData: makeIssue(),
+      issues: [
+        issueSummary(7, { title: 'T-001' }),
+        issueSummary(21, { state: 'CLOSED', body: '---\ntask_id: T-001\n---\n' }),
+      ],
+    });
+    const result = runGitHubReady({ pr: 42, commandRunner: runner });
+    assert.equal(result.readyForMerge, false);
+    assert.equal(result.identity.ok, false);
+    assert.ok(result.errors.some(message => /#7/.test(message) && /#21/.test(message) && /T-001/.test(message)),
+      JSON.stringify(result.errors));
+    assert.ok(result.diagnostics.some(item => item.category === 'task_identity'));
+  });
+
+  it('fails closed when the identity inventory is incomplete', () => {
+    const runner = makeRunner({ prData: makePr(), issueData: makeIssue(), issues: [] });
+    // Override: the inventory fetch itself fails.
+    const failing = (command, args) => {
+      if (args[0] === 'issue' && args[1] === 'list') {
+        return { status: 1, stdout: '', stderr: 'HTTP 500' };
+      }
+      return runner(command, args);
+    };
+    const result = runGitHubReady({ pr: 42, commandRunner: failing });
+    assert.equal(result.readyForMerge, false);
+    assert.ok(result.errors.some(message => /inventory|could not be fetched/i.test(message)),
+      JSON.stringify(result.errors));
+  });
+
+  it('accepts a prebuilt inventory snapshot instead of fetching again', () => {
+    const runner = makeRunner({ prData: makePr(), issueData: makeIssue() });
+    const calls = [];
+    const counting = (command, args) => {
+      if (args[0] === 'issue' && args[1] === 'list') calls.push(args.join(' '));
+      return runner(command, args);
+    };
+    const snapshot = {
+      complete: true,
+      state: 'ok',
+      carriers: new Map([['T-001', [{ number: 7, state: 'open', source: 'title' }]]]),
+      duplicates: [],
+      contradictions: [],
+      errors: [],
+      issues: [],
+    };
+    const result = runGitHubReady({ pr: 42, commandRunner: counting, taskInventory: snapshot });
+    assert.equal(result.readyForMerge, true, JSON.stringify(result.errors));
+    assert.equal(calls.length, 0, 'the injected snapshot is reused; no second enumeration');
   });
 });
 

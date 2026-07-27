@@ -118,7 +118,7 @@ describe('audit end-to-end lifecycle', () => {
 
     // Accepted tasks integrated into one candidate -> create the audit record.
     assert.equal(
-      (await audit(target, newAuditArgs('T-041,T-042', 'commit:aaa111'))).status,
+      (await audit(target, newAuditArgs('T-041,T-042', 'commit:aaa1110000000000000000000000000000000000'))).status,
       0
     );
 
@@ -134,20 +134,20 @@ describe('audit end-to-end lifecycle', () => {
     assert.equal(
       (await audit(target, [
         'baseline', 'AUD-001',
-        '--artifact', 'commit:bbb222',
+        '--artifact', 'commit:bbb2220000000000000000000000000000000000',
         '--covered-tasks', 'T-041,T-042,T-055',
-        '--evidence', 'Integrated verification bound to commit:bbb222.',
+        '--evidence', 'Integrated verification bound to commit:bbb2220000000000000000000000000000000000.',
       ])).status,
       0
     );
 
     // A report bound to the old candidate is rejected: the baseline moved.
-    const staleReport = await reportRun(target, { verdict: 'certified', ref: 'ref-2', artifact: 'commit:aaa111' });
+    const staleReport = await reportRun(target, { verdict: 'certified', ref: 'ref-2', artifact: 'commit:aaa1110000000000000000000000000000000000' });
     assert.equal(staleReport.status, 1);
     assert.match(staleReport.stderr, /does not match the frozen candidate/);
 
     // Fresh invocation audits the new exact candidate and certifies it.
-    assert.equal((await reportRun(target, { verdict: 'certified', ref: 'ref-2', artifact: 'commit:bbb222' })).status, 0);
+    assert.equal((await reportRun(target, { verdict: 'certified', ref: 'ref-2', artifact: 'commit:bbb2220000000000000000000000000000000000' })).status, 0);
 
     const closeout = gate(target);
     assert.equal(closeout.allowed, true, closeout.reasons.join('; '));
@@ -169,7 +169,7 @@ describe('audit end-to-end lifecycle', () => {
 
   it('exhausts the budget after three non-certifying reports without inventing a verdict', async () => {
     const target = makeTarget('budget');
-    await audit(target, newAuditArgs('T-041', 'commit:ccc333'));
+    await audit(target, newAuditArgs('T-041', 'commit:ccc3330000000000000000000000000000000000'));
 
     for (let index = 1; index <= 3; index++) {
       const verdict = index === 3 ? 'needs_human_decision' : 'needs_remediation';
@@ -191,7 +191,7 @@ describe('audit end-to-end lifecycle', () => {
 
   it('bypasses the gate visibly when work_unit_audit is explicitly disabled', async () => {
     const target = makeTarget('disabled', 'disabled');
-    await audit(target, newAuditArgs('T-041', 'commit:ddd444'));
+    await audit(target, newAuditArgs('T-041', 'commit:ddd4440000000000000000000000000000000000'));
     await reportRun(target, { verdict: 'needs_remediation', ref: 'ref-1', findings: BLOCKING_FINDING });
 
     const closeout = gate(target, 'disabled');

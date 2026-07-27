@@ -70,6 +70,10 @@ export const DECISIONS_DIRECTORY_RELATIVE_PATH = '.agenticloop/decisions';
 // not a task-record projection and does not reintroduce the removed summaries
 // store: per-task completion summaries stay inline in the task record.
 export const AUDITS_DIRECTORY_RELATIVE_PATH = '.agenticloop/audits';
+// Improvement proposals. Target-owned durable state created on first proposal;
+// a serious required-gate incident may create one proposal without waiting for
+// repeated friction. Proposals never mutate their target surface.
+export const IMPROVEMENTS_DIRECTORY_RELATIVE_PATH = '.agenticloop/improvements';
 export const LOGS_DIRECTORY_RELATIVE_PATH = '.agenticloop/logs';
 export const SCRATCH_DIRECTORY_RELATIVE_PATH = '.agenticloop/tmp';
 export const LEGACY_SCRATCH_DIRECTORY_RELATIVE_PATH = 'tmp';
@@ -130,6 +134,7 @@ export const TARGET_STATE_RELATIVE_PATHS = Object.freeze([
   TASKS_DIRECTORY_RELATIVE_PATH,
   DECISIONS_DIRECTORY_RELATIVE_PATH,
   AUDITS_DIRECTORY_RELATIVE_PATH,
+  IMPROVEMENTS_DIRECTORY_RELATIVE_PATH,
   LOGS_DIRECTORY_RELATIVE_PATH,
   SCRATCH_DIRECTORY_RELATIVE_PATH,
 ]);
@@ -253,10 +258,17 @@ export const AUDIT_REQUIRED_SECTION_HEADINGS = Object.freeze([
   '## Known Limitations',
   '## Audit History',
   '## Consolidated Findings',
+  '## Finding Dispositions',
   '## Remediation Tasks',
   '## Final Certification',
   '## Comments',
 ]);
+
+// Legacy (audit_schema_version absent or 1) records predate typed finding
+// dispositions; the section is required only for current-schema records.
+export const LEGACY_AUDIT_REQUIRED_SECTION_HEADINGS = Object.freeze(
+  AUDIT_REQUIRED_SECTION_HEADINGS.filter(heading => heading !== '## Finding Dispositions')
+);
 
 // The lifecycle state of the certificate itself. Distinct from the Auditor's
 // verdict: `blocked` is a workflow state the budget rule sets, never a verdict
@@ -291,6 +303,56 @@ export const AUDIT_INVOCATION_MODES = Object.freeze([
 ]);
 
 export const AUDIT_BLOCKED_REASON_BUDGET_EXHAUSTED = 'audit_budget_exhausted';
+
+// Current audit-record shape. Legacy records carry no audit_schema_version
+// and are parsed with an explicit migration diagnostic; they are never
+// silently reinterpreted as current-schema records.
+export const AUDIT_SCHEMA_VERSION = 2;
+export const LEGACY_AUDIT_SCHEMA_VERSION = 1;
+
+// Versioned Auditor report wire format (auditor -> CLI). One schema is emitted
+// by the Auditor role and consumed by `audit report --file|--stdin` without
+// substantive rewriting.
+export const AUDIT_REPORT_SCHEMA_VERSION = 'auditor_report_v1';
+// Legacy inline `--finding-json` ingestion remains accepted during the
+// compatibility period and is recorded under this explicit version label. It
+// never fabricates six perspective bodies and never claims lossless provenance.
+export const LEGACY_INLINE_REPORT_VERSION = 'legacy_inline_v1';
+
+// The six audit perspectives. One Auditor covers all six in one execution; the
+// wire format and durable history keep every perspective body.
+export const AUDIT_PERSPECTIVES = Object.freeze([
+  'outcome',
+  'completeness',
+  'integration_coherence',
+  'engineering_quality',
+  'verification',
+  'risk',
+]);
+
+// Typed finding dispositions. A disposition never changes blocking status,
+// never certifies the work unit, and never consumes audit_budget.
+export const AUDIT_DISPOSITION_TYPES = Object.freeze([
+  'remediation_task',
+  'change_request',
+  'human_decision',
+  'accepted_limitation',
+  'follow_up',
+  'rejected_with_counter_evidence',
+  'no_action',
+]);
+
+// Terminal closeout marker model. The first compatibility line stays
+// `AGENT_CLOSEOUT_STATUS: <status>`; current markers add schema and
+// provenance lines and are the only markers treated as valid completion.
+export const CLOSEOUT_MARKER_STATUSES = Object.freeze([
+  'complete',
+  'follow_up_required',
+  'needs_context',
+  'blocked',
+]);
+export const CLOSEOUT_MARKER_SCHEMA_VERSION = 1;
+export const CLOSEOUT_PACKET_SCHEMA_VERSION = 1;
 
 // Workflow defaults are centralized here so task validation, GitHub preflight,
 // telemetry, and record creation cannot drift from one another.

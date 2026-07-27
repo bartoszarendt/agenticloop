@@ -494,7 +494,7 @@ function buildClaudeCoordinationLines(maintainerAgent, engineerAgent, auditorAge
     'Coordination in Claude Code:',
     `- Route task authoring, review, acceptance, and closeout through the Claude Code subagent \`${maintainerAgent}\`.`,
     `- Route scoped implementation and revision work through the Claude Code subagent \`${engineerAgent}\`.`,
-    `- Route work-unit certification through the Claude Code subagent \`${auditorAgent}\` once every covered task is accepted and integrated into one exact frozen candidate. Every re-audit is a fresh invocation; there is no same-session audit.`,
+    `- Route work-unit certification through the Claude Code subagent \`${auditorAgent}\` once every covered task is accepted and integrated into one exact frozen candidate. Every re-audit is a fresh invocation; there is no same-session audit. Persist the returned \`auditor_report_v1\` object through \`agenticloop audit report\` without rewriting its findings.`,
     '- Agentic Loop is serial by default. For every authorized multi-task unit, complete a current Parallel Opportunity Scan after decomposition and include its durable result or not-currently-eligible rescan trigger in implementation delegation. Load parallel-delegation before choosing serial or parallel execution.',
     '- Start parallel role work only when the parallel-delegation skill plan, lease, backend ownership, and join condition requirements are satisfied; otherwise record the concrete serial reason.',
     '- Long-running or parallel role work must include a lease; parallel-specific liveness details live in parallel-delegation.',

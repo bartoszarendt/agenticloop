@@ -118,6 +118,12 @@ tracked Markdown alongside `.agenticloop/decisions/`, created on first proposal,
 and never scaffolded by init. Settle gitignore the same way decisions are
 handled (tracked, not ignored).
 
+Create one only for a recurring process pattern, except for one directly
+evidenced required-gate bypass, fabrication, or material misordering. Use
+`npx agenticloop improvement new` with durable source references; a serious audit
+incident cites both the audit and the erroneous marker/carrier. The command uses
+exclusive creation and never edits the proposed target surface.
+
 `agenticloop.json` and `agenticloop/config.json` are adapter/tooling config.
 They are created by `agenticloop init --adapter <host>` or by choosing host
 integration during `agenticloop setup`, and are not part

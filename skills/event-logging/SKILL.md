@@ -59,6 +59,12 @@ identifiers (`github:issue:<n>`, `github:pr:<n>`, `commit:<sha>`, `branch:<name>
 `task-file:<path>`, `command:<command>`) and `--data-json` for small structured
 context.
 
+For a fresh Auditor delegation, the Orchestrator records `role.invoked` with
+`data.target_role: "auditor"`, `data.invocation_reference`,
+`data.delegation_mode`, and `data.fallback: false`. When logging is enabled,
+`audit report` cross-checks that event; event logging remains optional and an
+unavailable logger never manufactures verified provenance.
+
 When event logging is enabled, a completed or reviewed task ending with zero
 required gate events is non-conformant. Do not backfill missed events as if they
 happened on time; record the miss as a process gap instead.

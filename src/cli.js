@@ -76,6 +76,8 @@ import { loadProjectMap } from './project-map.js';
 import { resolveTaskBackend } from './task-backend.js';
 import { cmdTask } from './task-cli.js';
 import { cmdAudit } from './audit-cli.js';
+import { cmdCloseout } from './closeout-cli.js';
+import { cmdImprovement } from './improvement-cli.js';
 import {
   configureModels,
   parseModelMutations,
@@ -874,7 +876,16 @@ async function cmdGithubReady(args, io) {
 
   let result;
   try {
-    result = runGitHubReady({ pr: opts.pr, issue: opts.issue, repo: opts.repo });
+    const target = resolveCliTarget(io, opts.target);
+    const projectConfig = loadProjectMap(target)?.config ?? null;
+    result = runGitHubReady({
+      pr: opts.pr,
+      issue: opts.issue,
+      repo: opts.repo,
+      commandRunner: io.ghCommandRunner ?? defaultGhCommandRunner,
+      target,
+      taskIdRegex: projectConfig?.task_backend === 'github' ? projectConfig?.task_id_regex : undefined,
+    });
   } catch (error) {
     if (!(error instanceof GitHubReadyError)) throw error;
     if (asJson) io.out(JSON.stringify({ ...commandFailure('github-ready', error), readyForMerge: false }));
@@ -2461,6 +2472,10 @@ export async function dispatch(argv, io = createIo()) {
       return await cmdTask(rest, io);
     case 'audit':
       return await cmdAudit(rest, io);
+    case 'closeout':
+      return await cmdCloseout(rest, io);
+    case 'improvement':
+      return await cmdImprovement(rest, io);
     case 'event-logging':
       return await cmdEvent(rest, command === 'event' ? 'event' : 'event-logging', io);
     case 'configure':

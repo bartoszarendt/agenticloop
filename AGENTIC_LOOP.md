@@ -1731,9 +1731,40 @@ awaiting-human, blocked, or non-certifying audit keeps the marker at
 `follow_up_required`. Publish one final marker for the work unit, not one per
 audit run. See the Work-Unit Audit section and [[work-unit-audit]].
 
-An explicit `work_unit_audit: disabled` bypasses that gate, preserves any
-existing audit history, does not claim the work unit is certified, and must be
-stated visibly in the closeout evidence.
+An explicit `work_unit_audit: disabled` bypasses that gate only for a
+non-audit completion: it still requires an exact candidate and every other
+closeout gate, records `audit_opt_out: true` with `audit: null`, and never calls
+the result certification.
+
+Use `closeout prepare` then `closeout record --packet ... --yes`. Preparation
+emits a versioned packet with `publishable`, `completion_eligible`,
+`recommended_status`, structured reasons, and a reconstructable digest. Exit 0
+from prepare means only completion eligibility; exit 1 may still emit a truthful
+packet. Record rebuilds live facts before mutation and compares the packet's
+candidate, tasks, carrier revision, audit identity/run/verdict, gates,
+dispositions, plan sync, improvements, predecessor set, and derived state. A
+files-backend retry of the exact applied packet is idempotent: when the packet
+digest is already the one current marker and no other live fact changed, record
+returns success without rewriting the marker.
+
+Plan synchronization is mechanical: when a selected source plan applies, an
+omitted `--plan-sync` is never completion-eligible; `not_required` is the
+explicit opt-out; `synced` cites and verifies the exact plan reference and
+content revision. After certification only specifically validated workflow
+deltas survive: the bound audit record, the exact marker mutation, a covered-task
+`accepted -> closed` terminal transition, an append-only schema-valid closeout
+event in an applicable event log, an exact valid referenced improvement
+proposal, and transient scratch activity. Every other changed, dirty, untracked,
+or renamed path is product drift.
+
+The only marker states are `complete`, `follow_up_required`, `needs_context`, and
+`blocked`. One current marker is required. New markers include schema, work unit,
+artifact, audit reference, predecessor, plan-sync disposition, improvement refs,
+and gate digest. A correction appends a new marker that supersedes exact prior
+marker references; old history remains visible. Legacy unprovenanced markers are
+recognizable but never valid completion. A packet is transient under
+`.agenticloop/tmp/`; status reconstructs the digest from durable state after it is
+deleted.
 
 Closeout checks:
 
@@ -1750,8 +1781,7 @@ Closeout checks:
 - follow-up task records
 - repeated process failures worth turning into skill updates
 
-Post exactly one closeout status marker (`AGENT_CLOSEOUT_STATUS: complete` or
-`follow_up_required`). For files-backed work, append it to the last accepted task
+Post exactly one closeout status marker. For files-backed work, append it to the last accepted task
 record under `## Comments`; for GitHub-backed work, post it as a comment on the
 last task issue or PR in the work unit. Cite the covered task ids.
 

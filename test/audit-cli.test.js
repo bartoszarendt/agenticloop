@@ -69,10 +69,10 @@ async function seedRecord(target) {
     'new',
     '--work-unit', 'phase:4',
     '--covered-tasks', 'T-041,T-042',
-    '--artifact', 'commit:abc123',
+    '--artifact', 'commit:abc1230000000000000000000000000000000000',
     '--goal', 'Deliver Phase 4.',
     '--completion-oracle', 'All covered outcomes and checks pass.',
-    '--evidence', 'Integrated verification for commit:abc123.',
+    '--evidence', 'Integrated verification for commit:abc1230000000000000000000000000000000000.',
   ], target);
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
   return result;
@@ -188,9 +188,9 @@ describe('audit CLI', () => {
 
     const rebaseline = await run([
       'baseline', 'AUD-001',
-      '--artifact', 'commit:def456',
+      '--artifact', 'commit:def4560000000000000000000000000000000000',
       '--covered-tasks', 'T-041,T-042,T-055',
-      '--evidence', 'Integrated verification for commit:def456.',
+      '--evidence', 'Integrated verification for commit:def4560000000000000000000000000000000000.',
     ], target);
     assert.equal(rebaseline.status, 0);
     const record = readRecord(target);
@@ -203,7 +203,7 @@ describe('audit CLI', () => {
     const target = makeTarget('baseline-evidence');
     await seedRecord(target);
     const result = await run([
-      'baseline', 'AUD-001', '--artifact', 'commit:def456',
+      'baseline', 'AUD-001', '--artifact', 'commit:def4560000000000000000000000000000000000',
     ], target);
     assert.equal(result.status, 2);
     assert.match(result.stderr, /requires --evidence/);
@@ -239,7 +239,7 @@ describe('audit CLI', () => {
     writeFileSync(
       file,
       readFileSync(file, 'utf-8').replace(
-        'Audited artifact: commit:abc123',
+        'Audited artifact: commit:abc1230000000000000000000000000000000000',
         'Audited artifact: commit:other'
       ),
       'utf-8'
@@ -358,9 +358,9 @@ describe('audit CLI', () => {
     assert.equal(readRecord(target).auditBudget, 4);
 
     const override = await run([
-      'new', '--work-unit', 'phase:5', '--covered-tasks', 'T-055', '--artifact', 'commit:def456',
+      'new', '--work-unit', 'phase:5', '--covered-tasks', 'T-055', '--artifact', 'commit:def4560000000000000000000000000000000000',
       '--goal', 'Deliver Phase 5.', '--completion-oracle', 'The outcome is observable.',
-      '--evidence', 'Integrated verification for commit:def456.', '--budget', '6',
+      '--evidence', 'Integrated verification for commit:def4560000000000000000000000000000000000.', '--budget', '6',
     ], target);
     assert.equal(override.status, 0, override.stderr);
     assert.equal(readRecord(target, 'AUD-002').auditBudget, 6);
@@ -369,9 +369,9 @@ describe('audit CLI', () => {
   it('lets an explicit --budget win even when the lower-precedence project default is invalid', async () => {
     const target = makeTarget('explicit-budget-invalid-project-default', ['default_audit_budget: nope']);
     const result = await run([
-      'new', '--work-unit', 'phase:5', '--covered-tasks', 'T-055', '--artifact', 'commit:def456',
+      'new', '--work-unit', 'phase:5', '--covered-tasks', 'T-055', '--artifact', 'commit:def4560000000000000000000000000000000000',
       '--goal', 'Deliver Phase 5.', '--completion-oracle', 'The outcome is observable.',
-      '--evidence', 'Integrated verification for commit:def456.', '--budget', '4',
+      '--evidence', 'Integrated verification for commit:def4560000000000000000000000000000000000.', '--budget', '4',
     ], target);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(readRecord(target).auditBudget, 4);

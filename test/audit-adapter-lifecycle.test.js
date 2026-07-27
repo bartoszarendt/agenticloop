@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -173,6 +174,63 @@ describe('auditor adapter lifecycle', () => {
     assert.ok(!existsSync(join(fx, '.opencode', 'agents', 'auditor.md')));
     assert.ok(!existsSync(join(fx, '.codex', 'agents', 'auditor.toml')));
     assert.ok(!existsSync(join(fx, '.claude', 'agents', 'auditor.md')));
+  });
+});
+
+describe('generated-adapter auditor contract', () => {
+  const HOSTS = [
+    { name: 'opencode', generate: generateOpencodeArtifacts, dir: '.opencode' },
+    { name: 'codex', generate: generateCodexArtifacts, dir: '.codex' },
+    { name: 'claude-code', generate: generateClaudeCodeArtifacts, dir: '.claude' },
+    { name: 'copilot', generate: generateCopilotArtifacts, dir: '.github' },
+    { name: 'cursor', generate: generateCursorArtifacts, dir: '.cursor' },
+  ];
+
+  function hostText(root, dir) {
+    const base = join(root, dir);
+    const chunks = [];
+    const walk = current => {
+      for (const entry of readdirSync(current, { withFileTypes: true })) {
+        const full = join(current, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else chunks.push(readFileSync(full, 'utf-8'));
+      }
+    };
+    walk(base);
+    return chunks.join('\n');
+  }
+
+  it('every generated host requires fresh Auditor delegation, auditor_report_v1 transport, and no same-session fallback', () => {
+    for (const host of HOSTS) {
+      const fx = makeFixture();
+      const cfg = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+      const out = mkdtempSync(join(tmpDir, `contract-${host.name}-`));
+      host.generate(cfg, fx, out);
+      const text = hostText(out, host.dir);
+      assert.match(text, /auditor_report_v1/, `${host.name}: generated guidance must name the auditor_report_v1 transport`);
+      assert.match(text, /fresh (spawn|invocation|delegation)|fresh Auditor/i,
+        `${host.name}: generated guidance must require a fresh Auditor delegation per audit`);
+      assert.match(text, /no same-session audit|same-session audit (does not satisfy|is not)/i,
+        `${host.name}: generated guidance must forbid a same-session audit fallback`);
+    }
+  });
+
+  it('every generated auditor role emits the auditor_report_v1 wire format from canonical source', () => {
+    const auditorFiles = {
+      opencode: ['.opencode', 'agents', 'auditor.md'],
+      codex: ['.codex', 'agents', 'auditor.toml'],
+      'claude-code': ['.claude', 'agents', 'auditor.md'],
+      copilot: ['.github', 'agents', 'auditor.agent.md'],
+      cursor: ['.cursor', 'agents', 'auditor.md'],
+    };
+    for (const host of HOSTS) {
+      const fx = makeFixture();
+      const cfg = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+      const out = mkdtempSync(join(tmpDir, `wire-${host.name}-`));
+      host.generate(cfg, fx, out);
+      const content = readFileSync(join(out, ...auditorFiles[host.name]), 'utf-8');
+      assert.match(content, /auditor_report_v1/, `${host.name}: generated auditor role must emit auditor_report_v1`);
+    }
   });
 });
 

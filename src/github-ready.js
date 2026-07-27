@@ -19,6 +19,7 @@
 import { defaultGhCommandRunner } from './gh-helpers.js';
 import { runPreflight, PreflightError } from './github-preflight.js';
 import { runGitHubReviewAudit, GitHubReviewAuditError } from './github-review-audit.js';
+import { fetchGitHubTaskInventory } from './closeout-github.js';
 
 export class GitHubReadyError extends Error {
   constructor(message) {
@@ -37,6 +38,9 @@ export class GitHubReadyError extends Error {
  * @param {Function} [options.commandRunner] Injectable `gh` runner for testing.
  * @param {string} [options.target] Local target root for verification facts and references.
  * @param {object} [options.verificationContext] Injectable local verification context.
+ * @param {string} [options.taskIdRegex]  Project task id pattern for identity checks.
+ * @param {object} [options.taskInventory] Injectable prebuilt inventory snapshot
+ *   (one command reuses one snapshot); fetched once when omitted.
  * @returns {{
  *   ok: boolean,
  *   readyForMerge: boolean,
@@ -56,6 +60,8 @@ export function runGitHubReady({
   commandRunner = defaultGhCommandRunner,
   target = process.cwd(),
   verificationContext,
+  taskIdRegex,
+  taskInventory,
 } = {}) {
   const prNumber = Number(pr);
   if (pr === undefined || pr === null || pr === '' || !Number.isInteger(prNumber) || prNumber <= 0) {
@@ -120,7 +126,42 @@ export function runGitHubReady({
     );
   }
 
-  const readyForMerge = preflight.ok && reviewAudit.ok && errors.length === 0;
+  // 3. Repository-wide task identity: the linked issue must be the unique
+  // carrier for its materialized task identity across open and closed issues.
+  // One inventory snapshot serves this command; incomplete state fails closed.
+  const linkedIssue = reviewAudit.issue ?? preflight.issue ?? null;
+  const identity = { ok: true, taskId: null, errors: /** @type {string[]} */ ([]) };
+  if (linkedIssue !== null) {
+    const inventory = taskInventory ?? fetchGitHubTaskInventory(commandRunner, { repo, taskIdRegex });
+    if (inventory.state !== 'ok') {
+      identity.ok = false;
+      identity.errors.push(
+        ...(inventory.errors.length > 0
+          ? inventory.errors
+          : [`GitHub task identity inventory is ${inventory.state}; uniqueness cannot be proven`])
+      );
+    } else {
+      const taskIds = [];
+      for (const [taskId, list] of inventory.carriers) {
+        if (taskId.startsWith('#')) continue;
+        if (list.some(carrier => Number(carrier.number) === Number(linkedIssue))) taskIds.push(taskId);
+      }
+      if (taskIds.length === 1) {
+        const carriers = inventory.carriers.get(taskIds[0]) ?? [];
+        identity.taskId = taskIds[0];
+        if (carriers.length !== 1 || Number(carriers[0]?.number) !== Number(linkedIssue)) {
+          identity.ok = false;
+          identity.errors.push(
+            `task identity '${taskIds[0]}' must be unique to the linked issue #${linkedIssue} but is carried by ` +
+            `${carriers.map(carrier => `#${carrier.number} [${carrier.state}]`).join(', ')}`
+          );
+        }
+      }
+    }
+  }
+  for (const message of identity.errors) errors.push(message);
+
+  const readyForMerge = preflight.ok && reviewAudit.ok && identity.ok && errors.length === 0;
 
   return {
     schemaVersion: 1,
@@ -136,12 +177,15 @@ export function runGitHubReady({
       independentReviewRequired: reviewAudit.independentReviewRequired,
       errors: reviewAudit.errors,
     },
+    identity: { ok: identity.ok, taskId: identity.taskId, errors: identity.errors },
     errors,
     warnings: [],
     diagnostics: [
       ...(preflight.errors ?? []).map(message => ({ message, category: 'preflight', owner: 'engineer' })),
       ...(reviewAudit.errors ?? []).map(message => ({ message, category: 'review_audit', owner: 'maintainer' })),
-      ...errors.map(message => ({ message, category: 'cross_gate_identity', owner: 'orchestrator' })),
+      ...(identity.errors ?? []).map(message => ({ message, category: 'task_identity', owner: 'maintainer' })),
+      ...errors.filter(message => !(identity.errors ?? []).includes(message))
+        .map(message => ({ message, category: 'cross_gate_identity', owner: 'orchestrator' })),
     ],
     warningDiagnostics: [],
     failureCategories: readyForMerge ? [] : ['preflight_or_review_audit'],

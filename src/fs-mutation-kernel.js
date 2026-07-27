@@ -25,12 +25,14 @@
 import {
   existsSync,
   lstatSync,
+  linkSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   renameSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
@@ -150,6 +152,20 @@ export function atomicWriteFile(path, content) {
   }
 }
 
+/** Atomically create a new file without ever replacing an existing path. */
+function atomicCreateFile(path, content) {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, content, { flag: 'wx' });
+    // `link` is an exclusive, same-directory commit: EEXIST leaves the
+    // contender untouched, unlike rename on platforms that replace targets.
+    linkSync(temporary, path);
+  } finally {
+    if (existsSync(temporary)) unlinkSync(temporary);
+  }
+}
+
 /**
  * Capture pre-transaction state for one absolute path. The snapshot is an
  * explicit discriminated record so rollback never has to guess:
@@ -252,7 +268,7 @@ function prepareMutation(targetRoot, mutation) {
     throw new Error(`mutation must be an object: ${JSON.stringify(mutation)}`);
   }
   const { type, path, content } = mutation;
-  if (type !== 'write' && type !== 'remove' && type !== 'mkdir' && type !== 'rmdir-empty') {
+  if (type !== 'write' && type !== 'create' && type !== 'remove' && type !== 'mkdir' && type !== 'rmdir-empty') {
     throw new Error(`unsupported mutation type '${type}' for ${String(path)}`);
   }
   const absPath = resolveTargetPath(targetRoot, path);
@@ -265,6 +281,7 @@ function prepareMutation(targetRoot, mutation) {
  * Mutations use **target-relative paths** resolved inside the kernel through
  * one canonical validator:
  *   { type: 'write',  path: 'relative/path', content }   atomic write
+ *   { type: 'create', path: 'relative/path', content }   atomic exclusive create
  *   { type: 'remove', path: 'relative/path' }            removal of a FILE only
  *   { type: 'mkdir',  path: 'relative/path' }            recursive directory creation
  *   { type: 'rmdir-empty', path: 'relative/path' }        reversible empty-dir removal
@@ -322,6 +339,19 @@ export function executeMutationBatch(targetRoot, mutations) {
   const removes = prepared.filter(item => item.type === 'remove');
   const emptyDirRemoves = prepared.filter(item => item.type === 'rmdir-empty');
   const writes = prepared.filter(item => item.type === 'write');
+  const creates = prepared.filter(item => item.type === 'create');
+
+  for (const item of creates) {
+    if (existsSync(item.absPath)) {
+      return {
+        ok: false,
+        errors: [`refusing exclusive create '${item.relPath}'; path already exists`],
+        rollbackErrors: [],
+        writtenFiles: [],
+        committedPaths: [],
+      };
+    }
+  }
 
   for (const item of emptyDirRemoves) {
     if (existsSync(item.absPath) && !statSync(item.absPath).isDirectory()) {
@@ -347,6 +377,7 @@ export function executeMutationBatch(targetRoot, mutations) {
   }
   const createdDirsOrdered = [...createdDirs].sort((left, right) => right.length - left.length);
   const removedDirs = [];
+  const createdFiles = new Set();
 
   try {
     for (const item of mkdirs) {
@@ -365,16 +396,25 @@ export function executeMutationBatch(targetRoot, mutations) {
     for (const item of writes) {
       atomicWriteFile(item.absPath, item.content);
     }
+    for (const item of creates) {
+      atomicCreateFile(item.absPath, item.content);
+      createdFiles.add(item.absPath);
+    }
     removeEmptyParents(root, removes.map(item => item.absPath));
     return {
       ok: true,
       errors: [],
       rollbackErrors: [],
-      writtenFiles: writes.map(item => item.relPath),
+      writtenFiles: [...writes, ...creates].map(item => item.relPath),
       committedPaths: prepared.map(item => item.relPath),
     };
   } catch (error) {
-    const rollbackErrors = rollbackSnapshots(snapshots);
+    // Do not remove a competing creator's file when our exclusive link failed
+    // with EEXIST after snapshotting. Only roll back create paths this batch
+    // actually linked.
+    const rollbackErrors = rollbackSnapshots(snapshots.filter(item =>
+      item.state !== 'absent' || !creates.some(create => create.absPath === item.path) || createdFiles.has(item.path)
+    ));
     // Recreate pre-existing empty directories removed by this batch. File
     // restoration above may already have recreated some parents.
     for (const dir of [...removedDirs].sort((left, right) => left.length - right.length)) {

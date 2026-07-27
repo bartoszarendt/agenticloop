@@ -3,6 +3,41 @@
 ## Unreleased
 
 ### Added
+- Audit and closeout integrity: canonical `auditor_report_v1` file/stdin
+  ingestion, capability-tiered asserted versus verified invocation provenance,
+  global invocation/receipt uniqueness, typed disposition requirements, and
+  collision-safe improvement proposal creation. `closeout prepare/status/record`
+  now use reconstructable digest packets, explicit four-state marker correction,
+  exact candidate drift checks, scratch-only atomic packet output, and trusted
+  GitHub marker publication with final-state revalidation.
+- Mechanical closeout gates: plan synchronization is enforced with
+  `--plan-sync not_required|synced|skipped` plus `--plan-ref`/`--plan-revision`
+  binding (an omitted disposition never completes when a source plan applies,
+  and a plan edit after certification stales the marker); post-certification
+  workflow deltas are content-validated (covered-task `accepted -> closed`
+  terminal transitions, append-only schema-valid `task.closed` events in
+  applicable event logs, exact valid referenced improvement proposals, and
+  transient scratch activity only); and a same-packet files retry whose exact
+  digest is already the current marker returns idempotent success without
+  rewriting the marker.
+- Durable improvement evidence: `improvement new` and `improvement lint`
+  resolve every `--source-ref` against live backend state (audit IDs and runs,
+  task IDs, decision IDs, closeout marker digests, proposal IDs) and reject
+  fabricated references before any file is created; closeout
+  `--improvement-ref` must name an existing, lint-valid proposal related to
+  the work unit.
+- GitHub terminal lifecycle: closeout proves one review-accepted, merged PR
+  that closes the correct covered-task issue and lands the certified
+  candidate; `github-ready` adds a repository-wide task-identity gate that
+  fails closed on duplicate carriers across open and closed issues; and every
+  GitHub audit, closeout, and readiness command uses one command-scoped
+  issue-inventory snapshot through the production `gh` runner (no test-only
+  injection), failing closed with an explicit `inventory_incomplete`
+  diagnostic when GitHub cannot be queried.
+- Generated host adapters (OpenCode, Codex, Claude Code, Copilot, Cursor) now
+  instruct orchestrators to persist the returned `auditor_report_v1` object
+  through `agenticloop audit report` without rewriting findings, alongside the
+  existing fresh-delegation and no-same-session audit rules.
 - Closed-loop PR-body authoring: `pr-body lint --pr <n> --body-file <path>`
   lints a local Markdown draft against live read-only GitHub context (the local
   file replaces only the in-memory candidate body; live task/decision reference

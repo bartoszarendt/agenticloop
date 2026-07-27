@@ -78,8 +78,9 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   accepted and its artifacts are integrated or composed into one exact frozen
   candidate. Auditor is a fresh, separate invocation every time and has no
   single-agent fallback; if no real delegation mechanism exists, record a blocked
-  condition instead of auditing inline. Persist the returned report with
-  `npx agenticloop audit report ...` without altering its findings, then route a
+   condition instead of auditing inline. Persist the returned `auditor_report_v1`
+   JSON unchanged with `npx agenticloop audit report <AUD-ID> --file <path>` or
+   `--stdin`, then route a
   non-certifying report to maintainer for disposition and to engineer for
   ordinary remediation tasks. Work-unit audit is enabled unless
   `.agenticloop/project.md` explicitly records `work_unit_audit: disabled`; see

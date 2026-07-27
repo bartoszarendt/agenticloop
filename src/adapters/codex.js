@@ -487,7 +487,7 @@ function buildCodexDeveloperInstructions(
 
   if (roleName === 'orchestrator') {
     lines.push(`When maintainer-owned work is needed, explicitly spawn the Codex custom agent \`${maintainerAgent}\`. When engineer-owned work is needed, explicitly spawn the Codex custom agent \`${engineerAgent}\` instead of doing that work inline.`);
-    lines.push(`When the covered tasks of a work unit are accepted and integrated into one exact frozen candidate, explicitly spawn the Codex custom agent \`${auditorAgent}\` to certify the work unit. Every re-audit is a fresh spawn; a same-session audit does not satisfy work-unit auditing.`);
+    lines.push(`When the covered tasks of a work unit are accepted and integrated into one exact frozen candidate, explicitly spawn the Codex custom agent \`${auditorAgent}\` to certify the work unit. Every re-audit is a fresh spawn; a same-session audit does not satisfy work-unit auditing. Persist the returned \`auditor_report_v1\` object through \`agenticloop audit report\` without rewriting its findings.`);
     lines.push('Agentic Loop is serial by default. For every authorized multi-task unit, complete a current Parallel Opportunity Scan after decomposition and include its durable result or not-currently-eligible rescan trigger in implementation delegation. Load parallel-delegation before choosing serial or parallel execution.');
     lines.push('Start parallel role work only when the parallel-delegation skill plan, lease, backend ownership, and join condition requirements are satisfied; otherwise record the concrete serial reason.');
     lines.push('Codex delegation contract:');

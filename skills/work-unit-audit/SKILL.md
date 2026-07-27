@@ -202,18 +202,24 @@ report:
 2. The orchestrator (or a human) persists it mechanically:
 
 ```text
-npx agenticloop audit report <AUD-ID> --verdict <verdict> \
-  --invocation-mode host_subagent --invocation-ref <unique-ref> \
-  --assessment "<one paragraph>" --evidence "<checks run>" \
-  --finding-json '<json array>'
+npx agenticloop audit report <AUD-ID> --file .agenticloop/tmp/AUD-001-run-1.json
+# PowerShell-safe alternative:
+Get-Content -Raw '.agenticloop/tmp/AUD-001-run-1.json' |
+  npx agenticloop audit report <AUD-ID> --stdin
 ```
 
-Persistence appends one history entry and rewrites the derived certification
-fields. It never edits an earlier history entry and never alters the report's
-substantive findings. Where the host supports path or operation restrictions,
-enforce the Auditor's read-only posture mechanically as well as in the prompt.
-`agenticloop/memory/audit-record.md` shows the parsed `### Run 1` recovery shape
-for diagnosis only; the CLI remains the sole writer for `## Audit History`.
+The input is exactly one `auditor_report_v1` JSON object from `agents/auditor.md`:
+all six named perspectives, exact artifact and task set, invocation object,
+assessment, evidence, verdict, and complete finding fields are required. Unknown
+top-level, invocation, perspective, or finding fields fail rather than being
+discarded. Multiline substantive text persists in the fenced JSON payload.
+
+Persistence appends one history entry and rewrites only derived certification
+fields. It never edits an earlier history entry or alters report substance. A
+host verifier can classify provenance as `verified`; without one, even a supplied
+receipt remains `asserted`. Invocation references and receipts are unique across
+every audit record before a write, so a successful mutation leaves audit lint
+clean. `legacy_inline_v1` remains compatible but is not lossless wire provenance.
 
 ## 9. Remediation routing
 

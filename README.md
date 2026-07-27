@@ -74,6 +74,7 @@ has the user-facing guide; merge remains human-controlled.
 | **Task records** | Define scope, out-of-scope boundaries, acceptance criteria, required checks, expected files, implementation notes, and review state. |
 | **Role boundaries** | Split work across orchestrator, maintainer, engineer, and auditor roles with explicit edit and acceptance boundaries per role. |
 | **Work-unit audit** | Certify a finished work unit against its exact integrated baseline before closeout, with findings routed through ordinary remediation. On by default; an explicit `work_unit_audit: disabled` is the human opt-out. |
+| **Mechanical closeout** | Prepare and revalidate a digest-bound packet before recording one current marker, with correction history, candidate-drift checks, and files/GitHub parity. |
 | **Parallel worktree lanes** | Run independent engineer lanes concurrently in guarded repo-internal `git worktree`s, with guard checks, lane-state preservation, and safe bulk cleanup after acceptance. |
 | **Canonical skills** | Provide focused procedures for task creation, TDD, debugging, verification evidence, review, blocked states, decision capture, attribution, and closeout. |
 | **Decision records** | Preserve durable project decisions under `.agenticloop/decisions/` so future agent sessions do not rediscover or contradict them. |

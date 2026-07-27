@@ -198,25 +198,70 @@ state the opt-out visibly in the closeout note.
 
 ## Closeout marker
 
-Post or record exactly one status marker:
+Use the two-stage CLI; never construct a completion marker by hand:
+
+```text
+npx agenticloop closeout prepare --work-unit milestone:M00 \
+  --artifact commit:<full-sha> --output .agenticloop/tmp/milestone-M00-closeout.json
+npx agenticloop closeout record --packet .agenticloop/tmp/milestone-M00-closeout.json --dry-run
+npx agenticloop closeout record --packet .agenticloop/tmp/milestone-M00-closeout.json --yes
+```
+
+`prepare` is read-only and writes only a validator-clean transient packet under
+`.agenticloop/tmp/`. Exit 0 means `completion_eligible: true`; exit 1 still
+returns a truthful non-complete or unevaluable packet. `record` re-evaluates live
+state and rejects stale packets. Its operational success never means a
+non-complete marker is completion.
+
+The four marker states are `complete`, `follow_up_required`, `needs_context`, and
+`blocked`. A packet exposes `publishable`, `completion_eligible`, and
+`recommended_status`. Only a publishable, completion-eligible `complete` packet
+has no non-complete reasons. A non-complete marker is publishable only as an
+explicit correction/update of one current marker; contradictory multiple current
+markers fail closed and are never silently repaired.
 
 ```text
 AGENT_CLOSEOUT_STATUS: complete
 AGENT_CLOSEOUT_STATUS: follow_up_required
+AGENT_CLOSEOUT_STATUS: needs_context
+AGENT_CLOSEOUT_STATUS: blocked
 ```
 
-If gaps remain, create or link follow-up task records and use `follow_up_required` until they are resolved or explicitly deferred by a human.
+Current markers carry schema, work unit, artifact, audit reference, predecessor,
+plan-sync disposition, improvement references, and a gate digest. A correction
+posts a new marker with `AGENT_CLOSEOUT_SUPERSEDES` naming the exact prior marker
+reference; it retains history. A legacy unprovenanced complete marker is history,
+not completion, and is corrected to a non-complete state before a later complete
+marker. GitHub never deletes the historical comment.
+
+Freeze the product candidate after all durable task, decision, and plan changes.
+After certification, only the bound audit record, marker publication, exact
+referenced improvement proposal, allowed closeout event append, permitted task
+terminal transition, and transient packet may change; every other path (including
+a product-to-workflow rename) is product drift and requires re-audit. Files tasks
+may already be `accepted` or `closed`; GitHub task issues must already be closed.
 
 The complete marker's evidence/note includes the conditional plan-sync record
 when a plan was selected and updated. Do not publish it until the post-sync audit
-certificate is current.
+certificate is current. The closeout gate enforces this mechanically: when a
+selected source plan applies, an omitted `--plan-sync` is never
+completion-eligible. Pass `--plan-sync not_required` only as the explicit
+maintainer opt-out, or `--plan-sync synced [--plan-ref <path>]
+[--plan-revision sha256:<hash>]` after the update; `synced` verifies the plan's
+task table covers the work items past `planned`/`in-progress` and binds the exact
+plan content revision into the packet digest, so any later plan edit stales the
+marker.
 
 If the work unit spans multiple task records, record the marker once for the
 work unit, citing the task ids it covers.
 
-**GitHub projection**: post the marker as a comment on the last task issue or PR
-in the work unit (or on the tracking issue when one exists), citing the covered
-task ids. End with [[github-attribution]].
+**GitHub projection**: post the marker as a comment on the resolved covered-task
+issue carrier, citing the covered task ids. The adapter accepts only a marker
+authored by the trusted authenticated Agentic Loop account, re-fetches the full
+task inventory and carrier state immediately before publication, and recovers an
+ambiguous post only by locating the exact current digest. GitHub has no
+cross-resource transaction, so the residual remote TOCTOU window is reported
+rather than claimed away. End with [[github-attribution]].
 
 **Files projection**: append the marker and a dated note to the last accepted
 task record in the work unit (under `## Comments`), citing the covered task ids.

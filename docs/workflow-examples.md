@@ -138,7 +138,10 @@ inline `## Scope Completed` summary and evidence in each task record are
 complete, then posts an `AGENT_CLOSEOUT_STATUS` marker citing the covered task
 ids. In grouped projects this happens at group boundaries; in flat projects it
 runs when a human-identified task set finishes. Closeout does not write a
-separate summary file.
+separate summary file. Use `closeout prepare` to create a transient packet under
+`.agenticloop/tmp/`, inspect or dry-run `closeout record`, then apply it with
+`--yes`. The four truthful states are `complete`, `follow_up_required`,
+`needs_context`, and `blocked`; only the first is completion.
 
 When useful, include the optional `## Trace` section in the inline task summary
 following the shape in `agenticloop/memory/work-unit-summary.md`.

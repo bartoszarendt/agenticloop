@@ -100,6 +100,7 @@ function detectColor(env, stdoutIsTTY, ci) {
  * @param {boolean} [options.color]        Override color capability.
  * @param {(input: NodeJS.ReadableStream, output: NodeJS.WritableStream) => object} [options.promptFactory]
  * @param {Function} [options.ghCommandRunner]  Injectable read-only GitHub command runner for tests.
+ * @param {Function} [options.auditProvenanceVerifier] Host receipt verifier for Auditor delegations.
  * @returns {object} io context
  */
 export function createIo(options = {}) {
@@ -129,6 +130,7 @@ export function createIo(options = {}) {
     err: makeWriter(stderr),
     warn: makeWriter(stderr),
     ghCommandRunner: options.ghCommandRunner ?? null,
+    auditProvenanceVerifier: options.auditProvenanceVerifier ?? null,
   };
 
   io.style = (text, code) => (color ? `\u001b[${code}m${text}\u001b[0m` : text);

@@ -199,6 +199,7 @@ const FORBIDDEN_AUDIT_TEMPLATE_KEYS = Object.freeze([
 ]);
 
 const REQUIRED_AUDIT_TEMPLATE_KEYS = Object.freeze([
+  'audit_schema_version',
   'audit_id',
   'work_unit',
   'audit_state',

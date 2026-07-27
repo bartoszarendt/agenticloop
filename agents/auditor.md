@@ -96,16 +96,50 @@ audit record is the single source of truth for certification outcomes.
 
 ## Output
 
-Return one consolidated report containing:
+Return exactly one `auditor_report_v1` JSON object and no Markdown wrapper. This
+is the canonical wire format consumed unchanged by `agenticloop audit report
+--file` or `--stdin`. Do not add fields, rename fields, or shorten substantive
+multiline text.
 
-- the exact audited artifact and covered task IDs;
-- the invocation reference and invocation mode for this run;
-- one assessment paragraph covering all six perspectives;
-- every finding in the canonical finding shape;
-- the single verdict;
-- the bounded evidence actually checked.
+```json
+{
+  "report_schema": "auditor_report_v1",
+  "artifact": "commit:<full-sha>",
+  "covered_tasks": ["T-001", "T-002"],
+  "invocation": {
+    "mode": "host_subagent",
+    "reference": "<fresh-invocation-reference>",
+    "provenance": "asserted"
+  },
+  "perspectives": {
+    "outcome": "...",
+    "completeness": "...",
+    "integration_coherence": "...",
+    "engineering_quality": "...",
+    "verification": "...",
+    "risk": "..."
+  },
+  "assessment": "...",
+  "evidence_checked": "...",
+  "verdict": "certified",
+  "findings": [{
+    "id": "A-01",
+    "severity": "high",
+    "blocking": true,
+    "claim": "...",
+    "evidenceRefs": "...",
+    "consequence": "...",
+    "requiredOutcome": "...",
+    "verificationRequired": "..."
+  }]
+}
+```
 
-Do not return raw transcripts, full file dumps, or host runtime output.
+Use `provenance: "verified"` only when the host gives this fresh Auditor
+invocation a verifiable receipt; include that receipt as `invocation.receipt`.
+A receipt merely supplied in the JSON is normalized to `asserted` when the host
+has no verifier. Do not return raw transcripts, full file dumps, or host runtime
+output.
 
 ## Before Handing Back
 

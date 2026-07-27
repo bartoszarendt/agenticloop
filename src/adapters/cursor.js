@@ -391,7 +391,7 @@ function buildCursorAgentBody(
 
   if (roleName === 'orchestrator') {
     lines.push(`The active Cursor session is the coordinator/orchestrator. When maintainer-owned work is needed, delegate through the Cursor subagent \`${maintainerAgent}\`. When engineer-owned work is needed, delegate through the Cursor subagent \`${engineerAgent}\` instead of doing that work inline.`);
-    lines.push(`When the covered tasks of a work unit are accepted and integrated into one exact frozen candidate, delegate work-unit certification through the Cursor subagent \`${auditorAgent}\`. Every re-audit is a fresh delegation; a same-session audit does not satisfy work-unit auditing.`);
+    lines.push(`When the covered tasks of a work unit are accepted and integrated into one exact frozen candidate, delegate work-unit certification through the Cursor subagent \`${auditorAgent}\`. Every re-audit is a fresh delegation; a same-session audit does not satisfy work-unit auditing. Persist the returned \`auditor_report_v1\` object through \`agenticloop audit report\` without rewriting its findings.`);
     lines.push('Agentic Loop is serial by default. For every authorized multi-task unit, complete a current Parallel Opportunity Scan after decomposition and include its durable result or not-currently-eligible rescan trigger in implementation delegation. Load parallel-delegation before choosing serial or parallel execution.');
     lines.push('Start parallel role work only when the parallel-delegation skill plan, lease, backend ownership, and join condition requirements are satisfied; otherwise record the concrete serial reason.');
     lines.push('Use real Cursor subagent delegation where the current surface supports it.');

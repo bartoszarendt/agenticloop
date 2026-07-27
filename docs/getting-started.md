@@ -510,16 +510,12 @@ npx agenticloop audit new --work-unit phase:4 \
   --goal "<outcome and source>" \
   --completion-oracle "<observable completion>" \
   --evidence "<integrated evidence for commit:abc123>"
-npx agenticloop audit report AUD-001 --verdict needs_remediation \
-  --invocation-mode host_subagent --invocation-ref <unique-ref> \
-  --assessment "<one paragraph>" --evidence "<checks run>" \
-  --finding-json '<json array>'
+npx agenticloop audit report AUD-001 --file .agenticloop/tmp/AUD-001-run-1.json
 # remediation runs as ordinary tasks, then:
 npx agenticloop audit baseline AUD-001 --artifact commit:def456 \
   --covered-tasks T-041,T-042,T-055 \
   --evidence "<integrated evidence for commit:def456>"
-npx agenticloop audit report AUD-001 --verdict certified \
-  --invocation-mode explicit_agent_invocation --invocation-ref <new-ref> ...
+npx agenticloop audit report AUD-001 --file .agenticloop/tmp/AUD-001-run-2.json
 npx agenticloop audit gate AUD-001
 ```
 

@@ -26,6 +26,8 @@ import { generatedCursorArtifactsPresent } from './adapters/cursor.js';
 import { detectSetupState, formatSetupChecklist, nextStepsFromState } from './setup-state.js';
 import { createIo } from './cli-io.js';
 import { formatGitGuardDoctor } from './worktree.js';
+import { deriveAuditDueWorkUnits } from './closeout.js';
+import { loadProjectMap } from './project-map.js';
 
 function hasModelSettings(adapterCfg, roles) {
   const rs = adapterCfg?.roleSettings ?? {};
@@ -316,6 +318,18 @@ export function printDoctor(repoRoot, io = createIo()) {
 
   io.out();
   io.out(formatGitGuardDoctor(repoRoot));
+
+  // Audit-due diagnostics: deterministic only where work-unit membership is
+  // derivable (files backend, grouped projects). Reporting a due state is
+  // diagnostic output, never a doctor failure.
+  const auditDue = deriveAuditDueWorkUnits(repoRoot, loadProjectMap(repoRoot)?.config);
+  if (auditDue.length > 0) {
+    io.out();
+    io.out('Work-unit audit:');
+    for (const entry of auditDue) {
+      io.out(`  - ${entry.workUnit}: audit due (${entry.tasks.length} accepted/closed covered tasks, no audit record)`);
+    }
+  }
 
   const steps = nextStepsFromState(state);
   io.out();
