@@ -29,6 +29,7 @@ import {
   openBlockingFindings,
   parseAuditRecord,
   parseWorkUnitIdentity,
+  repairAuditRecordStructure,
   updateAuditBaseline,
   validateAuditRecord,
   validateAuditRecords,
@@ -142,6 +143,41 @@ describe('audit record validation', () => {
     const content = baseRecord().replace('## Accepted Decisions\n\nnone\n', '');
     const errors = validateAuditRecord(content, '.agenticloop/audits/AUD-001.md');
     assert.ok(errors.some(e => e.includes("missing required section '## Accepted Decisions'")), errors.join('\n'));
+  });
+
+  it('repairs duplicate canonical titles without changing audit payloads', () => {
+    const canonical = baseRecord();
+    const corrupted = canonical.replace(
+      '# AUD-001: Work-Unit Audit',
+      Array(6).fill('# AUD-001: Work-Unit Audit').join('\n\n')
+    );
+    const errors = validateAuditRecord(corrupted, 'AUD-001.md');
+    assert.match(errors.join('\n'), /Safe repair: agenticloop audit repair-structure AUD-001/);
+
+    const repaired = repairAuditRecordStructure(corrupted);
+    assert.ok(repaired.ok, repaired.errors.join('; '));
+    assert.deepEqual(validateAuditRecord(repaired.content, 'AUD-001.md'), []);
+    assert.equal((repaired.content.match(/^# AUD-001: Work-Unit Audit$/gm) ?? []).length, 1);
+    assert.deepEqual(parseAuditRecord(repaired.content), parseAuditRecord(canonical));
+  });
+
+  it('refuses automatic audit repair when canonical sections are also corrupt', () => {
+    const corrupted = baseRecord()
+      .replace('# AUD-001: Work-Unit Audit', '')
+      .replace('## Comments', '## Comments\n\nfirst\n\n## Comments');
+    const repaired = repairAuditRecordStructure(corrupted);
+    assert.equal(repaired.ok, false);
+    assert.match(repaired.errors.join('\n'), /requires exactly one '## Comments'/);
+  });
+
+  it('refuses audit repair when an unrecognized live section would be lost', () => {
+    const corrupted = baseRecord()
+      .replace('# AUD-001: Work-Unit Audit', '')
+      .replace('## Comments', '## Field Notes\n\nOperator prose that must survive.\n\n## Comments');
+    const repaired = repairAuditRecordStructure(corrupted);
+    assert.equal(repaired.ok, false);
+    assert.match(repaired.errors.join('\n'), /would discard unrecognized live section.*Field Notes/);
+    assert.match(corrupted, /Operator prose that must survive/);
   });
 
   it('rejects model, reasoning effort, provider, and mutable round fields by contract', () => {

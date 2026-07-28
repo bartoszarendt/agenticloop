@@ -22,7 +22,9 @@ import { runPreflight, PreflightError } from './github-preflight.js';
 import { runGitHubReviewAudit, GitHubReviewAuditError } from './github-review-audit.js';
 import { fetchGitHubTaskInventory } from './closeout-github.js';
 
-export class GitHubReadyError extends Error {
+import { PublicCommandError } from './public-error.js';
+
+export class GitHubReadyError extends PublicCommandError {
   constructor(message) {
     super(message);
     this.name = 'GitHubReadyError';
@@ -70,7 +72,7 @@ export function runGitHubReady({
   }
 
   // 1. Evidence preflight.
-  let preflight = { ok: false, errors: [], issue: null, headRefOid: '' };
+  let preflight = { ok: false, errors: [], diagnostics: [], taskRecordRootInvalid: false, issue: null, headRefOid: '' };
   try {
     const result = runPreflight({
       pr: prNumber,
@@ -86,29 +88,35 @@ export function runGitHubReady({
     preflight = {
       ok: Boolean(result.ok),
       errors: Array.isArray(result.errors) ? result.errors : [],
+      diagnostics: Array.isArray(result.diagnostics) ? result.diagnostics : [],
+      taskRecordRootInvalid: Array.isArray(result.diagnostics) && result.diagnostics.some(item =>
+        ['task.body.utf8', 'task.body.bom', 'task.body.collapsed_newlines', 'task.record.structure'].includes(item?.code)
+      ),
       issue: result.issue ?? null,
       headRefOid: String(result.headRefOid ?? ''),
     };
   } catch (error) {
     if (!(error instanceof PreflightError)) throw error;
-    preflight = { ok: false, errors: [error.message], issue: null, headRefOid: '' };
+    preflight = { ok: false, errors: [error.message], diagnostics: [], taskRecordRootInvalid: false, issue: null, headRefOid: '' };
   }
 
   // 2. Review provenance audit, expecting an accepted current-head review.
   let reviewAudit = { ok: false, acceptanceReady: false, independentReviewRequired: false, errors: [], issue: null, headRefOid: '' };
-  try {
-    const result = runGitHubReviewAudit({ pr: prNumber, issue, repo, expectedStatus: 'accepted', commandRunner });
-    reviewAudit = {
-      ok: Boolean(result.ok),
-      acceptanceReady: Boolean(result.acceptanceReady),
-      independentReviewRequired: Boolean(result.independentReviewRequired),
-      errors: Array.isArray(result.errors) ? result.errors : [],
-      issue: result.issue ?? null,
-      headRefOid: String(result.headRefOid ?? ''),
-    };
-  } catch (error) {
-    if (!(error instanceof GitHubReviewAuditError)) throw error;
-    reviewAudit = { ok: false, acceptanceReady: false, independentReviewRequired: false, errors: [error.message], issue: null, headRefOid: '' };
+  if (!preflight.taskRecordRootInvalid) {
+    try {
+      const result = runGitHubReviewAudit({ pr: prNumber, issue, repo, expectedStatus: 'accepted', commandRunner });
+      reviewAudit = {
+        ok: Boolean(result.ok),
+        acceptanceReady: Boolean(result.acceptanceReady),
+        independentReviewRequired: Boolean(result.independentReviewRequired),
+        errors: Array.isArray(result.errors) ? result.errors : [],
+        issue: result.issue ?? null,
+        headRefOid: String(result.headRefOid ?? ''),
+      };
+    } catch (error) {
+      if (!(error instanceof GitHubReviewAuditError)) throw error;
+      reviewAudit = { ok: false, acceptanceReady: false, independentReviewRequired: false, errors: [error.message], issue: null, headRefOid: '' };
+    }
   }
 
   // Conservative cross-check: the two gates must describe the same PR head and
@@ -132,7 +140,7 @@ export function runGitHubReady({
   // One inventory snapshot serves this command; incomplete state fails closed.
   const linkedIssue = reviewAudit.issue ?? preflight.issue ?? null;
   const identity = { ok: true, taskId: null, errors: /** @type {string[]} */ ([]), diagnostics: /** @type {object[]} */ ([]) };
-  if (linkedIssue !== null) {
+  if (linkedIssue !== null && !preflight.taskRecordRootInvalid) {
     const inventory = taskInventory ?? fetchGitHubTaskInventory(commandRunner, { repo, taskIdRegex });
     if (inventory.state !== 'ok') {
       identity.ok = false;
@@ -183,7 +191,9 @@ export function runGitHubReady({
     errors,
     warnings: [],
     diagnostics: [
-      ...(preflight.errors ?? []).map(message => createDiagnostic({ code: 'ready.preflight', message })),
+      ...(preflight.diagnostics?.length
+        ? preflight.diagnostics
+        : (preflight.errors ?? []).map(message => createDiagnostic({ code: 'ready.preflight', message }))),
       ...(reviewAudit.errors ?? []).map(message => createDiagnostic({ code: 'ready.review_audit', message })),
       ...(identity.diagnostics ?? []),
       ...(identity.errors ?? [])

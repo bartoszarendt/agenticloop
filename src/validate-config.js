@@ -77,6 +77,7 @@ import {
 } from './adapters/shared.js';
 import { getDocumentRoleRegistry } from './document-roles.js';
 import { parseFrontmatter } from './frontmatter.js';
+import { evaluateTaskRecordRoot } from './task-record-root.js';
 import {
   AGENTS_SOURCE_DIRECTORY,
   BACKENDS_SOURCE_DIRECTORY,
@@ -92,7 +93,7 @@ import {
   resolveToolkitAssetLayout,
 } from './layout.js';
 import { validateLayoutState } from './layout-migration.js';
-import { hasMarkdownHeading, markdownProseBlocks, markdownSection } from './markdown.js';
+import { hasMarkdownHeading, markdownLines, markdownProseBlocks, markdownSection, parseAtxHeading } from './markdown.js';
 import { validateCanonicalTemplates } from './template-contract.js';
 import { validateTransitionContractDefinition, WORKFLOW_ROLES } from './transition-contract.js';
 import {
@@ -398,10 +399,38 @@ function validateWorkUnitSummarySkeleton(content, filename) {
   return errors;
 }
 
+export function validateTaskRecordDiagnostics(content, filename) {
+  const root = evaluateTaskRecordRoot(content);
+  if (root.ok) return [];
+  return root.diagnostics.map(diagnostic => ({
+    ...diagnostic,
+    message: `Task record '${filename}' has malformed canonical structure: ${diagnostic.message}`,
+    repairHint: diagnostic.repairHint
+      ?? `Preserve '${filename}', repair its canonical structure, then rerun task lint.`,
+  }));
+}
+
 export function validateTaskRecord(content, filename) {
   const errors = [];
+  const rootDiagnostics = validateTaskRecordDiagnostics(content, filename);
+  if (rootDiagnostics.length > 0) return rootDiagnostics.map(diagnostic => diagnostic.message);
+
+  const headingCounts = new Map();
+  for (const line of markdownLines(content)) {
+    if (!line.live) continue;
+    const heading = parseAtxHeading(line.raw);
+    if (!heading) continue;
+    const key = `${heading.level}:${heading.text}`;
+    headingCounts.set(key, (headingCounts.get(key) ?? 0) + 1);
+  }
 
   for (const section of TASK_REQUIRED_SECTION_HEADINGS) {
+    const parsed = parseAtxHeading(section);
+    const count = headingCounts.get(`${parsed.level}:${parsed.text}`) ?? 0;
+    if (count > 1) {
+      errors.push(`Task record '${filename}' has duplicate canonical section '${section}'`);
+      continue;
+    }
     if (!hasMarkdownHeading(content, section)) {
       errors.push(`Task record '${filename}' missing required section '${section}'`);
     }
@@ -1285,9 +1314,11 @@ function validateTaskRecords(repoRoot, taskDirRel, errors, warnings, options = {
     const decisionExists = decisionId => existsSync(join(repoRoot, '.agenticloop', 'decisions', `${decisionId}.md`));
     for (const f of files) {
       const content = readFileSync(join(taskDir, f), 'utf-8');
+      const rootDiagnostics = validateTaskRecordDiagnostics(content, f);
       for (const err of validateTaskRecord(content, f)) {
         errors.push(err);
       }
+      if (rootDiagnostics.length > 0) continue;
       for (const err of validateFilesTaskRecord(content, f, {
         ...options,
         repoRoot,

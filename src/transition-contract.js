@@ -79,6 +79,8 @@ const DEFINITION = {
     artifactIdentity: 'backend-stable kind plus exact durable ID; display text, short commit prefixes, and mutable aliases are not exact identity',
     provenanceRule: 'producer, carrier, authority, and invocation facts are explicit; unverified claims use asserted provenance',
     freshnessRule: 'observation identity and invalidation condition are both required; changed bound input invalidates the envelope',
+    requiredFieldRule: 'requiredFields is a closed order-insensitive inventory; missing, duplicate, or unknown entries are invalid',
+    serializationRule: 'canonical JSON recursively sorts object keys and the validation-result set-like arrays errors, warnings, diagnostics, warningDiagnostics, and failureCategories by exact UTF-16 code-unit order of canonical JSON before SHA-256; semantically ordered arrays retain their schema order and incidental object-property or set-array insertion order carries no authority',
   },
   evidenceStates: ['current', 'missing', 'malformed', 'stale', 'negative', 'changed'],
   dispositions: [
@@ -800,8 +802,8 @@ export function validateTransitionContractDefinition(candidate = TRANSITION_CONT
   }
 
   validateShape(candidate.envelope, 'transition envelope', EXPECTED.envelopeFields, EXPECTED.envelopeConstants, errors,
-    ['artifactIdentity', 'provenanceRule', 'freshnessRule']);
-  for (const key of ['artifactIdentity', 'provenanceRule', 'freshnessRule']) {
+    ['artifactIdentity', 'provenanceRule', 'freshnessRule', 'requiredFieldRule', 'serializationRule']);
+  for (const key of ['artifactIdentity', 'provenanceRule', 'freshnessRule', 'requiredFieldRule', 'serializationRule']) {
     if (!nonEmpty(candidate.envelope?.[key])) errors.push(`transition envelope '${key}' rule is missing`);
   }
   if (!exactInventory(candidate.envelope?.requiredFields, EXPECTED.envelopeFields) ||

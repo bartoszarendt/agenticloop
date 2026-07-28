@@ -12,7 +12,12 @@ import { readdirSync, readFileSync, mkdirSync, writeFileSync, mkdtempSync, rmSyn
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { APPROVED_PRESENTATION_MODULES, CONSTRUCTOR_MODULES, checkDiagnosticArchitecture } from './helpers/diagnostic-architecture-check.js';
+import {
+  APPROVED_PRESENTATION_MODULES,
+  CONSTRUCTOR_MODULES,
+  PUBLIC_COMMAND_MODULES,
+  checkDiagnosticArchitecture,
+} from './helpers/diagnostic-architecture-check.js';
 import {
   HUMAN_AUTHORITY_BOUNDARY,
   getProjectRoleCapabilities,
@@ -35,6 +40,7 @@ describe('diagnostic architecture anti-bypass enforcement', () => {
         fileName: relative,
         presentation: APPROVED_PRESENTATION_MODULES.has(relative),
         constructorModule: CONSTRUCTOR_MODULES.has(relative),
+        publicCommandModule: PUBLIC_COMMAND_MODULES.has(relative),
       })) {
         violations.push(`${relative}:${violation.line} [${violation.rule}] ${violation.detail}`);
       }
@@ -68,6 +74,22 @@ describe('diagnostic architecture anti-bypass enforcement', () => {
       `const fact = { level: 'error', code: 'scope.deviation.missing', message: 'hand built fact' };`,
     );
     assert.ok(violations.some(item => item.rule === 'non-canonical-diagnostic-construction'));
+  });
+
+  it('rejects raw built-in errors in a public command path', () => {
+    const violations = checkDiagnosticArchitecture(
+      `function command() { throw new Error('private implementation detail'); }`,
+      { publicCommandModule: true },
+    );
+    assert.ok(violations.some(item => item.rule === 'untyped-public-command-error'));
+  });
+
+  it('allows classified public command errors', () => {
+    const violations = checkDiagnosticArchitecture(
+      `function command() { throw new VerificationContextError('missing task body'); }`,
+      { publicCommandModule: true },
+    );
+    assert.deepEqual(violations, []);
   });
 
   it('allows factual diagnostics and legitimate ownership vocabulary', () => {

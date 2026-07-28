@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { runCliInProcess } from './helpers/run-cli.js';
 import { parseCloseoutMarkers, validateCloseoutPacket } from '../src/closeout-contract.js';
+import { serializeValidationResult } from '../src/result-envelope.js';
 
 let tmpDir;
 before(() => { tmpDir = mkdtempSync(join(tmpdir(), 'al-closeout-')); });
@@ -284,6 +285,23 @@ describe('closeout record and status', () => {
     const status = await closeout(['status', '--work-unit', 'milestone:M00'], target);
     assert.equal(status.status, 0, `${status.stdout}${status.stderr}`);
     assert.match(status.stdout, /complete \(current\)/);
+
+    writeFileSync(
+      join(target, '.agenticloop', 'tasks', 'T-002.md'),
+      `${carrierAfter}\nHost-local note after closeout.\n`,
+      'utf-8'
+    );
+    const stale = await closeout(['status', '--work-unit', 'milestone:M00', '--json'], target);
+    assert.equal(stale.status, 1);
+    const staleResult = JSON.parse(stale.stdout);
+    assert.equal(staleResult.state, 'stale');
+    assert.equal(staleResult.code, 'closeout.marker.stale');
+    assert.equal(staleResult.resume_command, 'npx agenticloop closeout prepare --work-unit milestone:M00');
+    assert.equal(staleResult.diagnostics[0].owner, 'engineer');
+    assert.equal(staleResult.diagnostics[0].escalationOwner, null);
+    assert.match(staleResult.diagnostics[0].nextAction, /closeout prepare/);
+    assert.match(staleResult.firstSafeRepair, /closeout prepare/);
+    assert.equal(stale.stdout.trim(), serializeValidationResult(staleResult));
   });
 
   it('rejects a stale packet after task, audit, or marker state changed', async () => {

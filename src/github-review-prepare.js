@@ -14,7 +14,9 @@ const REVIEW_PACKET_SCHEMA_VERSION = 1;
 const FULL_SHA = /^[0-9a-f]{40}$/i;
 const REVIEW_MODES = new Set(['host_subagent', 'independent_human']);
 
-export class GitHubReviewPrepareError extends Error {
+import { PublicCommandError } from './public-error.js';
+
+export class GitHubReviewPrepareError extends PublicCommandError {
   constructor(message) {
     super(message);
     this.name = 'GitHubReviewPrepareError';

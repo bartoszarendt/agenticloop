@@ -47,6 +47,11 @@ import { createLocalVerificationContext } from './verification-context.js';
 import { findAuditRecord, normalizeCoveredTasks } from './audit-record.js';
 import { resolveCoveredGitHubTask } from './github-task-identity.js';
 import { buildCliDurableReferenceContext } from './durable-refs.js';
+import { createDiagnostic } from './repair-policy.js';
+import { createValidationResult, emitValidationResult } from './result-envelope.js';
+import { presentDiagnostic } from './diagnostic-presentation.js';
+import { getProjectRoleCapabilities } from './role-capabilities.js';
+import { PublicCommandError } from './public-error.js';
 
 function optionString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -167,10 +172,20 @@ function resolvePacketOutputPath(target, output, workUnit) {
   const withinScratch = relative(scratch, packetPath);
   if (!withinScratch || withinScratch === '..' || withinScratch.startsWith(`..\\`) ||
       withinScratch.startsWith('../') || isAbsolute(withinScratch)) {
-    throw new Error(`closeout packet output must be under ${SCRATCH_DIRECTORY_RELATIVE_PATH}/`);
+    throw new PublicCommandError(`closeout packet output must be under ${SCRATCH_DIRECTORY_RELATIVE_PATH}/`, {
+      code: 'evidence.negative',
+      evidenceState: 'negative',
+      disposition: 'blocked',
+      safeRepair: `Choose a packet output path under ${SCRATCH_DIRECTORY_RELATIVE_PATH}/.`,
+    });
   }
   if (existsSync(packetPath) && packetPath !== defaultPath) {
-    throw new Error(`closeout packet output already exists and is not the transient default packet: ${output}`);
+    throw new PublicCommandError(`closeout packet output already exists and is not the transient default packet: ${output}`, {
+      code: 'evidence.negative',
+      evidenceState: 'negative',
+      disposition: 'blocked',
+      safeRepair: 'Choose a new packet output path; do not overwrite an existing file.',
+    });
   }
   return packetPath;
 }
@@ -289,14 +304,47 @@ export async function cmdCloseout(args, io = createIo()) {
       const params = await buildEvaluationParams(target, config, opts, io);
       const result = verifyCloseoutStatus(target, params);
       if (opts.json) {
-        io.out(JSON.stringify({
-          work_unit: optionString(opts.workUnit),
-          state: result.state,
-          status: result.status,
-          current: result.current,
-          expected_digest: result.expectedDigest,
-          reasons: result.reasons,
-        }, null, 2));
+        if (result.current && result.state === 'complete') {
+          io.out(JSON.stringify({
+            work_unit: optionString(opts.workUnit),
+            state: result.state,
+            code: result.code ?? null,
+            status: result.status,
+            current: result.current,
+            expected_digest: result.expectedDigest,
+            resume_command: result.resumeCommand ?? null,
+            reasons: result.reasons,
+          }, null, 2));
+        } else {
+          const code = result.code ?? 'cli.operational';
+          const evidenceState = code === 'closeout.marker.stale' ? 'stale' : 'negative';
+          const diagnostic = presentDiagnostic(createDiagnostic({
+            code,
+            message: result.reasons?.[0] ?? 'Closeout status is not current.',
+            evidence: { state: evidenceState, rollbackAuthorized: false },
+            repairHint: result.resumeCommand ?? 'Re-run closeout status after repairing the reported state.',
+          }), getProjectRoleCapabilities(target));
+          const domainFields = {
+            work_unit: optionString(opts.workUnit),
+            state: result.state,
+            status: result.status,
+            current: result.current,
+            expected_digest: result.expectedDigest ?? null,
+            resume_command: result.resumeCommand ?? null,
+            reasons: Array.isArray(result.reasons) ? result.reasons : [],
+          };
+          domainFields.code = result.code ?? null;
+          emitValidationResult(io, createValidationResult({
+            command: 'closeout status',
+            evidenceState,
+            disposition: evidenceState === 'stale' ? 'superseded' : 'blocked',
+            diagnostics: [diagnostic],
+            firstSafeRepair: diagnostic.nextAction ?? result.resumeCommand
+              ?? 'Re-run closeout status after repairing the reported state.',
+            debugReference: null,
+            ...domainFields,
+          }));
+        }
       } else {
         io.out(`${optionString(opts.workUnit)}: ${result.state}${result.current ? ' (current)' : ''}`);
         for (const message of result.reasons) io.out(`  - ${message}`);

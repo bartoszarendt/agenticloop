@@ -55,6 +55,9 @@ export class CliUsageError extends Error {
     this.name = 'CliUsageError';
     this.exitCode = EXIT_USAGE;
     this.hint = options.hint ?? null;
+    this.code = 'cli.usage';
+    this.evidenceState = 'negative';
+    this.disposition = 'blocked';
   }
 }
 

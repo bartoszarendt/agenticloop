@@ -480,19 +480,22 @@ export function validateTaskContractBaseline(taskBody, { requireBaseline = false
       digest: null,
       baseline: null,
       corrections: [],
+      errorFacts: requireTrustedBaseline
+        ? [{ code: 'contract.baseline.missing', message: 'task requires a trusted task-contract baseline record' }]
+        : missingContract ? [] : [{ code: 'contract.baseline.invalid', message: current.error }],
     };
   }
-  if (hasTaskContractRecordMarker(taskBody)) return { ok: false, errors: ['task-contract RECORD markers are forbidden in mutable task bodies; use independently fetched backend carriers'], warnings: [], digest: current.digest, baseline: null, corrections: [] };
+  if (hasTaskContractRecordMarker(taskBody)) return { ok: false, errors: ['task-contract RECORD markers are forbidden in mutable task bodies; use independently fetched backend carriers'], warnings: [], digest: current.digest, baseline: null, corrections: [], errorFacts: [{ code: 'contract.baseline.invalid', message: 'task-contract RECORD markers are forbidden in mutable task bodies; use independently fetched backend carriers' }] };
   const markers = parseTaskContractMarkers(taskBody);
-  if (markers.errors.length) return { ok: false, errors: markers.errors, warnings: [], digest: current.digest, baseline: null, corrections: [] };
-  if (trustedRecordErrors.length) return { ok: false, errors: [...trustedRecordErrors], warnings: [], digest: current.digest, baseline: null, corrections: [] };
+  if (markers.errors.length) return { ok: false, errors: markers.errors, warnings: [], digest: current.digest, baseline: null, corrections: [], errorFacts: markers.errors.map(message => ({ code: 'contract.baseline.invalid', message })) };
+  if (trustedRecordErrors.length) return { ok: false, errors: [...trustedRecordErrors], warnings: [], digest: current.digest, baseline: null, corrections: [], errorFacts: trustedRecordErrors.map(message => ({ code: 'contract.baseline.invalid', message })) };
   const taskId = current.projection.task_id;
   const trusted = Array.isArray(trustedRecords) ? trustedRecords : [];
   const prospective = Array.isArray(prospectiveRecords) ? prospectiveRecords : [];
   const relevant = [...trusted, ...prospective].filter(record => record?.taskId === taskId);
   const prospectiveIds = new Set(prospective.map(record => record?.recordId));
   const graph = evaluateTrustedRecordGraph(relevant, { taskId, prospectiveIds });
-  if (graph.errors.length) return { ok: false, errors: graph.errors, warnings: [], digest: current.digest, baseline: graph.baseline, corrections: graph.corrections };
+  if (graph.errors.length) return { ok: false, errors: graph.errors, warnings: [], digest: current.digest, baseline: graph.baseline, corrections: graph.corrections, errorFacts: graph.errors.map(message => ({ code: 'contract.baseline.invalid', message })) };
   if (!graph.baseline) {
     return {
       ok: !requireTrustedBaseline,
@@ -501,8 +504,9 @@ export function validateTaskContractBaseline(taskBody, { requireBaseline = false
       digest: current.digest,
       baseline: null,
       corrections: [],
+      errorFacts: requireTrustedBaseline ? [{ code: 'contract.baseline.missing', message: 'missing task-contract baseline record' }] : [],
     };
   }
-  if (graph.terminalDigest !== current.digest) return { ok: false, errors: ['current task contract differs from the trusted baseline without an authorized correction record'], warnings: [], digest: current.digest, baseline: graph.baseline, corrections: graph.corrections };
-  return { ok: true, errors: [], warnings: [], digest: current.digest, baseline: graph.baseline, corrections: graph.corrections };
+  if (graph.terminalDigest !== current.digest) return { ok: false, errors: ['current task contract differs from the trusted baseline without an authorized correction record'], warnings: [], digest: current.digest, baseline: graph.baseline, corrections: graph.corrections, errorFacts: [{ code: 'contract.baseline.stale', message: 'current task contract differs from the trusted baseline without an authorized correction record' }] };
+  return { ok: true, errors: [], warnings: [], digest: current.digest, baseline: graph.baseline, corrections: graph.corrections, errorFacts: [] };
 }

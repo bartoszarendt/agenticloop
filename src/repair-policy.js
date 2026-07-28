@@ -32,11 +32,25 @@ export const REPAIR_POLICY = Object.freeze({
   'contract.baseline.stale': policy('task_contract', 'authorize_contract_correction', 'contract_reconciliation', 'Current task contract differs from the trusted baseline chain.'),
   'contract.record_marker.mutable_body': policy('task_contract', 'remove_mutable_record_marker', 'contract_reconciliation', 'A task-contract RECORD marker is present in mutable task text.'),
   'task.body.bom': policy('task_contract', 'preserve_and_sanitize_body', 'record_recovery', 'Task body begins with a UTF-8 BOM.'),
+  'task.body.collapsed_newlines': policy('task_contract', 'preserve_and_sanitize_body', 'record_recovery', 'Task body has collapsed line boundaries and is not a canonical Markdown record.'),
+  'task.body.utf8': policy('task_contract', 'preserve_and_sanitize_body', 'record_recovery', 'Task record is not valid UTF-8.'),
+  'task.record.structure': policy('task_contract', 'repair_task_record', 'record_recovery', 'Canonical record structure is malformed or duplicated.'),
   'task.body.identity': policy('task_contract', 'repair_task_identity', 'contract_reconciliation', 'GitHub task record identity is invalid.'),
   'task.body.invalid': policy('task_contract', 'repair_task_record', 'contract_reconciliation', 'GitHub task record is invalid.'),
   'task.body.attribution': policy('task_contract', 'repair_task_attribution', 'contract_reconciliation', 'GitHub task record attribution is invalid.'),
   'task.body.base_inventory.missing': policy('path_intent', 'supply_base_inventory', 'contract_reconciliation', 'An authoritative base-tree path inventory is required.'),
   'readiness.base_inventory.missing': policy('path_intent', 'supply_base_inventory', 'contract_reconciliation', 'An authoritative base-tree path inventory is required.'),
+  'evidence.missing': policy('evidence', 'repair_evidence', 'none', 'Required evidence was not supplied.'),
+  'evidence.malformed': policy('evidence', 'repair_evidence', 'none', 'Supplied evidence is malformed.'),
+  'evidence.stale': policy('evidence', 'repair_evidence', 'none', 'Supplied evidence is stale.'),
+  'evidence.negative': policy('evidence', 'repair_evidence', 'none', 'Supplied evidence shows the required condition is false.'),
+  'evidence.changed': policy('evidence', 'repair_evidence', 'none', 'Evidence changed after preparation or verification.'),
+  'verification.context.missing': policy('evidence', 'repair_evidence', 'none', 'Verification context was not supplied; committed state was not evaluated.'),
+  'verification.context.malformed': policy('evidence', 'repair_evidence', 'none', 'Supplied verification context is malformed; committed state was not evaluated.'),
+  'worktree.clean_gate.failed': policy('workspace', 'repair_review_workspace', 'none', 'The clean-worktree gate failed.'),
+  'state.host_local': policy('workspace', 'repair_review_workspace', 'none', 'Host-local or preexisting state requires classification.'),
+  'role_result.schema.invalid': policy('evidence', 'repair_evidence', 'none', 'The role result does not satisfy its required schema.'),
+  'closeout.marker.stale': policy('evidence', 'repair_evidence', 'none', 'The closeout marker is stale relative to current bound state.'),
   'readiness.mode.invalid': policy('path_intent', 'select_readiness_mode', 'none', 'Readiness mode is invalid.'),
   'preflight.head_identity': policy('head_identity', 'repair_artifact_identity', 'none', 'PR artifact identity does not match the declared head.'),
   'preflight.summary_shape': policy('summary_shape', 'repair_pr_summary', 'none', 'PR completion summary is incomplete or malformed.'),
@@ -62,6 +76,7 @@ export const REPAIR_POLICY = Object.freeze({
   'pr_body.input_format': policy('input_format', 'repair_pr_body_input_format', 'none', 'PR-body input format is invalid.'),
   'cli.usage': policy('usage', 'correct_command_usage', 'none', 'Command usage is invalid.'),
   'cli.operational': policy('operational_error', 'repair_command_environment', 'human_authority_review', 'A command dependency or execution environment is unavailable.'),
+  'cli.unexpected': policy('operational_error', 'repair_evidence', 'human_authority_review', 'The public command failed unexpectedly.'),
   'review_prepare.workspace': policy('workspace', 'repair_review_workspace', 'none', 'The review workspace does not match the exact review artifact.'),
   'review_prepare.stale_head': policy('stale_head', 'refresh_review_preparation', 'none', 'Review preparation is stale relative to the current PR head.'),
   'review_prepare.packet': policy('review_packet', 'regenerate_review_packet', 'none', 'The review preparation packet is invalid.'),
@@ -111,9 +126,14 @@ export const HUMAN_AUTHORITY_ESCALATION_PREFIX = 'human_authority';
  */
 export function createDiagnostic({ level = 'error', code, evidence = {}, message = null, ...details } = {}) {
   const entry = assertDiagnosticPolicy(code);
-  const protectedFields = ['category', 'repairKind', 'escalationKind', 'owner', 'escalationOwner', 'ownerRouting', 'nextAction', 'firstSafeRepair'];
+  const protectedFields = ['category', 'repairKind', 'escalationKind', 'owner', 'escalationOwner', 'ownerRouting', 'nextAction', 'firstSafeRepair', 'dependsOn'];
   for (const field of protectedFields) {
     if (Object.hasOwn(details, field)) throw new Error(`diagnostic policy field '${field}' cannot be evaluator-supplied`);
+  }
+  if (details.diagnosticPrerequisites !== undefined &&
+      (!Array.isArray(details.diagnosticPrerequisites) ||
+       !details.diagnosticPrerequisites.every(item => typeof item === 'string' && item))) {
+    throw new Error('diagnosticPrerequisites must be an array of non-empty strings');
   }
   return {
     ...details,

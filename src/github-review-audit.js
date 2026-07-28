@@ -27,7 +27,9 @@ import {
   validateFixupEpisode,
 } from './maintainer-fixup.js';
 
-export class GitHubReviewAuditError extends Error {
+import { PublicCommandError } from './public-error.js';
+
+export class GitHubReviewAuditError extends PublicCommandError {
   /** @param {string} message */
   constructor(message) {
     super(message);

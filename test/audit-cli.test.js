@@ -100,6 +100,42 @@ describe('audit CLI', () => {
     assert.equal((await run(['lint'], target)).status, 0);
   });
 
+  it('offers and applies the safe duplicate-title repair route', async () => {
+    const target = makeTarget('repair-structure');
+    await seedRecord(target);
+    const file = join(target, '.agenticloop', 'audits', 'AUD-001.md');
+    const corrupted = readFileSync(file, 'utf-8').replace(
+      '# AUD-001: Work-Unit Audit',
+      Array(6).fill('# AUD-001: Work-Unit Audit').join('\n\n')
+    );
+    writeFileSync(file, corrupted, 'utf-8');
+
+    const lint = await run(['lint', 'AUD-001'], target);
+    assert.equal(lint.status, 1);
+    assert.match(lint.stdout + lint.stderr, /audit repair-structure AUD-001/);
+
+    const repaired = await run(['repair-structure', 'AUD-001', '--json'], target);
+    assert.equal(repaired.status, 0, repaired.stdout + repaired.stderr);
+    assert.equal(JSON.parse(repaired.stdout).repaired, true);
+    assert.equal((await run(['lint', 'AUD-001'], target)).status, 0);
+    assert.equal((readFileSync(file, 'utf-8').match(/^# AUD-001: Work-Unit Audit$/gm) ?? []).length, 1);
+  });
+
+  it('refuses structural repair rather than discarding an unrecognized live section', async () => {
+    const target = makeTarget('repair-unknown-section');
+    await seedRecord(target);
+    const file = join(target, '.agenticloop', 'audits', 'AUD-001.md');
+    const corrupted = readFileSync(file, 'utf-8')
+      .replace('# AUD-001: Work-Unit Audit', '')
+      .replace('## Comments', '## Field Notes\n\nOperator prose that must survive.\n\n## Comments');
+    writeFileSync(file, corrupted, 'utf-8');
+
+    const repair = await run(['repair-structure', 'AUD-001', '--json'], target);
+    assert.equal(repair.status, 1, repair.stdout + repair.stderr);
+    assert.equal(readFileSync(file, 'utf-8'), corrupted);
+    assert.match(repair.stdout + repair.stderr, /would discard unrecognized live section.*Field Notes/);
+  });
+
   it('requires a canonical work-unit, covered tasks, and an artifact', async () => {
     const target = makeTarget('create-guards');
     assert.equal((await run(['new', '--work-unit', 'phase-4', '--covered-tasks', 'T-041', '--artifact', 'commit:a'], target)).status, 2);

@@ -1013,6 +1013,15 @@ export function validateAuditRecord(content, label, options = {}) {
     return [`Audit record '${label}' is missing YAML frontmatter`];
   }
 
+  const structure = evaluateCanonicalAuditStructure(content, record);
+  if (!structure.ok) {
+    const selector = record.auditId || String(label ?? '').replace(/\.md$/i, '');
+    return [
+      `Audit record '${label}' has malformed canonical structure: ${structure.message}. ` +
+      `Safe repair: agenticloop audit repair-structure ${selector}`,
+    ];
+  }
+
   // Current records carry an explicit audit_schema_version. Legacy records
   // parse, but they receive a deterministic migration diagnostic and are
   // never silently reinterpreted as current-schema records.
@@ -1342,6 +1351,51 @@ const AUDIT_PREAMBLE_LINES = Object.freeze([
   'their task records; this store never duplicates them.',
 ]);
 
+function structureError(message) {
+  const error = new Error(message);
+  error.name = 'AuditRecordStructureError';
+  error.code = 'task.record.structure';
+  return error;
+}
+
+/** One live-Markdown structure evaluator serves validation and every rewrite. */
+function evaluateCanonicalAuditStructure(content, record = parseAuditRecord(content)) {
+  const [, body] = parseFrontmatter(content);
+  const lines = markdownLines(body ?? '');
+  const headings = lines.map((line, index) => ({
+    index,
+    line,
+    heading: line.live ? parseAtxHeading(line.raw) : null,
+  })).filter(item => item.heading);
+  const expectedTitle = `${record.auditId}: Work-Unit Audit`;
+  const titleIndexes = headings
+    .filter(item => item.heading.level === 1 && item.heading.text === expectedTitle)
+    .map(item => item.index);
+  if (titleIndexes.length !== 1) {
+    return { ok: false, message: `expected exactly one '# ${expectedTitle}' heading`, lines };
+  }
+  const requiredHeadings = isLegacyAuditRecord(record)
+    ? LEGACY_AUDIT_REQUIRED_SECTION_HEADINGS
+    : AUDIT_REQUIRED_SECTION_HEADINGS;
+  const firstSectionIndex = headings.find(item => item.heading.level === 2)?.index ?? lines.length;
+  if (titleIndexes[0] >= firstSectionIndex) {
+    return { ok: false, message: `canonical title '# ${expectedTitle}' must appear before canonical sections`, lines };
+  }
+  for (const required of requiredHeadings) {
+    const wanted = parseAtxHeading(required);
+    const count = headings.filter(item => item.heading.level === wanted.level && item.heading.text === wanted.text).length;
+    if (count === 0) return { ok: false, message: `missing required section '${required}'`, lines };
+    if (count > 1) return { ok: false, message: `section '${required}' occurs more than once`, lines };
+  }
+  return { ok: true, lines, titleIndex: titleIndexes[0], firstSectionIndex, requiredHeadings };
+}
+
+function assertCanonicalAuditStructure(content, record = parseAuditRecord(content)) {
+  const structure = evaluateCanonicalAuditStructure(content, record);
+  if (!structure.ok) throw structureError(structure.message);
+  return structure;
+}
+
 /**
  * Render `## Evidence Available` with the CLI-owned structural artifact binding
  * followed by the human-supplied substantive evidence.
@@ -1398,23 +1452,12 @@ function renderFrontmatterLines(fields) {
  */
 export function readAuditRecordParts(content) {
   const record = parseAuditRecord(content);
-  const [, body] = parseFrontmatter(content);
-  const lines = markdownLines(body);
-  let firstSectionIndex = lines.length;
-  for (let index = 0; index < lines.length; index++) {
-    if (!lines[index].live) continue;
-    const parsed = parseAtxHeading(lines[index].raw);
-    if (parsed && parsed.level === 2) {
-      firstSectionIndex = index;
-      break;
-    }
-  }
-  const preamble = lines.slice(0, firstSectionIndex).map(item => item.raw).join('\n').trim();
+  const structure = assertCanonicalAuditStructure(content, record);
+  const preambleLines = structure.lines.slice(0, structure.firstSectionIndex).map(item => item.raw);
+  preambleLines.splice(structure.titleIndex, 1);
+  const preamble = preambleLines.join('\n').trim();
   const sections = {};
-  const headings = isLegacyAuditRecord(record)
-    ? LEGACY_AUDIT_REQUIRED_SECTION_HEADINGS
-    : AUDIT_REQUIRED_SECTION_HEADINGS;
-  for (const heading of headings) {
+  for (const heading of structure.requiredHeadings) {
     sections[heading] = markdownSection(content, heading)?.body ?? '';
   }
   return {
@@ -1455,6 +1498,124 @@ export function renderAuditRecord(parts) {
     lines.push('');
   }
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').replace(/\s*$/, '\n');
+}
+
+/**
+ * Safely repair only duplicate/missing canonical title corruption in a
+ * current-schema audit record. Every canonical section must still occur exactly
+ * once; substantive fields and append-only history are preserved at section
+ * body level. Broader corruption remains a human reconstruction.
+ */
+export function repairAuditRecordStructure(content, validationOptions = {}) {
+  const record = parseAuditRecord(content);
+  if (!record.frontmatterPresent) {
+    return { ok: false, errors: ['audit structure repair requires intact YAML frontmatter'] };
+  }
+  if (isLegacyAuditRecord(record)) {
+    return {
+      ok: false,
+      errors: ['legacy audit records require `agenticloop audit baseline <audit> --canonicalize --evidence <text>`'],
+    };
+  }
+  const structure = evaluateCanonicalAuditStructure(content, record);
+  if (structure.ok) {
+    return { ok: false, errors: ['audit record already has canonical structure'] };
+  }
+
+  const expectedTitle = `${record.auditId}: Work-Unit Audit`;
+  const [, body] = parseFrontmatter(content);
+  const lines = markdownLines(body ?? '');
+  const headings = lines.map((line, index) => ({
+    index,
+    line,
+    heading: line.live ? parseAtxHeading(line.raw) : null,
+  })).filter(item => item.heading);
+  const firstSectionIndex = headings.find(item => item.heading.level === 2)?.index ?? lines.length;
+  const titleEntries = headings.filter(item =>
+    item.heading.level === 1 && item.heading.text === expectedTitle
+  );
+  const unrelatedTitles = headings.filter(item =>
+    item.heading.level === 1 && item.heading.text !== expectedTitle
+  );
+  const canonicalSectionNames = new Set(
+    AUDIT_REQUIRED_SECTION_HEADINGS.map(heading => parseAtxHeading(heading).text)
+  );
+  const unrecognizedSections = headings.filter(item =>
+    item.heading.level === 2 && !canonicalSectionNames.has(item.heading.text)
+  );
+  if (unrecognizedSections.length > 0) {
+    return {
+      ok: false,
+      errors: [
+        `audit structure repair would discard unrecognized live section(s): ` +
+        `${unrecognizedSections.map(item => `'## ${item.heading.text}'`).join(', ')}; ` +
+        'preserve the record and reconcile those sections with human authority',
+      ],
+    };
+  }
+  const titleOnlyCorruption =
+    structure.message === `expected exactly one '# ${expectedTitle}' heading` &&
+    titleEntries.every(item => item.index < firstSectionIndex) &&
+    unrelatedTitles.length === 0;
+  if (!titleOnlyCorruption) {
+    return {
+      ok: false,
+      errors: [
+        `audit structure repair is not safe for this corruption: ${structure.message}; preserve the record and reconstruct it with human authority`,
+      ],
+    };
+  }
+
+  const sections = {};
+  for (const required of AUDIT_REQUIRED_SECTION_HEADINGS) {
+    const wanted = parseAtxHeading(required);
+    const matching = headings.filter(item =>
+      item.heading.level === wanted.level && item.heading.text === wanted.text
+    );
+    if (matching.length !== 1) {
+      return {
+        ok: false,
+        errors: [`audit structure repair requires exactly one '${required}' section; found ${matching.length}`],
+      };
+    }
+    sections[required] = markdownSection(content, required)?.body ?? '';
+  }
+
+  const preamble = lines
+    .slice(0, firstSectionIndex)
+    .filter(item => {
+      if (!item.live) return true;
+      const heading = parseAtxHeading(item.raw);
+      return !(heading?.level === 1 && heading.text === expectedTitle);
+    })
+    .map(item => item.raw)
+    .join('\n')
+    .trim();
+  const rendered = renderAuditRecord({
+    fields: {
+      auditId: record.auditId,
+      workUnit: record.workUnit,
+      auditState: record.auditState,
+      auditBlockedReason: record.auditBlockedReason,
+      humanResolutionRef: record.humanResolutionRef,
+      coveredTasks: record.coveredTasks,
+      candidateArtifact: record.candidateArtifact,
+      certifiedArtifact: record.certifiedArtifact,
+      certifiedCoveredTasks: record.certifiedCoveredTasks,
+      latestVerdict: record.latestVerdict,
+      auditBudget: record.auditBudget ?? DEFAULT_AUDIT_BUDGET,
+    },
+    preamble,
+    sections,
+  });
+  const errors = validateAuditRecord(rendered, `${record.auditId || 'audit'}.md`, validationOptions);
+  if (errors.length > 0) {
+    return {
+      ok: false,
+      errors: errors.map(error => `repaired audit record is invalid: ${error}`),
+    };
+  }
+  return { ok: true, content: rendered, errors: [] };
 }
 
 /**
@@ -1721,13 +1882,14 @@ function buildRunReportPayload(entry, reportFormat) {
 export function appendAuditReport(content, report, validationOptions = {}) {
   const errors = [];
   const record = parseAuditRecord(content);
-  const parts = readAuditRecordParts(content);
   const existingErrors = validateAuditRecord(
     content,
     `${record.auditId || 'audit'}.md`,
     validationOptions
   );
   errors.push(...existingErrors.map(error => `existing audit record is invalid: ${error}`));
+  if (existingErrors.length > 0) return { ok: false, errors };
+  const parts = readAuditRecordParts(content);
 
   if (!AUDIT_VERDICTS.includes(report?.verdict)) {
     errors.push(`verdict must be one of: ${AUDIT_VERDICTS.join(', ')}`);
@@ -2155,6 +2317,8 @@ export function applyAuditDisposition(content, options, validationOptions = {}) 
 export function canonicalizeAuditRecord(content, options, validationOptions = {}) {
   const errors = [];
   const record = parseAuditRecord(content);
+  const structure = evaluateCanonicalAuditStructure(content, record);
+  if (!structure.ok) return { ok: false, errors: [`existing audit record is invalid: malformed canonical structure: ${structure.message}`] };
   if (!isLegacyAuditRecord(record)) {
     errors.push('audit record already uses the current schema; use audit baseline without --canonicalize');
     return { ok: false, errors };

@@ -9,6 +9,8 @@
  * 2. createDiagnostic calls that supply protected fields.
  * 3. Role-name prose concatenated into diagnostic messages.
  * 4. Diagnostic construction that bypasses the canonical fact constructor.
+ * 5. Raw built-in errors thrown from public command modules instead of a
+ *    classified PublicCommandError subtype.
  *
  * Legitimate non-diagnostic ownership fields (event roles, attribution
  * contracts, adapter generation) are unaffected: a literal is only
@@ -30,6 +32,14 @@ export const APPROVED_PRESENTATION_MODULES = new Set([
 
 /** The canonical fact constructor module itself may build fact literals. */
 export const CONSTRUCTOR_MODULES = new Set(['src/repair-policy.js']);
+export const PUBLIC_COMMAND_MODULES = new Set([
+  'src/audit-cli.js',
+  'src/cli-main.js',
+  'src/cli.js',
+  'src/closeout-cli.js',
+  'src/improvement-cli.js',
+  'src/task-cli.js',
+]);
 
 const ROUTING_FIELDS = new Set(['owner', 'escalationOwner', 'ownerRouting', 'nextAction', 'firstSafeRepair']);
 const PROTECTED_CONSTRUCTOR_FIELDS = new Set(['category', 'repairKind', 'escalationKind', ...ROUTING_FIELDS]);
@@ -67,13 +77,28 @@ function composedStringHasRoleProse(node) {
  * Inspect one source file and return a list of violations:
  * `{ rule, line, detail }`.
  */
-export function checkDiagnosticArchitecture(sourceText, { fileName = 'fixture.js', presentation = false, constructorModule = false } = {}) {
+export function checkDiagnosticArchitecture(sourceText, {
+  fileName = 'fixture.js',
+  presentation = false,
+  constructorModule = false,
+  publicCommandModule = false,
+} = {}) {
   const source = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
   const violations = [];
   const lineOf = node => source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
   const literalFields = node => new Set(node.properties.map(propertyName).filter(Boolean));
 
   const visit = node => {
+    if (publicCommandModule && ts.isThrowStatement(node) && ts.isNewExpression(node.expression)) {
+      const thrownType = ts.isIdentifier(node.expression.expression) ? node.expression.expression.text : null;
+      if (['Error', 'TypeError', 'RangeError'].includes(thrownType)) {
+        violations.push({
+          rule: 'untyped-public-command-error',
+          line: lineOf(node),
+          detail: `public command throws raw ${thrownType}; use CliUsageError or a PublicCommandError subtype`,
+        });
+      }
+    }
     if (ts.isObjectLiteralExpression(node)) {
       const fields = literalFields(node);
       const routing = [...fields].filter(field => ROUTING_FIELDS.has(field));

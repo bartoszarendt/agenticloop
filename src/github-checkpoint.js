@@ -3,7 +3,9 @@
 import { loadPreflightInput } from './github-preflight.js';
 import { applyCheckpointRepairs, deriveCheckpointState, formatCheckpoint, formatCheckpointRepair, parseReviewCheckpoint, validateCheckpointSchema } from './review-checkpoint.js';
 
-export class GitHubCheckpointError extends Error {
+import { PublicCommandError } from './public-error.js';
+
+export class GitHubCheckpointError extends PublicCommandError {
   constructor(message) {
     super(message);
     this.name = 'GitHubCheckpointError';

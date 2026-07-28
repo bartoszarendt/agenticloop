@@ -291,6 +291,12 @@ describe('help rendering', () => {
       assert.match(help, new RegExp(`^ {2}${code} {2,}`, 'm'));
     }
   });
+
+  it('documents the global debug flag and environment switch', () => {
+    const help = renderFullHelp();
+    assert.match(help, /--debug/);
+    assert.match(help, /AGENTICLOOP_DEBUG=1/);
+  });
 });
 
 describe('CLI help and version through runCli', () => {

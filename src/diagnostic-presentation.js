@@ -58,6 +58,46 @@ export function presentDiagnostics(diagnostics, capabilities) {
 }
 
 /**
+ * Construct the dependency-free last-resort public boundary result. This
+ * intentionally bypasses capability routing and the canonical constructors:
+ * it is used only after that normal presentation path itself has failed.
+ * Insertion order is canonical so direct JSON.stringify remains deterministic.
+ */
+export function minimalUnexpectedFailureResult({ command, debugReference, message, repair }) {
+  const diagnostic = {
+    category: 'operational_error',
+    code: 'cli.unexpected',
+    escalationKind: 'human_authority_review',
+    evidence: {
+      committedStateEvaluated: false,
+      rollbackAuthorized: false,
+      state: 'missing',
+    },
+    level: 'error',
+    message,
+    repairHint: repair,
+    repairKind: 'repair_evidence',
+  };
+  return {
+    command,
+    debugReference,
+    diagnostics: [diagnostic],
+    disposition: 'blocked',
+    errors: [message],
+    evidenceState: 'missing',
+    failureCategories: ['operational_error'],
+    firstSafeRepair: repair,
+    kind: 'agenticloop.validation-result',
+    ok: false,
+    requiredContext: [],
+    rollbackAuthorized: false,
+    schemaVersion: 1,
+    warningDiagnostics: [],
+    warnings: [],
+  };
+}
+
+/**
  * Derive the envelope compatibility fields for a gate result: presented
  * diagnostics plus the envelope `firstSafeRepair`.
  */

@@ -40,6 +40,7 @@ import {
   openBlockingFindings,
   parseAuditRecord,
   parseWorkUnitIdentity,
+  repairAuditRecordStructure,
   updateAuditBaseline,
   validateAuditRecord,
   validateAuditRecords,
@@ -316,7 +317,7 @@ export async function cmdAudit(args, io = createIo()) {
     const suggestion = sub ? suggestName(sub, Object.keys(AUDIT_SUBCOMMANDS)) : null;
     io.err(suggestion
       ? `audit: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
-      : 'audit requires a subcommand: new, baseline, report, status, gate, lint, disposition, override, resolve.');
+      : 'audit requires a subcommand: new, repair-structure, baseline, report, status, gate, lint, disposition, override, resolve.');
     io.err('Run "agenticloop help audit" for usage.');
     return EXIT_USAGE;
   }
@@ -427,6 +428,43 @@ export async function cmdAudit(args, io = createIo()) {
       }
       if (opts.json) io.out(JSON.stringify({ audit_id: auditId, file: relPath }, null, 2));
       else io.out(`Created ${relPath}`);
+      return 0;
+    }
+
+    if (sub === 'repair-structure') {
+      const selector = positional[0];
+      if (!selector) {
+        io.err('audit repair-structure requires an <audit-id|work-unit> selector');
+        return EXIT_USAGE;
+      }
+      const entry = findAuditRecord(target, selector);
+      if (!entry) {
+        io.err(`Audit record not found: ${selector}`);
+        return 1;
+      }
+      const repaired = repairAuditRecordStructure(entry.content, commandValidation());
+      if (!repaired.ok) {
+        printMutationErrors(
+          repaired.errors.map(error => `Cannot repair audit record structure: ${error}`),
+          null,
+          io
+        );
+        return 1;
+      }
+      const committed = commitAuditMutation(target, entry.relPath, repaired.content);
+      if (!committed.ok) {
+        printMutationErrors(committed.errors, null, io);
+        return 1;
+      }
+      if (opts.json) {
+        io.out(JSON.stringify({
+          audit_id: entry.record.auditId,
+          file: entry.relPath,
+          repaired: true,
+        }, null, 2));
+      } else {
+        io.out(`Repaired canonical structure for ${entry.relPath}`);
+      }
       return 0;
     }
 
@@ -894,6 +932,7 @@ export async function cmdAudit(args, io = createIo()) {
     return EXIT_USAGE;
   } catch (error) {
     if (error instanceof CliUsageError) throw error;
+    if (error?.code === 'task.record.structure') throw error;
     io.err(error.message);
     return 1;
   }

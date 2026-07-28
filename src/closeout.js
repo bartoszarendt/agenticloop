@@ -1007,11 +1007,13 @@ export function verifyCloseoutStatus(target, params) {
   if (!matches) {
     return {
       state: 'stale',
+      code: 'closeout.marker.stale',
       status: marker.status,
       current: false,
       marker,
       expectedDigest,
-      reasons: ['the current marker digest does not reconstruct from live state; re-run closeout prepare/record', ...reasons],
+      resumeCommand: `npx agenticloop closeout prepare --work-unit ${packet.work_unit}`,
+      reasons: ['the current marker digest does not reconstruct from live state; re-run closeout prepare, inspect the new packet, then record it once', ...reasons],
     };
   }
   if (marker.status !== 'complete') {
@@ -1020,10 +1022,12 @@ export function verifyCloseoutStatus(target, params) {
   if (evaluation.reasons.length > 0) {
     return {
       state: 'stale',
+      code: 'closeout.marker.stale',
       status: marker.status,
       current: false,
       marker,
       expectedDigest,
+      resumeCommand: `npx agenticloop closeout prepare --work-unit ${packet.work_unit}`,
       reasons: ['the complete marker no longer matches current gate state', ...reasons],
     };
   }

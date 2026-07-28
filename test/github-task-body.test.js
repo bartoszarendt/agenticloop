@@ -5,8 +5,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import {
+  GitHubTaskBodyError,
   applyGitHubTaskBody,
   lintGitHubTaskBody,
+  setTaskBodyFrontmatterField,
   summarizeTaskBodyChanges,
   taskBodyDigest,
 } from '../src/github-task-body.js';
@@ -15,10 +17,12 @@ import {
   renderTaskContractCorrectionMarker,
   createTaskContractBaselineRecord,
   createTaskContractCorrectionRecord,
+  renderTaskContractRecord,
   taskContractDigest,
   validateTaskContractBaseline,
 } from '../src/task-contract-baseline.js';
 import { runCliInProcess } from './helpers/run-cli.js';
+import { serializeValidationResult } from '../src/result-envelope.js';
 
 function taskBody({ title = 'Draft task', status = 'draft' } = {}) {
   return [
@@ -115,6 +119,40 @@ describe('task-contract digest markers', () => {
 });
 
 describe('transactional GitHub task-body application', () => {
+  it('requires every task-body error site to declare its evidence classification', () => {
+    assert.throws(
+      () => new GitHubTaskBodyError('unclassified failure'),
+      /requires explicit evidenceState and committedStateEvaluated classification/
+    );
+  });
+
+  it('classifies an invalid issue number as CLI usage and exits 2', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'agenticloop-task-body-usage-'));
+    try {
+      const result = await runCliInProcess([
+        'task-body', 'fetch', '--issue', '0', '--output', join(directory, 'issue.md'), '--json',
+      ], { cwd: directory, ghCommandRunner: issueRunner({ body: taskBody(), edits: 0 }) });
+      assert.equal(result.status, 2, result.stdout + result.stderr);
+      const envelope = JSON.parse(result.stdout);
+      assert.equal(envelope.diagnostics[0].code, 'cli.usage');
+      assert.equal(envelope.evidenceState, 'negative');
+      assert.equal(envelope.diagnostics[0].evidence.committedStateEvaluated, false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('classifies malformed task frontmatter as rejected malformed context', () => {
+    assert.throws(
+      () => setTaskBodyFrontmatterField('not frontmatter', 'status', 'draft'),
+      error => error instanceof GitHubTaskBodyError
+        && error.code === 'verification.context.malformed'
+        && error.evidenceState === 'malformed'
+        && error.disposition === 'rejected'
+        && error.committedStateEvaluated === false
+    );
+  });
+
   it('exercises fetch, lint, and dry-run apply through the offline CLI runner', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'agenticloop-task-body-cli-'));
     try {
@@ -293,8 +331,55 @@ describe('transactional GitHub task-body application', () => {
         'task-body', 'transition', '--issue', '31', '--status', 'agent-ready',
         '--expect-digest', taskBodyDigest(state.body), '--dry-run', '--json',
       ], { cwd: directory, ghCommandRunner: issueRunner(state) });
-      assert.equal(result.status, 2);
-      assert.match(result.stdout, /--base <ref>|--base-paths/i);
+      assert.equal(result.status, 1);
+      const envelope = JSON.parse(result.stdout);
+      assert.equal(envelope.kind, 'agenticloop.validation-result');
+      assert.equal(envelope.evidenceState, 'missing');
+      assert.equal(envelope.disposition, 'needs_context');
+      assert.equal(envelope.rollbackAuthorized, false);
+      assert.equal(envelope.diagnostics[0].code, 'verification.context.missing');
+      assert.equal(result.stdout.trim(), serializeValidationResult(envelope));
+      assert.equal(state.edits, 0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the explicit-base transition and standalone lint positive paths successful', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'agenticloop-task-body-explicit-base-'));
+    try {
+      const state = { body: taskBody(), edits: 0, comments: [] };
+      const projected = taskContractDigest(state.body);
+      const record = createTaskContractBaselineRecord({
+        recordId: 'github-comment:100', taskId: 'T-101', digest: projected.digest, projection: projected.projection,
+        authority: 'maintainer:dispatch', actor: 'maintainer', timestamp: '2026-01-02T03:04:05.000Z', affectedArtifact: 'issue:31',
+      });
+      state.comments.push({
+        id: 100,
+        html_url: 'https://example.test/comments/100',
+        user: { login: 'maintainer' },
+        author_association: 'MEMBER',
+        created_at: '2026-01-02T03:04:05.000Z',
+        updated_at: '2026-01-02T03:04:05.000Z',
+        body: renderTaskContractRecord(record),
+      });
+      const paths = join(directory, 'base-paths.json');
+      const bodyFile = join(directory, 'task.md');
+      writeFileSync(paths, JSON.stringify(['src/existing.js']), 'utf8');
+      writeFileSync(bodyFile, state.body, 'utf8');
+
+      const lint = await runCliInProcess([
+        'task-body', 'lint', '--issue', '31', '--body-file', bodyFile,
+        '--base-paths', paths, '--offline', '--json',
+      ], { cwd: directory, ghCommandRunner: issueRunner(state) });
+      assert.equal(lint.status, 0, lint.stdout + lint.stderr);
+
+      const transition = await runCliInProcess([
+        'task-body', 'transition', '--issue', '31', '--status', 'agent-ready',
+        '--expect-digest', taskBodyDigest(state.body), '--base-paths', paths, '--dry-run', '--json',
+      ], { cwd: directory, ghCommandRunner: issueRunner(state) });
+      assert.equal(transition.status, 0, transition.stdout + transition.stderr);
+      assert.equal(JSON.parse(transition.stdout).ok, true);
       assert.equal(state.edits, 0);
     } finally {
       rmSync(directory, { recursive: true, force: true });

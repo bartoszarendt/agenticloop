@@ -423,6 +423,14 @@ override a current change request. `github-ready` fails closed when the linked
 issue is not the unique carrier of its task identity across open and closed
 issues.
 
+## Global diagnostics
+
+`--debug` is a global flag accepted in flag position by every command. It prints
+internal stack details for unexpected failures; normal output keeps those
+details behind a stable debug reference. Set `AGENTICLOOP_DEBUG=1` for the same
+behavior in automation. Do not publish debug output without reviewing it for
+paths, environment details, or other sensitive operational context.
+
 ## Exit statuses
 
 | Status | Meaning |

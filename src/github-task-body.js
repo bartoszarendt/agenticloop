@@ -11,14 +11,48 @@ import { evaluateTaskReadiness, parseTaskReadinessDeclaration } from './task-rea
 import { deriveTaskContractLifecycle, hasTaskContractRecordMarker, parseTaskContractRecords, taskContractDigest, validateTaskContractBaseline, validateTrustedTaskContractRecords } from './task-contract-baseline.js';
 import { parseAttemptBudget, parseReviewBudget } from './github-preflight.js';
 import { createDiagnostic } from './repair-policy.js';
+import { evaluateTaskRecordRoot } from './task-record-root.js';
+import { PublicCommandError } from './public-error.js';
 import { normalizeGitHubCommentCarriers } from './github-comment-carrier.js';
 import { resolveTrustedTaskContractActors } from './trusted-actors.js';
 
 const BODY_DIGEST_RE = /^sha256:[a-f0-9]{64}$/;
 
-export class GitHubTaskBodyError extends Error {
-  constructor(message) {
-    super(message);
+export const TASK_BODY_USAGE_ERROR = Object.freeze({
+  code: 'cli.usage',
+  evidenceState: 'negative',
+  disposition: 'blocked',
+  committedStateEvaluated: false,
+  safeRepair: 'Correct the command arguments, then rerun without changing remote state.',
+});
+export const TASK_BODY_MISSING_CONTEXT = Object.freeze({
+  code: 'verification.context.missing',
+  evidenceState: 'missing',
+  disposition: 'needs_context',
+  committedStateEvaluated: false,
+  safeRepair: 'Restore the required GitHub or local-file context, then rerun without changing remote state.',
+});
+export const TASK_BODY_MALFORMED_CONTEXT = Object.freeze({
+  code: 'verification.context.malformed',
+  evidenceState: 'malformed',
+  disposition: 'rejected',
+  committedStateEvaluated: false,
+  safeRepair: 'Repair or regenerate the malformed task-body context, then rerun.',
+});
+export const TASK_BODY_NEGATIVE_EVIDENCE = Object.freeze({
+  code: 'evidence.negative',
+  evidenceState: 'negative',
+  disposition: 'blocked',
+  committedStateEvaluated: false,
+  safeRepair: 'Repair the reported task-body condition, then rerun the operation.',
+});
+
+export class GitHubTaskBodyError extends PublicCommandError {
+  constructor(message, options) {
+    if (!options || typeof options.evidenceState !== 'string' || typeof options.committedStateEvaluated !== 'boolean') {
+      throw new TypeError('GitHubTaskBodyError requires explicit evidenceState and committedStateEvaluated classification');
+    }
+    super(message, options);
     this.name = 'GitHubTaskBodyError';
   }
 }
@@ -29,34 +63,48 @@ export function taskBodyDigest(body) {
 
 function issueNumber(issue) {
   const number = Number(issue);
-  if (!Number.isInteger(number) || number <= 0) throw new GitHubTaskBodyError('--issue must be a positive integer');
+  if (!Number.isInteger(number) || number <= 0) {
+    throw new GitHubTaskBodyError('--issue must be a positive integer', TASK_BODY_USAGE_ERROR);
+  }
   return number;
 }
 
 function runGhJson(commandRunner, args) {
   const result = commandRunner('gh', args, { encoding: 'utf8' });
-  if (result?.error) throw new GitHubTaskBodyError(`failed to run 'gh ${args.join(' ')}': ${result.error.message}`);
+  if (result?.error) {
+    throw new GitHubTaskBodyError(`failed to run 'gh ${args.join(' ')}': ${result.error.message}`, TASK_BODY_MISSING_CONTEXT);
+  }
   if (result?.status !== 0) {
-    throw new GitHubTaskBodyError(`'gh ${args.join(' ')}' failed: ${(result?.stderr ?? result?.stdout ?? `exit ${result?.status}`).trim()}`);
+    throw new GitHubTaskBodyError(
+      `'gh ${args.join(' ')}' failed: ${(result?.stderr ?? result?.stdout ?? `exit ${result?.status}`).trim()}`,
+      TASK_BODY_MISSING_CONTEXT
+    );
   }
   try {
     return JSON.parse(String(result?.stdout ?? ''));
   } catch {
-    throw new GitHubTaskBodyError(`'gh ${args.join(' ')}' returned invalid JSON`);
+    throw new GitHubTaskBodyError(`'gh ${args.join(' ')}' returned invalid JSON`, TASK_BODY_MALFORMED_CONTEXT);
   }
 }
 
 function runGh(commandRunner, args) {
   const result = commandRunner('gh', args, { encoding: 'utf8' });
-  if (result?.error) throw new GitHubTaskBodyError(`failed to run 'gh ${args.join(' ')}': ${result.error.message}`);
+  if (result?.error) {
+    throw new GitHubTaskBodyError(`failed to run 'gh ${args.join(' ')}': ${result.error.message}`, TASK_BODY_MISSING_CONTEXT);
+  }
   if (result?.status !== 0) {
-    throw new GitHubTaskBodyError(`'gh ${args.join(' ')}' failed: ${(result?.stderr ?? result?.stdout ?? `exit ${result?.status}`).trim()}`);
+    throw new GitHubTaskBodyError(
+      `'gh ${args.join(' ')}' failed: ${(result?.stderr ?? result?.stdout ?? `exit ${result?.status}`).trim()}`,
+      TASK_BODY_MISSING_CONTEXT
+    );
   }
 }
 
 function configuredTrustedActors(projectMapConfig) {
   const resolved = resolveTrustedTaskContractActors(projectMapConfig);
-  if (resolved.errors.length) throw new GitHubTaskBodyError(resolved.errors.join('; '));
+  if (resolved.errors.length) {
+    throw new GitHubTaskBodyError(resolved.errors.join('; '), TASK_BODY_MALFORMED_CONTEXT);
+  }
   return resolved;
 }
 
@@ -64,14 +112,24 @@ function githubRepository(commandRunner, repo) {
   if (repo) return repo;
   const data = runGhJson(commandRunner, ['repo', 'view', '--json', 'nameWithOwner']);
   const name = String(data?.nameWithOwner ?? '').trim();
-  if (!name) throw new GitHubTaskBodyError('cannot resolve the current GitHub repository for paginated issue comments');
+  if (!name) {
+    throw new GitHubTaskBodyError(
+      'cannot resolve the current GitHub repository for paginated issue comments',
+      TASK_BODY_MISSING_CONTEXT
+    );
+  }
   return name;
 }
 
 function fetchAllGitHubIssueComments(commandRunner, repo, issue) {
   const ownerName = githubRepository(commandRunner, repo);
   const data = runGhJson(commandRunner, ['api', '--paginate', '--slurp', `repos/${ownerName}/issues/${issue}/comments`]);
-  if (!Array.isArray(data)) throw new GitHubTaskBodyError('GitHub issue-comment pagination returned an invalid collection');
+  if (!Array.isArray(data)) {
+    throw new GitHubTaskBodyError(
+      'GitHub issue-comment pagination returned an invalid collection',
+      TASK_BODY_MALFORMED_CONTEXT
+    );
+  }
   return data.flatMap(page => Array.isArray(page) ? page : []);
 }
 
@@ -80,7 +138,9 @@ export function fetchGitHubTaskBody({ issue, repo, commandRunner, projectMapConf
   const args = ['issue', 'view', String(number), '--json', 'body,number'];
   if (repo) args.push('--repo', repo);
   const data = runGhJson(commandRunner, args);
-  if (!data || typeof data.body !== 'string') throw new GitHubTaskBodyError(`issue #${number} has no readable body`);
+  if (!data || typeof data.body !== 'string') {
+    throw new GitHubTaskBodyError(`issue #${number} has no readable body`, TASK_BODY_MISSING_CONTEXT);
+  }
   const trustConfig = configuredTrustedActors(projectMapConfig);
   const comments = fetchAllGitHubIssueComments(commandRunner, repo, number);
   const carriers = normalizeGitHubCommentCarriers(comments, { trustedActors: trustConfig.actors });
@@ -126,21 +186,36 @@ function rawFrontmatterLines(body) {
 export function setTaskBodyFrontmatterField(body, field, value) {
   const text = String(body ?? '');
   const parsed = parseFrontmatterStrict(text);
-  if (parsed.state !== 'valid') throw new GitHubTaskBodyError(`cannot set task field: frontmatter is ${parsed.state}${parsed.reason ? ` (${parsed.reason})` : ''}`);
+  if (parsed.state !== 'valid') {
+    throw new GitHubTaskBodyError(
+      `cannot set task field: frontmatter is ${parsed.state}${parsed.reason ? ` (${parsed.reason})` : ''}`,
+      TASK_BODY_MALFORMED_CONTEXT
+    );
+  }
   const name = String(field ?? '').trim();
-  if (!/^[a-z_][a-z0-9_]*$/i.test(name)) throw new GitHubTaskBodyError('task-body set-field requires a simple frontmatter field name');
-  if (String(value ?? '').includes('\n') || String(value ?? '').includes('\r')) throw new GitHubTaskBodyError('task-body set-field value must be one line');
+  if (!/^[a-z_][a-z0-9_]*$/i.test(name)) {
+    throw new GitHubTaskBodyError('task-body set-field requires a simple frontmatter field name', TASK_BODY_USAGE_ERROR);
+  }
+  if (String(value ?? '').includes('\n') || String(value ?? '').includes('\r')) {
+    throw new GitHubTaskBodyError('task-body set-field value must be one line', TASK_BODY_USAGE_ERROR);
+  }
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const opening = text.match(/^(?:\uFEFF)?---[ \t]*\r?\n/);
-  if (!opening) throw new GitHubTaskBodyError('cannot find task frontmatter opening delimiter');
+  if (!opening) {
+    throw new GitHubTaskBodyError('cannot find task frontmatter opening delimiter', TASK_BODY_MALFORMED_CONTEXT);
+  }
   const close = /\r?\n---[ \t]*(?=\r?\n|$)/g;
   close.lastIndex = opening[0].length;
   const closing = close.exec(text);
-  if (!closing) throw new GitHubTaskBodyError('cannot find task frontmatter closing delimiter');
+  if (!closing) {
+    throw new GitHubTaskBodyError('cannot find task frontmatter closing delimiter', TASK_BODY_MALFORMED_CONTEXT);
+  }
   const frontmatter = text.slice(opening[0].length, closing.index);
   const lines = frontmatter.split(/\r?\n/);
   const matches = lines.map((line, index) => ({ line, index })).filter(item => new RegExp(`^${name}:`).test(item.line));
-  if (matches.length > 1) throw new GitHubTaskBodyError(`cannot set duplicate frontmatter field '${name}'`);
+  if (matches.length > 1) {
+    throw new GitHubTaskBodyError(`cannot set duplicate frontmatter field '${name}'`, TASK_BODY_MALFORMED_CONTEXT);
+  }
   const rendered = `${name}: ${JSON.stringify(String(value ?? ''))}`;
   if (matches.length === 1) lines[matches[0].index] = rendered;
   else lines.push(rendered);
@@ -175,9 +250,29 @@ export function lintGitHubTaskBody({
 } = {}) {
   const number = issueNumber(issue);
   const text = String(body ?? '');
-  const diagnostics = [];
+  let diagnostics = [];
+  const root = evaluateTaskRecordRoot(text);
+  if (!root.ok) {
+    diagnostics.push(...root.diagnostics);
+    const errors = diagnostics.filter(item => item.level !== 'warning');
+    const warnings = diagnostics.filter(item => item.level === 'warning');
+    return {
+      schemaVersion: 1,
+      ok: false,
+      evidenceState: 'malformed',
+      disposition: 'rejected',
+      rollbackAuthorized: false,
+      issue: number,
+      digest: taskBodyDigest(text),
+      errors: errors.map(item => item.message),
+      warnings: warnings.map(item => item.message),
+      diagnostics,
+      warningDiagnostics: warnings,
+      failureCategories: [...new Set(errors.map(item => item.category))],
+      firstSafeRepair: root.firstSafeRepair,
+    };
+  }
   if (hasTaskContractRecordMarker(text)) diagnostics.push(diagnostic('contract.record_marker.mutable_body'));
-  if (text.startsWith('\uFEFF')) diagnostics.push(diagnostic('task.body.bom'));
   const parsed = parseFrontmatterStrict(text);
   if (parsed.state !== 'valid') {
     diagnostics.push(diagnostic(parsed.state === 'malformed' ? 'task.contract.malformed' : 'task.contract.absent', {
@@ -205,12 +300,9 @@ export function lintGitHubTaskBody({
       trustedRecordErrors,
       prospectiveRecords,
     });
-    diagnostics.push(...baseline.errors.map(message => diagnostic(
-      message.includes('differs from the trusted baseline') ? 'contract.baseline.stale'
-        : message.includes('trusted task-contract baseline record') ? 'contract.baseline.missing'
-          : 'contract.baseline.invalid',
-      { message }
-    )));
+    diagnostics.push(...(baseline.errorFacts ?? baseline.errors.map(message => ({
+      code: 'contract.baseline.invalid', message,
+    }))).map(fact => diagnostic(fact.code, { message: fact.message })));
     diagnostics.push(...baseline.warnings.map(message => diagnostic('contract.baseline.missing', { message, level: 'warning' })));
     if (String(frontmatter.status ?? '').trim() === 'agent-ready' && !Array.isArray(basePaths)) diagnostics.push(diagnostic('task.body.base_inventory.missing'));
   }
@@ -309,7 +401,12 @@ function writeRecoveryFiles({ recoveryDir, issue, original, candidate, fs }) {
   const prefix = `issue-${issue}-task-body-${digest}-${timestamp}-${operationId}`;
   const originalPath = join(recoveryDir, `${prefix}-original.md`);
   const candidatePath = join(recoveryDir, `${prefix}-candidate.md`);
-  if (fs.existsSync?.(originalPath) || fs.existsSync?.(candidatePath)) throw new GitHubTaskBodyError('refusing to overwrite an existing task-body recovery artifact');
+  if (fs.existsSync?.(originalPath) || fs.existsSync?.(candidatePath)) {
+    throw new GitHubTaskBodyError(
+      'refusing to overwrite an existing task-body recovery artifact',
+      TASK_BODY_NEGATIVE_EVIDENCE
+    );
+  }
   atomicWriteUtf8(originalPath, original, fs);
   atomicWriteUtf8(candidatePath, candidate, fs);
   return { originalPath, candidatePath, operationId, retained: true };
@@ -341,13 +438,29 @@ export function applyGitHubTaskBody({
 } = {}) {
   const number = issueNumber(issue);
   if (Boolean(dryRun) === Boolean(yes)) {
-    throw new GitHubTaskBodyError('task-body apply requires exactly one of --dry-run or --yes');
+    throw new GitHubTaskBodyError(
+      'task-body apply requires exactly one of --dry-run or --yes',
+      TASK_BODY_USAGE_ERROR
+    );
   }
   if (!BODY_DIGEST_RE.test(String(expectDigest ?? ''))) {
-    throw new GitHubTaskBodyError('--expect-digest must be sha256:<64 lowercase hex characters>');
+    throw new GitHubTaskBodyError(
+      '--expect-digest must be sha256:<64 lowercase hex characters>',
+      TASK_BODY_USAGE_ERROR
+    );
   }
-  const candidate = body === undefined ? fs.readFileSync(bodyFile, 'utf8') : String(body);
-  if (candidate.startsWith('\uFEFF')) throw new GitHubTaskBodyError('candidate task body begins with a UTF-8 BOM');
+  let candidate;
+  try {
+    candidate = body === undefined ? fs.readFileSync(bodyFile, 'utf8') : String(body);
+  } catch {
+    throw new GitHubTaskBodyError(
+      `candidate task body '${String(bodyFile ?? '')}' is unavailable`,
+      TASK_BODY_MISSING_CONTEXT
+    );
+  }
+  if (candidate.startsWith('\uFEFF')) {
+    throw new GitHubTaskBodyError('candidate task body begins with a UTF-8 BOM', TASK_BODY_MALFORMED_CONTEXT);
+  }
   const current = fetchGitHubTaskBody({ issue: number, repo, commandRunner, projectMapConfig });
   if (current.digest !== expectDigest) {
     return {

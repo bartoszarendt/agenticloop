@@ -410,8 +410,8 @@ export const COMMAND_REGISTRY = {
     },
   },
   audit: {
-    summary: 'Manage work-unit audit certificates (new, baseline, report, status, gate, lint, disposition, override, resolve).',
-    usage: 'agenticloop audit <new|baseline|report|status|gate|lint|disposition|override|resolve> [options]',
+    summary: 'Manage work-unit audit certificates (new, repair-structure, baseline, report, status, gate, lint, disposition, override, resolve).',
+    usage: 'agenticloop audit <new|repair-structure|baseline|report|status|gate|lint|disposition|override|resolve> [options]',
     subcommands: {
       new: {
         summary: 'Create an audit record.',
@@ -427,6 +427,12 @@ export const COMMAND_REGISTRY = {
           opt('evidence', 'string', 'Integrated evidence for the candidate. The CLI adds the structural artifact binding. Required.'),
           jsonOption,
         ],
+      },
+      'repair-structure': {
+        summary: 'Safely repair duplicate or missing canonical audit titles.',
+        usage: 'agenticloop audit repair-structure <audit-id|work-unit> [--json] [--target <dir>]',
+        positionals: [{ name: 'audit-id|work-unit', required: true }],
+        options: [targetOption(), jsonOption],
       },
       baseline: {
         summary: 'Rebaseline an audit record after remediation.',
@@ -1038,6 +1044,12 @@ Run "agenticloop help" for all commands.
 export function renderFullHelp() {
   const lines = [];
   lines.push('agenticloop <command> [options]');
+  lines.push('');
+  lines.push('Global options:');
+  lines.push('  --debug              Print internal stack details for this invocation. May appear before or after command options.');
+  lines.push('');
+  lines.push('Environment:');
+  lines.push('  AGENTICLOOP_DEBUG=1  Enable the same internal stack details as --debug.');
   lines.push('');
   lines.push('Get started:');
   lines.push('  setup                 Recommended guided onboarding; scaffolds or repairs as needed.');

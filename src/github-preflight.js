@@ -71,8 +71,10 @@ import { deriveTaskContractLifecycle, parseTaskContractRecords, taskContractDige
 import { normalizeGitHubCommentCarriers } from './github-comment-carrier.js';
 import { resolveTrustedTaskContractActors } from './trusted-actors.js';
 import { createDiagnostic, preflightDiagnosticCode, repairPolicyFor } from './repair-policy.js';
+import { evaluateTaskRecordRoot } from './task-record-root.js';
+import { PublicCommandError } from './public-error.js';
 
-export class PreflightError extends Error {
+export class PreflightError extends PublicCommandError {
   constructor(message) {
     super(message);
     this.name = 'PreflightError';
@@ -1248,6 +1250,8 @@ export function evaluatePreflight({
   mode,
   pathInventoryRequired = false,
 }) {
+  const taskRoot = evaluateTaskRecordRoot(issueData?.body);
+  if (!taskRoot.ok) return preflightForMalformedTaskRoot({ prData, issueData, taskRoot });
   const errors = [];
   const warnings = [];
   const headRefOid = String(prData?.headRefOid ?? '').toLowerCase();
@@ -1276,15 +1280,10 @@ export function evaluatePreflight({
   for (const message of [...(parsedCarrierRecords.parseWarnings ?? []), ...(trustedCarrierRecords.warnings ?? [])]) {
     warnings.push(message);
   }
-  for (const message of contractBaseline.errors) {
-    errors.push(createDiagnostic({
-      code: message.includes('differs from the trusted baseline')
-        ? 'contract.baseline.stale'
-        : message.includes('trusted task-contract baseline record')
-          ? 'contract.baseline.missing'
-          : 'contract.baseline.invalid',
-      message,
-    }));
+  for (const fact of contractBaseline.errorFacts ?? contractBaseline.errors.map(message => ({
+    code: 'contract.baseline.invalid', message,
+  }))) {
+    errors.push(createDiagnostic({ code: fact.code, message: fact.message }));
   }
   for (const message of contractBaseline.warnings) {
     warnings.push(createDiagnostic({ code: 'contract.baseline.missing', message, level: 'warning' }));
@@ -1644,6 +1643,65 @@ export function evaluatePreflight({
       errors: noProgressValidation.errors,
     },
     resolutionMatrixValidation: resolutionMatrixValidation ? { valid: resolutionMatrixValidation.valid, errors: resolutionMatrixValidation.errors } : null,
+  };
+}
+
+/**
+ * A malformed canonical task record invalidates task-derived checks. Preserve
+ * only facts obtainable from the PR itself; dependent parsers never run.
+ */
+function preflightForMalformedTaskRoot({ prData, issueData, taskRoot }) {
+  const errors = [...taskRoot.diagnostics];
+  const warnings = [];
+  const headRefOid = String(prData?.headRefOid ?? '').toLowerCase();
+  if (!headRefOid) {
+    errors.push(createDiagnostic({
+      code: 'preflight.head_identity',
+      message: 'PR head commit (headRefOid) is unavailable; cannot verify evidence freshness',
+    }));
+  } else if (!/^[0-9a-f]{40}$/.test(headRefOid)) {
+    errors.push(createDiagnostic({
+      code: 'preflight.head_identity',
+      message: `PR head commit '${headRefOid}' is not a full 40-character hexadecimal SHA`,
+    }));
+  }
+  const summaryValidation = validateCompletionSummary(prData?.body, headRefOid);
+  for (const error of summaryValidation.errors) {
+    errors.push(createDiagnostic({
+      code: 'preflight.summary_shape',
+      message: typeof error === 'string' ? error : error.message,
+    }));
+  }
+  const diagnostics = errors;
+  return {
+    schemaVersion: 1,
+    ok: false,
+    evidenceState: 'malformed',
+    disposition: 'rejected',
+    rollbackAuthorized: false,
+    errors: diagnostics.map(item => item.message),
+    warnings: warnings.map(item => item.message),
+    diagnostics,
+    warningDiagnostics: warnings,
+    pr: prData?.number ?? null,
+    issue: issueData?.number ?? null,
+    headRefOid,
+    requiredChecks: [],
+    evidenceMatches: [],
+    statusSubstitutions: [],
+    missing: [],
+    failureCategories: [...new Set(diagnostics.map(item => item.category))],
+    pathValidation: null,
+    taskReadiness: null,
+    summaryValidation: { errors: summaryValidation.errors.map(item => typeof item === 'string' ? item : item.message) },
+    attributionValidation: { established: false, errors: [] },
+    attemptBudget: { budget: null, source: 'unavailable' },
+    contractBaseline: { ok: false, digest: null, baseline: null },
+    reviewHistory: { events: 0, errors: [] },
+    checkpointValidation: null,
+    noProgressValidation: { authorized: false, required: false, sustainedFindingIds: [], disposition: null, errors: [] },
+    resolutionMatrixValidation: null,
+    firstSafeRepair: taskRoot.firstSafeRepair,
   };
 }
 

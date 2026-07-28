@@ -153,10 +153,17 @@ independently meaningful field groups:
 | `validation` | Typed result with diagnostics and evidence state. A result does not choose a repair owner. |
 | `disposition` | One of `proceed`, `blocked`, `needs_context`, `rejected`, `superseded`, `exception_requested`, `exception_accepted`, or `exception_rejected`. |
 
-The required-field list is a closed inventory, not a serialization sequence.
-Canonical envelope ordering and digest serialization must be defined explicitly
-by their owning implementation rather than inferred from array or JSON property
-order.
+The required-field list is a closed, order-insensitive inventory, not a
+serialization sequence. Missing, duplicate, and unknown required-field entries
+are invalid. Public validation results use kind
+`agenticloop.validation-result`, schema version `1`, and the canonical serializer
+in `src/result-envelope.js`. It recursively sorts object keys and sorts the
+schema-declared set-like arrays (`errors`, `warnings`, `diagnostics`,
+`warningDiagnostics`, and `failureCategories`) by exact UTF-16 code-unit order
+of their canonical JSON representation before SHA-256. Semantically ordered
+arrays retain their declared order. Equivalent set permutations therefore
+serialize and digest identically across locales and hosts; incidental
+object-property or set-array insertion order carries no authority.
 
 Every required evidence input is classified as exactly one of `current`,
 `missing`, `malformed`, `stale`, `negative`, or `changed`. `missing` means no
@@ -164,7 +171,8 @@ adequate input was supplied; `negative` means supplied, valid evidence proves
 the required condition is false. `malformed`, `stale`, and `changed` also do
 not mean negative. A verifier that lacks required context reports
 `missing`/`verification_context_missing`; it does not invalidate a previously
-verified write or authorize rollback.
+verified write or authorize rollback or a compensating mutation. Public results
+state `rollbackAuthorized: false`.
 
 Machine vocabulary inventories are closed:
 

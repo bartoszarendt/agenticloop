@@ -30,6 +30,7 @@ import {
   validateFilesTaskRecord,
   validateFilesReviewControls,
   validateTaskRecord,
+  validateTaskRecordDiagnostics,
 } from './validate-config.js';
 import { validateVerificationAttempts } from './verification-learning.js';
 import { createLocalVerificationContext } from './verification-context.js';
@@ -37,6 +38,7 @@ import {
   validateReviewProvenance,
 } from './review-provenance.js';
 import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.js';
+import { VerificationContextError, VerificationContextMalformedError } from './public-error.js';
 import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
 import { evaluateTaskReadiness } from './task-readiness.js';
 import { createTaskContractBaselineRecord, createTaskContractCorrectionRecord, taskContractDigest, trustedChainTerminal, validateTaskContractBaseline } from './task-contract-baseline.js';
@@ -84,7 +86,7 @@ function taskPathForId(target, projectConfig, taskId) {
   const fullPath = resolve(target, relPath);
   const root = resolve(target);
   if (fullPath !== root && !fullPath.startsWith(`${root}\\`) && !fullPath.startsWith(`${root}/`)) {
-    throw new Error(`task_file_template resolves outside target: ${projectConfig.task_file_template}`);
+    throw new VerificationContextMalformedError(`task_file_template resolves outside target: ${projectConfig.task_file_template}`);
   }
   return fullPath;
 }
@@ -141,6 +143,15 @@ function lintTaskFile(filePath, target, projectConfig, verificationContext) {
   const content = readFileSync(filePath, 'utf-8');
   const filename = relative(target, filePath).replace(/\\/g, '/');
   const warnings = [];
+  const diagnostics = validateTaskRecordDiagnostics(content, filename);
+  if (diagnostics.length > 0) {
+    return {
+      file: filename,
+      errors: diagnostics.map(item => item.message),
+      warnings,
+      diagnostics,
+    };
+  }
   const errors = [
     ...validateTaskRecord(content, filename),
     ...validateFilesTaskRecord(content, filename, {
@@ -166,7 +177,7 @@ function lintTaskFile(filePath, target, projectConfig, verificationContext) {
     errors.push(...baseline.errors);
     warnings.push(...baseline.warnings);
   }
-  return { file: filename, errors, warnings };
+  return { file: filename, errors, warnings, diagnostics };
 }
 
 function baseTreePaths(target) {
@@ -190,7 +201,9 @@ function instantiateTaskTemplate(target, projectConfig, taskId, title) {
   const layout = resolveToolkitAssetLayout(target);
   const templatePath = resolveToolkitAssetPath(target, TASK_RECORD_TEMPLATE_RELATIVE_PATH, layout);
   if (!existsSync(templatePath)) {
-    throw new Error(`Task template not found: ${TASK_RECORD_TEMPLATE_RELATIVE_PATH}`);
+    throw new VerificationContextError(`Task template not found: ${TASK_RECORD_TEMPLATE_RELATIVE_PATH}`, {
+      requiredContext: [`a readable toolkit task template at '${TASK_RECORD_TEMPLATE_RELATIVE_PATH}'`],
+    });
   }
   return readFileSync(templatePath, 'utf-8')
     .replaceAll('T-001', taskId)
@@ -203,7 +216,7 @@ function replaceFrontmatterField(content, key, value) {
   // `key:` line elsewhere in the body (e.g. a fenced example) is never touched.
   const fence = content.match(/^(---[ \t]*\r?\n)([\s\S]*?)(\r?\n---[ \t]*(?:\r?\n|$))/);
   if (!fence) {
-    throw new Error('Task record missing YAML frontmatter');
+    throw new VerificationContextMalformedError('Task record missing YAML frontmatter');
   }
   const [full, open, block, close] = fence;
   const eol = block.includes('\r\n') ? '\r\n' : '\n';
@@ -248,7 +261,14 @@ function printLintResults(results, json, io) {
       io.out(`${result.file}: ok`);
       continue;
     }
-    for (const error of result.errors) io.out(`${result.file}: ERROR ${error}`);
+    const diagnosticMessages = new Set((result.diagnostics ?? []).map(item => item.message));
+    for (const diagnostic of result.diagnostics ?? []) {
+      io.out(`${result.file}: ERROR [${diagnostic.code}] ${diagnostic.message}`);
+      if (diagnostic.repairHint) io.out(`${result.file}: REPAIR ${diagnostic.repairHint}`);
+    }
+    for (const error of result.errors) {
+      if (!diagnosticMessages.has(error)) io.out(`${result.file}: ERROR ${error}`);
+    }
     for (const warning of result.warnings) io.out(`${result.file}: WARN ${warning}`);
   }
 }

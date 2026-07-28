@@ -111,6 +111,21 @@ describe('review preparation CLI - task-readiness', () => {
     assert.match(parsed.errors.join('\n'), /App\.tsx/);
   });
 
+  it('types a missing base inventory as unavailable verification context', async () => {
+    const task = write('task-no-base.md', '---\nallowed_paths: ["src/**"]\n---\n# Task\n');
+    const result = await runCliInProcess(['task-readiness', '--task-body', task, '--mode', 'review', '--json'], { cwd: tmpDir });
+    assert.equal(result.status, 1, result.stderr + result.stdout);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.evidenceState, 'missing');
+    assert.equal(parsed.disposition, 'needs_context');
+    assert.equal(parsed.diagnostics[0].code, 'verification.context.missing');
+    assert.equal(parsed.diagnostics[0].evidence.state, 'missing');
+    assert.equal(Object.hasOwn(parsed.diagnostics[0].evidence, 'evidenceState'), false);
+    assert.equal(parsed.diagnostics[0].evidence.committedStateEvaluated, false);
+    assert.equal(parsed.rollbackAuthorized, false);
+  });
+
   it('fails closed with a gate error when --mode is missing', async () => {
     const task = write('task-nomode.md', '---\nallowed_paths: ["src/**"]\n---\n# Task\n');
     const base = write('base-nomode.json', JSON.stringify(['src/a.js']));

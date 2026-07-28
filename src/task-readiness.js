@@ -3,6 +3,7 @@
 import { parseFrontmatterStrict } from './frontmatter.js';
 import { fileMatchesScopePattern, isSafeScopePattern, parseScopePatterns, validatePathsAgainstDeviations } from './scope-matcher.js';
 import { createDiagnostic } from './repair-policy.js';
+import { evaluateTaskRecordRoot } from './task-record-root.js';
 
 const GLOB = /[*?]/;
 const GLOB_SAMPLE_LIMIT = 5;
@@ -125,12 +126,25 @@ export function evaluateTaskReadiness({
   dependencyEvaluator,
   projectFacts = [],
 } = {}) {
+  const root = evaluateTaskRecordRoot(taskBody);
+  if (!root.ok) {
+    return finish(root.diagnostics, {
+      paths: [],
+      dependencies: [],
+      knownFacts: projectFacts,
+      deviations: { missing: [], stale: [], unnecessary: [] },
+    });
+  }
   const diagnostics = [];
   if (!Array.isArray(basePaths)) {
-    diagnostics.push(issue('error', 'readiness.base_inventory.missing', {}));
+    diagnostics.push(issue('error', 'readiness.base_inventory.missing', {
+      state: 'missing',
+      committedStateEvaluated: false,
+      rollbackAuthorized: false,
+    }));
   }
   if (!['authoring', 'review'].includes(mode)) {
-    diagnostics.push(issue('error', 'readiness.mode.invalid', { mode }));
+    diagnostics.push(issue('error', 'readiness.mode.invalid', { mode: mode ?? null }));
   }
   const parsed = parseTaskReadinessDeclaration(taskBody);
   diagnostics.push(...parsed.diagnostics);
@@ -208,9 +222,23 @@ export function evaluateTaskReadiness({
 function finish(diagnostics, detail) {
   const errors = diagnostics.filter(item => item.level === 'error');
   const warnings = diagnostics.filter(item => item.level === 'warning');
+  const evidenceState = errors
+    .map(item => item.evidence?.state)
+    .find(state => ['missing', 'malformed', 'stale', 'negative', 'changed'].includes(state))
+    ?? (errors.length === 0 ? 'current' : 'negative');
+  const disposition = evidenceState === 'missing'
+    ? 'needs_context'
+    : evidenceState === 'malformed'
+      ? 'rejected'
+      : ['stale', 'changed'].includes(evidenceState)
+        ? 'superseded'
+        : errors.length === 0 ? 'proceed' : 'blocked';
   return {
     schemaVersion: 1,
     ok: errors.length === 0,
+    evidenceState,
+    disposition,
+    rollbackAuthorized: false,
     errors: errors.map(item => item.message),
     warnings: warnings.map(item => item.message),
     diagnostics,
