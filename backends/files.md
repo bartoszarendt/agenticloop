@@ -23,6 +23,20 @@ GitHub backend.
 The files backend is not an autonomous runner. It is a storage projection for
 the same Agentic Loop roles, skills, and review gates.
 
+## Shared transition contract
+
+Files projects the backend-neutral `agenticloop.transition-contract` defined in
+`agenticloop/AGENTIC_LOOP.md`. Task-file frontmatter is authoritative for the
+durable task lifecycle status, append-only task-contract history is authoritative
+for contract readiness, and the backend-neutral audit record and closeout marker
+retain their own facts. A task status does not replace a current blocked-return
+receipt, review-entry receipt, audit state, or terminal closeout marker.
+
+The files projection has no labels. Its task history and optional event log are
+authoritative only for the typed records they carry; ordinary prose remains
+advisory. Apply the shared freshness, terminal ordering, Markdown preservation,
+and audit-budget rules before adding a files mutation mechanism.
+
 New files-backed tasks materialize `attempt_budget` from project
 `default_attempt_budget`, then built-in `5`. A task-specific override is an
 explicit task-record edit made before work begins; the files `task new` command

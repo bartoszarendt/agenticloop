@@ -13,6 +13,19 @@ request, review, and merge. Direct commits to the default or integration branch
 are not valid automated implementation artifacts unless a human approves and
 records a no-PR exception before implementation starts.
 
+## Shared transition contract
+
+GitHub projects the backend-neutral `agenticloop.transition-contract` defined
+in `agenticloop/AGENTIC_LOOP.md`. The issue body carries durable task lifecycle
+status and verified immutable task-contract comments carry contract readiness.
+Labels are authoritative only for label presence; comments and review bodies are
+authoritative only for their typed records. Neither a label nor free-form comment
+can substitute for a current blocked-return receipt, exact-head review-entry
+receipt, audit record, or closeout marker.
+
+Apply the shared freshness, terminal ordering, Markdown preservation, and
+audit-budget rules before adding GitHub publication or reconciliation mechanics.
+
 ## GitHub-Specific Configuration
 
 GitHub-only label and branch config lives under `backends.github` in

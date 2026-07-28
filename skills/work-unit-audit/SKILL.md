@@ -265,9 +265,17 @@ Then invoke a fresh Auditor and append the new report to the same audit record.
 - Count only completed substantive reports, derived from `## Audit History`.
 - Count both certifying and non-certifying reports, but stop immediately after
   certification.
-- Invocation failures without a report do not consume it.
+- Invocation failures without a report, rejected or malformed reports, and
+  report-validation failures do not consume it; the normal attempt budget still
+  bounds equivalent failures.
 - Remediation work does not consume it.
 - Baseline replacement does not reset history.
+- One `product_invalidation_recovery` allowance exists per audit record. It is
+  a separately recorded recovery cause, not a substantive audit run, and allows
+  one fresh report after a confirmed product-caused invalidation without
+  consuming `audit_budget`. Record the invalidation reference, affected prior
+  run, and Maintainer-recorded cause. Auditor findings cannot use this allowance;
+  a second recovery requires an explicit human budget override.
 
 After three non-certifying reports, set `audit_state: blocked` with
 `audit_blocked_reason: audit_budget_exhausted` and keep `latest_verdict` at the
