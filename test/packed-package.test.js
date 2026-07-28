@@ -377,6 +377,45 @@ describe('packed package smoke tests', () => {
     }
   });
 
+  it('ships a self-validating OpenCode init path with all four configured roles', () => {
+    const target = mkdtempSync(join(tmpBase, 'target-opencode-roles-'));
+    const initialized = runPacked(['init', '--target', target, '--adapter', 'opencode']);
+    assert.equal(initialized.status, 0, `${initialized.stdout}\n${initialized.stderr}`);
+
+    const configPath = join(target, 'agenticloop.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+    for (const [role, model] of Object.entries({
+      orchestrator: 'openrouter/model-o',
+      maintainer: 'openrouter/model-m',
+      engineer: 'openrouter/model-e',
+      auditor: 'openrouter/model-a',
+    })) {
+      config.adapters.opencode.roleSettings[role] ??= {};
+      config.adapters.opencode.roleSettings[role].model = model;
+    }
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
+
+    const updated = runPacked(['update', '--target', target, '--adapter', 'opencode']);
+    assert.equal(updated.status, 0, `${updated.stdout}\n${updated.stderr}`);
+    const validation = runPacked(['validate', '--target', target]);
+    assert.equal(validation.status, 0, `${validation.stdout}\n${validation.stderr}`);
+
+    for (const [role, model] of Object.entries({
+      orchestrator: 'openrouter/model-o',
+      maintainer: 'openrouter/model-m',
+      engineer: 'openrouter/model-e',
+      auditor: 'openrouter/model-a',
+    })) {
+      const generated = readFileSync(join(target, '.opencode', 'agents', `${role}.md`), 'utf-8');
+      assert.match(generated, new RegExp(`^model: "${model}"$`, 'm'));
+      assert.match(generated, new RegExp(`Follow agenticloop/agents/${role}\\.md as the canonical role contract\\.`));
+    }
+    assert.ok(
+      existsSync(join(target, '.opencode', 'commands', 'agenticloop.md')),
+      'manual Agentic Loop activation command must be present'
+    );
+  });
+
   it('reports usage failures with exit 2 from the packed binary', () => {
     const target = mkdtempSync(join(tmpBase, 'target-'));
     writeFileSync(join(target, 'README.md'), '# R\n', 'utf-8');

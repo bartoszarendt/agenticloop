@@ -26,6 +26,8 @@ const PLANNERS = {
 /**
  * @typedef {Object} GenerationOptions
  * @property {string} target
+ * @property {string} [assetSourceRoot] Repository root used to read canonical
+ * adapter source assets when the target's planned assets are not yet on disk.
  * @property {object} alConfig
  * @property {string|string[]} [adapter]
  * @property {string} [outputDirOpt]
@@ -54,6 +56,7 @@ const PLANNERS = {
  */
 export function planAdapterArtifacts(options) {
   const { target, alConfig, adapter, outputDirOpt, forceGenerated = false, runPluginChecks = true } = options;
+  const assetSourceRoot = options.assetSourceRoot ?? target;
 
   const outputDir = resolveOutputDir(target, outputDirOpt);
   const outputRoot = computeOutputRoot(target, outputDir);
@@ -79,7 +82,7 @@ export function planAdapterArtifacts(options) {
       return { ok: false, errors: [`Unknown adapter: ${adapterName}`], adapters: expanded, outputDir };
     }
     try {
-      const plan = planner(alConfig, target, outputDir);
+      const plan = planner(alConfig, assetSourceRoot, outputDir);
       allActions.push(...plan.actions);
       allFiles.push(...plan.files);
       adaptersWithPlans.push(adapterName);

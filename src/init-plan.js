@@ -11,7 +11,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   LIFECYCLE_PLAN_SCHEMA_VERSION,
   hashContent,
@@ -591,7 +591,24 @@ function planAdapterGroup(target, selectedAdapter, plan) {
     plan.blockers.push(`Cannot generate adapter output: ${error.message}`);
     return;
   }
-  const planned = planAdapterArtifacts({ target, alConfig, adapter: selectedAdapter });
+  const toolkitAssetsChange = plan.actions.some(action =>
+    action.category === 'toolkit'
+    && (action.kind === 'create' || action.kind === 'update')
+  );
+  // Init is planned as one atomic transaction. On a fresh install or asset
+  // refresh, the canonical role files exist only as pending toolkit actions
+  // when adapter output is rendered. Read those exact bundled assets instead
+  // of the not-yet-updated target so generated prompts match the state that
+  // validation sees after the transaction commits.
+  const assetSourceRoot = toolkitAssetsChange
+    ? dirname(bundledToolkitPath(CONFIG_RELATIVE_PATH))
+    : target;
+  const planned = planAdapterArtifacts({
+    target,
+    assetSourceRoot,
+    alConfig,
+    adapter: selectedAdapter,
+  });
   if (!planned.ok) {
     plan.blockers.push(...planned.errors);
     return;

@@ -25,6 +25,11 @@ import { fileURLToPath } from 'node:url';
 import { init } from '../src/init.js';
 import { loadJsonFile } from '../src/json.js';
 import { parseFrontmatter } from '../src/frontmatter.js';
+import { validateConfig } from '../src/validate-config.js';
+import {
+  normalizeSkillsSourceDir,
+  rewriteOpencodeSkillReferences,
+} from '../src/adapters/opencode.js';
 import { TOOLKIT_SOURCE_RELATIVE_PATHS, toPackageSourcePath } from '../src/layout.js';
 import { exactPathMatch } from '../src/layout-migration.js';
 import { isValidTaskId, loadProjectMap } from '../src/project-map.js';
@@ -666,13 +671,32 @@ describe('init - adapter generation creates JSON', () => {
   it('generates OpenCode markdown agents with --adapter opencode', async () => {
     const d = makeEmptyTarget();
     await init({ target: d, adapter: 'opencode' });
-    assert.ok(existsSync(join(d, '.opencode', 'agents', 'orchestrator.md')), 'OpenCode orchestrator agent should be generated');
-    assert.ok(existsSync(join(d, '.opencode', 'agents', 'maintainer.md')), 'OpenCode maintainer agent should be generated');
-    assert.ok(existsSync(join(d, '.opencode', 'agents', 'engineer.md')), 'OpenCode engineer agent should be generated');
+    const config = loadJsonFile(join(d, 'agenticloop.json'));
+    for (const role of ['orchestrator', 'maintainer', 'engineer', 'auditor']) {
+      const generatedPath = join(d, '.opencode', 'agents', `${role}.md`);
+      const canonicalPath = join(d, 'agenticloop', 'agents', `${role}.md`);
+      assert.ok(existsSync(generatedPath), `OpenCode ${role} agent should be generated`);
+      const [, generatedBody] = parseFrontmatter(readFileSync(generatedPath, 'utf-8'));
+      const [, canonicalBody] = parseFrontmatter(readFileSync(canonicalPath, 'utf-8'));
+      const expectedBody = rewriteOpencodeSkillReferences(
+        canonicalBody.trim(),
+        normalizeSkillsSourceDir(config.skills?.sourceDirectory)
+      );
+      assert.ok(
+        generatedBody.includes(expectedBody),
+        `OpenCode ${role} prompt should append its newly installed canonical role body`
+      );
+    }
     assert.ok(existsSync(join(d, '.opencode', 'commands', 'agenticloop.md')), 'OpenCode command should be generated');
     assert.ok(!existsSync(join(d, 'opencode.jsonc')), 'opencode.jsonc should not be generated');
     const [frontmatter] = parseFrontmatter(readFileSync(join(d, '.opencode', 'agents', 'orchestrator.md'), 'utf-8'));
     assert.equal(frontmatter?.mode, 'primary');
+    const { errors } = validateConfig(d);
+    assert.equal(
+      errors.filter(error => error.includes('prompt body must append the canonical role body')).length,
+      0,
+      errors.join('\n')
+    );
   });
 
   it('generates Codex artifacts with --adapter codex', async () => {
