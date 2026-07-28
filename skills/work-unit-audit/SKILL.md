@@ -270,12 +270,17 @@ Then invoke a fresh Auditor and append the new report to the same audit record.
   bounds equivalent failures.
 - Remediation work does not consume it.
 - Baseline replacement does not reset history.
-- One `product_invalidation_recovery` allowance exists per audit record. It is
-  a separately recorded recovery cause, not a substantive audit run, and allows
-  one fresh report after a confirmed product-caused invalidation without
-  consuming `audit_budget`. Record the invalidation reference, affected prior
-  run, and Maintainer-recorded cause. Auditor findings cannot use this allowance;
-  a second recovery requires an explicit human budget override.
+- The shared contract declares one bounded `product_invalidation_recovery`
+  allowance per audit record, but it is not operationally enforced yet. Current
+  executable behavior derives consumption from `## Audit History`, so every
+  completed substantive report consumes `audit_budget`, including a rerun caused
+  by product invalidation. After exhaustion, use the existing human-approved
+  override. Agents must not claim or attempt a non-consuming recovery until the
+  guarded audit mechanism supports it.
+- Future guarded support must retain exactly one allowance, a typed cause, an
+  invalidation reference, the affected prior run, and a Maintainer-recorded
+  cause. Auditor findings cannot use it; a second recovery requires explicit
+  human override.
 
 After three non-certifying reports, set `audit_state: blocked` with
 `audit_blocked_reason: audit_budget_exhausted` and keep `latest_verdict` at the

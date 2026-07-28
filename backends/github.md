@@ -15,8 +15,10 @@ records a no-PR exception before implementation starts.
 
 ## Shared transition contract
 
-GitHub projects the backend-neutral `agenticloop.transition-contract` defined
-in `agenticloop/AGENTIC_LOOP.md`. The issue body carries durable task lifecycle
+GitHub projects the complete backend-neutral `agenticloop.transition-contract`
+defined in `agenticloop/AGENTIC_LOOP.md`. Its executable definition is internal
+to the installed Agentic Loop npm package and is not copied into the target. The
+issue body carries durable task lifecycle
 status and verified immutable task-contract comments carry contract readiness.
 Labels are authoritative only for label presence; comments and review bodies are
 authoritative only for their typed records. Neither a label nor free-form comment

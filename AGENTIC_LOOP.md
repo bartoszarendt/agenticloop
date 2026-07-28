@@ -60,27 +60,103 @@ artifact; a hidden scope or task-contract correction blocks review. Detailed
 carrier, readiness, and recovery rules live in [[task-record-contract]] and the
 selected backend document.
 
+Agentic Loop is a supervised implementation workflow for AI coding agents. It
+turns a vague request into a durable task record, a scoped implementation,
+evidence, review, and closeout.
+
+The methodology is host-neutral. All five implemented host adapters - OpenCode,
+Codex, Claude Code, GitHub Copilot, and Cursor - are supported. The workflow
+should read naturally in any agent that can follow Markdown instructions and
+load skills.
+
 ## Shared Transition Contract
 
 Every backend projection uses the versioned `agenticloop.transition-contract`
-schema. Its machine-readable vocabulary is maintained in
-`agenticloop/src/transition-contract.js`; this section defines the durable
-methodology contract. It is a fact and authority contract, not a scheduler,
-controller, or alternate task store.
+schema. Its executable definition is an internal module bundled with the
+Agentic Loop CLI at package path `src/transition-contract.js`; it is not copied
+into target projects. This section is the installed, human-readable methodology
+contract. It is a fact and authority contract, not a scheduler, controller, or
+alternate task store.
 
-### Envelope and evidence
+### Workflow role identity
 
-A transition envelope carries these independently meaningful fields:
+Workflow roles are declared by one canonical registry. Each registry entry has:
 
 | Field | Meaning |
 | --- | --- |
+| `roleId` | Immutable lowercase machine identity used in durable records, filenames, ownership references, provenance, dispatch, and return packets. |
+| `defaultLabel` | Mutable human-readable display label. It is not authority and may be renamed or replaced by a localized renderer. |
+| `escalationPrecedence` | Unique positive integer used for deterministic escalation-owner selection. Lower values take priority; ties are invalid. Array position and alphabetical order are not authority. |
+
+The current registry is:
+
+| `roleId` | `defaultLabel` | `escalationPrecedence` | Capability source |
+| --- | --- | --- | --- |
+| `orchestrator` | `Orchestrator` | `10` | `agents/orchestrator.md` frontmatter |
+| `maintainer` | `Maintainer` | `20` | `agents/maintainer.md` frontmatter |
+| `engineer` | `Engineer` | `30` | `agents/engineer.md` frontmatter |
+| `auditor` | `Auditor` | `40` | `agents/auditor.md` frontmatter |
+
+The closed role-identity policy is:
+
+| Policy field | Value |
+| --- | --- |
+| `durableIdentity` | `roleId` |
+| `labelUsage` | `display_only` |
+| `semanticDigestExcludedField` | `defaultLabel` |
+| `capabilitySource` | `agents/<roleId>.md frontmatter` |
+| `roleIdRename` | `versioned_alias_or_explicit_migration_required` |
+
+Capabilities are mutable role metadata and do not define role identity.
+Executable owner fields always contain `roleId`, never `defaultLabel`. Generated
+prose may resolve a label at presentation time, but changing a label must not
+change durable identity, ownership, precedence, filenames, or projection
+semantics.
+
+Display-bearing backend projections may carry `defaultLabel` for renderers and
+therefore may differ textually after a label rename. The canonical semantic
+projection used for authority comparisons and digest input mechanically removes
+the policy's `semanticDigestExcludedField`, which is `defaultLabel`. A
+label-only rename must produce an identical semantic projection.
+
+A `roleId` is never renamed in place because commit trailers and append-only
+task, event, review, and audit history may already contain it. A replacement
+requires a versioned alias or explicit migration that preserves old identities.
+Adding a role is a deliberate registry extension with a unique ID and
+precedence, a matching `agents/<roleId>.md` capability source, config
+projection, adapter support or declared degradation, and contract tests.
+Target-local additions are not registry extensions and fail validation. Preserve
+useful custom agents as host-only helpers outside the managed
+`agenticloop/agents/` namespace until a versioned extension provides the full
+contract and migration support.
+
+Capitalized field names such as `Maintainer:` and `Orchestrator:` in existing
+review carriers are legacy protocol tokens, not display labels. They remain
+stable until a separately versioned carrier migration introduces neutral
+role-ID fields and backward-compatible parsing.
+
+### Envelope and evidence
+
+A serialized transition envelope is self-identifying with kind
+`agenticloop.transition-envelope` and schema version `1`. It carries these
+independently meaningful field groups:
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | Constant transition-envelope identity. |
+| `schemaVersion` | Positive envelope schema version. |
 | `transition` | Stable transition identity, source identity, and expected predecessor. |
 | `artifact` | Exact task, candidate, branch, commit, range, or PR-head identity the transition consumes or produces. |
-| `digest` | Versioned SHA-256 of canonical projected content, never a display-text hash. |
+| `digest` | `sha256:<canonicalization>:<64-lowercase-hex>` over `agenticloop.transition-projection.v1` canonical projected content, never display text. |
 | `provenance` | Producer, carrier, authority, and invocation facts; asserted provenance is labelled as asserted. |
 | `freshness` | Exact identities compared, the observation time, and the invalidation condition. |
 | `validation` | Typed result with diagnostics and evidence state. A result does not choose a repair owner. |
 | `disposition` | One of `proceed`, `blocked`, `needs_context`, `rejected`, `superseded`, `exception_requested`, `exception_accepted`, or `exception_rejected`. |
+
+The required-field list is a closed inventory, not a serialization sequence.
+Canonical envelope ordering and digest serialization must be defined explicitly
+by their owning implementation rather than inferred from array or JSON property
+order.
 
 Every required evidence input is classified as exactly one of `current`,
 `missing`, `malformed`, `stale`, `negative`, or `changed`. `missing` means no
@@ -90,6 +166,13 @@ not mean negative. A verifier that lacks required context reports
 `missing`/`verification_context_missing`; it does not invalidate a previously
 verified write or authorize rollback.
 
+Machine vocabulary inventories are closed:
+
+- Evidence states: `current`, `missing`, `malformed`, `stale`, `negative`, `changed`.
+- Dispositions: `proceed`, `blocked`, `needs_context`, `rejected`, `superseded`, `exception_requested`, `exception_accepted`, `exception_rejected`.
+- Return kinds: `agenticloop.role-return`, `agenticloop.exceptional-verification`.
+- Liveness entries: `delegationLiveness`, `lease`, `cancellation`, `managedJoin`, `reviewNoMutation`, `rollback`.
+
 ### Identity chain
 
 The operator's expected request digest is the root of request-integrity proof.
@@ -98,54 +181,109 @@ operator input.
 
 | Boundary | Authoritative identity and owner | Required evidence and freshness | Permitted disposition / absent or invalid evidence |
 | --- | --- | --- | --- |
-| Operator request | Operator-supplied expected SHA-256 | Digest of the exact authorized UTF-8 request; fixed for the activation attempt | `proceed` or `rejected`; without it, report original-input capture unsupported rather than inventing proof. |
-| Activation input | Parser-controlled normalized-input digest | Normalized bytes, their digest, and comparison to the operator digest before task authoring | `proceed` or `rejected`; mismatch or unavailable parser capture stops before mutation. |
-| Authored task | Maintainer-owned task ID and trusted contract digest | Current durable task record plus trusted baseline/correction chain; digest equals material task projection | `proceed`, `needs_context`, or `rejected`; quarantine mutation and dispatch until repaired by the owner. |
-| Dispatch | Orchestrator-owned preparation-packet ID and task digest | Refetched task digest, base/dependency evidence, role, and capability references | `proceed`, `blocked`, `needs_context`, or `rejected`; do not dispatch an under-specified packet. |
-| Role return | Producing-role return ID and consumed packet digest | Schema-valid role return naming its producer and exact artifact or blocker evidence | `proceed`, `blocked`, `needs_context`, or `rejected`; reject and re-route invalid returns to the producing role. |
-| Review | Maintainer-owned review-entry receipt and reviewed artifact | Passing exact-head receipt plus durable verdict; reviewed artifact remains current | `proceed`, `blocked`, `rejected`, or `superseded`; prose cannot publish review-ready or acceptance. |
-| Audit | Auditor-owned audit ID, run, and frozen candidate | Fresh schema-valid report persisted unchanged; candidate and covered set still match | `proceed`, `blocked`, `exception_requested`, or `rejected`; invalid reports return to Auditor. |
-| Terminal closeout | Maintainer-closeout packet and marker digest | Current closeout gate packet and provenanced marker against current candidate/carriers | `proceed`, `blocked`, `superseded`, or `rejected`; changed inputs make the marker stale and require reprepare. |
+| `operator_request` | Operator-supplied expected SHA-256 | Digest of the exact authorized UTF-8 request; fixed for the activation attempt | `proceed` or `rejected`; without it, report original-input capture unsupported rather than inventing proof. |
+| `activation_input` | Parser-controlled normalized-input digest | Normalized bytes, their digest, and comparison to the operator digest before task authoring | `proceed` or `rejected`; mismatch or unavailable parser capture stops before mutation. |
+| `authored_task` | Task ID and trusted contract digest; owner is typed by the boundary | Current durable task record plus trusted baseline/correction chain; digest equals material task projection | `proceed`, `needs_context`, or `rejected`; quarantine mutation and dispatch until repaired by the boundary owner. |
+| `dispatch` | Preparation-packet ID and task digest; owner is typed by the boundary | Refetched task digest, base/dependency evidence, role, and capability references | `proceed`, `blocked`, `needs_context`, or `rejected`; do not dispatch an under-specified packet. |
+| `role_return` | Producing-role return ID and consumed packet digest | Schema-valid role return naming its producer and exact artifact or blocker evidence | `proceed`, `blocked`, `needs_context`, or `rejected`; reject and re-route invalid returns to the producing role. |
+| `review` | Review-entry receipt and reviewed artifact; owner is typed by the boundary | Passing exact-head receipt plus durable verdict; reviewed artifact remains current | `proceed`, `blocked`, `rejected`, or `superseded`; prose cannot publish review-ready or acceptance. |
+| `audit` | Audit ID, run, and frozen candidate; owner is typed by the boundary | Fresh schema-valid report persisted unchanged; candidate and covered set still match | `proceed`, `blocked`, `exception_requested`, or `rejected`; invalid reports return to the owning role. |
+| `terminal_closeout` | Closeout packet and marker digest; owner is typed by the boundary | Current closeout gate packet and provenanced marker against current candidate/carriers | `proceed`, `blocked`, `superseded`, or `rejected`; changed inputs make the marker stale and require reprepare. |
 
 ### Lifecycle and source of truth
 
-`implementation_blocked`, `implementation_ready_for_review`,
-`review_changes_requested`, `review_accepted`, and `closeout_complete` are
-authoritative only when their named current receipt exists. Free-form progress
-text is advisory. An authoritative source owns only the fact in its row; task
-status, runtime blocking, labels, comments, audit state, and closeout must not
-be treated as synonyms.
+#### Lifecycle claims
+
+Free-form progress text is advisory and never completion authority. Lifecycle
+claims are authoritative only under this exact evidence mapping:
+
+| Claim | Authoritative evidence | Producer / evidence authority / work owner | Exact binding and invalidation | Without current valid evidence |
+| --- | --- | --- | --- | --- |
+| `implementation_blocked` | `structured_blocked_return` | Producing workflow role / same role or explicitly redelegated owner | Consumed transition ID/digest plus current blocker; invalidated by transition, evidence, or precondition change | `needs_context` |
+| `implementation_ready_for_review` | `exact_head_review_entry_receipt` | Review-preparation gate / review-preparation gate / Engineer | Exact implementation artifact or full PR head; invalidated by artifact, checks, or task-contract change | `blocked` |
+| `review_changes_requested` | `durable_review_changes_result` | Maintainer / Maintainer | Exact reviewed artifact and finding set; invalidated by artifact or carrier change | `rejected` |
+| `review_accepted` | `durable_review_acceptance_result` | Maintainer / Maintainer | Exact current reviewed artifact; invalidated by artifact or acceptance-evidence change | `blocked` |
+| `closeout_complete` | `current_closeout_marker_and_gate_receipt` | Canonical closeout path / Maintainer | Exact candidate, covered tasks, predecessor, gate, and required audit; invalidated by any bound input change | `blocked` |
+
+An authoritative source owns only the fact in its row; task status, runtime
+blocking, labels, comments, audit state, and closeout are not synonyms.
+
+#### Source-of-truth facts
 
 | Fact | Canonical source and owner | Files / GitHub projection carrier | Freshness | Authority |
 | --- | --- | --- | --- | --- |
-| Contract readiness | Trusted task-contract baseline; Maintainer | Append-only task-contract history / verified immutable task-contract comment | Current material task digest | Authoritative |
-| Runtime blocked state | Current structured blocked result; producing role | Role-return receipt referenced by task history / issue or review carrier | Current transition and unsatisfied preconditions | Authoritative for resumption only |
-| Task-body lifecycle status | Durable task-record status; Maintainer | Task-file frontmatter / task-issue body frontmatter | Current record digest and trusted chain for material transitions | Authoritative |
-| Labels | Backend label set; backend projection | Not applicable / issue labels | Refetched after owner reconciliation | Authoritative only for label presence |
-| Comments and history | Typed comment or history carrier; its producer | Append-only task history or enabled event log / issue comments and review bodies | Carrier identity, trust, and bound artifact when required | Authoritative only for the typed record it carries |
-| Review readiness | Exact-head review-entry receipt; review-preparation gate | Exact implementation artifact receipt / exact PR-head packet | Artifact equals current artifact or head | Authoritative |
-| Review verdict | Maintainer review result | Review fields plus history / trusted current-head review marker | Verdict binds current reviewed artifact | Authoritative |
-| Audit state | Audit record and append-only report history; Auditor produces, audit CLI persists | `.agenticloop/audits/<audit-id>.md` / same backend-neutral audit record | Candidate and covered set equal certification boundary | Authoritative |
-| Terminal closeout | Current provenanced closeout marker; Maintainer closeout | Resolved task-carrier marker / trusted closeout comment or review body | Gate digest, candidate, tasks, and predecessor are current | Authoritative |
+| `contract_readiness` | Trusted task-contract baseline; Maintainer | Append-only task-contract history / verified immutable task-contract comment | Current material task digest | Authoritative |
+| `runtime_blocked_state` | Current structured blocked result; producing role | Role-return receipt referenced by task history / issue or review carrier | Current transition and unsatisfied preconditions | Authoritative for resumption only |
+| `task_lifecycle_status` | Durable task-record lifecycle status; Maintainer producer, task-contract store persister | Task-file frontmatter / task-issue body frontmatter | Current record digest and trusted chain for material transitions | Authoritative |
+| `labels` | Backend label set; backend projection | No files carrier (`applicable: false`, `carrier: null`) / issue labels | Refetched after owner reconciliation | Authoritative only for label presence |
+| `comments` | Typed comment or history carrier; its producer | Append-only task history or enabled event log / issue comments and review bodies | Carrier identity, trust, and bound artifact when required | Authoritative only for the typed record it carries |
+| `review_readiness` | Exact-head review-entry receipt; review-preparation gate | Exact implementation artifact receipt / exact PR-head packet | Artifact equals current artifact or head | Authoritative |
+| `review_verdict` | Maintainer review result | Review fields plus history / trusted current-head review marker | Verdict binds current reviewed artifact | Authoritative |
+| `audit_state` | Audit record and append-only report history; Auditor produces, audit CLI persists | `.agenticloop/audits/<audit-id>.md` / same backend-neutral audit record | Candidate and covered set equal certification boundary | Authoritative |
+| `terminal_closeout` | Current provenanced closeout marker; canonical closeout path produces, Maintainer owns | Resolved task-carrier marker / trusted closeout comment or review body | Gate digest, candidate, tasks, and predecessor are current | Authoritative |
+
+Each projection identifies itself with `projectionBackend`, retains
+`supportedBackends` as the definition inventory, and selects each fact's
+`carrierApplicability`. Files and GitHub preserve every other shared semantic
+section.
 
 ### Authority boundaries
 
+#### Authority actions
+
 | Action | Sole authority | Required evidence | Refusal when absent |
 | --- | --- | --- | --- |
-| Request and activation identity | Operator plus parser-controlled adapter | Expected digest and normalized-input receipt | Report unsupported or mismatch; do not trust a model restatement. |
-| Blocked-result resumption | Producing role or explicitly redelegated owner | Current blocked result, resume transition, and preconditions | Block remains non-transferable. |
-| Exceptional verification | Named disposition owner | Failed/unavailable check, evidence, proposed disposition, and next transition | `exception_requested`; no implicit substitute. |
-| Destructive or scope-changing recovery | Human authority | Typed human disposition bound to exact blocked result and recovery | Human authority required. |
-| Terminal closeout | Maintainer closeout | Current closeout packet and passed closeout gate | Closeout gate required. |
+| `request_and_activation_identity` | Operator plus parser-controlled adapter | Expected digest and normalized-input receipt | Report unsupported or mismatch; do not trust a model restatement. |
+| `blocked_result_resumption` | Producing role or explicitly redelegated owner | Current blocked result, resume transition, and preconditions | Block remains non-transferable. |
+| `exceptional_verification` | Named disposition owner | Failed/unavailable check, evidence, proposed disposition, and next transition | `exception_requested`; no implicit substitute. |
+| `destructive_or_scope_changing_recovery` | Human authority | Typed human disposition bound to exact blocked result and recovery | Human authority required. |
+| `terminal_closeout` | Maintainer using `task_terminal_closeout` / `closeout_owned_accepted_to_closed` | Current closeout packet and passed closeout gate | Closeout gate required. |
 
 ### Terminal and Markdown rules
 
-The canonical terminal ordering is: review accepted; integration or exact
-candidate freeze; current audit gate when enabled; `closeout prepare`; `closeout
-record`; then the closeout-owned `accepted -> closed` transition. For a task
-outside an enabled audit/closeout scope, the documented generic `accepted ->
-closed` transition remains valid. A generic terminal action inside enabled scope
-cannot bypass the closeout-owned path.
+Closeout scope is evidence-derived independently from `work_unit_audit`:
+
+- `configured_group` requires `group_closeout: true` and current, valid exact
+  grouping membership.
+- `explicit_task_set` requires durable, current, authority-backed evidence that
+  names the exact tasks: a typed human-selection receipt, current audit record,
+  or current closeout marker/receipt.
+- `none` requires proof that no configured group scope and no explicit durable
+  scope evidence exists.
+- `indeterminate` means relevant configuration, membership, authority, or scope
+  evidence is missing, malformed, stale, or contradictory. It fails closed and
+  never authorizes generic closure.
+
+`work_unit_audit` maps independently to audit mode `enabled` or `disabled`.
+Enabled mode requires a current audit certificate inside an established scope;
+disabled mode does not, but closeout ownership remains.
+
+#### Terminal variants
+
+| Scope case | Scope source | Audit certificate | Generic `accepted -> closed` | Terminal owner/action |
+| --- | --- | --- | --- | --- |
+| `configured_group_audit_enabled` | Phase/custom grouping, `group_closeout: true`, current membership | Required | Forbidden | Boundary owner via `closeout_owned_accepted_to_closed` |
+| `configured_group_audit_disabled` | Phase/custom grouping, `group_closeout: true`, current membership | Not required | Forbidden | Boundary owner via `closeout_owned_accepted_to_closed` |
+| `explicit_task_set_audit_enabled` | Flat or other profile with current explicit durable selection | Required | Forbidden | Boundary owner via `closeout_owned_accepted_to_closed` |
+| `explicit_task_set_audit_disabled` | Flat or other profile with current explicit durable selection | Not required | Forbidden | Boundary owner via `closeout_owned_accepted_to_closed` |
+| `no_scope_audit_enabled` | Phase/custom `group_closeout: false`, or flat with no explicit selection | Not required | Allowed | Existing `generic_accepted_to_closed` |
+| `no_scope_audit_disabled` | Phase/custom `group_closeout: false`, or flat with no explicit selection | Not required | Allowed | Existing `generic_accepted_to_closed` |
+| `indeterminate_audit_enabled` | Missing, malformed, stale, or contradictory scope facts | Not applicable | Forbidden | `blocked`; no terminal action until scope repair and re-derivation |
+| `indeterminate_audit_disabled` | Missing, malformed, stale, or contradictory scope facts | Not applicable | Forbidden | `blocked`; no terminal action until scope repair and re-derivation |
+
+The canonical ordering inside closeout scope is: review accepted; integration or
+exact candidate freeze; current audit gate when required; `closeout prepare`;
+`closeout record`; then the closeout-owned terminal action. Generic files-task
+closure remains valid only outside closeout scope. `isTerminalTaskTransition()`
+currently recognizes the allowed post-certification content delta but does not
+execute the closeout-owned transition. An `indeterminate` resolver result has
+disposition `blocked`, no terminal action, and the resume condition
+`repair_and_rederive_scope`. `deriveAuditDueWorkUnits()` also currently
+ignores `group_closeout` for non-flat profiles. P35-03 must consume the canonical
+scope resolver, align audit-due derivation with configured grouping and explicit
+durable scope evidence, refuse unauthorized direct closure for established or
+indeterminate scope, and preserve generic terminal behavior only for proven
+`none` scope. P35-01 declares and validates the contract; it does not enforce it.
 
 A carrier, candidate, covered task, or marker input changed after recording
 closeout makes the marker `stale`; it does not erase history or trigger an
@@ -173,13 +311,15 @@ records its cause. An unavailable invocation, rejected or malformed report, or
 report-validation failure consumes neither audit budget nor recovery allowance;
 the ordinary attempt budget still bounds equivalent failures.
 
-One typed `product_invalidation_recovery` allowance exists per audit record. It
-permits one fresh rerun caused by a confirmed product transition defect without
-consuming the substantive audit budget. It must record the invalidation
-reference, affected prior run, and Maintainer-recorded cause. A second recovery
-attempt is blocked pending an explicit human budget override. Auditor findings
-never use this allowance. There is no silent free retry or unexplained budget
-consumption.
+One bounded `product_invalidation_recovery` allowance is declared per audit
+record, with required `typed_cause`, `invalidation_reference`,
+`affected_prior_run`, and `maintainer_recorded_cause`. Its availability is
+`declared_not_operational` and enforcement is `unavailable`: current audit
+history counts every completed substantive report, and exhausted budgets require
+the existing human-approved override. Agents must not claim or attempt a
+non-consuming recovery until guarded audit support exists. A second declared
+recovery would still require explicit human override. Auditor findings never use
+the allowance.
 
 Every observed state is classified as `product_state` (the project artifact),
 `workflow_state` (durable task, review, audit, or closeout record),
@@ -197,31 +337,22 @@ not copy whole workflow procedures. A host reports each requested capability as
 must name the next authoritative boundary that detects incompatible actor or
 evidence; it never silently becomes enforcement.
 
-`lease` is retained only as a legacy synonym for a
-`delegation_liveness_window`: an observable-step cadence, expiry, and stop
-condition that grants no mutation authority. Use these precise terms elsewhere:
-`cancellation_boundary`, `managed_join_plan`, `review_no_mutation_window`, and
-`digest_guarded_rollback`. None is a lock or authority transfer. In particular,
-a digest-guarded rollback compares the exact current digest before writing and
-refuses changed state.
+`lease` remains the accepted external term during migration and is interpreted
+as a `delegation_liveness_window`: an observable-step cadence, expiry, and stop
+condition that grants no mutation authority. `managed_join` remains the existing
+bounded relation with a dedicated task/artifact and exact evidence; an execution
+plan is an artifact of that relation, not a new `managed_join_plan` synonym. Use
+`cancellation_boundary`, `review_no_mutation_window`, and
+`digest_guarded_rollback` precisely. None is a lock or authority transfer.
 
 A blocked role return has kind `agenticloop.role-return`, schema version `1`,
-and includes return ID, producing role, consumed transition ID/digest,
-`disposition: blocked`, blocker category/evidence, resume owner/transition, and
-resume preconditions. An exceptional-verification return has kind
+and separately declares required fields plus constant `disposition: blocked`.
+Its fields include return ID, producing role, consumed transition ID/digest,
+blocker category/evidence, resume owner/transition, and resume preconditions. An exceptional-verification return has kind
 `agenticloop.exceptional-verification`, schema version `1`, and includes request
 ID, producing role, transition ID, exact failed/unavailable check, evidence,
 proposed disposition, disposition authority, and next resumable transition.
 Neither packet authorizes another role to repair, accept, or reconstruct it.
-
-Agentic Loop is a supervised implementation workflow for AI coding agents. It
-turns a vague request into a durable task record, a scoped implementation,
-evidence, review, and closeout.
-
-The methodology is host-neutral. All five implemented host adapters – OpenCode,
-Codex, Claude Code, GitHub Copilot, and Cursor – are supported. The workflow
-should read naturally in any agent that can follow Markdown instructions and
-load skills.
 
 ## Activation Boundary
 
@@ -1017,11 +1148,11 @@ append-only history. An invocation that failed without producing a report does
 not consume it; rejected or malformed reports and report-validation failures
 also do not consume it. Repeated equivalent failures stay bounded by the Attempt
 Budget above. Remediation work does not consume it, and replacing the baseline or
-the audit record does not reset it. The shared transition contract permits one
-separately recorded `product_invalidation_recovery` allowance per audit record
-for a confirmed product-caused invalidation. It requires the invalidation
-reference, affected prior run, and Maintainer-recorded cause; it never applies to
-an Auditor finding, and a second recovery requires a human budget override.
+the audit record does not reset it. The shared transition contract declares one
+bounded `product_invalidation_recovery` allowance per audit record, but marks it
+`declared_not_operational`: current executable behavior counts every completed
+substantive report. Agents cannot use a non-consuming recovery until guarded
+audit support exists; an exhausted budget requires the existing human override.
 
 After three non-certifying reports the audit record moves to
 `audit_state: blocked` with reason `audit_budget_exhausted` while preserving the

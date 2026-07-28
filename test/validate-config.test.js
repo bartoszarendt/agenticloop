@@ -472,6 +472,15 @@ describe('Layout validation', () => {
       `v2 validation should not report current-layout path noise: ${JSON.stringify(errors)}`
     );
   });
+
+  it('validates an installed toolkit without a target-local transition contract', () => {
+    const d = mkdtempSync(join(tmpDir, 'layout-contract-missing-'));
+    seedToolkitSource(REPO_ROOT, d);
+
+    const { errors } = validateConfig(d);
+    assert.equal(errors.some(error => /transition contract/i.test(error)), false, JSON.stringify(errors));
+    assert.equal(existsSync(join(d, 'agenticloop', 'src')), false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -3243,5 +3252,105 @@ describe('inline task summary requirement', () => {
       !warnings.some(w => w.includes('work-unit summary') || w.includes('.agenticloop/summaries')),
       `did not expect any separate-summary warning, got: ${JSON.stringify(warnings)}`
     );
+  });
+});
+
+describe('workflow role registry projection validation', () => {
+  function rewriteConfig(target, mutate) {
+    const path = join(target, 'agenticloop.json');
+    const config = loadAgenticLoopConfig(path);
+    mutate(config);
+    writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
+  }
+
+  it('rejects missing and unexpected config role IDs', () => {
+    const missing = makeTarget('registry-config-missing');
+    rewriteConfig(missing, config => { delete config.roles.auditor; });
+    assert.ok(validateConfig(missing).errors.some(error => error.includes('Config roles missing registry role IDs: auditor')));
+
+    const extra = makeTarget('registry-config-extra');
+    rewriteConfig(extra, config => {
+      config.roles.reviewer = {
+        sourceFile: 'agenticloop/agents/reviewer.md',
+        requiredSkills: [],
+      };
+    });
+    assert.ok(validateConfig(extra).errors.some(error => error.includes('Config roles contain unexpected role IDs: reviewer')));
+  });
+
+  it('rejects missing and unexpected agent role files', () => {
+    const missing = makeTarget('registry-agent-missing');
+    rmSync(join(missing, 'agenticloop', 'agents', 'auditor.md'));
+    assert.ok(validateConfig(missing).errors.some(error => error.includes('Agent sources missing registry role IDs: auditor')));
+
+    const extra = makeTarget('registry-agent-extra');
+    writeFileSync(join(extra, 'agenticloop', 'agents', 'reviewer.md'), '---\nname: reviewer\n---\n# Reviewer\n', 'utf-8');
+    assert.ok(validateConfig(extra).errors.some(error => error.includes('Agent sources contain unexpected role IDs: reviewer')));
+  });
+
+  it('reports non-role Markdown in the managed agent directory without role-migration guidance', () => {
+    const target = makeTarget('registry-agent-readme');
+    writeFileSync(join(target, 'agenticloop', 'agents', 'README.md'), '# Agent sources\n', 'utf-8');
+
+    const { errors } = validateConfig(target);
+    assert.ok(errors.some(error =>
+      error.includes('Managed agent source directory contains unexpected Markdown files: README.md')
+    ));
+    assert.equal(errors.some(error => error.includes('unexpected role IDs: README')), false);
+    assert.equal(errors.some(error => error.includes('Workflow role registry migration required')), false);
+  });
+
+  it('rejects sourceFile and frontmatter identities that differ from roleId', () => {
+    const sourceMismatch = makeTarget('registry-source-mismatch');
+    rewriteConfig(sourceMismatch, config => {
+      config.roles.maintainer.sourceFile = 'agenticloop/agents/engineer.md';
+    });
+    assert.ok(validateConfig(sourceMismatch).errors.some(error =>
+      error.includes("Role 'maintainer' sourceFile must match roleId: agenticloop/agents/maintainer.md")
+    ));
+
+    const frontmatterMismatch = makeTarget('registry-frontmatter-mismatch');
+    const path = join(frontmatterMismatch, 'agenticloop', 'agents', 'maintainer.md');
+    writeFileSync(path, readFileSync(path, 'utf-8').replace('name: maintainer', 'name: release_steward'), 'utf-8');
+    assert.ok(validateConfig(frontmatterMismatch).errors.some(error =>
+      error.includes("Role 'maintainer' source frontmatter name must equal roleId 'maintainer'")
+    ));
+  });
+
+  it('provides an actionable legacy-role migration that returns to zero errors', () => {
+    const target = makeTarget('registry-legacy-role-migration');
+    const configPath = join(target, 'agenticloop.json');
+    const rawConfig = loadJsonFile(configPath);
+    rawConfig.roles = {
+      reviewer: {
+        sourceFile: 'agenticloop/agents/reviewer.md',
+        requiredSkills: [],
+      },
+    };
+    rawConfig.adapters.opencode.roleSettings.reviewer = {};
+    writeFileSync(configPath, `${JSON.stringify(rawConfig, null, 2)}\n`, 'utf-8');
+
+    const managedCustomRole = join(target, 'agenticloop', 'agents', 'reviewer.md');
+    writeFileSync(managedCustomRole, '---\nname: reviewer\n---\n# Reviewer\n', 'utf-8');
+
+    const before = validateConfig(target);
+    assert.ok(before.errors.some(error => error.includes('Config roles contain unexpected role IDs: reviewer')));
+    assert.ok(before.errors.some(error =>
+      error.includes("make agenticloop.json extend './agenticloop/config.json'") &&
+      error.includes("run 'npx agenticloop update'") &&
+      error.includes("run 'npx agenticloop validate'")
+    ));
+
+    const preservedCustomDir = join(target, 'custom-host-agents');
+    mkdirSync(preservedCustomDir, { recursive: true });
+    copyFileSync(managedCustomRole, join(preservedCustomDir, 'reviewer.md'));
+    rmSync(managedCustomRole);
+    delete rawConfig.roles;
+    delete rawConfig.adapters.opencode.roleSettings.reviewer;
+    writeFileSync(configPath, `${JSON.stringify(rawConfig, null, 2)}\n`, 'utf-8');
+
+    const after = validateConfig(target);
+    assert.deepEqual(after.errors, []);
+    assert.equal(existsSync(join(preservedCustomDir, 'reviewer.md')), true);
   });
 });

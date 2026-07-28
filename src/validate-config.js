@@ -94,6 +94,7 @@ import {
 import { validateLayoutState } from './layout-migration.js';
 import { hasMarkdownHeading, markdownProseBlocks, markdownSection } from './markdown.js';
 import { validateCanonicalTemplates } from './template-contract.js';
+import { validateTransitionContractDefinition, WORKFLOW_ROLES } from './transition-contract.js';
 import {
   isValidTaskId,
   loadProjectMap,
@@ -1082,6 +1083,16 @@ export function validateConfig(repoRoot, options = {}) {
   const hasToolkitSource = assetLayout.kind !== 'absent';
   const toolkitSourceRepo = isPackageSourceRepositoryRoot(repoRoot);
 
+  const transitionContractValidation = validateTransitionContractDefinition();
+  if (!transitionContractValidation.ok) {
+    errors.push(`Bundled transition contract is invalid: ${transitionContractValidation.errors.join('; ')}`);
+  }
+
+  if (toolkitSourceRepo) {
+    const bundledConfig = loadJsonFile(join(repoRoot, 'config.json'));
+    validateWorkflowRoleProjection(bundledConfig, join(repoRoot, 'agents'), errors);
+  }
+
   const layoutValidation = validateLayoutState(repoRoot);
   errors.push(...layoutValidation.errors);
   warnings.push(...layoutValidation.warnings);
@@ -1460,6 +1471,70 @@ function validateResolvedTaskBackend(repoRoot, taskBackendResolution, config, er
   }
 }
 
+function validateWorkflowRoleProjection(config, agentsDir, errors) {
+  const roles = config.roles ?? {};
+  const configuredRoleIds = Object.keys(roles);
+  const missingRoleIds = WORKFLOW_ROLES.filter(roleId => !configuredRoleIds.includes(roleId));
+  const unexpectedRoleIds = configuredRoleIds.filter(roleId => !WORKFLOW_ROLES.includes(roleId));
+  let migrationRequired = false;
+  if (missingRoleIds.length > 0) {
+    errors.push(`Config roles missing registry role IDs: ${missingRoleIds.join(', ')}`);
+    migrationRequired = true;
+  }
+  if (unexpectedRoleIds.length > 0) {
+    errors.push(`Config roles contain unexpected role IDs: ${unexpectedRoleIds.join(', ')}`);
+    migrationRequired = true;
+  }
+
+  if (existsSync(agentsDir) && statSync(agentsDir).isDirectory()) {
+    const agentMarkdownFiles = readdirSync(agentsDir).filter(name => name.endsWith('.md'));
+    const agentRoleIds = agentMarkdownFiles
+      .map(name => name.slice(0, -3))
+      .filter(roleId => /^[a-z][a-z0-9_]*$/.test(roleId));
+    const unexpectedAgentFiles = agentMarkdownFiles.filter(name =>
+      !/^[a-z][a-z0-9_]*\.md$/.test(name)
+    );
+    const missingAgentRoleIds = WORKFLOW_ROLES.filter(roleId => !agentRoleIds.includes(roleId));
+    const unexpectedAgentRoleIds = agentRoleIds.filter(roleId => !WORKFLOW_ROLES.includes(roleId));
+    if (missingAgentRoleIds.length > 0) {
+      errors.push(`Agent sources missing registry role IDs: ${missingAgentRoleIds.join(', ')}`);
+      migrationRequired = true;
+    }
+    if (unexpectedAgentRoleIds.length > 0) {
+      errors.push(`Agent sources contain unexpected role IDs: ${unexpectedAgentRoleIds.join(', ')}`);
+      migrationRequired = true;
+    }
+    if (unexpectedAgentFiles.length > 0) {
+      errors.push(`Managed agent source directory contains unexpected Markdown files: ${unexpectedAgentFiles.join(', ')}`);
+    }
+  }
+
+  const agentsSourceDirectory = (config.agents?.sourceDirectory ?? AGENTS_SOURCE_DIRECTORY).replace(/\\/g, '/');
+  for (const [roleId, role] of Object.entries(roles)) {
+    const expectedSourceFile = `${agentsSourceDirectory}/${roleId}.md`;
+    if (role?.sourceFile?.replace(/\\/g, '/') !== expectedSourceFile) {
+      errors.push(`Role '${roleId}' sourceFile must match roleId: ${expectedSourceFile}`);
+      migrationRequired = true;
+    }
+    const sourcePath = join(agentsDir, `${roleId}.md`);
+    if (existsSync(sourcePath)) {
+      const [frontmatter] = parseFrontmatter(readFileSync(sourcePath, 'utf-8'));
+      if (frontmatter?.name !== roleId) {
+        errors.push(`Role '${roleId}' source frontmatter name must equal roleId '${roleId}'`);
+        migrationRequired = true;
+      }
+    }
+  }
+  if (migrationRequired) {
+    errors.push(
+      "Workflow role registry migration required: transition contract v1 permits only canonical role IDs. " +
+      "Preserve host-only custom agents outside agenticloop/agents, make agenticloop.json extend " +
+      "'./agenticloop/config.json', remove non-registry roles and adapter roleSettings, run " +
+      "'npx agenticloop update', then run 'npx agenticloop validate'."
+    );
+  }
+}
+
 function validateJsoncConfig(config, rawConfig, cfgPath, repoRoot, forced, errors, warnings) {
   const rawAdapters = rawConfig?.adapters ?? {};
   // --- Source directories --------------------------------------------------
@@ -1498,6 +1573,7 @@ function validateJsoncConfig(config, rawConfig, cfgPath, repoRoot, forced, error
 
   // --- Roles ---------------------------------------------------------------
   const roles = config.roles ?? {};
+  validateWorkflowRoleProjection(config, agentsDir, errors);
   for (const [roleName, roleCfg] of Object.entries(roles)) {
     const sourceFile = roleCfg.sourceFile;
     if (!sourceFile) {

@@ -174,6 +174,36 @@ describe('role capability bindings', () => {
     }
   });
 
+  it('resolves overlapping escalation claims by registry precedence, not caller order', () => {
+    const dir = fixture({
+      ...COMPLETE,
+      maintainer: `${COMPLETE.maintainer}escalation_capabilities:\n  - dependency_escalation\n`,
+    });
+    try {
+      const canonical = loadRoleCapabilities(dir);
+      const shuffled = loadRoleCapabilities(dir, {
+        roles: ['auditor', 'engineer', 'maintainer', 'orchestrator'],
+      });
+      assert.equal(canonical.escalationOwnerByKind.dependency_escalation, 'orchestrator');
+      assert.equal(shuffled.escalationOwnerByKind.dependency_escalation, 'orchestrator');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('requires agent frontmatter identity to match the registry role ID', () => {
+    const dir = fixture(COMPLETE);
+    try {
+      const path = join(dir, 'maintainer.md');
+      writeFileSync(path, readFileSync(path, 'utf8').replace('name: maintainer', 'name: release-steward'), 'utf8');
+      const result = loadRoleCapabilities(dir);
+      assert.equal(result.ok, false);
+      assert.match(result.errors.join('\n'), /frontmatter name must equal roleId 'maintainer'/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('models human authority as a boundary no role may claim', () => {
     const dir = fixture({
       ...COMPLETE,

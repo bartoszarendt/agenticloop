@@ -17,9 +17,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFrontmatter } from './frontmatter.js';
 import { ESCALATION_KINDS, HUMAN_AUTHORITY_ESCALATION_PREFIX, REPAIR_KINDS } from './repair-policy.js';
-import { WORKFLOW_ROLES } from './workflow-vocabulary.js';
+import {
+  HUMAN_AUTHORITY_BOUNDARY,
+  WORKFLOW_ROLE_REGISTRY,
+  WORKFLOW_ROLES,
+} from './transition-contract.js';
 
-export const HUMAN_AUTHORITY_BOUNDARY = 'human_authority';
+export { HUMAN_AUTHORITY_BOUNDARY };
 
 const TOOLKIT_AGENTS_DIR = fileURLToPath(new URL('../agents/', import.meta.url));
 const REPAIR_KIND_SET = new Set(REPAIR_KINDS);
@@ -54,6 +58,9 @@ export function loadRoleCapabilities(agentsDir, { roles = WORKFLOW_ROLES } = {})
     }
     presentRoles.push(role);
     const [frontmatter] = parseFrontmatter(readFileSync(path, 'utf8'));
+    if (frontmatter?.name !== role) {
+      errors.push(`role capability source '${path}' frontmatter name must equal roleId '${role}'`);
+    }
     for (const kind of capabilityList(frontmatter?.primary_repair_capabilities)) {
       if (!REPAIR_KIND_SET.has(kind)) {
         errors.push(`role '${role}' declares unknown primary repair capability '${kind}'`);
@@ -91,9 +98,12 @@ export function loadRoleCapabilities(agentsDir, { roles = WORKFLOW_ROLES } = {})
       errors.push(`escalation kind '${kind}' cannot be resolved to a role or the human authority boundary`);
       continue;
     }
-    // Escalation/fallback capabilities may overlap; resolution is the first
-    // claimant in canonical role order.
-    escalationOwnerByKind[kind] = roles.find(role => claimants.includes(role)) ?? claimants[0];
+    // Escalation/fallback capabilities may overlap; the lowest explicit
+    // registry precedence wins regardless of input or file order.
+    escalationOwnerByKind[kind] = [...claimants].sort((left, right) => {
+      const precedence = role => WORKFLOW_ROLE_REGISTRY.find(entry => entry.roleId === role)?.escalationPrecedence ?? Number.MAX_SAFE_INTEGER;
+      return precedence(left) - precedence(right) || left.localeCompare(right);
+    })[0];
   }
   return {
     ok: errors.length === 0,

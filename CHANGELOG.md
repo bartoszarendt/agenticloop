@@ -3,6 +3,21 @@
 ## Unreleased
 
 ### Added
+- Shared transition contract: one deeply immutable, backend-neutral definition
+  now covers evidence, lifecycle claims, typed ownership, terminal scope,
+  Markdown, audit-budget availability, provenance, and liveness. Its executable
+  definition remains internal to the npm package, while installed targets receive
+  the human-readable contract in `agenticloop/AGENTIC_LOOP.md`. Indeterminate
+  terminal scope is explicitly blocked with no terminal action until scope
+  evidence is repaired and re-derived.
+- Workflow role identity: the shared contract now owns a deeply frozen registry
+  with lowercase durable `roleId` values, presentation-only default labels, and
+  explicit escalation precedence. Compatibility role-ID exports, capability
+  routing, config keys, source filenames, and agent frontmatter all derive from
+  or validate against that registry without changing adapter behavior.
+  Display-bearing projections may carry labels, while the separately exported
+  semantic projection mechanically excludes `defaultLabel` from authority and
+  digest input so a label-only rename cannot change workflow semantics.
 - Audit and closeout integrity: canonical `auditor_report_v1` file/stdin
   ingestion, capability-tiered asserted versus verified invocation provenance,
   global invocation/receipt uniqueness, typed disposition requirements, and
@@ -83,6 +98,13 @@
   no-progress dispositions.
 
 ### Migration and compatibility
+- Workflow-role registry validation is intentionally stricter: targets with
+  missing, renamed, or additional `roles` entries, canonical agent files,
+  `sourceFile` identities, or agent frontmatter now fail validation. Custom
+  host agents must live outside managed `agenticloop/agents/`; migrate
+  `agenticloop.json` to extend `./agenticloop/config.json`, remove non-registry
+  role and adapter-role settings, run `npx agenticloop update`, and then
+  revalidate. See `docs/getting-started.md`.
 - `pr-body lint --input <evaluation-input.json>` is deprecated as an ambiguous
   expert compatibility path: it retains its serialized-input semantics for now,
   emits a deprecation diagnostic in human output, `warnings`, and

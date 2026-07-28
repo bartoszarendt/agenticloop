@@ -168,8 +168,9 @@ installation that has none or overwriting a modified block). For OpenCode,
 update regenerates the repo-local `.opencode/agents/*.md` files and
 `.opencode/commands/agenticloop.md`. User-owned `opencode.jsonc` is ignored.
 Use `update
---adapter <host>` to generate or refresh one specific host. To remove the
-overlay, preview first and then confirm:
+--adapter <host>` to generate or refresh one specific host.
+
+To remove the overlay, preview first and then confirm:
 
 ```text
 npx agenticloop remove --dry-run
@@ -189,6 +190,33 @@ data. Its `transaction.json` maps original target paths to the remaining backup
 files. Resolve the reported filesystem obstruction and recover those paths from
 the journal before removing it; an incomplete rollback is not a completed
 removal.
+
+### Migrating legacy or custom workflow roles
+
+Transition contract v1 has a closed workflow-role registry:
+`orchestrator`, `maintainer`, `engineer`, and `auditor`. Validation now fails
+when `agenticloop.json`, `agenticloop/agents/`, configured `sourceFile` values,
+or agent frontmatter introduce a missing, renamed, or additional workflow role.
+This is a target-facing validation change; `update` does not delete or silently
+reinterpret target-owned custom role configuration.
+
+To migrate an older target:
+
+1. Preserve any custom agent content outside the managed
+   `agenticloop/agents/` namespace. If it remains useful as a host-only helper,
+   place it according to that host's custom-agent conventions; it is not an
+   Agentic Loop workflow role.
+2. Make `agenticloop.json` extend `"./agenticloop/config.json"`. Keep overrides
+   only for canonical role IDs, and remove non-registry keys from both `roles`
+   and `adapters.<host>.roleSettings`.
+3. Run `npx agenticloop update` to refresh the installed canonical role sources
+   and already-generated adapter output from the corrected configuration.
+4. Run `npx agenticloop validate`. Resolve every reported filename,
+   `sourceFile`, and frontmatter mismatch before activation.
+
+Do not rename a durable role ID in place. A future workflow-role addition or
+replacement requires a versioned registry extension with capability, adapter,
+history, and migration support.
 
 ## Stop the Loop
 

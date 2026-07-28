@@ -25,8 +25,10 @@ the same Agentic Loop roles, skills, and review gates.
 
 ## Shared transition contract
 
-Files projects the backend-neutral `agenticloop.transition-contract` defined in
-`agenticloop/AGENTIC_LOOP.md`. Task-file frontmatter is authoritative for the
+Files projects the complete backend-neutral `agenticloop.transition-contract`
+defined in `agenticloop/AGENTIC_LOOP.md`. Its executable definition is internal
+to the installed Agentic Loop npm package and is not copied into the target.
+Task-file frontmatter is authoritative for the
 durable task lifecycle status, append-only task-contract history is authoritative
 for contract readiness, and the backend-neutral audit record and closeout marker
 retain their own facts. A task status does not replace a current blocked-return
@@ -35,7 +37,8 @@ receipt, review-entry receipt, audit state, or terminal closeout marker.
 The files projection has no labels. Its task history and optional event log are
 authoritative only for the typed records they carry; ordinary prose remains
 advisory. Apply the shared freshness, terminal ordering, Markdown preservation,
-and audit-budget rules before adding a files mutation mechanism.
+and audit-budget rules before adding a files mutation mechanism. Carrier absence
+uses typed applicability (`applicable: false`, `carrier: null`), never prose.
 
 New files-backed tasks materialize `attempt_budget` from project
 `default_attempt_budget`, then built-in `5`. A task-specific override is an

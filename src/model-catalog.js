@@ -10,11 +10,12 @@
 
 import { spawnSync } from 'node:child_process';
 import { CODEX_SUPPORTED_REASONING_EFFORTS } from './codex-models.js';
+import { WORKFLOW_ROLES } from './transition-contract.js';
 
 const CATALOG_OBSERVED_AT = '2026-07';
 const CATALOG_SOURCE = 'bundled-fallback';
 const MODEL_DISCOVERY_TIMEOUT_MS = 3000;
-const ALL_ROLES = ['orchestrator', 'maintainer', 'engineer', 'auditor'];
+const ALL_ROLES = WORKFLOW_ROLES;
 
 const DISCOVERY_SOURCES = {
   opencode: 'host-native:opencode',
@@ -104,7 +105,7 @@ const CATALOG_ENTRIES = [
     label: 'GPT-5.6 Terra',
     provider: 'openai',
     hosts: ['opencode'],
-    roleSuitability: ['orchestrator', 'maintainer', 'engineer', 'auditor'],
+    roleSuitability: [...ALL_ROLES],
     supportsReasoningEffort: true,
     source: CATALOG_SOURCE,
     observedAt: CATALOG_OBSERVED_AT,
@@ -134,7 +135,7 @@ const CATALOG_ENTRIES = [
     label: 'GPT-5.6 Terra',
     provider: 'openai',
     hosts: ['codex'],
-    roleSuitability: ['orchestrator', 'maintainer', 'engineer', 'auditor'],
+    roleSuitability: [...ALL_ROLES],
     supportsReasoningEffort: true,
     source: CATALOG_SOURCE,
     observedAt: CATALOG_OBSERVED_AT,
@@ -164,7 +165,7 @@ const CATALOG_ENTRIES = [
     label: 'Claude Sonnet 4.6 (native)',
     provider: 'anthropic',
     hosts: ['claude-code'],
-    roleSuitability: ['orchestrator', 'maintainer', 'engineer', 'auditor'],
+    roleSuitability: [...ALL_ROLES],
     supportsReasoningEffort: false,
     source: CATALOG_SOURCE,
     observedAt: CATALOG_OBSERVED_AT,

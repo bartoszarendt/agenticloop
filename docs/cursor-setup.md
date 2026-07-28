@@ -182,8 +182,10 @@ Optional role-to-agent filename bindings live at:
 }
 ```
 
-That changes generated `.cursor/agents/<name>.md` filenames and the role names
-referenced in the public skill.
+That changes generated `.cursor/agents/<name>.md` filenames and the host-agent
+names referenced in the public skill. The mapping keys (`maintainer`,
+`engineer`, and so on) remain immutable Agentic Loop `roleId` values; a host
+binding does not rename a workflow role.
 
 ## Optional plugin packaging
 

@@ -620,6 +620,8 @@ describe('init - copies canonical assets', () => {
     await init({ target: d });
 
     assertInstalledPayloadMatchesPackageSource(d);
+    assert.equal(existsSync(join(d, 'agenticloop', 'src')), false,
+      'target toolkit payload must not contain package runtime source');
   });
 });
 

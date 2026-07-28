@@ -23,6 +23,7 @@ import {
   parseCursorModelsOutput,
   parseCodexModelsOutput,
 } from '../src/model-catalog.js';
+import { WORKFLOW_ROLES } from '../src/transition-contract.js';
 
 // ---------------------------------------------------------------------------
 // getCatalogEntries
@@ -90,6 +91,21 @@ describe('getCatalogEntries', () => {
 
   it('marks native Claude Code catalog entries as not supporting reasoning effort', () => {
     assert.ok(getCatalogEntries('claude-code').every(entry => entry.supportsReasoningEffort === false));
+  });
+
+  it('derives all-role suitability from the canonical workflow registry', () => {
+    for (const [host, id] of [
+      ['opencode', 'openai/gpt-5.6-terra'],
+      ['codex', 'gpt-5.6-terra'],
+      ['claude-code', 'claude-sonnet-4-6'],
+    ]) {
+      const entry = getCatalogEntries(host).find(candidate => candidate.id === id);
+      assert.deepEqual(entry.roleSuitability, WORKFLOW_ROLES);
+    }
+    assert.deepEqual(
+      parseOpenCodeModelsOutput('provider/new-model')[0].roleSuitability,
+      WORKFLOW_ROLES
+    );
   });
 });
 

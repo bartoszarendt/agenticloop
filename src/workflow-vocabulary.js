@@ -1,6 +1,8 @@
 /** Shared, intentionally distinct vocabulary for workflow runtime data. */
 
-export const WORKFLOW_ROLES = Object.freeze(['orchestrator', 'maintainer', 'engineer', 'auditor']);
+import { HUMAN_AUTHORITY_BOUNDARY, WORKFLOW_ROLES } from './transition-contract.js';
+
+export { WORKFLOW_ROLES };
 export const DIAGNOSTIC_OWNERS = Object.freeze([...WORKFLOW_ROLES, 'human_authority']);
 export const EVENT_ROLES = Object.freeze([...WORKFLOW_ROLES, 'human', 'unknown']);
 
@@ -14,7 +16,7 @@ export const EVENT_ROLE_SET = new Set(EVENT_ROLES);
  */
 export function eventRoleToDiagnosticOwner(eventRole) {
   if (WORKFLOW_ROLE_SET.has(eventRole)) return eventRole;
-  return eventRole === 'human' ? 'human_authority' : null;
+  return eventRole === 'human' ? HUMAN_AUTHORITY_BOUNDARY : null;
 }
 
 export function isDiagnosticOwner(value) {

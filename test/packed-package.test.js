@@ -24,7 +24,7 @@ import {
 import { join, delimiter } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -347,6 +347,11 @@ describe('packed package smoke tests', () => {
       'docs/cli-reference.md must be shipped in the packed package');
   });
 
+  it('ships the runtime transition module in the package', () => {
+    assert.ok(existsSync(join(packedRoot, 'src', 'transition-contract.js')),
+      'src/transition-contract.js must be shipped in the packed package');
+  });
+
   it('runs setup --dry-run --json with zero writes from the packed package', () => {
     const target = mkdtempSync(join(tmpBase, 'target-'));
     const result = runPacked(['setup', '--target', target, '--adapter', 'opencode', '--dry-run', '--json']);
@@ -377,7 +382,7 @@ describe('packed package smoke tests', () => {
     }
   });
 
-  it('ships a self-validating OpenCode init path with all four configured roles', () => {
+  it('ships a self-validating OpenCode init path without target-local executable source', async () => {
     const target = mkdtempSync(join(tmpBase, 'target-opencode-roles-'));
     const initialized = runPacked(['init', '--target', target, '--adapter', 'opencode']);
     assert.equal(initialized.status, 0, `${initialized.stdout}\n${initialized.stderr}`);
@@ -400,6 +405,29 @@ describe('packed package smoke tests', () => {
     const validation = runPacked(['validate', '--target', target]);
     assert.equal(validation.status, 0, `${validation.stdout}\n${validation.stderr}`);
 
+    assert.equal(existsSync(join(target, 'agenticloop', 'src')), false,
+      'target toolkit payload must not contain package runtime source');
+    const contractPath = join(packedRoot, 'src', 'transition-contract.js');
+    const contract = await import(`${pathToFileURL(contractPath).href}?packed-test=${Date.now()}`);
+    assert.deepEqual(contract.validateTransitionContractDefinition(), { ok: true, errors: [] });
+    assert.strictEqual(contract.WORKFLOW_ROLE_REGISTRY, contract.TRANSITION_CONTRACT_DEFINITION.ownership.workflowRoles);
+    assert.deepEqual(contract.WORKFLOW_ROLE_REGISTRY, [
+      { roleId: 'orchestrator', defaultLabel: 'Orchestrator', escalationPrecedence: 10 },
+      { roleId: 'maintainer', defaultLabel: 'Maintainer', escalationPrecedence: 20 },
+      { roleId: 'engineer', defaultLabel: 'Engineer', escalationPrecedence: 30 },
+      { roleId: 'auditor', defaultLabel: 'Auditor', escalationPrecedence: 40 },
+    ]);
+    assert.deepEqual(contract.WORKFLOW_ROLES, ['orchestrator', 'maintainer', 'engineer', 'auditor']);
+    const filesProjection = contract.projectTransitionContract('files');
+    const githubProjection = contract.projectTransitionContract('github');
+    const filesSemantics = contract.projectTransitionContractSemantics('files');
+    const githubSemantics = contract.projectTransitionContractSemantics('github');
+    assert.deepEqual(Object.keys(filesProjection).sort(), Object.keys(githubProjection).sort());
+    assert.equal(filesProjection.facts.length, contract.TRANSITION_CONTRACT_DEFINITION.facts.length);
+    assert.equal(githubProjection.facts.length, contract.TRANSITION_CONTRACT_DEFINITION.facts.length);
+    assert.equal(filesSemantics.ownership.workflowRoles.some(role => Object.hasOwn(role, 'defaultLabel')), false);
+    assert.equal(githubSemantics.ownership.workflowRoles.some(role => Object.hasOwn(role, 'defaultLabel')), false);
+
     for (const [role, model] of Object.entries({
       orchestrator: 'openrouter/model-o',
       maintainer: 'openrouter/model-m',
@@ -414,6 +442,48 @@ describe('packed package smoke tests', () => {
       existsSync(join(target, '.opencode', 'commands', 'agenticloop.md')),
       'manual Agentic Loop activation command must be present'
     );
+  });
+
+  it('migrates a legacy custom workflow role through the documented packed-package route', () => {
+    const target = mkdtempSync(join(tmpBase, 'target-role-migration-'));
+    writeFileSync(join(target, 'README.md'), '# Role migration fixture\n', 'utf-8');
+    const initialized = runPacked(['init', '--target', target, '--adapter', 'opencode']);
+    assert.equal(initialized.status, 0, `${initialized.stdout}\n${initialized.stderr}`);
+
+    const configPath = join(target, 'agenticloop.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+    config.roles = {
+      reviewer: {
+        sourceFile: 'agenticloop/agents/reviewer.md',
+        requiredSkills: [],
+      },
+    };
+    config.adapters.opencode.roleSettings.reviewer = {};
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
+
+    const managedCustomRole = join(target, 'agenticloop', 'agents', 'reviewer.md');
+    writeFileSync(managedCustomRole, '---\nname: reviewer\n---\n# Reviewer\n', 'utf-8');
+    const invalid = runPacked(['validate', '--target', target]);
+    assert.equal(invalid.status, 1);
+    assert.match(
+      `${invalid.stdout}\n${invalid.stderr}`,
+      /Workflow role registry migration required:[\s\S]*npx agenticloop update[\s\S]*npx agenticloop validate/
+    );
+
+    const preservedCustomDir = join(target, 'custom-host-agents');
+    mkdirSync(preservedCustomDir, { recursive: true });
+    copyFileSync(managedCustomRole, join(preservedCustomDir, 'reviewer.md'));
+    rmSync(managedCustomRole);
+    delete config.roles;
+    delete config.adapters.opencode.roleSettings.reviewer;
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
+
+    const updated = runPacked(['update', '--target', target, '--adapter', 'opencode']);
+    assert.equal(updated.status, 0, `${updated.stdout}\n${updated.stderr}`);
+    const valid = runPacked(['validate', '--target', target]);
+    assert.equal(valid.status, 0, `${valid.stdout}\n${valid.stderr}`);
+    assert.doesNotMatch(`${valid.stdout}\n${valid.stderr}`, /^\s*(?:ERROR|WARN):/m);
+    assert.equal(existsSync(join(preservedCustomDir, 'reviewer.md')), true);
   });
 
   it('reports usage failures with exit 2 from the packed binary', () => {
