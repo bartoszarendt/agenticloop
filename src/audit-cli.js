@@ -18,6 +18,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.js';
 import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
@@ -27,6 +28,8 @@ import {
   applyAuditHumanResolution,
   auditBudgetState,
   canonicalizeAuditRecord,
+  LEGACY_CONSUMPTION_CAUSE,
+  migrateAuditConsumptionCause,
   certificationStatus,
   createAuditRecordContent,
   applyAuditBudgetOverride,
@@ -141,6 +144,27 @@ function filesTaskStatus(target, config, taskId) {
  * @param {string} content  Fully validated record content.
  * @returns {{ ok: boolean, errors: string[] }}
  */
+function auditDigest(content) {
+  return `sha256:${createHash('sha256').update(String(content ?? ''), 'utf8').digest('hex')}`;
+}
+
+function auditMutationReceipt({ entry, before, after, disposition, cause = null }) {
+  const record = parseAuditRecord(after);
+  const budget = auditBudgetState(record);
+  return {
+    kind: 'agenticloop.audit-mutation-receipt',
+    schemaVersion: 1,
+    audit: { id: record.auditId, workUnit: record.workUnit, file: entry.relPath },
+    beforeDigest: auditDigest(before),
+    afterDigest: auditDigest(after),
+    changedPaths: before === after ? [] : [entry.relPath],
+    mutationDisposition: disposition,
+    budget: { completed: budget.completed, remaining: budget.remaining, exhausted: budget.exhausted },
+    consumptionCause: cause,
+    revalidateCommand: `npx agenticloop audit lint ${record.auditId}`,
+  };
+}
+
 function commitAuditMutation(target, relPath, content) {
   const result = executeMutationBatch(target, [{ type: 'write', path: relPath, content }]);
   if (!result.ok) {
@@ -152,7 +176,20 @@ function commitAuditMutation(target, relPath, content) {
       ],
     };
   }
-  return { ok: true, errors: [] };
+  let refetched;
+  try {
+    refetched = readFileSync(join(target, relPath), 'utf8');
+  } catch (error) {
+    return { ok: false, errors: [`audit mutation committed but could not be re-read: ${error.message}`] };
+  }
+  if (refetched !== content) {
+    return { ok: false, errors: ['audit mutation committed but the re-read content differs from the validated candidate; preserve the record and inspect it before retrying'] };
+  }
+  const errors = validateAuditRecord(refetched, relPath);
+  if (errors.length > 0) {
+    return { ok: false, errors: errors.map(error => `audit mutation committed but post-write validation failed: ${error}`) };
+  }
+  return { ok: true, errors: [], content: refetched };
 }
 
 /** Reject global invocation/receipt reuse before a mutation can make lint fail. */
@@ -281,6 +318,15 @@ function statusPayload(entry, target, validation) {
     audit_budget: budget.budget,
     budget_remaining: budget.remaining,
     budget_exhausted: budget.exhausted,
+    // Every consumed run names why it consumed budget, so an exhausted budget
+    // always has provenance rather than an unexplained count.
+    budget_consumption: record.history.map(entry => ({
+      run: entry.runNumber ?? entry.position,
+      cause: entry.consumptionCause || 'unrecorded',
+      authority: entry.consumptionAuthority || null,
+      reason: entry.consumptionReason || null,
+      plan: entry.consumptionPlan || null,
+    })),
     open_blocking_findings: openBlockingFindings(record).map(finding => finding.id),
     undisposed_findings: findingDispositionState(record).undisposed
       .map(entry => `run:${entry.run}/${entry.findingId}`),
@@ -300,6 +346,12 @@ function printStatus(payload, io) {
   io.out(`  certified_artifact:  ${payload.certified_artifact ?? '(none)'}`);
   io.out(`  covered_tasks:       ${payload.covered_tasks.join(', ') || '(none)'}`);
   io.out(`  completed audits:    ${payload.completed_audits}/${payload.audit_budget}`);
+  // An exhausted budget must never be an unexplained count: name the cause of
+  // every consumed run.
+  for (const consumed of payload.budget_consumption) {
+    const detail = consumed.authority ? ` (${consumed.authority})` : consumed.plan ? ` (${consumed.plan})` : '';
+    io.out(`    run ${consumed.run}: ${consumed.cause}${detail}`);
+  }
   io.out(`  work_unit_audit:     ${payload.work_unit_audit}`);
   io.out(`  certification:       ${payload.certification_current ? 'current' : 'not current'}`);
   for (const reason of payload.blocking_reasons) io.out(`    - ${reason}`);
@@ -483,6 +535,49 @@ export async function cmdAudit(args, io = createIo()) {
       const coveredTasks = splitList(opts.coveredTasks);
       const canonicalize = Boolean(opts.canonicalize);
       const evidence = optionString(opts.evidence);
+
+      // Explicit, non-destructive consumption-cause migration. It is its own
+      // mode: it neither rebaselines the candidate nor consumes audit budget.
+      if (opts.migrateConsumptionCause) {
+        if (canonicalize || artifact || coveredTasks.length > 0 || evidence) {
+          io.err('audit baseline --migrate-consumption-cause records budget provenance only; it does not accept --canonicalize, --artifact, --covered-tasks, or --evidence');
+          return EXIT_USAGE;
+        }
+        const migration = migrateAuditConsumptionCause(entry.content);
+        if (!migration.ok) {
+          printMutationErrors(migration.errors, null, io);
+          return 1;
+        }
+        if (!migration.changed) {
+          if (opts.json) io.out(JSON.stringify({ audit_id: entry.record.auditId, migrated: false, already_migrated: true }, null, 2));
+          else io.out(`${relDisplay(entry.record.auditId)} already records a consumption cause for every run; nothing to do.`);
+          return 0;
+        }
+        const committed = commitAuditMutation(target, entry.relPath, migration.content);
+        if (!committed.ok) {
+          printMutationErrors(committed.errors, null, io);
+          return 1;
+        }
+        const migratedRecord = parseAuditRecord(committed.content);
+        const receipt = auditMutationReceipt({
+          entry, before: entry.content, after: committed.content,
+          disposition: 'committed', cause: LEGACY_CONSUMPTION_CAUSE,
+        });
+        if (opts.json) {
+          io.out(JSON.stringify({
+            audit_id: migratedRecord.auditId,
+            migrated: true,
+            migrated_runs: migration.migratedRuns,
+            consumption_cause: LEGACY_CONSUMPTION_CAUSE,
+            receipt,
+          }, null, 2));
+        } else {
+          io.out(`Recorded '${LEGACY_CONSUMPTION_CAUSE}' budget provenance for run(s) ${migration.migratedRuns.join(', ')} in ${relDisplay(migratedRecord.auditId)}.`);
+          io.out('  No historical authority was invented; the cause records that it was never captured.');
+        }
+        return 0;
+      }
+
       if (canonicalize && (artifact || coveredTasks.length > 0)) {
         io.err('audit baseline --canonicalize resolves the existing candidate; --artifact/--covered-tasks are mutually exclusive with it');
         return EXIT_USAGE;
@@ -551,9 +646,11 @@ export async function cmdAudit(args, io = createIo()) {
         printMutationErrors(committed.errors, null, io);
         return 1;
       }
-      const record = parseAuditRecord(updated);
+      const finalContent = committed.content;
+      const record = parseAuditRecord(finalContent);
+      const receipt = auditMutationReceipt({ entry, before: entry.content, after: finalContent, disposition: 'committed', cause: 'rebaseline' });
       if (opts.json) {
-        io.out(JSON.stringify(statusPayload({ record, content: updated, relPath: entry.relPath }, target, commandValidation()), null, 2));
+        io.out(JSON.stringify({ ...statusPayload({ record, content: finalContent, relPath: entry.relPath }, target, commandValidation()), receipt }, null, 2));
       } else {
         io.out(canonicalize
           ? `Canonicalized ${relDisplay(record.auditId)} to audit_schema_version 2 (${record.candidateArtifact})`
@@ -644,6 +741,10 @@ export async function cmdAudit(args, io = createIo()) {
           findings,
         });
       }
+      run.consumptionCause = optionString(opts.cause) || 'substantive_audit';
+      run.consumptionAuthority = optionString(opts.consumptionAuthority);
+      run.consumptionReason = optionString(opts.consumptionReason);
+      run.consumptionPlan = optionString(opts.consumptionPlan);
 
       const normalizedProvenance = await normalizeAuditorInvocationProvenance(run, {
         verifier: io.auditProvenanceVerifier,
@@ -692,11 +793,14 @@ export async function cmdAudit(args, io = createIo()) {
         printMutationErrors(committed.errors, null, io);
         return 1;
       }
-      const record = parseAuditRecord(result.content);
+      const finalContent = committed.content;
+      const record = parseAuditRecord(finalContent);
+      const receipt = auditMutationReceipt({ entry, before: entry.content, after: finalContent, disposition: 'committed', cause: run.consumptionCause });
       if (opts.json) {
         io.out(JSON.stringify({
           run: result.runNumber,
-          ...statusPayload({ record, content: result.content, relPath: entry.relPath }, target, commandValidation()),
+          ...statusPayload({ record, content: finalContent, relPath: entry.relPath }, target, commandValidation()),
+          receipt,
         }, null, 2));
       } else {
         io.out(`Recorded run ${result.runNumber} in ${relDisplay(record.auditId)} (${record.latestVerdict})`);

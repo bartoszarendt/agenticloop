@@ -11,6 +11,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 import {
   createTaskContractBaselineRecord,
@@ -225,9 +226,26 @@ describe('schema-less readiness transitions require baseline migration', () => {
       assert.equal(created.status, 0, created.stderr);
       const path = join(target, '.agenticloop', 'tasks', 'T-001.md');
       writeFileSync(path, readFileSync(path, 'utf8').replace(/^task_contract_schema: 2\n/m, ''), 'utf8');
-      const result = await runCliInProcess(['task', 'status', 'T-001', 'agent-ready', '--target', target]);
+      // Complete readiness evidence is supplied explicitly so the refusal is
+      // proven to come from the missing trusted baseline, not from a missing
+      // argument.
+      const dependencies = '.agenticloop/tmp/dependencies.json';
+      mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
+      writeFileSync(join(target, dependencies), `${JSON.stringify({
+        kind: 'agenticloop.dependency-snapshot',
+        schemaVersion: 1,
+        source: 'files:.agenticloop/tasks',
+        observedAt: new Date().toISOString(),
+        freshnessPolicy: { maxAgeSeconds: 86400 },
+        statuses: {},
+      })}\n`, 'utf8');
+      const digest = `sha256:${createHash('sha256').update(readFileSync(path, 'utf8'), 'utf8').digest('hex')}`;
+      const result = await runCliInProcess([
+        'task', 'status', 'T-001', 'agent-ready', '--expect-digest', digest,
+        '--base', 'HEAD', '--dependencies', dependencies, '--target', target,
+      ]);
       assert.notEqual(result.status, 0, 'schema-less task must not enter agent-ready without a trusted baseline');
-      assert.match(result.stderr, /baseline/i);
+      assert.match(result.stdout + result.stderr, /baseline/i);
     } finally {
       rmSync(target, { recursive: true, force: true });
     }

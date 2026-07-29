@@ -43,6 +43,14 @@ function makeTarget() {
   return mkdtempSync(join(tmpBase, 'target-'));
 }
 
+/**
+ * The prior-gate lifecycle receipt records the outcome of the run that just
+ * executed, not managed target state. It legitimately differs between runs, so
+ * the zero-mutation snapshots below exclude it; dedicated receipt regressions
+ * live in `test/task-publication-readiness.test.js`.
+ */
+const RUN_RECORD_PATHS = new Set(['.agenticloop/lifecycle-receipt.json']);
+
 function snapshotTree(root) {
   const entries = [];
   if (!existsSync(root)) return entries;
@@ -51,7 +59,7 @@ function snapshotTree(root) {
       const fullPath = join(dir, entry);
       const relPath = rel ? `${rel}/${entry}` : entry;
       if (statSync(fullPath).isDirectory()) walk(fullPath, relPath);
-      else entries.push(`${relPath}:${readFileSync(fullPath).length}`);
+      else if (!RUN_RECORD_PATHS.has(relPath)) entries.push(`${relPath}:${readFileSync(fullPath).length}`);
     }
   };
   walk(root, '');

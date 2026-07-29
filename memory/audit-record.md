@@ -85,6 +85,7 @@ Entry shape:
 - Findings: A-01
 - Evidence checked: npm test (pass), npx agenticloop validate (pass)
 - Report format: legacy_inline_v1
+- Consumption cause: substantive_audit
 ```
 
 A wire-format run (`Report format: auditor_report_v1`) additionally persists

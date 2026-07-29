@@ -553,7 +553,18 @@ function replaceFrontmatterWorkflowStatus(text, acceptedValues, replacement) {
  */
 export function workflowRecordSubstance(text) {
   const stripped = stripCloseoutMarkers(text);
-  return replaceFrontmatterWorkflowStatus(stripped, ['accepted', 'closed'], '<workflow-status>') ?? stripped;
+  const lines = stripped.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index].trim() !== '## Comments') continue;
+    let end = index + 1;
+    while (end < lines.length && !/^#{1,2}\s+/.test(lines[end])) end += 1;
+    if (lines.slice(index + 1, end).every(line => line.trim() === '')) {
+      lines.splice(index, end - index);
+    }
+    break;
+  }
+  const normalized = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return replaceFrontmatterWorkflowStatus(normalized, ['accepted', 'closed'], '<workflow-status>') ?? normalized;
 }
 
 /**

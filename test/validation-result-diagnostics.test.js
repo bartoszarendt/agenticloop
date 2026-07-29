@@ -16,6 +16,9 @@ import { lintGitHubTaskBody } from '../src/github-task-body.js';
 import { evaluateTaskRecordRoot } from '../src/task-record-root.js';
 import { evaluatePreflight } from '../src/github-preflight.js';
 import { evaluateTaskReadiness } from '../src/task-readiness.js';
+import { validationResultForGate } from '../src/public-result.js';
+import { presentDiagnostic } from '../src/diagnostic-presentation.js';
+import { getProjectRoleCapabilities } from '../src/role-capabilities.js';
 import { validateTaskRecord, validateTaskRecordDiagnostics } from '../src/validate-config.js';
 import {
   appendAuditReport,
@@ -107,6 +110,17 @@ describe('canonical validation-result envelopes', () => {
     assert.equal(validateRequiredFieldInventory([...VALIDATION_RESULT_REQUIRED_FIELDS].reverse()).ok, true);
   });
 
+  it('derives the same public evidence state from every permutation of a diagnostic set', () => {
+    const missing = createDiagnostic({ code: 'evidence.missing', evidence: { state: 'missing' } });
+    const changed = createDiagnostic({ code: 'evidence.changed', evidence: { state: 'changed' } });
+    const first = validationResultForGate('verify', { diagnostics: [missing, changed] });
+    const second = validationResultForGate('verify', { diagnostics: [changed, missing] });
+    assert.equal(first.evidenceState, 'missing');
+    assert.equal(first.disposition, 'needs_context');
+    assert.equal(serializeValidationResult(first), serializeValidationResult(second));
+    assert.equal(validationResultDigest(first), validationResultDigest(second));
+  });
+
   it('uses exact UTF-16 code-unit ordering when locale collation compares distinct diagnostics equally', () => {
     const a = createDiagnostic({ code: 'evidence.malformed', message: 'a' });
     const zeroWidth = createDiagnostic({ code: 'evidence.malformed', message: 'a\u200B' });
@@ -134,10 +148,107 @@ describe('canonical validation-result envelopes', () => {
       { failureCategories: [Symbol('category')] },
       { firstSafeRepair: () => {} },
       { debugReference: Infinity },
+      { diagnostics: {} },
+      { diagnostics: 'not an array' },
+      { warningDiagnostics: {} },
     ];
     for (const input of protectedInputs) {
       assert.throws(() => createValidationResult({ command: 'verify', ...input }));
     }
+  });
+
+  it('rejects forged diagnostic policy and routing fields', () => {
+    const diagnostic = createDiagnostic({ code: 'evidence.malformed' });
+    for (const forged of [
+      { ...diagnostic, category: 'usage' },
+      { ...diagnostic, repairKind: 'authorize_rollback' },
+      { ...diagnostic, escalationKind: 'human_authority_review' },
+      {
+        ...diagnostic,
+        owner: 'orchestrator',
+        escalationOwner: null,
+        firstSafeRepair: diagnostic.repairKind,
+        nextAction: `Repair: ${diagnostic.repairKind}. Owner: orchestrator.`,
+      },
+    ]) {
+      assert.throws(
+        () => createValidationResult({
+          command: 'verify',
+          diagnostics: [forged],
+          evidenceState: 'malformed',
+          disposition: 'rejected',
+        }),
+        /diagnostic/
+      );
+    }
+  });
+
+  it('validates routing against the capabilities that presented the diagnostic', () => {
+    const fact = createDiagnostic({
+      code: 'evidence.malformed',
+      repairHint: 'Repair the selected target evidence.',
+    });
+    const capabilities = {
+      primaryOwnerByRepairKind: { [fact.repairKind]: 'maintainer' },
+      escalationOwnerByKind: { [fact.escalationKind]: null },
+    };
+    const diagnostic = presentDiagnostic(fact, capabilities);
+    const envelope = createValidationResult({
+      command: 'verify',
+      diagnostics: [diagnostic],
+      evidenceState: 'malformed',
+      disposition: 'rejected',
+    });
+    assert.equal(envelope.diagnostics[0].owner, 'maintainer');
+    assert.doesNotThrow(() => serializeValidationResult(envelope));
+
+    const parsed = JSON.parse(JSON.stringify(envelope));
+    assert.throws(
+      () => serializeValidationResult(parsed),
+      /routing capabilities are required/
+    );
+    assert.doesNotThrow(
+      () => serializeValidationResult(parsed, { capabilities })
+    );
+  });
+
+  it('rejects diagnostics presented for different targets in one envelope', () => {
+    const fact = createDiagnostic({ code: 'evidence.malformed' });
+    const engineerCapabilities = {
+      primaryOwnerByRepairKind: { [fact.repairKind]: 'engineer' },
+      escalationOwnerByKind: { [fact.escalationKind]: null },
+    };
+    const maintainerCapabilities = {
+      primaryOwnerByRepairKind: { [fact.repairKind]: 'maintainer' },
+      escalationOwnerByKind: { [fact.escalationKind]: null },
+    };
+    assert.throws(
+      () => createValidationResult({
+        command: 'verify',
+        diagnostics: [
+          presentDiagnostic(fact, engineerCapabilities),
+          presentDiagnostic(fact, maintainerCapabilities),
+        ],
+        evidenceState: 'malformed',
+        disposition: 'rejected',
+      }),
+      /share one routing capability context/
+    );
+    assert.throws(
+      () => createValidationResult({
+        command: 'verify',
+        diagnostics: [presentDiagnostic(fact, engineerCapabilities)],
+        warningDiagnostics: [
+          presentDiagnostic(
+            createDiagnostic({ code: 'evidence.malformed', level: 'warning' }),
+            maintainerCapabilities
+          ),
+        ],
+        evidenceState: 'malformed',
+        disposition: 'rejected',
+      }),
+      /share one routing capability context/
+    );
   });
 
   it('rejects missing, duplicate, and unknown required fields', () => {
@@ -275,6 +386,42 @@ describe('task-record root-cause diagnostics', () => {
     }
   });
 
+  it('rejects structurally incomplete or duplicated task records before readiness evaluation', () => {
+    const incomplete = [
+      '---',
+      'task_id: T-101',
+      'status: draft',
+      'backend: github',
+      'attempt_budget: 5',
+      'review_budget: 5',
+      'allowed_paths:',
+      '  - src/**',
+      'intended_creations: []',
+      '---',
+      '',
+      '# T-101 - Incomplete task',
+      '',
+      '## Task',
+      'One section is not a canonical task record.',
+      '',
+      '## Scope',
+      'First scope.',
+      '',
+      '## Scope',
+      'Duplicate scope.',
+    ].join('\n');
+    const readiness = evaluateTaskReadiness({
+      taskBody: incomplete,
+      basePaths: ['src/app.js'],
+      mode: 'review',
+    });
+    assert.equal(readiness.ok, false);
+    assert.equal(readiness.evidenceState, 'malformed');
+    assert.equal(readiness.disposition, 'rejected');
+    assert.ok(readiness.diagnostics.every(item => item.code === 'task.record.structure'));
+    assert.match(readiness.errors.join('\n'), /duplicate canonical section '## Scope'/);
+  });
+
   it('keeps files-backed root diagnostics typed alongside legacy strings', () => {
     const content = validGitHubTaskBody({ prefix: '\uFEFF' });
     const diagnostics = validateTaskRecordDiagnostics(content, 'T-101.md');
@@ -284,7 +431,7 @@ describe('task-record root-cause diagnostics', () => {
   });
 
   it('distinguishes missing standalone verification context from invalid state', () => {
-    const check = evaluateTaskReadiness({ taskBody: 'not evaluated', mode: 'authoring' });
+    const check = evaluateTaskReadiness({ taskBody: validGitHubTaskBody(), mode: 'authoring' });
     assert.equal(check.evidenceState, 'missing');
     assert.equal(check.disposition, 'needs_context');
     assert.equal(check.rollbackAuthorized, false);
@@ -399,7 +546,10 @@ describe('public CLI failure boundaries', () => {
       const run = await runCliInProcess([command, '--json']);
       assert.notEqual(run.status, 0);
       const parsed = JSON.parse(run.stdout);
-      assert.equal(run.stdout.trim(), serializeValidationResult(parsed));
+      assert.equal(
+        run.stdout.trim(),
+        serializeValidationResult(parsed, { capabilities: getProjectRoleCapabilities() })
+      );
     }
     const usageCases = [
       [['frobnicate'], /Run "agenticloop help" for all commands\./],

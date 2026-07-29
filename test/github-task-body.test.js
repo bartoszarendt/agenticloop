@@ -23,6 +23,8 @@ import {
 } from '../src/task-contract-baseline.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 import { serializeValidationResult } from '../src/result-envelope.js';
+import { validateTaskMutationReceipt } from '../src/task-evidence-contract.js';
+import { getProjectRoleCapabilities } from '../src/role-capabilities.js';
 
 function taskBody({ title = 'Draft task', status = 'draft' } = {}) {
   return [
@@ -58,6 +60,7 @@ function taskBody({ title = 'Draft task', status = 'draft' } = {}) {
 function issueRunner(state, { mutate } = {}) {
   return (_command, args) => {
     if (args[0] === 'repo' && args[1] === 'view') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'example/repo' }) };
+    if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify({ login: 'maintainer' }) };
     if (args[0] === 'api' && args.includes('--paginate')) return { status: 0, stdout: JSON.stringify([state.comments ?? []]) };
     if (args[0] !== 'issue') return { status: 1, stderr: 'unexpected command' };
     if (args[1] === 'view') return { status: 0, stdout: JSON.stringify({ number: 31, body: state.body }) };
@@ -304,6 +307,11 @@ describe('transactional GitHub task-body application', () => {
       assert.equal(result.rollback.attempted, true);
       assert.equal(result.rollback.restored, true);
       assert.equal(state.body, taskBody());
+      assert.ok(result.receipt, 'a restored remote rollback still requires a machine-readable receipt');
+      assert.equal(result.receipt.mutationDisposition, 'rolled_back');
+      assert.equal(result.receipt.unresolved, false);
+      assert.deepEqual(result.receipt.changedPaths, []);
+      assert.equal(validateTaskMutationReceipt(result.receipt).ok, true);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -338,7 +346,10 @@ describe('transactional GitHub task-body application', () => {
       assert.equal(envelope.disposition, 'needs_context');
       assert.equal(envelope.rollbackAuthorized, false);
       assert.equal(envelope.diagnostics[0].code, 'verification.context.missing');
-      assert.equal(result.stdout.trim(), serializeValidationResult(envelope));
+      assert.equal(
+        result.stdout.trim(),
+        serializeValidationResult(envelope, { capabilities: getProjectRoleCapabilities(directory) })
+      );
       assert.equal(state.edits, 0);
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -364,8 +375,17 @@ describe('transactional GitHub task-body application', () => {
         body: renderTaskContractRecord(record),
       });
       const paths = join(directory, 'base-paths.json');
+      const dependencies = join(directory, 'dependencies.json');
       const bodyFile = join(directory, 'task.md');
       writeFileSync(paths, JSON.stringify(['src/existing.js']), 'utf8');
+      writeFileSync(dependencies, JSON.stringify({
+        kind: 'agenticloop.dependency-snapshot',
+        schemaVersion: 1,
+        source: 'github:issues',
+        observedAt: new Date().toISOString(),
+        freshnessPolicy: { maxAgeSeconds: 86400 },
+        statuses: {},
+      }), 'utf8');
       writeFileSync(bodyFile, state.body, 'utf8');
 
       const lint = await runCliInProcess([
@@ -376,7 +396,7 @@ describe('transactional GitHub task-body application', () => {
 
       const transition = await runCliInProcess([
         'task-body', 'transition', '--issue', '31', '--status', 'agent-ready',
-        '--expect-digest', taskBodyDigest(state.body), '--base-paths', paths, '--dry-run', '--json',
+        '--expect-digest', taskBodyDigest(state.body), '--base-paths', paths, '--dependencies', dependencies, '--dry-run', '--json',
       ], { cwd: directory, ghCommandRunner: issueRunner(state) });
       assert.equal(transition.status, 0, transition.stdout + transition.stderr);
       assert.equal(JSON.parse(transition.stdout).ok, true);

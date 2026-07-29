@@ -19,6 +19,7 @@ import {
   findMarkerByDigest,
   publishGitHubCloseoutMarker,
 } from '../src/closeout-github.js';
+import { renderCloseoutMarker } from '../src/closeout-contract.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 
 let tmpDir;
@@ -27,6 +28,31 @@ after(() => { rmSync(tmpDir, { recursive: true, force: true }); });
 
 function issue(number, { state = 'OPEN', title = '', body = '', labels = [] } = {}) {
   return { number, state, title, body, labels: labels.map(name => ({ name })) };
+}
+
+/**
+ * A complete, valid GitHub task-record body. The closeout-owned terminal
+ * transition validates the carrier before and after mutation, so a covered
+ * task fixture must be a real record rather than a frontmatter stub.
+ */
+function coveredTaskBody(status = 'accepted') {
+  return [
+    '---', 'task_id: T-001', 'task_contract_schema: 2', `status: ${status}`, 'backend: github',
+    'attempt_budget: 5', 'review_budget: 5', 'allowed_paths:', '  - src/**', '---', '',
+    '# T-001 - Covered task', '',
+    '## Task', 'Ship the covered work.', '',
+    '## Source Documents Reviewed', '- README.md', '',
+    '## Current State', 'Accepted.', '',
+    '## Scope', 'One work unit.', '',
+    '## Out of Scope', 'Everything else.', '',
+    '## Acceptance Criteria', '- accepted', '',
+    '## Required Checks', '- npm test', '',
+    '## Expected Files or Areas', '- src/', '',
+    '## Implementation Notes', 'none', '',
+    '## Completion Summary Template', 'Use the template.', '',
+    '## Reviewer Checklist', '- [x] reviewed', '',
+    '[[agent: maintainer]]',
+  ].join('\n');
 }
 
 describe('task identity inventory', () => {
@@ -331,6 +357,70 @@ describe('github closeout evaluation', () => {
     return target;
   }
 
+  function closeoutHarness({ publishVisible = true, conflictOnFinalRead = false } = {}) {
+    const full = 'a'.repeat(40);
+    const carrier = { body: coveredTaskBody('accepted') };
+    const issues = [issue(1, { state: 'CLOSED', body: carrier.body })];
+    const comments = [];
+    const state = { recording: false, commentReads: 0, postAttempts: 0 };
+    const mergedPr = {
+      number: 5,
+      state: 'MERGED',
+      mergedAt: '2026-07-27T12:00:00Z',
+      mergeCommit: { oid: full },
+      headRefOid: full,
+      reviewDecision: 'APPROVED',
+      reviews: [],
+      closingIssuesReferences: [{ number: 1 }],
+    };
+    const conflictingMarker = renderCloseoutMarker({
+      status: 'blocked',
+      workUnit: 'milestone:M00',
+      artifact: `commit:${full}`,
+      auditRef: 'none',
+      predecessor: 'none',
+      planSync: 'none',
+      improvementRefs: [],
+      gateDigest: `sha256:${'f'.repeat(64)}`,
+    });
+    const runner = (_command, args) => {
+      if (args[0] === 'issue' && args[1] === 'list') return { status: 0, stdout: JSON.stringify(issues), stderr: '' };
+      if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify({ login: 'loop' }), stderr: '' };
+      if (args[0] === 'issue' && args[1] === 'view' && args.includes('closedByPullRequestsReferences')) {
+        return { status: 0, stdout: JSON.stringify({ closedByPullRequestsReferences: [{ number: 5 }] }), stderr: '' };
+      }
+      if (args[0] === 'api') return { status: 0, stdout: JSON.stringify([[]]), stderr: '' };
+      if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'example/repo' }), stderr: '' };
+      if (args[0] === 'issue' && args[1] === 'view' && String(args[args.indexOf('--json') + 1] ?? '').includes('body')) {
+        return { status: 0, stdout: JSON.stringify({ number: 1, body: carrier.body }), stderr: '' };
+      }
+      if (args[0] === 'issue' && args[1] === 'view') {
+        if (state.recording) {
+          state.commentReads += 1;
+          if (conflictOnFinalRead && state.commentReads === 3 && comments.length === 0) {
+            comments.push({ id: 99, author: { login: 'loop' }, body: conflictingMarker });
+          }
+        }
+        return { status: 0, stdout: JSON.stringify({ comments, updatedAt: 'now' }), stderr: '' };
+      }
+      if (args[0] === 'pr' && args[1] === 'view') return { status: 0, stdout: JSON.stringify(mergedPr), stderr: '' };
+      if (args[0] === 'issue' && args[1] === 'comment') {
+        state.postAttempts += 1;
+        if (publishVisible) {
+          comments.push({ id: comments.length + 1, author: { login: 'loop' }, body: args[args.indexOf('--body') + 1] });
+        }
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'issue' && args[1] === 'edit' && args.includes('--body-file')) {
+        carrier.body = readFileSync(args[args.indexOf('--body-file') + 1], 'utf8');
+        issues[0].body = carrier.body;
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      return { status: 1, stdout: '', stderr: `unexpected ${args.join(' ')}` };
+    };
+    return { full, carrier, comments, state, runner };
+  }
+
   it('blocks completion when a covered GitHub task was reopened after certification', async () => {
     const target = makeTarget('reopened');
     const issues = [
@@ -389,7 +479,10 @@ describe('github closeout evaluation', () => {
     const target = makeTarget('lifecycle', { work_unit_audit: 'disabled' });
     mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
     const full = 'a'.repeat(40);
-    const issues = [issue(1, { state: 'CLOSED', body: '---\ntask_id: T-001\n---\n' })];
+    // The closeout-owned terminal transition reads and rewrites the covered
+    // carrier body, so this fake transport serves and stores it.
+    const carrier = { body: coveredTaskBody('accepted') };
+    const issues = [issue(1, { state: 'CLOSED', body: carrier.body })];
     const comments = [];
     const mergedPr = {
       number: 5,
@@ -407,10 +500,20 @@ describe('github closeout evaluation', () => {
       if (args[0] === 'issue' && args[1] === 'view' && args.includes('closedByPullRequestsReferences')) {
         return { status: 0, stdout: JSON.stringify({ closedByPullRequestsReferences: [{ number: 5 }] }), stderr: '' };
       }
+      if (args[0] === 'api') return { status: 0, stdout: JSON.stringify([[]]), stderr: '' };
+      if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'example/repo' }), stderr: '' };
+      if (args[0] === 'issue' && args[1] === 'view' && String(args[args.indexOf('--json') + 1] ?? '').includes('body')) {
+        return { status: 0, stdout: JSON.stringify({ number: 1, body: carrier.body }), stderr: '' };
+      }
       if (args[0] === 'issue' && args[1] === 'view') return { status: 0, stdout: JSON.stringify({ comments, updatedAt: 'now' }), stderr: '' };
       if (args[0] === 'pr' && args[1] === 'view') return { status: 0, stdout: JSON.stringify(mergedPr), stderr: '' };
       if (args[0] === 'issue' && args[1] === 'comment') {
         comments.push({ id: comments.length + 1, author: { login: 'loop' }, body: args[args.indexOf('--body') + 1] });
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'issue' && args[1] === 'edit' && args.includes('--body-file')) {
+        carrier.body = readFileSync(args[args.indexOf('--body-file') + 1], 'utf8');
+        issues[0].body = carrier.body;
         return { status: 0, stdout: '', stderr: '' };
       }
       return { status: 1, stdout: '', stderr: `unexpected ${args.join(' ')}` };
@@ -426,12 +529,57 @@ describe('github closeout evaluation', () => {
     ], { ghCommandRunner: runner });
     assert.equal(recorded.status, 0, `${recorded.stdout}${recorded.stderr}`);
     assert.equal(comments.length, 1);
+    // The canonical closeout-owned terminal transition reaches `closed`.
+    assert.match(recorded.stdout, /closeout_owned_accepted_to_closed/);
+    assert.match(carrier.body, /status: "?closed"?/);
     (await import('node:fs')).unlinkSync(packetPath);
     const status = await runCliInProcess([
       'closeout', 'status', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001', '--target', target,
     ], { ghCommandRunner: runner });
     assert.equal(status.status, 0, `${status.stdout}${status.stderr}`);
     assert.match(status.stdout, /complete \(current\)/);
+  });
+
+  it('does not close covered tasks when a successful post is not remotely visible', async () => {
+    const target = makeTarget('post-not-visible', { work_unit_audit: 'disabled' });
+    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
+    const harness = closeoutHarness({ publishVisible: false });
+    const packetPath = join(target, '.agenticloop', 'tmp', 'github-packet.json');
+    const prepared = await runCliInProcess([
+      'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
+      '--artifact', `commit:${harness.full}`, '--output', packetPath, '--target', target,
+    ], { ghCommandRunner: harness.runner });
+    assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
+    harness.state.recording = true;
+    const recorded = await runCliInProcess([
+      'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
+    ], { ghCommandRunner: harness.runner });
+    assert.equal(recorded.status, 1);
+    assert.match(recorded.stderr, /not the unique current packet/);
+    assert.equal(harness.state.postAttempts, 1);
+    assert.deepEqual(harness.comments, []);
+    assert.match(harness.carrier.body, /status: accepted/);
+  });
+
+  it('refuses publication when the trusted marker carrier changes after final evaluation', async () => {
+    const target = makeTarget('marker-race', { work_unit_audit: 'disabled' });
+    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
+    const harness = closeoutHarness({ conflictOnFinalRead: true });
+    const packetPath = join(target, '.agenticloop', 'tmp', 'github-packet.json');
+    const prepared = await runCliInProcess([
+      'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
+      '--artifact', `commit:${harness.full}`, '--output', packetPath, '--target', target,
+    ], { ghCommandRunner: harness.runner });
+    assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
+    harness.state.recording = true;
+    const recorded = await runCliInProcess([
+      'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
+    ], { ghCommandRunner: harness.runner });
+    assert.equal(recorded.status, 1);
+    assert.match(recorded.stderr, /marker carrier changed after final evaluation/);
+    assert.equal(harness.state.postAttempts, 0);
+    assert.equal(harness.comments.length, 1);
+    assert.match(harness.carrier.body, /status: accepted/);
   });
 
   it('refuses GitHub publication when a covered task reopens in the final snapshot', async () => {

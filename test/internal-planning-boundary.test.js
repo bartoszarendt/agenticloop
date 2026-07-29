@@ -23,8 +23,9 @@ const TEXT_EXTENSIONS = new Set([
   '.yaml',
   '.yml',
 ]);
-const PHASE_NUMBER_IN_FILENAME = /phase[ _-]?\d+/i;
+const PHASE_NUMBER_IN_FILENAME = /(?:phase[ _-]?\d+|p\d{2}-(?:d)?\d+)/i;
 const INTERNAL_PHASE_REFERENCE = /\b(?:phase[ _-]?\d{2}|p\d{2}-d\d+)\b/i;
+const TEST_NAME_INTERNAL_REFERENCE = /\b(?:p\d{2}-\d+|[rs]\d+:)\b/i;
 
 function repositoryFiles(directory = REPO_ROOT) {
   const files = [];
@@ -62,6 +63,13 @@ describe('internal planning boundary', () => {
       for (const [index, line] of lines.entries()) {
         if (INTERNAL_PHASE_REFERENCE.test(line)) {
           violations.push(`${relativePath}:${index + 1}: numbered internal phase reference`);
+        }
+        if (
+          relativePath.startsWith('test/')
+          && /\b(?:describe|it)\s*\(/.test(line)
+          && TEST_NAME_INTERNAL_REFERENCE.test(line)
+        ) {
+          violations.push(`${relativePath}:${index + 1}: planning identifier in test name`);
         }
       }
     }

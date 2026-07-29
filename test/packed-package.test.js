@@ -189,15 +189,29 @@ describe('packed package smoke tests', () => {
 
   it('runs task-readiness with --task-body and --base-paths from the installed tarball', () => {
     const target = mkdtempSync(join(tmpBase, 'readiness-'));
+    const readinessRecord = allowedPath => [
+      '---', `allowed_paths: ["${allowedPath}"]`, '---', '# Task',
+      '## Task', 'Evaluate readiness.',
+      '## Source Documents Reviewed', '- README.md',
+      '## Current State', 'Awaiting evaluation.',
+      '## Scope', 'Check the declared path.',
+      '## Out of Scope', 'No implementation.',
+      '## Acceptance Criteria', '- Readiness is reported.',
+      '## Required Checks', '- task-readiness',
+      '## Expected Files or Areas', `- ${allowedPath}`,
+      '## Implementation Notes', 'Use the packed command.',
+      '## Completion Summary Template', 'Summarize readiness.',
+      '## Reviewer Checklist', '- [ ] Verify the result.',
+    ].join('\n');
     const taskFile = join(target, 'task.md');
-    writeFileSync(taskFile, '---\nallowed_paths: ["src/**"]\n---\n# Task\n', 'utf-8');
+    writeFileSync(taskFile, readinessRecord('src/**'), 'utf-8');
     const baseFile = join(target, 'base.json');
     writeFileSync(baseFile, JSON.stringify(['src/app.js']), 'utf-8');
     const ok = runPacked(['task-readiness', '--task-body', taskFile, '--base-paths', baseFile, '--mode', 'review', '--json'], { cwd: target });
     assert.equal(ok.status, 0, ok.stderr + ok.stdout);
     assert.equal(JSON.parse(ok.stdout).ok, true);
     const typo = join(target, 'task-typo.md');
-    writeFileSync(typo, '---\nallowed_paths: ["src/app/App.tsx"]\n---\n# Task\n', 'utf-8');
+    writeFileSync(typo, readinessRecord('src/app/App.tsx'), 'utf-8');
     const bad = runPacked(['task-readiness', '--task-body', typo, '--base-paths', baseFile, '--mode', 'review', '--json'], { cwd: target });
     assert.equal(bad.status, 1, bad.stderr);
     assert.match(JSON.parse(bad.stdout).errors.join('\n'), /App\.tsx/);

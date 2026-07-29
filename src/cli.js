@@ -47,10 +47,20 @@ import { spawnSync } from 'node:child_process';
 import { join, resolve, isAbsolute } from 'node:path';
 import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.js';
 import { createValidationResult, emitValidationResult } from './result-envelope.js';
+import { commandFailure, printGateResult, validationResultForGate } from './public-result.js';
 import {
+  createTaskEvidenceContext,
+  createTaskReadinessEvidence,
+  dependencyStatusMap,
+  parseDependencySnapshot,
+} from './task-evidence-contract.js';
+import {
+  BaselineChangedError,
   OPERATIONAL_FAILURE_MESSAGE,
+  PublicCommandError,
   VerificationContextError,
   VerificationContextMalformedError,
+  VerificationContextStaleError,
 } from './public-error.js';
 import {
   COMMAND_REGISTRY,
@@ -63,7 +73,11 @@ import {
   resolveCommandName,
   suggestName,
 } from './cli-registry.js';
-import { lifecyclePlanBlockers } from './lifecycle-plan.js';
+import {
+  assertLifecycleHandoffResolved,
+  lifecyclePlanBlockers,
+  persistLifecycleReceipt,
+} from './lifecycle-plan.js';
 import { init } from './init.js';
 import { bootstrapLabels } from './bootstrap-labels.js';
 import {
@@ -79,7 +93,9 @@ import {
 import { validateSharedAgenticLoopPluginCompatibility } from './adapter-plugin-compatibility.js';
 import { generateAdapterArtifacts } from './adapter-generation.js';
 import { deepMerge, loadAgenticLoopConfig } from './json.js';
-import { loadProjectMap } from './project-map.js';
+import { loadProjectMap, PROJECT_MAP_DEFAULTS } from './project-map.js';
+import { loadFilesTaskContractRecords } from './files-task-contract.js';
+import { canonicalJson } from './canonical-json.js';
 import { resolveTaskBackend } from './task-backend.js';
 import { cmdTask } from './task-cli.js';
 import {
@@ -89,11 +105,14 @@ import {
   TASK_BODY_NEGATIVE_EVIDENCE,
   TASK_BODY_USAGE_ERROR,
   applyGitHubTaskBody,
+  authenticatedGitHubLogin,
   atomicWriteUtf8,
   fetchGitHubTaskBody,
   lintGitHubTaskBody,
   setTaskBodyFrontmatterField,
+  taskBodyDigest,
 } from './github-task-body.js';
+import { trustedCarrierMarkerText } from './closeout-github.js';
 import {
   createTaskContractBaselineRecord,
   createTaskContractCorrectionRecord,
@@ -152,6 +171,9 @@ import {
 } from './pr-body-context.js';
 import { atomicWriteFile } from './fs-mutation-kernel.js';
 import { evaluateTaskReadiness } from './task-readiness.js';
+import { resolveCanonicalTerminalScope } from './terminal-scope.js';
+import { validateTaskStatusTransition } from './task-transition.js';
+import { parseFrontmatterStrict } from './frontmatter.js';
 import { evaluateCommitAttribution, lintAttributionRepairRecord, renderAttributionRepairRecord } from './commit-attribution.js';
 import { planGitHubCheckpointRepair, renderGitHubCheckpoint } from './github-checkpoint.js';
 import { runGitHubReviewPrepare } from './github-review-prepare.js';
@@ -499,7 +521,7 @@ async function cmdInit(args, io) {
     return EXIT_USAGE;
   }
 
-  const { errors: initErrors, plan: initPlanResult } = await init({
+  const { errors: initErrors, plan: initPlanResult, mutationReceipt: initReceipt } = await init({
     target,
     opencode: Boolean(opts.opencode),
     adapter,
@@ -511,9 +533,13 @@ async function cmdInit(args, io) {
   });
 
   if (opts.dryRun || opts.json) {
+    if (opts.json && initReceipt) io.out(JSON.stringify({ prior_gate_receipt: initReceipt }, null, 2));
     return lifecyclePlanBlockers(initPlanResult ?? { blockers: ['init plan unavailable'], adapterGroups: [] }).length > 0 ? 1 : 0;
   }
 
+  // The prior-gate receipt is persisted and reported rather than discarded, so
+  // the next authoritative readiness edge can refuse unresolved setup state.
+  if (initReceipt) persistLifecycleReceipt(target, initReceipt, io);
   const errors = [...initErrors];
 
   if (setup && errors.length === 0 && adapter && adapter !== 'all') {
@@ -574,7 +600,8 @@ async function cmdUpdate(args, io) {
     // Still run init to refresh assets, but no adapter output needed. Guidance
     // stays with the warning-only refreshOwnedGuidance path below, so the init
     // plan excludes it (no double apply, no fatal refresh on blocked refresh).
-    const { errors: initErrors } = await init({ target, refreshAssets: true, io, agentsGuidance: false });
+    const { errors: initErrors, mutationReceipt: updateReceipt } = await init({ target, refreshAssets: true, io, agentsGuidance: false });
+    if (updateReceipt) persistLifecycleReceipt(target, updateReceipt, io);
     if (initErrors.length > 0) { return 1; }
     refreshOwnedGuidance(target, guidanceOwnedBeforeUpdate, guidanceConfig, io);
     io.out('  No existing generated adapter artifacts found.');
@@ -948,112 +975,6 @@ async function cmdGithubReady(args, io) {
   for (const error of errors) io.err(`    ERROR: ${error}`);
   io.out();
   return result.ok ? 0 : 1;
-}
-
-function printGateResult(command, result, asJson, io, exitCode = null) {
-  const status = exitCode ?? (result.ok ? 0 : 1);
-  if (asJson) {
-    const output = status === 0 || result?.kind === 'agenticloop.validation-result'
-      ? result
-      : validationResultForGate(command, result);
-    if (output?.kind === 'agenticloop.validation-result') emitValidationResult(io, output);
-    else io.out(JSON.stringify(output));
-    return status;
-  }
-  io.out();
-  io.out(`agenticloop ${command}`);
-  io.out('='.repeat(50));
-  if (result.pr) io.out(`  PR: #${result.pr}`);
-  if (result.issue) io.out(`  issue: #${result.issue}`);
-  if (result.headRefOid) io.out(`  current head: ${result.headRefOid}`);
-  io.out(`  status: ${result.ok ? 'passed' : 'FAILED'}`);
-  for (const warning of result.warnings ?? []) io.warn(`  WARN: ${warning}`);
-  for (const error of result.errors ?? []) io.err(`  ERROR: ${error}`);
-  if (result.firstSafeRepair) io.out(`  first safe repair: ${result.firstSafeRepair}`);
-  io.out();
-  return status;
-}
-
-function validationResultForGate(command, result) {
-  const {
-    schemaVersion: _schemaVersion,
-    kind: _kind,
-    command: _command,
-    ok: _ok,
-    evidenceState: _evidenceState,
-    disposition: _disposition,
-    diagnostics: _diagnostics,
-    warningDiagnostics: _warningDiagnostics,
-    errors: _errors,
-    warnings: _warnings,
-    failureCategories: _failureCategories,
-    firstSafeRepair: _firstSafeRepair,
-    rollbackAuthorized: _rollbackAuthorized,
-    debugReference: _debugReference,
-    ...domainFields
-  } = result ?? {};
-  const diagnostics = Array.isArray(result?.diagnostics) ? result.diagnostics : [];
-  // Read the pre-P35-02 evidenceState spelling for compatibility, while every
-  // current producer emits the canonical evidence.state key.
-  const firstState = diagnostics
-    .map(item => item?.evidence?.state ?? item?.evidence?.evidenceState)
-    .find(state => ['missing', 'malformed', 'stale', 'negative', 'changed'].includes(state));
-  const evidenceState = result?.evidenceState ?? firstState ?? 'negative';
-  const disposition = result?.disposition ?? (evidenceState === 'missing'
-    ? 'needs_context'
-    : evidenceState === 'malformed' ? 'rejected'
-    : ['stale', 'changed'].includes(evidenceState) ? 'superseded' : 'blocked');
-  return createValidationResult({
-    command,
-    evidenceState,
-    disposition,
-    diagnostics,
-    warningDiagnostics: result?.warningDiagnostics ?? [],
-    errors: result?.errors ?? [],
-    warnings: result?.warnings ?? [],
-    firstSafeRepair: result?.firstSafeRepair ?? diagnostics[0]?.nextAction ?? null,
-    debugReference: result?.debugReference ?? null,
-    ...domainFields,
-  });
-}
-
-function commandFailure(command, error, category = 'operational_error', domainFields = {}, target = null) {
-  const usage = category === 'usage' || error instanceof CliUsageError;
-  const requestedCode = usage
-    ? 'cli.usage'
-    : typeof error?.code === 'string' ? error.code : 'cli.operational';
-  let code = requestedCode;
-  try { repairPolicyFor(code); } catch { code = usage ? 'cli.usage' : 'cli.operational'; }
-  const message = typeof error?.publicMessage === 'string'
-    ? error.publicMessage
-    : usage
-      ? error instanceof Error ? error.message : String(error)
-      : OPERATIONAL_FAILURE_MESSAGE;
-  const evidenceState = error?.evidenceState ?? (usage ? 'negative' : 'missing');
-  const disposition = error?.disposition ?? (evidenceState === 'missing'
-    ? 'needs_context'
-    : evidenceState === 'malformed' ? 'rejected'
-    : evidenceState === 'changed' || evidenceState === 'stale' ? 'superseded' : 'blocked');
-  const diagnostic = presentDiagnostic(createDiagnostic({
-    code,
-    message,
-    evidence: {
-      state: evidenceState,
-      committedStateEvaluated: error?.committedStateEvaluated ?? usage,
-      rollbackAuthorized: false,
-    },
-    repairHint: error?.safeRepair ?? error?.hint ?? 'Correct the command input or unavailable dependency, then rerun.',
-  }), getProjectRoleCapabilities(target));
-  return createValidationResult({
-    command,
-    evidenceState,
-    disposition,
-    diagnostics: [diagnostic],
-    firstSafeRepair: error?.safeRepair ?? error?.hint ?? diagnostic.nextAction,
-    debugReference: null,
-    requiredContext: Array.isArray(error?.requiredContext) ? error.requiredContext : [],
-    ...domainFields,
-  });
 }
 
 // --- PR-body scoped failure, merge, and rendering helpers ------------------
@@ -1604,36 +1525,166 @@ function readBasePaths(base, basePaths, target) {
   return result.stdout.split(/\r?\n/).filter(Boolean);
 }
 
-function taskReadinessBody(opts, target) {
-  if (opts.taskBody) {
+/**
+ * Resolve explicit base evidence for a read-only readiness evaluation.
+ * Exactly one of `--base` or `--base-paths` is accepted, and a `--base` value
+ * is resolved to its exact tree object id so the bound identity survives a
+ * later branch move.
+ */
+function readBaseEvidence(opts, target) {
+  const hasBase = Boolean(opts.base);
+  const hasInventory = Boolean(opts.basePaths);
+  if (hasBase && hasInventory) {
+    throw new VerificationContextMalformedError(
+      'Supply exactly one of --base <ref> or --base-paths <path>; supplying both leaves the intended baseline ambiguous.'
+    );
+  }
+  if (!hasBase && !hasInventory) {
+    throw new VerificationContextError('task-readiness requires --base <ref-or-tree> or --base-paths <path>', {
+      requiredContext: ['--base <ref-or-tree> or --base-paths <path>'],
+    });
+  }
+  if (hasInventory) {
+    const relPath = String(opts.basePaths).replace(/\\/g, '/');
+    let source;
     try {
-      return readFileSync(resolve(target, opts.taskBody), 'utf8');
+      source = readFileSync(resolve(target, String(opts.basePaths)), 'utf8');
     } catch {
-      throw new VerificationContextError(`Task-body context '${opts.taskBody}' is unavailable.`, {
-        requiredContext: [`a readable task body at '${opts.taskBody}'`],
+      throw new VerificationContextError(`Base-path inventory '${relPath}' is unavailable.`, {
+        requiredContext: [`a readable --base-paths JSON inventory at '${relPath}'`],
       });
     }
-  }
-  if (opts.task) {
-    const taskPath = join('.agenticloop', 'tasks', `${opts.task}.md`).replaceAll('\\', '/');
+    let parsed;
     try {
-      return readFileSync(resolve(target, taskPath), 'utf8');
+      parsed = JSON.parse(source);
     } catch {
-      throw new VerificationContextError(`Task record '${opts.task}' is unavailable.`, {
-        requiredContext: [`a readable task record at '${taskPath}'`],
+      throw new VerificationContextMalformedError(`--base-paths JSON at '${relPath}' is not valid JSON.`, {
+        requiredContext: [`valid JSON at '${relPath}' containing an array or { "paths": [] }`],
       });
     }
+    const paths = Array.isArray(parsed) ? parsed : parsed?.paths;
+    if (!Array.isArray(paths) || paths.some(entry => typeof entry !== 'string')) {
+      throw new VerificationContextMalformedError('--base-paths JSON must be an array or { paths: [] }', {
+        requiredContext: [`valid JSON at '${relPath}' containing an array or { "paths": [] }`],
+      });
+    }
+    return {
+      paths,
+      evidence: {
+        kind: 'path_inventory',
+        identity: `path-inventory:${relPath}`,
+        inventoryDigest: taskBodyDigest(canonicalJson([...paths].sort())),
+        pathCount: paths.length,
+        revalidationArgs: ['--base-paths', relPath],
+      },
+    };
   }
+  const ref = String(opts.base);
+  const tree = spawnSync('git', ['rev-parse', '--verify', `${ref}^{tree}`], { cwd: target, encoding: 'utf8' });
+  const treeOid = String(tree.stdout ?? '').trim();
+  if (tree.status !== 0 || !/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(treeOid)) {
+    throw new VerificationContextMalformedError(`Base tree '${ref}' cannot be resolved.`, {
+      requiredContext: [`a resolvable Git tree or commit for --base '${ref}'`],
+    });
+  }
+  const listed = spawnSync('git', ['ls-tree', '-r', '--name-only', treeOid], { cwd: target, encoding: 'utf8' });
+  if (listed.status !== 0) {
+    throw new VerificationContextMalformedError(`Base tree '${ref}' cannot be listed.`, {
+      requiredContext: [`a listable Git tree for --base '${ref}'`],
+    });
+  }
+  const paths = listed.stdout.split(/\r?\n/).filter(Boolean);
+  return {
+    paths,
+    evidence: {
+      kind: 'git_tree',
+      identity: `git-tree:${treeOid}`,
+      inventoryDigest: taskBodyDigest(canonicalJson([...paths].sort())),
+      pathCount: paths.length,
+      revalidationArgs: ['--base', treeOid],
+    },
+  };
+}
+
+/** Read and validate the exact dependency-status snapshot for one evaluation. */
+function readDependencyEvidence(target, dependencyPath, command) {
+  if (!dependencyPath) {
+    throw new VerificationContextError(`${command} requires --dependencies <path> naming the exact dependency-status snapshot.`, {
+      requiredContext: ['--dependencies <path>'],
+    });
+  }
+  const relPath = String(dependencyPath).replace(/\\/g, '/');
+  let source;
+  try {
+    source = readFileSync(resolve(target, dependencyPath), 'utf8');
+  } catch {
+    throw new VerificationContextError(`Dependency evidence '${relPath}' is unavailable.`, {
+      requiredContext: [`a readable dependency snapshot at '${relPath}'`],
+    });
+  }
+  const parsed = parseDependencySnapshot(source, { sourceRef: relPath });
+  if (!parsed.ok) {
+    if (parsed.errors.some(error => /stale|future/i.test(error))) {
+      throw new VerificationContextStaleError(parsed.errors[0]);
+    }
+    throw new VerificationContextMalformedError(parsed.errors[0]);
+  }
+  return { evidence: parsed.evidence, statuses: dependencyStatusMap(parsed.evidence) };
+}
+
+/**
+ * Resolve the exact task carrier a readiness evaluation reads, together with
+ * its identity, digest, and trusted-record context.
+ */
+function resolveTaskReadinessSource(opts, target, io, projectMapConfig) {
   if (opts.issue) {
-    const data = runGhJson(defaultGhCommandRunner, ['issue', 'view', String(opts.issue), '--json', 'body']);
-    if (!data?.body) {
-      throw new VerificationContextError(`GitHub issue #${opts.issue} has no task body`, {
-        requiredContext: [`a readable task body on GitHub issue #${opts.issue}`],
-      });
-    }
-    return data.body;
+    const live = fetchGitHubTaskBody({
+      issue: opts.issue,
+      commandRunner: io.ghCommandRunner ?? defaultGhCommandRunner,
+      projectMapConfig,
+    });
+    return {
+      backend: 'github',
+      body: live.body,
+      digest: live.digest,
+      carrier: `issue:${live.issue}`,
+      taskId: taskContractDigest(live.body).projection?.task_id ?? `#${live.issue}`,
+      trustedRecords: live.trustedRecords,
+      trustedRecordErrors: live.trustedRecordErrors,
+    };
   }
-  throw new CliUsageError('task-readiness requires --task, --issue, or --task-body');
+  const relPath = opts.taskBody
+    ? String(opts.taskBody).replace(/\\/g, '/')
+    : opts.task
+      ? filesTaskRecordPath(projectMapConfig, String(opts.task))
+      : null;
+  if (!relPath) throw new CliUsageError('task-readiness requires --task, --issue, or --task-body');
+  let body;
+  try {
+    body = readFileSync(resolve(target, relPath), 'utf8');
+  } catch {
+    throw new VerificationContextError(
+      opts.task ? `Task record '${opts.task}' is unavailable.` : `Task-body context '${relPath}' is unavailable.`,
+      { requiredContext: [`a readable task record at '${relPath}'`] }
+    );
+  }
+  const history = loadFilesTaskContractRecords(target, taskContractDigest(body).projection?.task_id ?? String(opts.task ?? ''));
+  return {
+    backend: 'files',
+    body,
+    digest: taskBodyDigest(body),
+    carrier: relPath,
+    taskId: taskContractDigest(body).projection?.task_id ?? String(opts.task ?? relPath),
+    trustedRecords: history.trustedRecords,
+    trustedRecordErrors: history.errors,
+  };
+}
+
+/** Project-configured relative path of one files-backed task record. */
+function filesTaskRecordPath(projectMapConfig, taskId) {
+  const template = String(projectMapConfig?.task_file_template ?? PROJECT_MAP_DEFAULTS.task_file_template)
+    .replace(/\\/g, '/');
+  return template.replaceAll('{taskId}', taskId);
 }
 
 async function cmdTaskReadiness(args, io) {
@@ -1641,30 +1692,67 @@ async function cmdTaskReadiness(args, io) {
   const asJson = Boolean(opts.json);
   const target = resolveCliTarget(io, opts.target);
   try {
-    const taskBody = taskReadinessBody(opts, target);
-    const basePaths = readBasePaths(opts.base, opts.basePaths, target);
-    const result = evaluateTaskReadiness({ taskBody, basePaths, mode: opts.mode, dependencies: opts.dependencies ? JSON.parse(readFileSync(resolveCliTarget(io, opts.dependencies), 'utf8')) : {} });
+    const projectMapConfig = loadProjectMap(target)?.config ?? null;
+    const source = resolveTaskReadinessSource(opts, target, io, projectMapConfig);
+    // Exact expected-task-digest verification. This is the receipt
+    // revalidation edge: the carrier must still hold the exact bytes the
+    // receipt reported, and the full trusted chain is re-evaluated.
+    const expectTaskDigest = opts.expectTaskDigest ? String(opts.expectTaskDigest) : null;
+    if (expectTaskDigest && expectTaskDigest !== source.digest) {
+      throw new BaselineChangedError(
+        `The task carrier '${source.carrier}' no longer holds the expected digest ${expectTaskDigest}; it currently holds ${source.digest}.`
+      );
+    }
+    assertLifecycleHandoffResolved(target);
+    const base = readBaseEvidence(opts, target);
+    const dependency = opts.dependencies
+      ? readDependencyEvidence(target, opts.dependencies, 'task-readiness')
+      : null;
+    const result = evaluateTaskReadiness({
+      taskBody: source.body,
+      basePaths: base.paths,
+      mode: opts.mode,
+      dependencies: dependency?.statuses ?? {},
+    });
+    if (expectTaskDigest) {
+      // Receipt revalidation additionally re-evaluates the trusted contract
+      // chain, so an already-agent-ready task is never confirmed on scope and
+      // dependency facts alone.
+      const baseline = validateTaskContractBaseline(source.body, {
+        lifecycle: 'transition',
+        trustedRecords: source.trustedRecords,
+        trustedRecordErrors: source.trustedRecordErrors,
+      });
+      if (!baseline.ok) {
+        result.ok = false;
+        result.evidenceState = 'negative';
+        result.disposition = 'blocked';
+        result.errors = [...result.errors, ...baseline.errors];
+        result.diagnostics = [
+          ...result.diagnostics,
+          ...(baseline.errorFacts ?? []).map(fact => createDiagnostic({
+            code: fact.code,
+            message: fact.message,
+            evidence: { state: 'negative', committedStateEvaluated: true, rollbackAuthorized: false },
+          })),
+        ];
+      }
+    }
+    result.readinessEvidence = createTaskReadinessEvidence({
+      backend: source.backend,
+      task: { id: source.taskId, carrier: source.carrier, expectedDigest: source.digest },
+      base: base.evidence,
+      dependencies: dependency?.evidence ?? null,
+      trustedRecordCount: source.trustedRecords.length,
+      trustedRecordErrors: source.trustedRecordErrors,
+    });
+    result.committedStateEvaluated = true;
     return printGateResult('task-readiness', presentGateResultForTarget(result, target), asJson, io);
   } catch (error) {
     if (error instanceof CliUsageError) return asJson ? printGateResult('task-readiness', commandFailure('task-readiness', error, 'usage', {}, target), true, io) : Promise.reject(error);
     return printGateResult('task-readiness', commandFailure('task-readiness', error, 'operational_error', {}, target), asJson, io);
   }
 }
-
-function authenticatedGitHubLogin(commandRunner) {
-  const result = commandRunner('gh', ['api', 'user'], { encoding: 'utf8' });
-  if (result?.error || result?.status !== 0) throw new GitHubTaskBodyError('cannot resolve the authenticated GitHub publisher', TASK_BODY_MISSING_CONTEXT);
-  let account;
-  try {
-    account = JSON.parse(String(result.stdout ?? ''));
-  } catch {
-    throw new GitHubTaskBodyError('authenticated GitHub account response is not valid JSON', TASK_BODY_MALFORMED_CONTEXT);
-  }
-  const login = String(account?.login ?? '').trim();
-  if (!login) throw new GitHubTaskBodyError('authenticated GitHub account has no login', TASK_BODY_MALFORMED_CONTEXT);
-  return login;
-}
-
 function taskBodyCommentRecord({ issue, repo, commandRunner, target, record, dryRun, yes, projectMapConfig, expectedBody, expectedDigest }) {
   if (Boolean(dryRun) === Boolean(yes)) throw new GitHubTaskBodyError('task-body record operation requires exactly one of --dry-run or --yes', TASK_BODY_USAGE_ERROR);
   const rendered = renderTaskContractRecord(record);
@@ -1745,7 +1833,11 @@ async function cmdTaskBody(args, io) {
   try {
     const commandRunner = io.ghCommandRunner ?? defaultGhCommandRunner;
     const projectMapConfig = loadProjectMap(target)?.config ?? null;
-    const basePaths = opts.base || opts.basePaths ? readBasePaths(opts.base, opts.basePaths, target) : undefined;
+    const baseContext = opts.base || opts.basePaths ? readBaseEvidence(opts, target) : null;
+    const basePaths = baseContext ? baseContext.paths : undefined;
+    const dependencySnapshot = opts.dependencies
+      ? readDependencyEvidence(target, opts.dependencies, `task-body ${sub}`)
+      : null;
     if (sub === 'fetch') {
       if (!opts.output) throw new CliUsageError('task-body fetch requires --output <path>');
       const fetched = fetchGitHubTaskBody({ issue: opts.issue, repo: opts.repo, commandRunner, projectMapConfig });
@@ -1832,23 +1924,50 @@ async function cmdTaskBody(args, io) {
       return 0;
     }
 
+    /** Refuse a candidate built from anything other than the exact expected remote body. */
+    const assertExpectedRemoteDigest = fetched => {
+      if (fetched.digest === opts.expectDigest) return fetched;
+      throw new GitHubTaskBodyError(`stale task body: expected ${opts.expectDigest}, current remote digest is ${fetched.digest}`, {
+        code: 'contract.baseline.stale', evidenceState: 'changed', disposition: 'superseded',
+        committedStateEvaluated: true,
+        safeRepair: 'Refetch the task body, re-evaluate the trusted baseline, and rerun with its current digest.',
+      });
+    };
+
     let bodyFile = null;
     let body;
+    // The exact remote body every mutating subcommand is built from. It is kept
+    // in scope so the guarded status-change gate below can compare the candidate
+    // against real remote state rather than against the caller's assertion.
+    let current = null;
     if (sub === 'set-field' || sub === 'transition') {
       if (!opts.expectDigest) throw new CliUsageError(`task-body ${sub} requires --expect-digest <digest>`);
       const field = sub === 'transition' ? 'status' : opts.field;
       const value = sub === 'transition' ? opts.status : opts.value;
       if (!field || value === undefined) throw new CliUsageError(`task-body ${sub} requires --${sub === 'transition' ? 'status' : 'field'} and --${sub === 'transition' ? 'status' : 'value'}`);
       if (sub === 'transition' && value === 'agent-ready' && !Array.isArray(basePaths)) {
-        throw new VerificationContextError('task-body transition --status agent-ready requires --base <ref> or --base-paths <path>');
+        throw new VerificationContextError('task-body transition --status agent-ready requires --base <ref> or --base-paths <path>; it never selects a default branch.');
       }
-      const current = fetchGitHubTaskBody({ issue: opts.issue, repo: opts.repo, commandRunner });
-      if (current.digest !== opts.expectDigest) throw new GitHubTaskBodyError(`stale task body: expected ${opts.expectDigest}, current remote digest is ${current.digest}`, {
-        code: 'contract.baseline.stale', evidenceState: 'changed', disposition: 'superseded',
-        committedStateEvaluated: true,
-        safeRepair: 'Refetch the task body, re-evaluate the trusted baseline, and rerun with its current digest.',
-      });
+      if (sub === 'transition' && value === 'agent-ready' && !dependencySnapshot) {
+        throw new VerificationContextError('task-body transition --status agent-ready requires --dependencies <path> naming an exact dependency-status snapshot.');
+      }
+      current = assertExpectedRemoteDigest(fetchGitHubTaskBody({ issue: opts.issue, repo: opts.repo, commandRunner, projectMapConfig }));
       body = setTaskBodyFrontmatterField(current.body, field, value).body;
+    } else if (sub === 'lint' && !opts.bodyFile && opts.expectTaskDigest) {
+      // Read-only receipt revalidation: verify the live body against the exact
+      // digest a receipt reported, with no local candidate involved.
+      const live = fetchGitHubTaskBody({ issue: opts.issue, repo: opts.repo, commandRunner, projectMapConfig });
+      if (live.digest !== String(opts.expectTaskDigest)) {
+        throw new GitHubTaskBodyError(
+          `the task body on issue #${live.issue} no longer holds the expected digest ${opts.expectTaskDigest}; it currently holds ${live.digest}`,
+          {
+            code: 'contract.baseline.stale', evidenceState: 'changed', disposition: 'superseded',
+            committedStateEvaluated: true,
+            safeRepair: 'Refetch the task body and reconcile the change before relying on the prior receipt.',
+          }
+        );
+      }
+      body = live.body;
     } else {
       if (!opts.bodyFile) throw new CliUsageError(`task-body ${sub} requires --body-file <path>`);
       bodyFile = resolveCliTarget(io, opts.bodyFile);
@@ -1871,7 +1990,7 @@ async function cmdTaskBody(args, io) {
         const live = fetchGitHubTaskBody({ issue: opts.issue, repo: opts.repo, commandRunner, projectMapConfig });
         context = { trustedRecords: live.trustedRecords, trustedRecordErrors: live.trustedRecordErrors, currentBody: live.body, warnings: live.warnings ?? [] };
       }
-      const result = lintGitHubTaskBody({ issue: opts.issue, body, basePaths, projectMapConfig, ...context });
+      const result = lintGitHubTaskBody({ issue: opts.issue, body, basePaths, dependencies: dependencySnapshot?.statuses ?? {}, projectMapConfig, ...context });
       result.warnings.push(...context.warnings);
       if (opts.offline) {
         // Offline lint is explicitly non-authoritative: snapshot records are
@@ -1893,6 +2012,74 @@ async function cmdTaskBody(args, io) {
       return printGateResult('task-body lint', presentGateResultForTarget(result, target), asJson, io);
     }
     if (!opts.expectDigest) throw new CliUsageError(`task-body ${sub} requires --expect-digest <digest>`);
+    if (current === null) {
+      current = assertExpectedRemoteDigest(fetchGitHubTaskBody({ issue: opts.issue, repo: opts.repo, commandRunner, projectMapConfig }));
+    }
+
+    // --- guarded status-change gate ------------------------------------------
+    //
+    // The gates belong to the write, not to one subcommand. `transition`,
+    // `set-field --field status`, and a generic `apply` whose candidate carries a
+    // different status are the same act — changing a protected field on a task
+    // carrier — and each has to satisfy the same contract. Gating only the
+    // subcommand named `transition` would leave the other two as unguarded
+    // routes to exactly the state the gates exist to refuse.
+    const fromStatus = String(parseFrontmatterStrict(current.body).data?.status ?? '').trim();
+    const toStatus = String(parseFrontmatterStrict(body).data?.status ?? '').trim();
+    if (fromStatus === toStatus && typeof opts.note === 'string') {
+      throw new GitHubTaskBodyError(
+        '--note is only valid when this command changes task status; notes are durable transition projections and are never accepted for a non-status update',
+        TASK_BODY_USAGE_ERROR
+      );
+    }
+    let evidenceContext = null;
+    if (fromStatus !== toStatus) {
+      const transitionError = validateTaskStatusTransition(fromStatus, toStatus, opts.note);
+      if (transitionError) throw new GitHubTaskBodyError(transitionError, { ...TASK_BODY_NEGATIVE_EVIDENCE, committedStateEvaluated: true });
+      if (toStatus === 'agent-ready') {
+        assertLifecycleHandoffResolved(target);
+        if (!Array.isArray(basePaths)) {
+          throw new VerificationContextError(`task-body ${sub} changing status to agent-ready requires --base <ref> or --base-paths <path>; it never selects a default branch.`);
+        }
+        if (!dependencySnapshot) {
+          throw new VerificationContextError(`task-body ${sub} changing status to agent-ready requires --dependencies <path> naming an exact dependency-status snapshot.`);
+        }
+        try {
+          evidenceContext = createTaskEvidenceContext({
+            backend: 'github',
+            task: {
+              id: taskContractDigest(current.body).projection?.task_id ?? `#${current.issue}`,
+              carrier: `issue:${current.issue}`,
+              expectedDigest: String(opts.expectDigest),
+            },
+            transition: { fromStatus: fromStatus || 'unknown', toStatus },
+            base: baseContext.evidence,
+            dependencies: dependencySnapshot.evidence,
+          });
+        } catch (error) {
+          throw new VerificationContextMalformedError(error.message);
+        }
+      }
+      if (toStatus === 'closed') {
+        const scope = resolveCanonicalTerminalScope({
+          target,
+          config: projectMapConfig ?? {},
+          taskId: taskContractDigest(current.body).projection?.task_id,
+          taskBody: current.body,
+          closeoutMarkerText: trustedCarrierMarkerText(
+            current.comments,
+            authenticatedGitHubLogin(commandRunner)
+          ),
+          inventoryComplete: false,
+        });
+        if (!scope.decision.genericTerminalAllowed) {
+          throw new GitHubTaskBodyError(
+            `Generic task-body closure is refused (${scope.scopeKind}/${scope.auditMode}): ${scope.reasons[0] ?? 'canonical closeout owns this terminal transition'}. Use closeout prepare/record after repairing and re-deriving scope where required.`,
+            { ...TASK_BODY_NEGATIVE_EVIDENCE, committedStateEvaluated: true }
+          );
+        }
+      }
+    }
     const result = applyGitHubTaskBody({
       issue: opts.issue,
       repo: opts.repo,
@@ -1901,10 +2088,14 @@ async function cmdTaskBody(args, io) {
       expectDigest: opts.expectDigest,
       dryRun: Boolean(opts.dryRun),
       yes: Boolean(opts.yes),
+      note: typeof opts.note === 'string' ? opts.note : null,
+      labels: Array.isArray(opts.label) ? opts.label : opts.label ? [String(opts.label)] : [],
       commandRunner,
       recoveryDir: join(target, '.agenticloop', 'tmp'),
       basePaths,
+      dependencies: dependencySnapshot?.statuses ?? {},
       projectMapConfig,
+      evidenceContext,
     });
     if (asJson) return printGateResult(`task-body ${sub}`, result, true, io);
     else {
@@ -1919,7 +2110,7 @@ async function cmdTaskBody(args, io) {
     }
     return result.ok ? 0 : 1;
   } catch (error) {
-    if (error instanceof CliUsageError || error instanceof GitHubTaskBodyError || error instanceof VerificationContextError) {
+    if (error instanceof PublicCommandError || error instanceof CliUsageError) {
       const usage = error instanceof CliUsageError || error.code === 'cli.usage';
       return printGateResult(
         `task-body ${sub}`,
@@ -2546,7 +2737,7 @@ async function cmdSetup(args, io) {
     return EXIT_USAGE;
   }
 
-  const { errors } = await setup({
+  const { errors, mutationReceipt } = await setup({
     target,
     adapter,
     nonInteractive,
@@ -2557,6 +2748,14 @@ async function cmdSetup(args, io) {
     json: Boolean(opts.json),
     verbose: Boolean(opts.verbose),
   });
+
+  // The prior-gate receipt survives the command that produced it: it is
+  // persisted to the durable target carrier and its disposition and safe next
+  // action are printed, so unresolved setup state cannot vanish silently.
+  if (mutationReceipt && !opts.dryRun) {
+    persistLifecycleReceipt(target, mutationReceipt, io, Boolean(opts.json));
+    if (opts.json) io.out(JSON.stringify({ prior_gate_receipt: mutationReceipt }, null, 2));
+  }
 
   return errors.length > 0 ? 1 : 0;
 }

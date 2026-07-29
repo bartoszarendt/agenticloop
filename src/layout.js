@@ -76,6 +76,13 @@ export const AUDITS_DIRECTORY_RELATIVE_PATH = '.agenticloop/audits';
 // repeated friction. Proposals never mutate their target surface.
 export const IMPROVEMENTS_DIRECTORY_RELATIVE_PATH = '.agenticloop/improvements';
 export const LOGS_DIRECTORY_RELATIVE_PATH = '.agenticloop/logs';
+/**
+ * Durable prior-gate receipt for the last lifecycle mutation (init, setup,
+ * update). It lives in the existing target-owned workflow-state directory so
+ * the next authoritative readiness edge can verify prior-gate state without a
+ * parallel setup-state system.
+ */
+export const LIFECYCLE_RECEIPT_RELATIVE_PATH = '.agenticloop/lifecycle-receipt.json';
 export const SCRATCH_DIRECTORY_RELATIVE_PATH = '.agenticloop/tmp';
 export const LEGACY_SCRATCH_DIRECTORY_RELATIVE_PATH = 'tmp';
 

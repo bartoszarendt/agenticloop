@@ -57,6 +57,37 @@ function completeInput(body = completeBody()) {
   };
 }
 
+function readinessTask(allowedPath) {
+  return [
+    '---',
+    `allowed_paths: ["${allowedPath}"]`,
+    '---',
+    '# Task',
+    '',
+    '## Task', 'Check task readiness.',
+    '',
+    '## Source Documents Reviewed', '- README.md',
+    '',
+    '## Current State', 'The task is awaiting readiness evaluation.',
+    '',
+    '## Scope', 'Evaluate the declared path.',
+    '',
+    '## Out of Scope', 'No implementation changes.',
+    '',
+    '## Acceptance Criteria', '- Readiness is reported.',
+    '',
+    '## Required Checks', '- task-readiness',
+    '',
+    '## Expected Files or Areas', `- ${allowedPath}`,
+    '',
+    '## Implementation Notes', 'Use the supplied base inventory.',
+    '',
+    '## Completion Summary Template', 'Summarize the readiness result.',
+    '',
+    '## Reviewer Checklist', '- [ ] Verify the declared path.',
+  ].join('\n');
+}
+
 describe('review preparation CLI - pr-body lint', () => {
   it('returns a success envelope with separated lint and gate results', async () => {
     const input = write('lint-ok.json', JSON.stringify(completeInput()));
@@ -92,7 +123,7 @@ describe('review preparation CLI - pr-body lint', () => {
 
 describe('review preparation CLI - task-readiness', () => {
   it('executes with --task-body and --base-paths and returns a success envelope', async () => {
-    const task = write('task.md', '---\nallowed_paths: ["src/**"]\n---\n# Task\n');
+    const task = write('task.md', readinessTask('src/**'));
     const base = write('base.json', JSON.stringify(['src/app.js']));
     const result = await runCliInProcess(['task-readiness', '--task-body', task, '--base-paths', base, '--mode', 'review', '--json'], { cwd: tmpDir });
     assert.equal(result.status, 0, result.stderr + result.stdout);
@@ -102,7 +133,7 @@ describe('review preparation CLI - task-readiness', () => {
   });
 
   it('returns a failure envelope for an unmatched literal in review mode', async () => {
-    const task = write('task-typo.md', '---\nallowed_paths: ["src/app/App.tsx"]\n---\n# Task\n');
+    const task = write('task-typo.md', readinessTask('src/app/App.tsx'));
     const base = write('base-typo.json', JSON.stringify(['src/App.tsx']));
     const result = await runCliInProcess(['task-readiness', '--task-body', task, '--base-paths', base, '--mode', 'review', '--json'], { cwd: tmpDir });
     assert.equal(result.status, 1, result.stderr);
@@ -112,7 +143,7 @@ describe('review preparation CLI - task-readiness', () => {
   });
 
   it('types a missing base inventory as unavailable verification context', async () => {
-    const task = write('task-no-base.md', '---\nallowed_paths: ["src/**"]\n---\n# Task\n');
+    const task = write('task-no-base.md', readinessTask('src/**'));
     const result = await runCliInProcess(['task-readiness', '--task-body', task, '--mode', 'review', '--json'], { cwd: tmpDir });
     assert.equal(result.status, 1, result.stderr + result.stdout);
     const parsed = JSON.parse(result.stdout);
@@ -127,7 +158,7 @@ describe('review preparation CLI - task-readiness', () => {
   });
 
   it('fails closed with a gate error when --mode is missing', async () => {
-    const task = write('task-nomode.md', '---\nallowed_paths: ["src/**"]\n---\n# Task\n');
+    const task = write('task-nomode.md', readinessTask('src/**'));
     const base = write('base-nomode.json', JSON.stringify(['src/a.js']));
     const result = await runCliInProcess(['task-readiness', '--task-body', task, '--base-paths', base, '--json'], { cwd: tmpDir });
     assert.equal(result.status, 1, result.stdout + result.stderr);

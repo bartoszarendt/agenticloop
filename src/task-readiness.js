@@ -4,6 +4,7 @@ import { parseFrontmatterStrict } from './frontmatter.js';
 import { fileMatchesScopePattern, isSafeScopePattern, parseScopePatterns, validatePathsAgainstDeviations } from './scope-matcher.js';
 import { createDiagnostic } from './repair-policy.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
+import { validateTaskRecord } from './validate-config.js';
 
 const GLOB = /[*?]/;
 const GLOB_SAMPLE_LIMIT = 5;
@@ -136,6 +137,26 @@ export function evaluateTaskReadiness({
     });
   }
   const diagnostics = [];
+  for (const message of validateTaskRecord(String(taskBody ?? ''), 'task readiness carrier')) {
+    diagnostics.push(createDiagnostic({
+      level: 'error',
+      code: 'task.record.structure',
+      message,
+      evidence: {
+        state: 'malformed',
+        prerequisite: 'canonical_task_record',
+        supplied: true,
+      },
+    }));
+  }
+  if (diagnostics.length > 0) {
+    return finish(diagnostics, {
+      paths: [],
+      dependencies: [],
+      knownFacts: projectFacts,
+      deviations: { missing: [], stale: [], unnecessary: [] },
+    });
+  }
   if (!Array.isArray(basePaths)) {
     diagnostics.push(issue('error', 'readiness.base_inventory.missing', {
       state: 'missing',

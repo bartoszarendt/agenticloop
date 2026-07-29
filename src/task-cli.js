@@ -7,9 +7,9 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join, relative, resolve } from 'node:path';
-import { parseFrontmatter } from './frontmatter.js';
+import { parseFrontmatter, replaceFrontmatterField } from './frontmatter.js';
 import { markdownSection } from './markdown.js';
 import {
   TASK_RECORD_TEMPLATE_RELATIVE_PATH,
@@ -38,11 +38,32 @@ import {
   validateReviewProvenance,
 } from './review-provenance.js';
 import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.js';
-import { VerificationContextError, VerificationContextMalformedError } from './public-error.js';
+import {
+  BaselineChangedError,
+  PublicCommandError,
+  VerificationContextError,
+  VerificationContextMalformedError,
+  VerificationContextStaleError,
+} from './public-error.js';
+import { commandFailure, printGateResult } from './public-result.js';
+import { canonicalJson } from './canonical-json.js';
+import {
+  createTaskEvidenceContext,
+  createTaskMutationReceipt,
+  dependencyStatusMap,
+  parseDependencySnapshot,
+  shellQuoteArgument,
+} from './task-evidence-contract.js';
+import { evaluateTaskRecordRoot } from './task-record-root.js';
+import { createValidationResult, validationResultDigest, VALIDATION_RESULT_KIND } from './result-envelope.js';
 import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
 import { evaluateTaskReadiness } from './task-readiness.js';
+import { executeMutationBatch } from './fs-mutation-kernel.js';
 import { createTaskContractBaselineRecord, createTaskContractCorrectionRecord, taskContractDigest, trustedChainTerminal, validateTaskContractBaseline } from './task-contract-baseline.js';
 import { appendFilesTaskContractRecord, loadFilesTaskContractRecords } from './files-task-contract.js';
+import { resolveCanonicalTerminalScope } from './terminal-scope.js';
+import { validateTaskStatusTransition } from './task-transition.js';
+import { assertLifecycleHandoffResolved } from './lifecycle-plan.js';
 
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -147,6 +168,7 @@ function lintTaskFile(filePath, target, projectConfig, verificationContext) {
   if (diagnostics.length > 0) {
     return {
       file: filename,
+      digest: taskRecordDigest(content),
       errors: diagnostics.map(item => item.message),
       warnings,
       diagnostics,
@@ -177,13 +199,138 @@ function lintTaskFile(filePath, target, projectConfig, verificationContext) {
     errors.push(...baseline.errors);
     warnings.push(...baseline.warnings);
   }
-  return { file: filename, errors, warnings, diagnostics };
+  return { file: filename, digest: taskRecordDigest(content), errors, warnings, diagnostics };
 }
 
-function baseTreePaths(target) {
-  const result = spawnSync('git', ['ls-tree', '-r', '--name-only', 'HEAD'], { cwd: target, encoding: 'utf8' });
-  if (result.status !== 0) return [];
-  return String(result.stdout ?? '').split(/\r?\n/).filter(Boolean);
+/** Digest of one exact task-record byte sequence. */
+function taskRecordDigest(content) {
+  return `sha256:${createHash('sha256').update(String(content ?? ''), 'utf8').digest('hex')}`;
+}
+
+/**
+ * Resolve explicit base evidence. There is no implicit HEAD and no default
+ * branch: exactly one of `--base` or `--base-paths` must be supplied, and a
+ * `--base` ref is resolved to its exact tree object id so a later branch move
+ * cannot silently redefine the recorded baseline.
+ */
+function readExplicitBaseEvidence(target, options = {}) {
+  const hasBase = Boolean(options.base);
+  const hasInventory = Boolean(options.basePaths);
+  if (hasBase && hasInventory) {
+    throw new VerificationContextMalformedError(
+      'Supply exactly one of --base <ref> or --base-paths <path>; supplying both leaves the intended baseline ambiguous.'
+    );
+  }
+  if (!hasBase && !hasInventory) {
+    throw new VerificationContextError(
+      'An agent-ready transition requires explicit base evidence: --base <ref> or --base-paths <path>. No default branch or HEAD is selected.',
+      { requiredContext: ['--base <ref> or --base-paths <path>'] }
+    );
+  }
+  if (hasInventory) {
+    const relPath = String(options.basePaths).replace(/\\/g, '/');
+    const path = resolve(target, String(options.basePaths));
+    let source;
+    try {
+      source = readFileSync(path, 'utf8');
+    } catch {
+      throw new VerificationContextError(`Base-path inventory '${relPath}' is unavailable.`, {
+        requiredContext: [`a readable --base-paths JSON inventory at '${relPath}'`],
+      });
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(source);
+    } catch {
+      throw new VerificationContextMalformedError(`Base-path inventory '${relPath}' is not valid JSON.`);
+    }
+    const paths = Array.isArray(parsed) ? parsed : parsed?.paths;
+    if (!Array.isArray(paths) || paths.some(entry => typeof entry !== 'string')) {
+      throw new VerificationContextMalformedError('--base-paths JSON must be an array or { paths: [] } of strings');
+    }
+    return {
+      paths,
+      evidence: {
+        kind: 'path_inventory',
+        identity: `path-inventory:${relPath}`,
+        inventoryDigest: taskRecordDigest(canonicalJson([...paths].sort())),
+        pathCount: paths.length,
+        revalidationArgs: ['--base-paths', relPath],
+      },
+    };
+  }
+  const ref = String(options.base);
+  const tree = spawnSync('git', ['rev-parse', '--verify', `${ref}^{tree}`], { cwd: target, encoding: 'utf8' });
+  const treeOid = String(tree.stdout ?? '').trim();
+  if (tree.status !== 0 || !/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(treeOid)) {
+    throw new VerificationContextMalformedError(`Base ref '${ref}' cannot be resolved to an exact Git tree object id.`);
+  }
+  const listed = spawnSync('git', ['ls-tree', '-r', '--name-only', treeOid], { cwd: target, encoding: 'utf8' });
+  if (listed.status !== 0) {
+    throw new VerificationContextMalformedError(`Base tree '${treeOid}' cannot be listed.`);
+  }
+  const paths = String(listed.stdout ?? '').split(/\r?\n/).filter(Boolean);
+  return {
+    paths,
+    evidence: {
+      kind: 'git_tree',
+      identity: `git-tree:${treeOid}`,
+      inventoryDigest: taskRecordDigest(canonicalJson([...paths].sort())),
+      pathCount: paths.length,
+      // Revalidation binds the resolved tree, never the symbolic ref, so a
+      // moved branch cannot make the emitted command evaluate a different base.
+      revalidationArgs: ['--base', treeOid],
+    },
+  };
+}
+
+/** Read and validate the exact dependency-status snapshot for this transition. */
+function readDependencyEvidence(target, option) {
+  if (!option) {
+    throw new VerificationContextError(
+      'An agent-ready transition requires --dependencies <path> naming the exact dependency-status snapshot.',
+      { requiredContext: ['--dependencies <path>'] }
+    );
+  }
+  const relPath = String(option).replace(/\\/g, '/');
+  const path = resolve(target, String(option));
+  let source;
+  try {
+    source = readFileSync(path, 'utf8');
+  } catch {
+    throw new VerificationContextError(`Dependency evidence '${relPath}' is unavailable.`, {
+      requiredContext: [`a readable dependency snapshot at '${relPath}'`],
+    });
+  }
+  const parsed = parseDependencySnapshot(source, { sourceRef: relPath });
+  if (!parsed.ok) {
+    const stale = parsed.errors.some(error => /stale|future/i.test(error));
+    if (stale) throw new VerificationContextStaleError(parsed.errors[0]);
+    throw new VerificationContextMalformedError(parsed.errors[0]);
+  }
+  return { evidence: parsed.evidence, statuses: dependencyStatusMap(parsed.evidence) };
+}
+
+/**
+ * The exact read-only command that re-evaluates this transition's evidence
+ * against the resulting record. It is `task-readiness`, never a mutation
+ * command, and it carries the resulting digest rather than a placeholder.
+ */
+function readinessRevalidationCommand({ taskId, carrier, resultingDigest, context, mode = 'authoring' }) {
+  // Without a readiness evidence context there is no base or dependency
+  // evidence to re-evaluate, so the exact read-only verifier is the lint
+  // family bound to the resulting digest.
+  if (!context) {
+    return ['npx', 'agenticloop', 'task', 'lint', shellQuoteArgument(taskId), '--expect-task-digest', resultingDigest].join(' ');
+  }
+  return [
+    'npx', 'agenticloop', 'task-readiness',
+    '--task-body', shellQuoteArgument(carrier),
+    '--mode', mode,
+    '--expect-task-digest', resultingDigest,
+    ...context.base.revalidationArgs.map(shellQuoteArgument),
+    ...context.dependencies.revalidationArgs.map(shellQuoteArgument),
+  ].join(' ');
 }
 
 function nextDefaultTaskId(files) {
@@ -209,33 +356,6 @@ function instantiateTaskTemplate(target, projectConfig, taskId, title) {
     .replaceAll('T-001', taskId)
     .replaceAll('Short Task Title', title)
     .replaceAll('Short task title', title);
-}
-
-function replaceFrontmatterField(content, key, value) {
-  // Operate only inside the leading YAML frontmatter block so a matching
-  // `key:` line elsewhere in the body (e.g. a fenced example) is never touched.
-  const fence = content.match(/^(---[ \t]*\r?\n)([\s\S]*?)(\r?\n---[ \t]*(?:\r?\n|$))/);
-  if (!fence) {
-    throw new VerificationContextMalformedError('Task record missing YAML frontmatter');
-  }
-  const [full, open, block, close] = fence;
-  const eol = block.includes('\r\n') ? '\r\n' : '\n';
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const keyPattern = new RegExp(`^${escapedKey}:`);
-  const lines = block.split(/\r?\n/);
-  const index = lines.findIndex(l => keyPattern.test(l));
-
-  if (value === null) {
-    if (index === -1) return content;
-    lines.splice(index, 1);
-  } else if (index === -1) {
-    lines.unshift(`${key}: ${value}`);
-  } else {
-    lines[index] = `${key}: ${value}`;
-  }
-
-  const newBlock = lines.join(eol);
-  return content.slice(0, fence.index) + open + newBlock + close + content.slice(fence.index + full.length);
 }
 
 function appendComment(content, note) {
@@ -271,62 +391,6 @@ function printLintResults(results, json, io) {
     }
     for (const warning of result.warnings) io.out(`${result.file}: WARN ${warning}`);
   }
-}
-
-/**
- * Legal task status transitions for the files backend.
- *
- * Key rules:
- * - draft cannot jump directly to accepted or closed
- * - agent-ready cannot jump directly to closed
- * - accepted is terminal (requires explicit reopen to go back)
- * - blocked/needs_context require a note
- */
-const LEGAL_TRANSITIONS = {
-  'draft':         new Set(['agent-ready', 'blocked', 'needs_context']),
-  'agent-ready':   new Set(['in-progress', 'blocked', 'needs_context']),
-  'in-progress':   new Set(['needs_revision', 'blocked', 'needs_context', 'accepted']),
-  'needs_revision': new Set(['in-progress', 'blocked', 'needs_context']),
-  'blocked':       new Set(['agent-ready', 'in-progress']),
-  'needs_context': new Set(['agent-ready', 'in-progress']),
-  'accepted':      new Set(['closed']),
-  'closed':        new Set(),
-};
-
-/**
- * Validate a task status transition.
- *
- * @param {string} currentStatus
- * @param {string} nextStatus
- * @param {string|boolean} note
- * @returns {string|null} Error message, or null if transition is valid.
- */
-function validateTransition(currentStatus, nextStatus, note) {
-  if (!currentStatus) {
-    // No current status — allow setting any status (new task record).
-    return null;
-  }
-
-  if (currentStatus === nextStatus) {
-    return null; // Same status is always allowed (idempotent).
-  }
-
-  const allowed = LEGAL_TRANSITIONS[currentStatus];
-  if (!allowed) {
-    return null; // Unknown current status — don't block.
-  }
-
-  if (!allowed.has(nextStatus)) {
-    const allowedList = [...allowed].join(', ');
-    return `Cannot transition from '${currentStatus}' to '${nextStatus}'. Allowed transitions: ${allowedList}`;
-  }
-
-  // Require note for blocked and needs_context transitions.
-  if ((nextStatus === 'blocked' || nextStatus === 'needs_context') && (!note || note === true)) {
-    return `Transition to '${nextStatus}' requires --note explaining the reason`;
-  }
-
-  return null;
 }
 
 /**
@@ -442,10 +506,28 @@ export async function cmdTask(args, io = createIo()) {
 
     if (sub === 'lint') {
       const taskId = positional[0];
+      if (opts.expectTaskDigest && !taskId) {
+        io.err('task lint --expect-task-digest requires the exact task id whose digest is being verified');
+        return EXIT_USAGE;
+      }
       const files = taskId ? [taskPathForId(target, projectConfig, taskId)] : taskFiles(target, projectConfig);
       const results = files.map(file => existsSync(file)
         ? lintTaskFile(file, target, projectConfig, verificationContext)
         : { file: relative(target, file).replace(/\\/g, '/'), errors: [`Task record not found: ${taskId}`], warnings: [] });
+      // Read-only exact-digest verification: the receipt for a non-readiness
+      // mutation names this command, so it must fail when the carrier no longer
+      // holds the digest that receipt reported.
+      if (opts.expectTaskDigest) {
+        const expected = String(opts.expectTaskDigest);
+        for (const result of results) {
+          if (result.digest && result.digest !== expected) {
+            result.errors = [
+              ...result.errors,
+              `expected task digest ${expected}, the current record digest is ${result.digest}`,
+            ];
+          }
+        }
+      }
       printLintResults(results, Boolean(opts.json), io);
       return results.some(result => result.errors.length > 0) ? 1 : 0;
     }
@@ -496,9 +578,95 @@ export async function cmdTask(args, io = createIo()) {
       newContent = replaceFrontmatterField(newContent, 'attempt_budget', String(attemptBudget.budget));
       newContent = replaceFrontmatterField(newContent, 'review_budget', String(reviewBudget.budget));
       newContent = replaceFrontmatterField(newContent, 'task_contract_schema', '2');
-      writeFileSync(filePath, newContent, 'utf-8');
-      if (opts.json) io.out(JSON.stringify({ task_id: taskId, file: relative(target, filePath).replace(/\\/g, '/') }, null, 2));
-      else io.out(`Created ${relative(target, filePath).replace(/\\/g, '/')}`);
+      const prospectiveDiagnostics = validateTaskRecordDiagnostics(newContent, relative(target, filePath).replace(/\\/g, '/'));
+      const prospectiveErrors = [
+        ...prospectiveDiagnostics.map(item => item.message),
+        ...validateTaskRecord(newContent, relative(target, filePath).replace(/\\/g, '/')),
+        ...validateFilesTaskRecord(newContent, relative(target, filePath).replace(/\\/g, '/'), {
+          activeTaskBackend: 'files',
+          projectMapConfig: projectConfig,
+          projectVerificationFacts: verificationContext.projectFacts,
+          decisionExists: verificationContext.decisionExists,
+          taskExists: verificationContext.taskExists,
+          repoRoot: target,
+          commandRunner: taskLintCommandRunner,
+          warnings: [],
+        }),
+      ];
+      if (prospectiveErrors.length > 0) {
+        for (const error of prospectiveErrors) io.err(`Cannot create task: ${error}`);
+        return 1;
+      }
+      const relPath = relative(target, filePath).replace(/\\/g, '/');
+      const candidateDigest = taskRecordDigest(newContent);
+      const created = executeMutationBatch(target, [{ type: 'create', path: relPath, content: newContent }]);
+      const creationReceipt = ({ resultingDigest, disposition, changedPaths, recovery, result }) =>
+        createTaskMutationReceipt({
+          context: null,
+          backend: 'files',
+          taskId,
+          carrier: relPath,
+          expectedDigest: null,
+          candidateDigest,
+          resultingDigest,
+          verification: { resultKind: VALIDATION_RESULT_KIND, digest: validationResultDigest(result) },
+          ownedProjections: ['task_record'],
+          changedPaths,
+          mutationDisposition: disposition,
+          recovery,
+          revalidateCommand: readinessRevalidationCommand({
+            taskId, carrier: relPath, resultingDigest: resultingDigest ?? candidateDigest, context: null,
+          }),
+        });
+      if (!created.ok) {
+        const rolledBack = created.rollbackErrors.length === 0;
+        const receipt = creationReceipt({
+          resultingDigest: null,
+          disposition: rolledBack ? 'uncommitted' : 'partially_committed',
+          changedPaths: rolledBack ? [] : [relPath],
+          recovery: rolledBack
+            ? `No file was created at ${relPath}. Repair the reported cause and rerun task new.`
+            : `Creation failed and rollback reported errors. Inspect ${relPath} before retrying: ${created.rollbackErrors.join('; ')}`,
+          result: createValidationResult({
+            command: 'task new', ok: false, evidenceState: 'negative', disposition: 'blocked',
+            errors: created.errors, task_id: taskId, file: relPath,
+          }),
+        });
+        for (const error of created.errors) io.err(`Cannot create task: ${error}`);
+        for (const error of created.rollbackErrors) io.err(`rollback error: ${error}`);
+        if (opts.json) io.out(JSON.stringify({ task_id: taskId, file: relPath, receipt }, null, 2));
+        return 1;
+      }
+      const written = readFileSync(filePath, 'utf8');
+      const writtenDigest = taskRecordDigest(written);
+      if (written !== newContent || validateTaskRecordDiagnostics(written, relPath).length > 0) {
+        const receipt = creationReceipt({
+          resultingDigest: writtenDigest,
+          disposition: 'unresolved',
+          changedPaths: [relPath],
+          recovery: `A file was created at ${relPath} (${writtenDigest}) that does not equal the validated candidate (${candidateDigest}). ` +
+            'Preserve and inspect it before authorizing any readiness transition.',
+          result: createValidationResult({
+            command: 'task new', ok: false, evidenceState: 'changed', disposition: 'blocked',
+            errors: ['the created record does not equal the validated candidate'], task_id: taskId, file: relPath,
+          }),
+        });
+        io.err('Task creation did not refetch to the validated candidate; no readiness transition was authorized.');
+        if (opts.json) io.out(JSON.stringify({ task_id: taskId, file: relPath, receipt }, null, 2));
+        return 1;
+      }
+      const receipt = creationReceipt({
+        resultingDigest: writtenDigest,
+        disposition: 'committed',
+        changedPaths: created.writtenFiles,
+        recovery: null,
+        result: createValidationResult({
+          command: 'task new', ok: true, evidenceState: 'current', disposition: 'proceed',
+          task_id: taskId, file: relPath,
+        }),
+      });
+      if (opts.json) io.out(JSON.stringify({ task_id: taskId, file: relPath, receipt }, null, 2));
+      else io.out(`Created ${relPath}`);
       return 0;
     }
 
@@ -635,26 +803,80 @@ export async function cmdTask(args, io = createIo()) {
         io.err(`Invalid task status '${nextStatus}' (expected one of: ${[...FILES_TASK_STATUSES].join(', ')})`);
         return EXIT_USAGE;
       }
+      if (!opts.expectDigest) {
+        io.err('task status requires --expect-digest <sha256:...> read from the exact current task record.');
+        io.err('Run "agenticloop task lint <id> --json" to read the current digest.');
+        return EXIT_USAGE;
+      }
       const blockCategory = frontmatterString(opts.blockCategory);
       if (nextStatus === 'blocked' && !blockCategory) {
         io.err("task status blocked requires --block-category <category>");
         return EXIT_USAGE;
       }
       const filePath = taskPathForId(target, projectConfig, taskId);
+      const relPath = relative(target, filePath).replace(/\\/g, '/');
       if (!existsSync(filePath)) {
-        io.err(`Task record not found: ${relative(target, filePath).replace(/\\/g, '/')}`);
+        io.err(`Task record not found: ${relPath}`);
         return 1;
       }
-      let content = readFileSync(filePath, 'utf-8');
+      const asJson = Boolean(opts.json);
+      const domain = { task_id: taskId, status: nextStatus, file: relPath };
+      const failure = (error, category = 'operational_error') =>
+        printGateResult('task status', commandFailure('task status', error, category, domain, target), asJson, io);
 
-      // --- Lifecycle transition enforcement ---
+      // --- 1. Current record integrity, before any candidate is constructed ---
+      const currentContent = readFileSync(filePath, 'utf-8');
+      const currentDigest = taskRecordDigest(currentContent);
+      const root = evaluateTaskRecordRoot(currentContent);
+      if (!root.ok) {
+        return printGateResult('task status', {
+          ok: false,
+          diagnostics: root.diagnostics,
+          errors: root.diagnostics.map(item => item.message),
+          warnings: [],
+          firstSafeRepair: root.firstSafeRepair,
+          committedStateEvaluated: false,
+          rollbackAuthorized: false,
+          ...domain,
+        }, asJson, io);
+      }
+      if (String(opts.expectDigest) !== currentDigest) {
+        return failure(new BaselineChangedError(
+          `Stale task record: expected ${String(opts.expectDigest)}, the current digest is ${currentDigest}.`
+        ));
+      }
+
       const { content: parsedContent, frontmatter } = readTaskRecord(filePath);
+      const recordIdentity = frontmatterString(frontmatter.task_id);
+      if (recordIdentity !== taskId) {
+        const detail = `The requested task identity '${taskId}' differs from the materialized record identity '${recordIdentity || '(absent)'}' in ${relPath}.`;
+        return failure(new PublicCommandError(detail, {
+          code: 'task.record.identity_mismatch',
+          evidenceState: 'negative',
+          disposition: 'blocked',
+          committedStateEvaluated: true,
+          publicMessage: detail,
+          safeRepair: 'Reconcile the record identity through the correction-authority path before requesting a status change.',
+        }));
+      }
       const currentStatus = frontmatterString(frontmatter.status);
-
-      const transitionError = validateTransition(currentStatus, nextStatus, opts.note);
+      const transitionError = validateTaskStatusTransition(currentStatus, nextStatus, opts.note);
       if (transitionError) {
         io.err(transitionError);
         return 1;
+      }
+      // Validate the complete current record before it can authorize a change.
+      const currentDiagnostics = validateTaskRecordDiagnostics(currentContent, relPath);
+      if (currentDiagnostics.length > 0) {
+        return printGateResult('task status', {
+          ok: false,
+          diagnostics: currentDiagnostics,
+          errors: currentDiagnostics.map(item => `Current task record is invalid: ${item.message}`),
+          warnings: [],
+          committedStateEvaluated: true,
+          rollbackAuthorized: false,
+          ...domain,
+        }, asJson, io);
       }
 
       if (currentStatus === 'needs_revision' && nextStatus === 'in-progress') {
@@ -669,47 +891,84 @@ export async function cmdTask(args, io = createIo()) {
         }
       }
 
+      // --- 2. Exact readiness evidence, required for every record ---
+      let evidenceContext = null;
       if (nextStatus === 'agent-ready' && currentStatus !== 'agent-ready') {
+        try {
+          assertLifecycleHandoffResolved(target);
+        } catch (error) {
+          if (error instanceof PublicCommandError) return failure(error);
+          throw error;
+        }
+        let base;
+        let dependencies;
+        try {
+          base = readExplicitBaseEvidence(target, opts);
+          dependencies = readDependencyEvidence(target, opts.dependencies);
+        } catch (error) {
+          if (error instanceof PublicCommandError) return failure(error);
+          throw error;
+        }
+        try {
+          evidenceContext = createTaskEvidenceContext({
+            backend: 'files',
+            task: { id: taskId, carrier: relPath, expectedDigest: currentDigest },
+            transition: { fromStatus: currentStatus, toStatus: nextStatus },
+            base: base.evidence,
+            dependencies: dependencies.evidence,
+          });
+        } catch (error) {
+          return failure(new VerificationContextMalformedError(error.message));
+        }
         const readiness = evaluateTaskReadiness({
           taskBody: parsedContent,
-          basePaths: baseTreePaths(target),
+          basePaths: base.paths,
           mode: 'authoring',
+          dependencies: dependencies.statuses,
         });
         // Blocking is represented structurally: readiness facts stay verbatim
         // and the gate outcome is the blocking signal, never role prose
         // prepended to a factual warning.
         if (readiness.errors.length > 0 || readiness.warnings.length > 0) {
-          if (opts.json) {
-            io.out(JSON.stringify({
-              ok: false,
-              task_id: taskId,
-              status: nextStatus,
-              blocking: {
-                kind: 'task_readiness',
-                errors: readiness.errors,
-                warnings: readiness.warnings,
-                diagnostics: readiness.diagnostics,
-              },
-            }));
-          } else {
-            for (const error of readiness.errors) io.err(error);
-            for (const warning of readiness.warnings) io.err(warning);
-            if (readiness.warnings.length > 0 && readiness.errors.length === 0) {
-              io.err('task-readiness warnings block agent-ready until they are corrected or dispositioned');
-            }
-          }
-          return 1;
+          return printGateResult('task status', {
+            ok: false,
+            diagnostics: readiness.diagnostics,
+            errors: readiness.errors,
+            warnings: readiness.warnings,
+            evidenceState: readiness.evidenceState,
+            // Warnings alone still block agent-ready, so a 'proceed'
+            // disposition from the readiness evaluator cannot be forwarded on a
+            // failed gate result.
+            disposition: readiness.disposition === 'proceed' ? 'blocked' : readiness.disposition,
+            committedStateEvaluated: true,
+            rollbackAuthorized: false,
+            evidence_context: evidenceContext,
+            ...domain,
+          }, asJson, io);
         }
         // Entering agent-ready is always a lifecycle transition: even a
         // schema-less legacy task requires a trusted baseline chain first.
         const history = loadFilesTaskContractRecords(target, taskId);
-        const baseline = validateTaskContractBaseline(content, {
+        const baseline = validateTaskContractBaseline(currentContent, {
           lifecycle: 'transition',
           trustedRecords: history.trustedRecords,
           trustedRecordErrors: history.errors,
         });
         if (!baseline.ok) {
           for (const error of baseline.errors) io.err(`Task cannot become agent-ready: ${error}`);
+          return 1;
+        }
+      }
+
+      if (nextStatus === 'closed' && currentStatus !== nextStatus) {
+        const scope = resolveCanonicalTerminalScope({ target, config: projectConfig, taskId });
+        if (!scope.decision.genericTerminalAllowed) {
+          const reason = scope.reasons[0] ??
+            `the task belongs to a ${scope.scopeKind} closeout scope, whose terminal transition is closeout-owned`;
+          io.err(
+            `Generic task closure is refused (${scope.scopeKind}/${scope.auditMode}): ${reason}. ` +
+            'Use closeout prepare and closeout record after repairing and re-deriving scope where required.'
+          );
           return 1;
         }
       }
@@ -724,17 +983,167 @@ export async function cmdTask(args, io = createIo()) {
         }
       }
 
-      content = replaceFrontmatterField(content, 'status', nextStatus);
-      content = nextStatus === 'blocked'
-        ? replaceFrontmatterField(content, 'block_category', blockCategory)
-        : replaceFrontmatterField(content, 'block_category', null);
+      // --- 3. Candidate construction and complete candidate validation ---
+      let candidate = replaceFrontmatterField(currentContent, 'status', nextStatus);
+      candidate = nextStatus === 'blocked'
+        ? replaceFrontmatterField(candidate, 'block_category', blockCategory)
+        : replaceFrontmatterField(candidate, 'block_category', null);
       if (opts.note && opts.note !== true) {
-        content = appendComment(content, String(opts.note));
+        candidate = appendComment(candidate, String(opts.note));
       }
-      writeFileSync(filePath, content, 'utf-8');
-      if (opts.json) io.out(JSON.stringify({ task_id: taskId, status: nextStatus, file: relative(target, filePath).replace(/\\/g, '/') }, null, 2));
-      else io.out(`Updated ${taskId} status to ${nextStatus}`);
-      return 0;
+      const candidateDigest = taskRecordDigest(candidate);
+      const candidateRoot = evaluateTaskRecordRoot(candidate);
+      const candidateDiagnostics = candidateRoot.ok
+        ? validateTaskRecordDiagnostics(candidate, relPath)
+        : candidateRoot.diagnostics;
+      if (candidateDiagnostics.length > 0) {
+        return printGateResult('task status', {
+          ok: false,
+          diagnostics: candidateDiagnostics,
+          errors: candidateDiagnostics.map(item => `Task status candidate is invalid: ${item.message}`),
+          warnings: [],
+          committedStateEvaluated: true,
+          rollbackAuthorized: false,
+          ...domain,
+        }, asJson, io);
+      }
+
+      const verificationOf = result => ({
+        resultKind: VALIDATION_RESULT_KIND,
+        digest: validationResultDigest(result),
+      });
+      const emitReceipt = receipt => {
+        if (asJson) io.out(JSON.stringify({ ...domain, receipt }, null, 2));
+        else {
+          io.out(receipt.mutationDisposition === 'already_current'
+            ? `${taskId} is already '${nextStatus}'; the validated record is unchanged.`
+            : `Updated ${taskId} status to ${nextStatus}`);
+          io.out(`  revalidate: ${receipt.revalidateCommand}`);
+        }
+        return receipt.unresolved ? 1 : 0;
+      };
+
+      // --- 4. Validated no-op: rerunning an already-current transition ---
+      if (candidate === currentContent) {
+        const result = createValidationResult({
+          command: 'task status', ok: true, evidenceState: 'current', disposition: 'proceed', ...domain,
+        });
+        return emitReceipt(createTaskMutationReceipt({
+          context: evidenceContext,
+          backend: 'files',
+          taskId,
+          carrier: relPath,
+          expectedDigest: currentDigest,
+          candidateDigest,
+          resultingDigest: currentDigest,
+          verification: verificationOf(result),
+          ownedProjections: ['task_record_status'],
+          changedPaths: [],
+          mutationDisposition: 'already_current',
+          revalidateCommand: readinessRevalidationCommand({
+            taskId, carrier: relPath, resultingDigest: currentDigest, context: evidenceContext,
+          }),
+        }));
+      }
+
+      // --- 5. Compare identity immediately before the atomic mutation ---
+      const immediate = readFileSync(filePath, 'utf-8');
+      if (taskRecordDigest(immediate) !== currentDigest) {
+        return failure(new BaselineChangedError(
+          `The task record changed between validation and mutation; nothing was written to ${relPath}.`
+        ));
+      }
+      const committed = executeMutationBatch(target, [{ type: 'write', path: relPath, content: candidate }]);
+      if (!committed.ok) {
+        const rolledBack = committed.rollbackErrors.length === 0;
+        const result = createValidationResult({
+          command: 'task status', ok: false, evidenceState: 'negative',
+          disposition: 'blocked', errors: committed.errors, ...domain,
+        });
+        const receipt = createTaskMutationReceipt({
+          context: evidenceContext,
+          backend: 'files',
+          taskId,
+          carrier: relPath,
+          expectedDigest: currentDigest,
+          candidateDigest,
+          resultingDigest: null,
+          verification: verificationOf(result),
+          ownedProjections: ['task_record_status'],
+          changedPaths: rolledBack ? [] : [relPath],
+          mutationDisposition: rolledBack ? 'uncommitted' : 'partially_committed',
+          recovery: rolledBack
+            ? `The transaction rolled back; ${relPath} still holds ${currentDigest}. Repair the reported cause and rerun with the same expected digest.`
+            : `The transaction failed and rollback reported errors. Inspect ${relPath} before any further mutation: ${committed.rollbackErrors.join('; ')}`,
+          revalidateCommand: readinessRevalidationCommand({
+            taskId, carrier: relPath, resultingDigest: currentDigest, context: evidenceContext,
+          }),
+        });
+        for (const error of committed.errors) io.err(`task status failed: ${error}`);
+        for (const error of committed.rollbackErrors) io.err(`rollback error: ${error}`);
+        if (asJson) io.out(JSON.stringify({ ...domain, receipt }, null, 2));
+        return 1;
+      }
+
+      // --- 6. Refetch and fully validate the exact resulting bytes ---
+      const resulting = readFileSync(filePath, 'utf-8');
+      const resultingDigest = taskRecordDigest(resulting);
+      const resultingRoot = evaluateTaskRecordRoot(resulting);
+      const resultingDiagnostics = resultingRoot.ok
+        ? validateTaskRecordDiagnostics(resulting, relPath)
+        : resultingRoot.diagnostics;
+      if (resulting !== candidate || resultingDiagnostics.length > 0) {
+        const result = createValidationResult({
+          command: 'task status', ok: false, evidenceState: 'changed', disposition: 'blocked',
+          diagnostics: resultingDiagnostics,
+          errors: resultingDiagnostics.length > 0
+            ? resultingDiagnostics.map(item => item.message)
+            : ['the committed record does not equal the validated candidate'],
+          ...domain,
+        });
+        const receipt = createTaskMutationReceipt({
+          context: evidenceContext,
+          backend: 'files',
+          taskId,
+          carrier: relPath,
+          expectedDigest: currentDigest,
+          candidateDigest,
+          resultingDigest,
+          verification: verificationOf(result),
+          ownedProjections: ['task_record_status'],
+          changedPaths: [relPath],
+          mutationDisposition: 'unresolved',
+          recovery: `A mutation committed to ${relPath} (${resultingDigest}) but does not equal the validated candidate (${candidateDigest}). ` +
+            'Preserve the file, compare it against the candidate, and repair it through the correction-authority path before any further transition.',
+          revalidateCommand: readinessRevalidationCommand({
+            taskId, carrier: relPath, resultingDigest, context: evidenceContext,
+          }),
+        });
+        io.err(`task status: ${relPath} was written but could not be revalidated against the exact candidate.`);
+        io.err(receipt.recovery);
+        if (asJson) io.out(JSON.stringify({ ...domain, receipt }, null, 2));
+        return 1;
+      }
+
+      const result = createValidationResult({
+        command: 'task status', ok: true, evidenceState: 'current', disposition: 'proceed', ...domain,
+      });
+      return emitReceipt(createTaskMutationReceipt({
+        context: evidenceContext,
+        backend: 'files',
+        taskId,
+        carrier: relPath,
+        expectedDigest: currentDigest,
+        candidateDigest,
+        resultingDigest,
+        verification: verificationOf(result),
+        ownedProjections: ['task_record_status'],
+        changedPaths: committed.writtenFiles,
+        mutationDisposition: 'committed',
+        revalidateCommand: readinessRevalidationCommand({
+          taskId, carrier: relPath, resultingDigest, context: evidenceContext,
+        }),
+      }));
     }
 
     io.err(`Unknown task subcommand '${sub}'. Expected: list, lint, new, establish-baseline, authorize-correction, status.`);

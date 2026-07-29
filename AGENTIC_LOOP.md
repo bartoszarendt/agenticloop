@@ -36,6 +36,44 @@ records it before dispatch in a separately verifiable carrier naming authority,
 author, actor, time, and artifact. The body may cache it but never authorizes it.
 Historical missing data warns; never invent history.
 
+An `agent-ready` transition carries one validated evidence context through
+pre-write and post-write validation: exact task identity, expected predecessor
+digest, a resolved base tree object id (never a symbolic branch name) with its
+canonical inventory digest, and a dependency snapshot naming its source, digest,
+observation time, freshness policy, and evaluated state. Every record requires
+that context, including records with no contract schema; nothing is defaulted
+from a branch or an inferred dependency state.
+
+The guarded receipt is mechanically derived from that exact context. It binds
+the expected, candidate, and resulting digests, the evidence-context digest, the
+verification-result identity, each owned projection's attempted and
+verified-complete state, changed paths, the mutation disposition, and one safe
+read-only revalidation command carrying the actual
+resulting digest. A revalidation argument is emitted only when one spelling is
+inert and byte-exact across POSIX shells, PowerShell, and `cmd.exe`; otherwise
+the command is refused rather than weakened. The canonical CLI registry must
+also mark the exact command leaf as receipt-safe; unmarked commands, dynamic
+event types, option-dependent writers, and unknown forms fail closed. Lifecycle
+commands qualify only with their registered `--dry-run` mode. A `rolled_back`
+receipt is resolved only when its closed rollback evidence proves the
+predecessor digest was restored exactly, the receipt resulting digest names that
+same predecessor, and changed paths are empty.
+
+Files mutations apply through the shared filesystem mutation kernel: identity
+is compared immediately before the write, the exact resulting bytes are
+refetched and revalidated, and a post-write mismatch returns an unresolved
+receipt naming the changed paths and a safe recovery rather than an error
+string. A candidate and its conditional-write digest are derived from the same
+source bytes; a second planning read cannot bless a candidate derived from stale
+content. A later read without the evidence context is
+`verification_context_missing`, not proof that the committed transition is
+invalid, and never authority for a rollback or compensating transition.
+
+A malformed, ambiguous, or unknown current record cannot authorize a mutation.
+An ordinary transition never doubles as a repair: recovery uses the explicit
+correction-authority path, and insufficient authority quarantines the carrier
+without mutation or dispatch.
+
 Carrier trust is explicit, not inferred from payload content. Untrusted or
 excluded carriers are ignored noise; an edited authority carrier is rejected
 without poisoning the chain; a malformed record on a trusted carrier is fatal;
@@ -281,17 +319,49 @@ disabled mode does not, but closeout ownership remains.
 
 The canonical ordering inside closeout scope is: review accepted; integration or
 exact candidate freeze; current audit gate when required; `closeout prepare`;
-`closeout record`; then the closeout-owned terminal action. Generic files-task
-closure remains valid only outside closeout scope. `isTerminalTaskTransition()`
-currently recognizes the allowed post-certification content delta but does not
-execute the closeout-owned transition. An `indeterminate` resolver result has
-disposition `blocked`, no terminal action, and the resume condition
-`repair_and_rederive_scope`. `deriveAuditDueWorkUnits()` also currently
-ignores `group_closeout` for non-flat profiles. P35-03 must consume the canonical
-scope resolver, align audit-due derivation with configured grouping and explicit
-durable scope evidence, refuse unauthorized direct closure for established or
-indeterminate scope, and preserve generic terminal behavior only for proven
-`none` scope. P35-01 declares and validates the contract; it does not enforce it.
+`closeout record`; then the closeout-owned terminal action. The runtime canonical
+scope resolver feeds both generic terminal enforcement and audit-due derivation.
+An unreadable or invalid task inventory is preserved as an indeterminate
+audit-due result; it is never converted to an empty list that could disagree with
+terminal enforcement.
+Generic files-task closure remains valid only for a resolver-proven `none` scope,
+which is returned only after proving that configured group scope and every
+explicit durable scope source are absent. Explicit scope comes from any of the
+three declared carriers - a typed human-selection receipt, a current validated
+audit record, or a current closeout marker or receipt. Freshness is
+carrier-specific: human selection uses `observedAt` with its maximum-age policy;
+a marker is the supersession-resolved current marker on the current carrier
+digest; an audit record is the exact current validated durable record bound to
+its candidate artifact and covered tasks, without a separate time expiry. A
+marker with `audit: none` has no configured-group fallback because configured
+grouping is already resolved authoritatively before explicit marker evaluation.
+Established
+configured or explicit scope and every `indeterminate` result refuse direct
+closure; the latter reports `blocked` with `repair_and_rederive_scope`.
+`isTerminalTaskTransition()` recognizes the allowed post-certification content
+delta but does not itself execute the closeout-owned transition.
+
+Because generic closure is refused for every established scope, the terminal
+transition stays reachable through closeout itself: after a fresh valid packet
+and all required gates, `closeout record` performs
+`closeout_owned_accepted_to_closed` over the exact covered task set. The files
+backend uses one guarded transaction and emits an exact receipt; GitHub uses
+guarded per-carrier transitions and reports partial external progress rather
+than claiming cross-resource atomicity. Safe reruns resume from already verified
+terminal steps, including a rerun that finds the marker already published: a
+published marker is not a completed closeout, so the rerun finishes the covered
+transitions rather than reporting success while tasks remain `accepted`.
+
+Every prior lifecycle gate returns its own receipt. `init`, `setup`, and
+`update` persist one to the target-owned workflow state and report it, keeping
+filesystem transaction completion separate from Git commit status: a path
+written to disk but untracked is untracked, never committed. Unresolved
+prior-gate state blocks the next authoritative readiness edge. The receipt is
+verified on every read rather than recognized: its fields are validated, its
+recorded paths are re-fingerprinted, and its commit disposition is re-derived
+from current Git state rather than read back. Committing the paths it lists
+resolves the gate; a path leaving the index un-resolves it even though its bytes
+never changed. Editing the receipt resolves nothing.
 
 A carrier, candidate, covered task, or marker input changed after recording
 closeout makes the marker `stale`; it does not erase history or trigger an

@@ -11,11 +11,12 @@
 
 import { repairPolicyFor } from './repair-policy.js';
 import { getProjectRoleCapabilities } from './role-capabilities.js';
+import { bindDiagnosticRoutingCapabilities } from './diagnostic-routing-context.js';
 
 /** Presentation-only concise guidance retained for CLI consumers. */
 export function renderDiagnosticNextAction({ repairKind, escalationKind, repairHint = null }, capabilities) {
   const owner = capabilities.primaryOwnerByRepairKind[repairKind] ?? null;
-  const escalationOwner = capabilities.escalationOwnerByKind[escalationKind] ?? null;
+  const escalationOwner = capabilities.escalationOwnerByKind[escalationKind] || null;
   const escalation = escalationOwner ? ` Escalation owner: ${escalationOwner}.` : '';
   const hint = repairHint ? `${repairHint} ` : '';
   return `${hint}Repair: ${repairKind}. Owner: ${owner}.${escalation}`;
@@ -42,15 +43,15 @@ export function presentDiagnostic(diagnostic, capabilities) {
   const escalationKind = diagnostic.escalationKind
     ?? (typeof diagnostic.code === 'string' ? repairPolicyFor(diagnostic.code).escalationKind : 'none');
   const owner = capabilities.primaryOwnerByRepairKind[repairKind];
-  const escalationOwner = capabilities.escalationOwnerByKind[escalationKind] ?? null;
-  return {
+  const escalationOwner = capabilities.escalationOwnerByKind[escalationKind] || null;
+  return bindDiagnosticRoutingCapabilities({
     ...fact,
     owner,
     escalationKind,
     escalationOwner,
     nextAction: renderDiagnosticNextAction({ repairKind, escalationKind, repairHint: diagnostic.repairHint ?? null }, capabilities),
     firstSafeRepair: repairKind,
-  };
+  }, capabilities);
 }
 
 export function presentDiagnostics(diagnostics, capabilities) {

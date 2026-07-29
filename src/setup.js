@@ -19,6 +19,7 @@ import {
   formatPartialApplyDiagnostics,
   lifecyclePlanBlockers,
   lifecyclePlanCounts,
+  lifecycleMutationReceipt,
   lifecyclePlanToJson,
   renderLifecyclePlan,
 } from './lifecycle-plan.js';
@@ -983,6 +984,7 @@ export async function setup(options) {
 
     io.throwIfAborted();
     const applied = applyLifecyclePlan(target, plan, { execHandler: setupExecHandler });
+    const mutationReceipt = lifecycleMutationReceipt(target, plan, applied);
     warnings.push(...applied.warnings);
     const counts = lifecyclePlanCounts(plan);
     if (verbose) {
@@ -1003,7 +1005,7 @@ export async function setup(options) {
       for (const error of applied.errors) io.err(`  ERROR: ${error}`);
       for (const line of formatPartialApplyDiagnostics(applied)) io.err(line);
       errors.push(...applied.errors);
-      return { errors, warnings, plan };
+      return { errors, warnings, plan, mutationReceipt };
     }
 
     // Step 6: Verify.
@@ -1050,7 +1052,7 @@ export async function setup(options) {
     }
 
     write('');
-    return { errors, warnings, plan };
+    return { errors, warnings, plan, mutationReceipt };
   } finally {
     prompts?.close();
   }

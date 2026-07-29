@@ -22,6 +22,7 @@ import { execSync } from 'node:child_process';
 import { runCliInProcess } from './helpers/run-cli.js';
 import { parseCloseoutMarkers, validateCloseoutPacket } from '../src/closeout-contract.js';
 import { serializeValidationResult } from '../src/result-envelope.js';
+import { getProjectRoleCapabilities } from '../src/role-capabilities.js';
 
 let tmpDir;
 before(() => { tmpDir = mkdtempSync(join(tmpdir(), 'al-closeout-')); });
@@ -115,8 +116,8 @@ function run(args, target) {
   return runCliInProcess(args.split(' ').concat(['--target', target]).filter(Boolean), {});
 }
 
-async function closeout(args, target) {
-  return runCliInProcess(['closeout', ...args, '--target', target]);
+async function closeout(args, target, options = {}) {
+  return runCliInProcess(['closeout', ...args, '--target', target], options);
 }
 
 async function audit(args, target) {
@@ -176,6 +177,7 @@ describe('closeout prepare', () => {
     assert.ok(packet.reasons.some(item => item.gate === 'audit_gate' && item.category === 'audit_missing'));
     const status = await closeout(['status', '--work-unit', 'milestone:M00', '--json'], target);
     assert.equal(status.status, 1);
+    assert.ok(status.stdout, status.stderr);
     assert.equal(JSON.parse(status.stdout).state, 'audit_due');
   });
 
@@ -301,7 +303,10 @@ describe('closeout record and status', () => {
     assert.equal(staleResult.diagnostics[0].escalationOwner, null);
     assert.match(staleResult.diagnostics[0].nextAction, /closeout prepare/);
     assert.match(staleResult.firstSafeRepair, /closeout prepare/);
-    assert.equal(stale.stdout.trim(), serializeValidationResult(staleResult));
+    assert.equal(
+      stale.stdout.trim(),
+      serializeValidationResult(staleResult, { capabilities: getProjectRoleCapabilities(target) })
+    );
   });
 
   it('rejects a stale packet after task, audit, or marker state changed', async () => {
@@ -319,6 +324,28 @@ describe('closeout record and status', () => {
     assert.equal(stale.status, 1, `${stale.stdout}|${stale.stderr}`);
     assert.match(stale.stderr, /stale packet/);
     assert.ok(!readFileSync(join(target, '.agenticloop', 'tasks', 'T-002.md'), 'utf-8').includes('AGENT_CLOSEOUT_STATUS'));
+  });
+
+  it('preserves a concurrent carrier edit and does not close tasks when marker publication loses its precondition', async () => {
+    const target = makeGitTarget('marker-publication-race');
+    const artifact = await certify(target);
+    const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
+    assert.equal((await closeout([
+      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--output', packetPath,
+    ], target)).status, 0);
+    const carrierPath = join(target, '.agenticloop', 'tasks', 'T-002.md');
+    const concurrent = `${readFileSync(carrierPath, 'utf8')}\nConcurrent operator note.\n`;
+    const recorded = await closeout(
+      ['record', '--packet', packetPath, '--yes'],
+      target,
+      { fsMutationOptions: { beforeWrite: () => writeFileSync(carrierPath, concurrent, 'utf8') } }
+    );
+    assert.equal(recorded.status, 1);
+    assert.equal(readFileSync(carrierPath, 'utf8'), concurrent);
+    assert.doesNotMatch(concurrent, /AGENT_CLOSEOUT_GATE:/);
+    for (const taskId of ['T-001', 'T-002']) {
+      assert.match(readFileSync(join(target, '.agenticloop', 'tasks', `${taskId}.md`), 'utf8'), /status: accepted/);
+    }
   });
 
   it('detects product drift and names the changed path', async () => {

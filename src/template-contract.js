@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { parseFrontmatter } from './frontmatter.js';
-import { AUDIT_RUN_LABELS, parseAuditRecord } from './audit-record.js';
+import { AUDIT_REQUIRED_RUN_LABELS, AUDIT_RUN_LABELS, parseAuditRecord } from './audit-record.js';
 import { hasMarkdownHeading, markdownLines, markdownSection, parseAtxHeading } from './markdown.js';
 import {
   AUDIT_RECORD_TEMPLATE_RELATIVE_PATH,
@@ -248,7 +248,7 @@ function validateAuditTemplateRunExample(content, relPath) {
   const run = runs[0];
   const occurrences = run.fieldOccurrences ?? [];
   const labels = occurrences.map(occurrence => occurrence.label);
-  for (const label of AUDIT_RUN_LABELS) {
+  for (const label of AUDIT_REQUIRED_RUN_LABELS) {
     const matching = occurrences.filter(occurrence => occurrence.label === label);
     if (matching.length === 0) {
       errors.push(`${relPath} audit Run 1 example is missing '${label}'`);
@@ -263,9 +263,9 @@ function validateAuditTemplateRunExample(content, relPath) {
       errors.push(`${relPath} audit Run 1 example has unknown label '${label}'; expected one of: ${AUDIT_RUN_LABELS.join(', ')}`);
     }
   }
-  if (labels.length === AUDIT_RUN_LABELS.length &&
-      labels.every(label => AUDIT_RUN_LABELS.includes(label)) &&
-      labels.some((label, index) => label !== AUDIT_RUN_LABELS[index])) {
+  const ordered = AUDIT_RUN_LABELS.filter(label => labels.includes(label));
+  if (labels.every(label => AUDIT_RUN_LABELS.includes(label)) &&
+      labels.some((label, index) => label !== ordered[index])) {
     errors.push(`${relPath} audit Run 1 example labels must be ordered: ${AUDIT_RUN_LABELS.join(', ')}`);
   }
   if (!AUDIT_INVOCATION_MODES.includes(run.invocationMode)) {

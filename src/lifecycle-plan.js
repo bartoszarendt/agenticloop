@@ -20,14 +20,21 @@
  */
 
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { LIFECYCLE_RECEIPT_RELATIVE_PATH } from './layout.js';
 import {
   assertSafeRelativePath,
+  atomicWriteFile,
   executeMutationBatch,
   fingerprintTargetPath,
 } from './fs-mutation-kernel.js';
 import { executeGenerationPlan } from './generation-transaction.js';
+import {
+  PublicCommandError,
+  VerificationContextMalformedError,
+} from './public-error.js';
 
 export const LIFECYCLE_PLAN_SCHEMA_VERSION = 1;
 
@@ -103,6 +110,8 @@ export const LIFECYCLE_PLAN_SCHEMA_VERSION = 1;
  * @property {string[]} committedSegments  Display labels of segments that
  *   committed before any failure (empty on full success is implied by ok=true;
  *   populated when partialApply=true).
+ * @property {string[]} committedPaths Exact target-relative paths in committed
+ *   segments. A removed path has a null final fingerprint in the receipt.
  * @property {{ kind: string, label: string, rolledBack: boolean } | null} failedSegment
  *   The segment that failed and was internally rolled back, or null.
  */
@@ -228,6 +237,393 @@ export function validateLifecyclePlan(plan) {
 export function lifecyclePlanToJson(plan) {
   const valid = validateLifecyclePlan(plan);
   return JSON.stringify(valid, null, 2);
+}
+
+/** Per-path Git dispositions a lifecycle receipt can report. */
+export const LIFECYCLE_PATH_GIT_STATES = Object.freeze([
+  'clean',
+  'modified_uncommitted',
+  'untracked',
+  // Git tracks files, not directories: a created directory carries no commit
+  // state of its own, and the files inside it carry theirs.
+  'directory',
+  'unverifiable',
+  'absent',
+]);
+
+/** Whether the filesystem transaction itself completed. */
+export const LIFECYCLE_TRANSACTION_DISPOSITIONS = Object.freeze(['applied', 'partially_applied', 'not_applied']);
+
+/** Bounded number of example paths named in a receipt reason. */
+const REASON_SAMPLE_LIMIT = 3;
+
+/** Whether the applied paths are durably committed to Git. */
+export const LIFECYCLE_COMMIT_DISPOSITIONS = Object.freeze(['committed', 'uncommitted', 'unverifiable', 'mixed']);
+
+/**
+ * @typedef {(target: string, args: string[]) => {status: number|null, stdout?: string}} GitRunner
+ */
+
+/** @type {GitRunner} */
+function defaultGitRunner(target, args) {
+  return spawnSync('git', args, { cwd: target, encoding: 'utf8' });
+}
+
+/**
+ * Read the Git disposition of each applied path.
+ *
+ * Writing a file to disk is not a commit. This resolves, for every changed
+ * path, whether Git tracks it, whether it differs from HEAD or the index, and
+ * whether Git can answer at all. A target outside a work tree reports
+ * `unverifiable` rather than being silently treated as clean.
+ */
+/**
+ * @param {string} target
+ * @param {string[]} paths
+ * @param {GitRunner} gitRunner
+ * @returns {{available: boolean, states: Map<string, string>}}
+ */
+function readGitDispositions(target, paths, gitRunner) {
+  const inside = gitRunner(target, ['rev-parse', '--is-inside-work-tree']);
+  if (inside.status !== 0 || String(inside.stdout ?? '').trim() !== 'true') {
+    return { available: false, states: new Map(paths.map(path => [path, 'unverifiable'])) };
+  }
+  /** @type {Map<string, string>} */
+  const states = new Map();
+  for (const path of paths) {
+    const status = gitRunner(target, ['status', '--porcelain', '--untracked-files=all', '--', path]);
+    if (status.status !== 0) {
+      states.set(path, 'unverifiable');
+      continue;
+    }
+    const lines = String(status.stdout ?? '').split(/\r?\n/).filter(Boolean);
+    if (lines.length === 0) {
+      const tracked = gitRunner(target, ['ls-files', '--error-unmatch', '--', path]);
+      states.set(path, tracked.status === 0 ? 'clean' : 'absent');
+      continue;
+    }
+    states.set(path, lines.every(line => line.startsWith('??')) ? 'untracked' : 'modified_uncommitted');
+  }
+  return { available: true, states };
+}
+
+/**
+ * Aggregate per-path Git states into the receipt's commit disposition.
+ *
+ * Shared by receipt construction and by receipt re-verification so the aggregate
+ * a consumer reads is always derived the same way from whatever per-path state
+ * is current, never inherited from the value recorded earlier.
+ *
+ * Directories carry no Git commit state and are excluded.
+ *
+ * @param {{git: string}[]} paths
+ * @param {boolean} gitAvailable
+ * @returns {string}
+ */
+function aggregateCommitDisposition(paths, gitAvailable) {
+  if (!gitAvailable) return 'unverifiable';
+  const filePaths = paths.filter(item => item.git !== 'directory');
+  if (filePaths.length === 0) return 'committed';
+  const gitStates = new Set(filePaths.map(item => item.git));
+  if (gitStates.size === 1 && gitStates.has('clean')) return 'committed';
+  if (gitStates.has('unverifiable') || gitStates.has('absent')) return 'unverifiable';
+  return gitStates.has('clean') ? 'mixed' : 'uncommitted';
+}
+
+/**
+ * Deterministic receipt for a lifecycle apply.
+ *
+ * The receipt separates two facts that a prior gate must never conflate:
+ * `transactionDisposition` reports whether the filesystem transaction
+ * completed, and `commitDisposition` reports whether those exact paths are
+ * durably committed. A path written to disk but untracked is reported as
+ * untracked, never as committed.
+ *
+ * `unresolved` is true whenever required setup state remains uncommitted,
+ * untracked, partially applied, stale, or unverifiable, so the next
+ * authoritative readiness edge can refuse to build on it.
+ *
+ * @param {string} target
+ * @param {LifecyclePlan} plan
+ * @param {LifecycleApplyResult} applied
+ * @param {{gitRunner?: Function}} [options]
+ */
+export function lifecycleMutationReceipt(target, plan, applied, options = {}) {
+  validateLifecyclePlan(plan);
+  const gitRunner = /** @type {GitRunner} */ (options.gitRunner ?? defaultGitRunner);
+  const changedPaths = [...new Set(applied?.committedPaths ?? [])].sort();
+  const git = readGitDispositions(target, changedPaths, gitRunner);
+  const paths = changedPaths.map(/** @param {string} path */ path => {
+    const fingerprint = fingerprintTargetPath(target, path);
+    return {
+      path,
+      fingerprint,
+      transaction: 'applied',
+      git: fingerprint === 'directory' ? 'directory' : git.states.get(path) ?? 'unverifiable',
+    };
+  });
+
+  const transactionDisposition = applied?.ok
+    ? 'applied'
+    : applied?.partialApply
+      ? 'partially_applied'
+      : 'not_applied';
+  const commitDisposition = aggregateCommitDisposition(paths, git.available);
+
+  const reasons = [];
+  if (transactionDisposition === 'partially_applied') reasons.push('the lifecycle transaction applied only some segments');
+  if (transactionDisposition === 'not_applied') reasons.push('the lifecycle transaction did not apply');
+  if (applied?.stale === true) reasons.push('the plan was stale relative to current target state');
+  if (!git.available) reasons.push('the target is not inside a Git work tree, so commit state cannot be verified');
+  // Reasons are a bounded summary; `changedPaths` carries the exact per-path
+  // fingerprint and Git state for every applied path.
+  const summary = [
+    ['untracked', 'written but untracked'],
+    ['modified_uncommitted', 'written but not committed'],
+    ['unverifiable', 'of unverifiable Git state'],
+    ['absent', 'not present after the transaction'],
+  ];
+  for (const [state, description] of summary) {
+    const matching = paths.filter(item => item.git === state);
+    if (matching.length === 0) continue;
+    const sample = matching.slice(0, REASON_SAMPLE_LIMIT).map(item => `'${item.path}'`).join(', ');
+    reasons.push(matching.length > REASON_SAMPLE_LIMIT
+      ? `${matching.length} path(s) are ${description}, including ${sample}`
+      : `${matching.length} path(s) are ${description}: ${sample}`);
+  }
+  const unresolved = transactionDisposition !== 'applied' || commitDisposition !== 'committed' || applied?.stale === true;
+
+  return {
+    kind: 'agenticloop.lifecycle-mutation-receipt',
+    schemaVersion: 2,
+    command: plan.command,
+    planDigest: `sha256:${hashContent(lifecyclePlanToJson(plan))}`,
+    transactionDisposition,
+    commitDisposition,
+    gitAvailable: git.available,
+    changedPaths: paths,
+    committedSegments: [...(applied?.committedSegments ?? [])],
+    failedSegment: applied?.failedSegment ?? null,
+    stale: applied?.stale === true,
+    unresolved,
+    reasons,
+    nextAction: unresolved
+      ? `Resolve the reported prior-gate state, then rerun 'npx agenticloop ${plan.command}' or commit the listed paths before the next handoff.`
+      : 'No action required; the prior gate is complete and committed.',
+    revalidateCommand: `npx agenticloop ${plan.command} --dry-run`,
+  };
+}
+
+/**
+ * Persist the prior-gate receipt to the durable target-owned carrier and print
+ * its disposition and safe next action.
+ *
+ * Public lifecycle surfaces call this instead of destructuring the receipt and
+ * discarding it: an unresolved prior gate has to survive the command that
+ * produced it.
+ *
+ * @param {string} target
+ * @param {object} receipt
+ * @param {{out: Function, err: Function}} io
+ * @param {boolean} [asJson]
+ */
+export function persistLifecycleReceipt(target, receipt, io, asJson = false) {
+  /** @type {{unresolved: boolean, transactionDisposition: string, commitDisposition: string, reasons: string[], nextAction: string, changedPaths: unknown[]}} */
+  const detail = /** @type {any} */ (receipt);
+  // A command that refused before touching the target must leave it untouched.
+  // Persisting a receipt for a transaction that applied nothing would itself be
+  // the mutation the refusal prevented.
+  if (detail.transactionDisposition === 'not_applied' && detail.changedPaths.length === 0) return receipt;
+  const path = resolve(target, LIFECYCLE_RECEIPT_RELATIVE_PATH);
+  try {
+    atomicWriteFile(path, `${JSON.stringify(receipt, null, 2)}\n`);
+  } catch (error) {
+    io.err?.(`  WARN: the prior-gate receipt could not be persisted to ${LIFECYCLE_RECEIPT_RELATIVE_PATH}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (asJson) return receipt;
+  const report = detail.unresolved ? io.err ?? io.out : io.out;
+  report(`  prior gate: transaction ${detail.transactionDisposition}, commit state ${detail.commitDisposition}` +
+    `${detail.unresolved ? ' (UNRESOLVED)' : ''}`);
+  for (const reason of detail.reasons) report(`    - ${reason}`);
+  report(`  next action: ${detail.nextAction}`);
+  return receipt;
+}
+
+/** Structural rules a persisted lifecycle receipt must satisfy to be usable evidence. */
+const LIFECYCLE_RECEIPT_SCHEMA_VERSION = 2;
+
+/**
+ * Validate a lifecycle receipt that arrived from disk.
+ *
+ * The receipt is unauthenticated JSON in a working tree, so recognizing its
+ * `kind` proves nothing: a hand-written stub asserting `unresolved: false`
+ * would otherwise resolve the gate it exists to guard. Every field a consumer
+ * reads is checked, and the two dispositions are re-derived into the
+ * `unresolved` flag so a receipt cannot contradict itself.
+ *
+ * @param {unknown} receipt
+ * @returns {string[]} every violated rule, empty when the receipt is well formed
+ */
+export function lifecycleReceiptErrors(receipt) {
+  const errors = [];
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) {
+    return ['prior-gate receipt must be a JSON object'];
+  }
+  const value = /** @type {Record<string, any>} */ (receipt);
+  if (value.kind !== 'agenticloop.lifecycle-mutation-receipt') {
+    errors.push('prior-gate receipt is not a recognized lifecycle mutation receipt');
+  }
+  if (value.schemaVersion !== LIFECYCLE_RECEIPT_SCHEMA_VERSION) {
+    errors.push(`prior-gate receipt schemaVersion must be ${LIFECYCLE_RECEIPT_SCHEMA_VERSION}`);
+  }
+  if (typeof value.command !== 'string' || value.command.trim().length === 0) {
+    errors.push('prior-gate receipt must name the command that produced it');
+  }
+  if (typeof value.planDigest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(value.planDigest)) {
+    errors.push('prior-gate receipt planDigest must be a sha256:<64 lowercase hex> digest');
+  }
+  if (!LIFECYCLE_TRANSACTION_DISPOSITIONS.includes(value.transactionDisposition)) {
+    errors.push(`prior-gate receipt transactionDisposition must be one of: ${LIFECYCLE_TRANSACTION_DISPOSITIONS.join(', ')}`);
+  }
+  if (!LIFECYCLE_COMMIT_DISPOSITIONS.includes(value.commitDisposition)) {
+    errors.push(`prior-gate receipt commitDisposition must be one of: ${LIFECYCLE_COMMIT_DISPOSITIONS.join(', ')}`);
+  }
+  if (typeof value.gitAvailable !== 'boolean') errors.push('prior-gate receipt gitAvailable must be a boolean');
+  if (typeof value.stale !== 'boolean') errors.push('prior-gate receipt stale must be a boolean');
+  if (typeof value.unresolved !== 'boolean') errors.push('prior-gate receipt unresolved must be a boolean');
+  if (!Array.isArray(value.reasons) || value.reasons.some(/** @param {unknown} item */ item => typeof item !== 'string')) {
+    errors.push('prior-gate receipt reasons must be an array of strings');
+  }
+  if (typeof value.nextAction !== 'string' || value.nextAction.trim().length === 0) {
+    errors.push('prior-gate receipt must carry a safe next action');
+  }
+  if (!Array.isArray(value.committedSegments)) errors.push('prior-gate receipt committedSegments must be an array');
+  if (!Array.isArray(value.changedPaths)) {
+    errors.push('prior-gate receipt changedPaths must be an array');
+  } else {
+    for (const entry of value.changedPaths) {
+      // A fingerprint is null exactly when the path was absent at receipt time;
+      // that is a recorded fact, not a missing field.
+      const fingerprintValid = typeof entry?.fingerprint === 'string' || entry?.fingerprint === null;
+      if (!entry || typeof entry !== 'object' || typeof entry.path !== 'string' || !fingerprintValid ||
+          entry.transaction !== 'applied' || !LIFECYCLE_PATH_GIT_STATES.includes(entry.git)) {
+        errors.push('prior-gate receipt changedPaths entries must be { path, fingerprint: string|null, transaction: "applied", git }');
+        break;
+      }
+    }
+  }
+  // The consumer trusts one boolean; that boolean must follow from the facts
+  // recorded beside it rather than standing on its own.
+  if (errors.length === 0) {
+    const derived = value.transactionDisposition !== 'applied' || value.commitDisposition !== 'committed' || value.stale === true;
+    if (value.unresolved !== derived) {
+      errors.push(`prior-gate receipt unresolved flag contradicts its own dispositions (${value.transactionDisposition}/${value.commitDisposition}, stale=${value.stale})`);
+    }
+  }
+  return errors;
+}
+
+/**
+ * Read and verify the durable prior-gate receipt, if one exists.
+ *
+ * Verification does not stop at the document, and it does not stop at bytes.
+ * `git rm --cached` leaves a file byte-identical while moving it out of the
+ * index, turning a committed path into an untracked one; a gate that compared
+ * only fingerprints would keep reporting `committed` for state that stopped
+ * being true, which is the exact conflation the receipt's two dispositions
+ * exist to prevent.
+ *
+ * So the commit disposition is *re-derived* from current per-path Git state
+ * rather than compared against the recorded one. Re-deriving is what makes the
+ * check correct in both directions: committing the listed paths resolves the
+ * gate, exactly as the receipt's own next action promises, while a path leaving
+ * the index un-resolves it. Only the fingerprint is compared, because content
+ * that no longer matches what the transaction applied is drift however it got
+ * that way.
+ *
+ * @param {string} target
+ * @param {{gitRunner?: Function}} [options]
+ * @returns {{state: 'absent'|'malformed'|'present', receipt: object|null, error: string|null, drift: string[], observed: {gitAvailable: boolean, commitDisposition: string, unresolved: boolean}|null}}
+ */
+export function readLifecycleReceipt(target, options = {}) {
+  const path = resolve(target, LIFECYCLE_RECEIPT_RELATIVE_PATH);
+  if (!existsSync(path)) return { state: 'absent', receipt: null, error: null, drift: [], observed: null };
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    return { state: 'malformed', receipt: null, error: `prior-gate receipt is not valid JSON: ${error instanceof Error ? error.message : String(error)}`, drift: [], observed: null };
+  }
+  const errors = lifecycleReceiptErrors(parsed);
+  if (errors.length > 0) {
+    return { state: 'malformed', receipt: null, error: errors.join('; '), drift: [], observed: null };
+  }
+  const drift = [];
+  const entries = /** @type {any[]} */ (parsed.changedPaths);
+  const gitRunner = /** @type {GitRunner} */ (options.gitRunner ?? defaultGitRunner);
+  const git = readGitDispositions(target, entries.map(entry => entry.path), gitRunner);
+  const observedStates = [];
+  for (const entry of entries) {
+    const fingerprint = fingerprintTargetPath(target, entry.path);
+    if (fingerprint !== entry.fingerprint) {
+      drift.push(`'${entry.path}' no longer matches the fingerprint the prior gate recorded (recorded ${entry.fingerprint}, observed ${fingerprint})`);
+    }
+    observedStates.push({
+      path: entry.path,
+      git: fingerprint === 'directory' ? 'directory' : git.states.get(entry.path) ?? 'unverifiable',
+    });
+  }
+  // The recorded aggregate is history; the consumer needs the current one.
+  const commitDisposition = aggregateCommitDisposition(observedStates, git.available);
+  return {
+    state: 'present',
+    receipt: parsed,
+    error: null,
+    drift,
+    observed: {
+      gitAvailable: git.available,
+      commitDisposition,
+      unresolved: parsed.transactionDisposition !== 'applied' || commitDisposition !== 'committed' || parsed.stale === true,
+    },
+  };
+}
+
+/**
+ * Refuse a handoff while the most recent lifecycle mutation is malformed,
+ * unresolved in current Git state, or has drifted from its recorded paths.
+ *
+ * This is the one authoritative consumer used by both the read-only readiness
+ * report and every mutation that grants `agent-ready`. Keeping the policy here
+ * prevents a diagnostic command from being stricter than the write it is meant
+ * to guard.
+ *
+ * @param {string} target
+ * @param {{gitRunner?: Function}} [options]
+ * @returns {ReturnType<typeof readLifecycleReceipt>}
+ */
+export function assertLifecycleHandoffResolved(target, options = {}) {
+  const priorGate = readLifecycleReceipt(target, options);
+  if (priorGate.state === 'malformed') {
+    throw new VerificationContextMalformedError(priorGate.error ?? 'the prior-gate receipt is malformed');
+  }
+  if (priorGate.state !== 'present' ||
+      (!priorGate.observed?.unresolved && priorGate.drift.length === 0)) {
+    return priorGate;
+  }
+  const receipt = /** @type {any} */ (priorGate.receipt);
+  const detail = priorGate.drift.length > 0
+    ? `The prior setup gate no longer describes the target: ${priorGate.drift[0]}.`
+    : `The prior setup gate is unresolved (${receipt?.transactionDisposition}/${priorGate.observed?.commitDisposition}): ${receipt?.reasons?.[0] ?? 'see the lifecycle receipt'}.`;
+  throw new PublicCommandError(detail, {
+    code: 'evidence.negative',
+    evidenceState: priorGate.drift.length > 0 ? 'changed' : 'negative',
+    disposition: 'blocked',
+    committedStateEvaluated: true,
+    publicMessage: detail,
+    safeRepair: priorGate.drift.length > 0
+      ? `Rerun 'npx agenticloop ${receipt?.command}' so the prior gate describes current target state, then retry.`
+      : receipt?.nextAction ?? 'Resolve and revalidate the prior lifecycle mutation before retrying.',
+  });
 }
 
 /** Parse and validate a JSON plan document. Throws TypeError when invalid. */
@@ -381,6 +777,7 @@ export function applyLifecyclePlan(target, plan, options = {}) {
     adapterFiles: [],
     warnings: [...plan.warnings],
     committedSegments: [],
+    committedPaths: [],
     failedSegment: null,
   };
 
@@ -472,6 +869,7 @@ export function applyLifecyclePlan(target, plan, options = {}) {
         else if (action.kind === 'update') result.updated.push(display);
         else if (action.kind === 'merge') result.merged.push(display);
         else if (action.kind === 'remove') result.removed.push(display);
+        result.committedPaths.push(action.path);
       }
       result.committedSegments.push(segment.label);
       continue;
@@ -496,6 +894,7 @@ export function applyLifecyclePlan(target, plan, options = {}) {
       }
       result.warnings.push(...generation.errors);
       result.adapterFiles.push(...group.files);
+      result.committedPaths.push(...group.files);
       result.committedSegments.push(segment.label);
       continue;
     }
@@ -530,6 +929,7 @@ export function applyLifecyclePlan(target, plan, options = {}) {
     }
     if (execResult.changed) {
       result.merged.push(execResult.display ?? action.display ?? action.path);
+      result.committedPaths.push(action.path);
     }
     result.committedSegments.push(segment.label);
   }

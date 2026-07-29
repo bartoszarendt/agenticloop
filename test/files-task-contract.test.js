@@ -8,6 +8,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 import {
   createTaskContractBaselineRecord,
@@ -299,14 +300,34 @@ describe('files correction lifecycle commands', () => {
     assert.ok(correction.changes.length > 0);
     assert.match(JSON.parse(corrected.stdout).warning, /commit it separately/i);
 
-    // Uncommitted: the agent-ready gate still fails on the uncommitted record.
-    const dirty = await runCliInProcess(['task', 'status', 'T-001', 'agent-ready', '--target', target]);
+    const dependencies = '.agenticloop/tmp/dependencies.json';
+    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
+    writeFileSync(join(target, dependencies), `${JSON.stringify({
+      kind: 'agenticloop.dependency-snapshot',
+      schemaVersion: 1,
+      source: 'files:.agenticloop/tasks',
+      observedAt: new Date().toISOString(),
+      freshnessPolicy: { maxAgeSeconds: 86400 },
+      statuses: {},
+    })}\n`, 'utf8');
+    const digestOfRecord = () =>
+      `sha256:${createHash('sha256').update(readFileSync(path, 'utf8'), 'utf8').digest('hex')}`;
+
+    // Uncommitted: the agent-ready gate still fails on the uncommitted record
+    // even with complete base and dependency evidence.
+    const dirty = await runCliInProcess([
+      'task', 'status', 'T-001', 'agent-ready', '--expect-digest', digestOfRecord(),
+      '--base', 'HEAD', '--dependencies', dependencies, '--target', target,
+    ]);
     assert.notEqual(dirty.status, 0);
 
     git(target, ['add', '.agenticloop']);
     git(target, ['commit', '-m', 'correction and task update']);
-    const ready = await runCliInProcess(['task', 'status', 'T-001', 'agent-ready', '--target', target]);
-    assert.equal(ready.status, 0, ready.stderr);
+    const ready = await runCliInProcess([
+      'task', 'status', 'T-001', 'agent-ready', '--expect-digest', digestOfRecord(),
+      '--base', 'HEAD', '--dependencies', dependencies, '--target', target,
+    ]);
+    assert.equal(ready.status, 0, ready.stdout + ready.stderr);
   });
 
   it('rejects a correction that does not change the protected contract', async () => {

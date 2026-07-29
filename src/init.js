@@ -30,6 +30,7 @@ import {
   applyLifecyclePlan,
   formatPartialApplyDiagnostics,
   lifecyclePlanCounts,
+  lifecycleMutationReceipt,
   lifecyclePlanToJson,
   renderLifecyclePlan,
 } from './lifecycle-plan.js';
@@ -125,6 +126,7 @@ export async function init(options = {}) {
   }
 
   const applied = applyLifecyclePlan(target, plan, { execHandler: initExecHandler });
+  const mutationReceipt = lifecycleMutationReceipt(target, plan, applied);
 
   const result = emptyResult();
   result.created.push(...applied.created, ...applied.updated);
@@ -215,7 +217,7 @@ export async function init(options = {}) {
   }
   io.out();
 
-  return { ...result, plan };
+  return { ...result, plan, mutationReceipt };
 }
 
 export { planInit };

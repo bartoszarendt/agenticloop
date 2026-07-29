@@ -40,6 +40,7 @@ class MemoryStream {
  * @param {boolean} [options.color]
  * @param {Function} [options.promptFactory]
  * @param {Function} [options.ghCommandRunner]  Injectable read-only GitHub command runner.
+ * @param {object} [options.fsMutationOptions]  Injectable filesystem mutation hooks.
  * @returns {Promise<{ status: number, stdout: string, stderr: string }>}
  */
 export async function runCliInProcess(argv, options = {}) {
@@ -58,6 +59,7 @@ export async function runCliInProcess(argv, options = {}) {
     color: options.color,
     promptFactory: options.promptFactory,
     ghCommandRunner: options.ghCommandRunner,
+    fsMutationOptions: options.fsMutationOptions,
   });
   return {
     status,

@@ -96,7 +96,20 @@ export const AUDIT_RUN_LABELS = Object.freeze([
   'Findings',
   'Evidence checked',
   'Report format',
+  'Consumption cause',
+  'Consumption authority',
+  'Consumption reason',
+  'Consumption plan',
 ]);
+
+/**
+ * The run labels every completed report carries. The remaining recognized
+ * labels are conditional on the declared consumption cause: they are required
+ * only for `human_authorized_retry` and `other_plan_required`.
+ */
+export const AUDIT_REQUIRED_RUN_LABELS = Object.freeze(
+  AUDIT_RUN_LABELS.filter(label => !['Consumption authority', 'Consumption reason', 'Consumption plan'].includes(label))
+);
 const AUDIT_RUN_LABEL_KEYS = new Set(AUDIT_RUN_LABELS.map(label => label.toLowerCase()));
 
 export const AUDIT_REPORT_FORMATS = Object.freeze([
@@ -121,6 +134,39 @@ const FINDING_ID_PATTERN = /^A-\d{2,}$/;
 const RUN_HEADING_PATTERN = /^Run\s+(\d+)$/;
 const DISPOSITION_HEADING_PATTERN = /^Run\s+(\d+)\s*\/\s*(A-\d{2,})$/;
 const HUMAN_AUTHORITY_PATTERN = /^human:\s*\S(?:.*\S)?$/i;
+/**
+ * Budget-consumption provenance for one completed audit run.
+ *
+ * `unrecorded_legacy` exists only so histories written before this field became
+ * required can be migrated non-destructively. It records the honest fact that
+ * the cause was never captured; it never asserts a substantive audit and never
+ * invents human authority. New reports cannot use it.
+ */
+export const AUDIT_CONSUMPTION_CAUSES = Object.freeze([
+  'substantive_audit',
+  'human_authorized_retry',
+  'other_plan_required',
+  'unrecorded_legacy',
+]);
+
+/** Causes a newly appended report may declare. */
+export const APPENDABLE_CONSUMPTION_CAUSES = Object.freeze([
+  'substantive_audit',
+  'human_authorized_retry',
+  'other_plan_required',
+]);
+
+/** The migration-only cause assigned to a pre-existing unrecorded run. */
+export const LEGACY_CONSUMPTION_CAUSE = 'unrecorded_legacy';
+
+/**
+ * Declared but non-operational: the audit contract keeps this cause while
+ * guarded support does not exist. Attempting it is refused before any budget is
+ * consumed.
+ */
+export const UNAVAILABLE_CONSUMPTION_CAUSE = 'product_invalidation_recovery';
+
+const AUDIT_CONSUMPTION_CAUSE_SET = new Set(AUDIT_CONSUMPTION_CAUSES);
 
 /** Typed disposition requirements and allowed audit states for UI/CLI consumers. */
 export const AUDIT_DISPOSITION_TRANSITIONS = Object.freeze({
@@ -469,6 +515,10 @@ export function parseAuditRecord(content) {
           .filter(value => value && value.toLowerCase() !== 'none'),
         evidenceChecked: fields.get('evidence checked') ?? '',
         reportFormat: fields.get('report format') ?? '',
+        consumptionCause: fields.get('consumption cause') ?? '',
+        consumptionAuthority: fields.get('consumption authority') ?? '',
+        consumptionReason: fields.get('consumption reason') ?? '',
+        consumptionPlan: fields.get('consumption plan') ?? '',
         reportPayload: parseRunReportPayload(entry.body),
         fieldOccurrences: occurrences,
       };
@@ -833,6 +883,30 @@ function validateAuditHistoryEntries(record, label, errors) {
         errors.push(
           `${entryLabel} invocation provenance '${entry.invocationProvenance}' must be 'verified' or 'asserted'`
         );
+      }
+      if (!entry.consumptionCause) {
+        // One explicit, non-destructive migration route: an audit history
+        // written before this field became required must never become unusable.
+        errors.push(
+          `${entryLabel} is missing 'Consumption cause'; migrate it with ` +
+          `'agenticloop audit baseline ${record.auditId || '<AUD-ID>'} --migrate-consumption-cause' ` +
+          'which records the unrecorded cause without inventing historical authority'
+        );
+      } else if (!AUDIT_CONSUMPTION_CAUSE_SET.has(entry.consumptionCause)) {
+        errors.push(`${entryLabel} consumption cause '${entry.consumptionCause}' is not an allowed budget provenance value`);
+      } else if (entry.consumptionCause === 'human_authorized_retry') {
+        if (!HUMAN_AUTHORITY_PATTERN.test(entry.consumptionAuthority)) {
+          errors.push(`${entryLabel} consumption cause 'human_authorized_retry' requires 'Consumption authority' as a 'human:<identity>' reference`);
+        }
+        if (!entry.consumptionReason) {
+          errors.push(`${entryLabel} consumption cause 'human_authorized_retry' requires a non-empty 'Consumption reason'`);
+        }
+      } else if (entry.consumptionCause === 'other_plan_required') {
+        if (!entry.consumptionPlan) {
+          errors.push(`${entryLabel} consumption cause 'other_plan_required' requires a bounded 'Consumption plan' reference`);
+        } else if (entry.consumptionPlan.length > 200) {
+          errors.push(`${entryLabel} 'Consumption plan' must be a bounded reference of at most 200 characters`);
+        }
       }
       if (entry.reportFormat === AUDIT_REPORT_SCHEMA_VERSION) {
         const payload = entry.reportPayload;
@@ -1396,6 +1470,100 @@ function assertCanonicalAuditStructure(content, record = parseAuditRecord(conten
   return structure;
 }
 
+function assertNoUnrecognizedLiveAuditSections(content, structure) {
+  const known = new Set(structure.requiredHeadings.map(heading => parseAtxHeading(heading).text));
+  const unknown = structure.lines
+    .filter(line => line.live)
+    .map(line => parseAtxHeading(line.raw))
+    .filter(heading => heading?.level === 2 && !known.has(heading.text));
+  if (unknown.length > 0) {
+    throw structureError(
+      `unrecognized live section(s) cannot be proven lossless during semantic rewrite: ${unknown.map(heading => `'## ${heading.text}'`).join(', ')}`
+    );
+  }
+}
+
+/**
+ * Migrate an audit history written before `Consumption cause` became required.
+ *
+ * This is the one explicit, non-destructive migration route. It inserts exactly
+ * one `- Consumption cause: unrecorded_legacy` line after the `Report format`
+ * line of each history entry that has none, and changes nothing else: every
+ * other byte, including unrecognized live content, is preserved. It never
+ * asserts that an unrecorded run was a substantive audit and never invents
+ * human authority.
+ *
+ * The migration is idempotent: rerunning it on a migrated record makes no
+ * change and reports `alreadyMigrated`.
+ *
+ * @param {string} content
+ * @returns {{ok: boolean, content: string, changed: boolean, alreadyMigrated: boolean, migratedRuns: number[], errors: string[]}}
+ */
+export function migrateAuditConsumptionCause(content) {
+  const record = parseAuditRecord(content);
+  const failure = (message) => ({
+    ok: false, content, changed: false, alreadyMigrated: false, migratedRuns: [], errors: [message],
+  });
+  let structure;
+  try {
+    structure = assertCanonicalAuditStructure(content, record);
+    assertNoUnrecognizedLiveAuditSections(content, structure);
+  } catch (error) {
+    return failure(`cannot migrate consumption cause: ${error.message}`);
+  }
+  const pending = record.history.filter(entry => !entry.consumptionCause);
+  if (pending.length === 0) {
+    return { ok: true, content, changed: false, alreadyMigrated: true, migratedRuns: [], errors: [] };
+  }
+
+  const eol = content.includes('\r\n') ? '\r\n' : '\n';
+  const lines = content.split(/\r?\n/);
+  const historyIndex = lines.findIndex(line => line.trim() === '## Audit History');
+  if (historyIndex === -1) return failure("cannot migrate consumption cause: '## Audit History' is absent");
+  const nextSection = lines.findIndex((line, index) => index > historyIndex && /^##\s+\S/.test(line));
+  const end = nextSection === -1 ? lines.length : nextSection;
+
+  // Insert after the last `- Report format:` line of each entry that lacks a
+  // `- Consumption cause:` line. Insertions are applied from the bottom up so
+  // earlier indices stay valid.
+  const insertions = [];
+  let entryStart = -1;
+  const flush = (entryEnd) => {
+    if (entryStart === -1) return;
+    const slice = lines.slice(entryStart, entryEnd);
+    if (slice.some(line => /^-\s*Consumption cause:/i.test(line.trim()))) return;
+    const offset = slice.findLastIndex(line => /^-\s*Report format:/i.test(line.trim()));
+    if (offset === -1) return;
+    insertions.push(entryStart + offset + 1);
+  };
+  for (let index = historyIndex + 1; index < end; index += 1) {
+    if (/^###\s+\S/.test(lines[index])) {
+      flush(index);
+      entryStart = index;
+    }
+  }
+  flush(end);
+  if (insertions.length === 0) {
+    return failure('cannot migrate consumption cause: no history entry exposes a Report format line to bind the migrated cause to');
+  }
+  for (const index of [...insertions].sort((left, right) => right - left)) {
+    lines.splice(index, 0, `- Consumption cause: ${LEGACY_CONSUMPTION_CAUSE}`);
+  }
+  const migrated = lines.join(eol);
+  const errors = validateAuditRecord(migrated, `${record.auditId || 'audit'}.md`);
+  if (errors.length > 0) {
+    return { ok: false, content, changed: false, alreadyMigrated: false, migratedRuns: [], errors: errors.map(error => `migrated audit record is invalid: ${error}`) };
+  }
+  return {
+    ok: true,
+    content: migrated,
+    changed: true,
+    alreadyMigrated: false,
+    migratedRuns: pending.map(entry => entry.runNumber ?? entry.position),
+    errors: [],
+  };
+}
+
 /**
  * Render `## Evidence Available` with the CLI-owned structural artifact binding
  * followed by the human-supplied substantive evidence.
@@ -1453,6 +1621,7 @@ function renderFrontmatterLines(fields) {
 export function readAuditRecordParts(content) {
   const record = parseAuditRecord(content);
   const structure = assertCanonicalAuditStructure(content, record);
+  assertNoUnrecognizedLiveAuditSections(content, structure);
   const preambleLines = structure.lines.slice(0, structure.firstSectionIndex).map(item => item.raw);
   preambleLines.splice(structure.titleIndex, 1);
   const preamble = preambleLines.join('\n').trim();
@@ -1690,6 +1859,13 @@ export function updateAuditBaseline(content, updates) {
       updates.evidence
     );
   }
+  if (updates.evidence) {
+    const date = new Date().toISOString().slice(0, 10);
+    const entry = `- ${date}: rebaseline required: ${String(updates.evidence).trim()}`;
+    parts.sections['## Comments'] = [parts.sections['## Comments'].trim(), entry]
+      .filter(Boolean)
+      .join('\n');
+  }
 
   const stale = parts.fields.certifiedArtifact !== parts.fields.candidateArtifact ||
     !coveredTaskSetsEqual(parts.fields.certifiedCoveredTasks, parts.fields.coveredTasks);
@@ -1820,7 +1996,11 @@ function renderHistoryBlock(entry, runNumber) {
     `- Findings: ${(entry.findings ?? []).length > 0 ? entry.findings.join(', ') : 'none'}`,
     `- Evidence checked: ${entry.evidenceChecked}`,
     `- Report format: ${reportFormat}`,
+    `- Consumption cause: ${entry.consumptionCause}`,
   ];
+  if (entry.consumptionAuthority) lines.push(`- Consumption authority: ${entry.consumptionAuthority}`);
+  if (entry.consumptionReason) lines.push(`- Consumption reason: ${entry.consumptionReason}`);
+  if (entry.consumptionPlan) lines.push(`- Consumption plan: ${entry.consumptionPlan}`);
   if (entry.reportPayload) {
     lines.push('', '```json', JSON.stringify(entry.reportPayload, null, 2), '```');
   }
@@ -1967,6 +2147,30 @@ export function appendAuditReport(content, report, validationOptions = {}) {
   if (invocationProvenance === 'verified' && !invocationReceipt) {
     errors.push("invocation provenance 'verified' requires a host receipt");
   }
+  const consumptionCause = String(report?.consumptionCause ?? 'substantive_audit').trim();
+  const consumptionAuthority = String(report?.consumptionAuthority ?? '').trim();
+  const consumptionReason = String(report?.consumptionReason ?? '').trim();
+  const consumptionPlan = String(report?.consumptionPlan ?? '').trim();
+  if (consumptionCause === UNAVAILABLE_CONSUMPTION_CAUSE) {
+    // Refused before any budget is consumed: this cause is declared in the
+    // shared contract but has no guarded implementation.
+    errors.push(`${UNAVAILABLE_CONSUMPTION_CAUSE} is declared but not operational; record a human-approved budget override before another completed report`);
+  } else if (!APPENDABLE_CONSUMPTION_CAUSES.includes(consumptionCause)) {
+    errors.push(`consumption cause '${consumptionCause}' must be one of: ${APPENDABLE_CONSUMPTION_CAUSES.join(', ')}`);
+  } else if (consumptionCause === 'human_authorized_retry') {
+    if (!HUMAN_AUTHORITY_PATTERN.test(consumptionAuthority)) {
+      errors.push("consumption cause 'human_authorized_retry' requires --consumption-authority as a 'human:<identity>' reference");
+    }
+    if (!consumptionReason) {
+      errors.push("consumption cause 'human_authorized_retry' requires a non-empty --consumption-reason");
+    }
+  } else if (consumptionCause === 'other_plan_required') {
+    if (!consumptionPlan) {
+      errors.push("consumption cause 'other_plan_required' requires a bounded --consumption-plan reference");
+    } else if (consumptionPlan.length > 200) {
+      errors.push('--consumption-plan must be a bounded reference of at most 200 characters');
+    }
+  }
   if (reportFormat === AUDIT_REPORT_SCHEMA_VERSION) {
     if (!report?.perspectives || typeof report.perspectives !== 'object') {
       errors.push(`report format '${AUDIT_REPORT_SCHEMA_VERSION}' requires all six perspective bodies`);
@@ -2020,6 +2224,10 @@ export function appendAuditReport(content, report, validationOptions = {}) {
     findings: findings.map(f => f.id),
     reportFindings: findings,
     reportFormat,
+    consumptionCause,
+    consumptionAuthority,
+    consumptionReason,
+    consumptionPlan,
   };
   runEntry.reportPayload = buildRunReportPayload(runEntry, reportFormat);
   parts.sections['## Audit History'] = [priorHistory, renderHistoryBlock(runEntry, runNumber)]
@@ -2368,6 +2576,10 @@ export function canonicalizeAuditRecord(content, options, validationOptions = {}
         reportFindings: Array.isArray(entry.reportPayload?.findings) ? entry.reportPayload.findings : [],
         perspectives: entry.reportPayload?.perspectives ?? null,
         reportFormat,
+        consumptionCause: entry.consumptionCause || LEGACY_CONSUMPTION_CAUSE,
+        consumptionAuthority: entry.consumptionAuthority || '',
+        consumptionReason: entry.consumptionReason || '',
+        consumptionPlan: entry.consumptionPlan || '',
       };
       runEntry.reportPayload = reportFormat === AUDIT_REPORT_SCHEMA_VERSION && entry.reportPayload
         ? entry.reportPayload

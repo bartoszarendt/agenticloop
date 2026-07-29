@@ -259,7 +259,8 @@ export function missingAncestorDirectories(targetRoot, paths) {
 
 /**
  * Validate the shape of one mutation and resolve its target-relative path to
- * an absolute path inside `targetRoot`. Returns `{ type, absPath, content }`.
+ * an absolute path inside `targetRoot`. Conditional mutations may additionally
+ * bind the exact file kind and pre-write digest the planner observed.
  *
  * @private
  */
@@ -267,12 +268,46 @@ function prepareMutation(targetRoot, mutation) {
   if (!mutation || typeof mutation !== 'object') {
     throw new Error(`mutation must be an object: ${JSON.stringify(mutation)}`);
   }
-  const { type, path, content } = mutation;
+  const { type, path, content, expectedDigest = undefined, expectedKind = undefined, validateCurrent = undefined } = mutation;
   if (type !== 'write' && type !== 'create' && type !== 'remove' && type !== 'mkdir' && type !== 'rmdir-empty') {
     throw new Error(`unsupported mutation type '${type}' for ${String(path)}`);
   }
   const absPath = resolveTargetPath(targetRoot, path);
-  return { type, relPath: path, absPath, content };
+  if (expectedDigest !== undefined && (typeof expectedDigest !== 'string' || !/^(?:sha256:)?[0-9a-f]{64}$/.test(expectedDigest))) {
+    throw new Error(`mutation '${String(path)}' expectedDigest must be a SHA-256 digest`);
+  }
+  if (expectedKind !== undefined && !['file', 'absent'].includes(expectedKind)) {
+    throw new Error(`mutation '${String(path)}' expectedKind must be 'file' or 'absent'`);
+  }
+  if (validateCurrent !== undefined && typeof validateCurrent !== 'function') {
+    throw new Error(`mutation '${String(path)}' validateCurrent must be a function`);
+  }
+  return { type, relPath: path, absPath, content, expectedDigest, expectedKind, validateCurrent };
+}
+
+function verifyExpectedMutationState(root, item) {
+  if (item.expectedDigest === undefined && item.expectedKind === undefined) return null;
+  const current = fingerprintTargetPath(root, item.relPath);
+  const kind = current === null ? 'absent' : current === 'directory' ? 'directory' : 'file';
+  if (item.expectedKind !== undefined && kind !== item.expectedKind) {
+    return `conditional mutation '${item.relPath}' is stale: expected ${item.expectedKind}, found ${kind}`;
+  }
+  if (item.expectedDigest !== undefined) {
+    const expected = item.expectedDigest.replace(/^sha256:/, '');
+    if (current !== expected) {
+      return `conditional mutation '${item.relPath}' is stale: expected digest ${item.expectedDigest}, found ${current === null ? 'absent' : current}`;
+    }
+  }
+  if (item.validateCurrent !== undefined) {
+    const validation = item.validateCurrent(readFileSync(item.absPath));
+    if (validation?.ok !== true) {
+      const detail = Array.isArray(validation?.diagnostics)
+        ? validation.diagnostics.map(item => item.message ?? item.code).join('; ')
+        : validation?.error ?? 'current carrier failed its required integrity check';
+      return `conditional mutation '${item.relPath}' is stale or malformed: ${detail}`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -292,14 +327,15 @@ function prepareMutation(targetRoot, mutation) {
  * at plan time. Those removals are non-recursive and recreated on rollback.
  *
  * @param {string} targetRoot
- * @param {Array<{type: string, path: string, content?: string|Buffer}>} mutations
- * @returns {{ ok: boolean, errors: string[], rollbackErrors: string[], writtenFiles: string[], committedPaths: string[] }}
+ * @param {Array<{type: string, path: string, content?: string|Buffer, expectedDigest?: string, expectedKind?: 'file'|'absent', validateCurrent?: Function}>} mutations
+ * @param {{beforeWrite?: Function}} [options] Testable pre-write boundary; production callers omit it.
+ * @returns {{ ok: boolean, stale: boolean, errors: string[], rollbackErrors: string[], writtenFiles: string[], committedPaths: string[] }}
  *   `errors` holds the primary failure; `rollbackErrors` reports genuine
  *   rollback failures separately. `writtenFiles` is empty on failure.
  *   `committedPaths` lists the target-relative paths that were committed
  *   before any failure (empty unless this batch succeeds).
  */
-export function executeMutationBatch(targetRoot, mutations) {
+export function executeMutationBatch(targetRoot, mutations, options = {}) {
   const root = resolve(targetRoot);
 
   // Phase 1: validate and resolve every mutation through the canonical
@@ -311,6 +347,7 @@ export function executeMutationBatch(targetRoot, mutations) {
     } catch (error) {
       return {
         ok: false,
+        stale: false,
         errors: [error.message],
         rollbackErrors: [],
         writtenFiles: [],
@@ -327,6 +364,7 @@ export function executeMutationBatch(targetRoot, mutations) {
     if (existsSync(item.absPath) && statSync(item.absPath).isDirectory()) {
       return {
         ok: false,
+        stale: false,
         errors: [`refusing directory-removal mutation '${item.relPath}'; enumerate owned files as individual remove actions`],
         rollbackErrors: [],
         writtenFiles: [],
@@ -345,6 +383,7 @@ export function executeMutationBatch(targetRoot, mutations) {
     if (existsSync(item.absPath)) {
       return {
         ok: false,
+        stale: false,
         errors: [`refusing exclusive create '${item.relPath}'; path already exists`],
         rollbackErrors: [],
         writtenFiles: [],
@@ -357,11 +396,31 @@ export function executeMutationBatch(targetRoot, mutations) {
     if (existsSync(item.absPath) && !statSync(item.absPath).isDirectory()) {
       return {
         ok: false,
+        stale: false,
         errors: [`refusing empty-directory removal '${item.relPath}'; path is not a directory`],
         rollbackErrors: [],
         writtenFiles: [],
         committedPaths: [],
       };
+    }
+  }
+
+  try {
+    options.beforeWrite?.();
+  } catch (error) {
+    return { ok: false, stale: false, errors: [error.message], rollbackErrors: [], writtenFiles: [], committedPaths: [] };
+  }
+  // This is the last common boundary before any mutation in the batch. Every
+  // conditional carrier is re-read here, after planning and immediately before
+  // the first mkdir/remove/write, so a concurrent edit cannot be overwritten.
+  for (const item of prepared) {
+    try {
+      const stale = verifyExpectedMutationState(root, item);
+      if (stale) {
+        return { ok: false, stale: true, errors: [stale], rollbackErrors: [], writtenFiles: [], committedPaths: [] };
+      }
+    } catch (error) {
+      return { ok: false, stale: false, errors: [error.message], rollbackErrors: [], writtenFiles: [], committedPaths: [] };
     }
   }
 
@@ -403,6 +462,7 @@ export function executeMutationBatch(targetRoot, mutations) {
     removeEmptyParents(root, removes.map(item => item.absPath));
     return {
       ok: true,
+      stale: false,
       errors: [],
       rollbackErrors: [],
       writtenFiles: [...writes, ...creates].map(item => item.relPath),
@@ -437,6 +497,7 @@ export function executeMutationBatch(targetRoot, mutations) {
     }
     return {
       ok: false,
+      stale: false,
       errors: [error.message],
       rollbackErrors,
       writtenFiles: [],

@@ -457,7 +457,7 @@ const DEFINITION = {
     genericAction: 'generic_accepted_to_closed',
     currentRecognition: 'isTerminalTaskTransition recognizes the allowed post-certification accepted-to-closed content delta but does not execute the closeout-owned transition',
     staleMarker: 'changed carrier, candidate, covered task, or marker input requires reprepare and a superseding marker',
-    currentRuntimeMismatch: 'deriveAuditDueWorkUnits currently ignores group_closeout for non-flat profiles; P35-03 must align derivation and terminal enforcement with this resolver',
+    currentRuntimeAlignment: 'deriveAuditDueWorkUnits and terminal enforcement derive configured and explicit scope through the same canonical resolver; indeterminate inventory and proven no-scope remain distinct outcomes.',
     decisionTable: [
       { caseId: 'configured_group_audit_enabled', scopeKind: 'configured_group', auditMode: 'enabled', scopeEstablished: true, auditCertificateRequired: true, genericTerminalAllowed: false, disposition: 'proceed', terminalAction: 'closeout_owned_accepted_to_closed', resumeCondition: null },
       { caseId: 'configured_group_audit_disabled', scopeKind: 'configured_group', auditMode: 'disabled', scopeEstablished: true, auditCertificateRequired: false, genericTerminalAllowed: false, disposition: 'proceed', terminalAction: 'closeout_owned_accepted_to_closed', resumeCondition: null },
@@ -926,7 +926,7 @@ export function validateTransitionContractDefinition(candidate = TRANSITION_CONT
 
   const terminal = candidate.terminalContract;
   const terminalRows = Array.isArray(terminal?.decisionTable) ? terminal.decisionTable : [];
-  if (!exactKeys(terminal, ['closeoutScopeRule', 'auditRule', 'scopeKinds', 'auditModes', 'explicitScopeEvidenceTypes', 'scopeDerivation', 'orderedSteps', 'owner', 'capability', 'closeoutAction', 'genericAction', 'currentRecognition', 'staleMarker', 'currentRuntimeMismatch', 'decisionTable']) ||
+  if (!exactKeys(terminal, ['closeoutScopeRule', 'auditRule', 'scopeKinds', 'auditModes', 'explicitScopeEvidenceTypes', 'scopeDerivation', 'orderedSteps', 'owner', 'capability', 'closeoutAction', 'genericAction', 'currentRecognition', 'staleMarker', 'currentRuntimeAlignment', 'decisionTable']) ||
       !nonEmpty(terminal.closeoutScopeRule) || !nonEmpty(terminal.auditRule) ||
       !exactInventory(terminal.scopeKinds, EXPECTED.scopeKinds) || !exactInventory(terminal.auditModes, EXPECTED.auditModes) ||
       !exactInventory(terminal.explicitScopeEvidenceTypes, EXPECTED.explicitScopeEvidenceTypes) ||
@@ -970,7 +970,7 @@ export function validateTransitionContractDefinition(candidate = TRANSITION_CONT
     }
   }
   if (!nonEmpty(terminal?.currentRecognition) || !terminal.currentRecognition.includes('does not execute') ||
-      !nonEmpty(terminal.currentRuntimeMismatch) || !terminal.currentRuntimeMismatch.includes('deriveAuditDueWorkUnits')) errors.push('terminal current-runtime recognition boundary is missing');
+       !nonEmpty(terminal.currentRuntimeAlignment) || !terminal.currentRuntimeAlignment.includes('deriveAuditDueWorkUnits')) errors.push('terminal current-runtime alignment assertion is missing');
 
   if (!exactKeys(candidate.markdownPolicy, ['currentSchema', 'preservation', 'idempotence', 'legacyMigration'])) errors.push('Markdown policy contains unknown or missing properties');
   for (const key of ['currentSchema', 'preservation', 'idempotence', 'legacyMigration']) {

@@ -134,6 +134,7 @@ export function createIo(options = {}) {
     warn: makeWriter(stderr),
     ghCommandRunner: options.ghCommandRunner ?? null,
     auditProvenanceVerifier: options.auditProvenanceVerifier ?? null,
+    fsMutationOptions: options.fsMutationOptions ?? null,
   };
 
   io.style = (text, code) => (color ? `\u001b[${code}m${text}\u001b[0m` : text);

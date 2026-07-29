@@ -85,6 +85,22 @@ describe('content-aware workflow deltas', () => {
     assert.notEqual(workflowRecordSubstance(bodyAccepted), workflowRecordSubstance(bodyClosed));
   });
 
+  it('normalizes the marker-only Comments section and terminal status out of carrier revisions', () => {
+    const accepted = '---\ntask_id: T-001\nstatus: accepted\n---\n\n# Task';
+    const marker = renderCloseoutMarker({
+      status: 'complete',
+      workUnit: 'milestone:M00',
+      artifact: 'commit:abc',
+      gateDigest: `sha256:${'a'.repeat(64)}`,
+    });
+    const closedWithMarker = `${accepted.replace('status: accepted', 'status: closed')}\n\n## Comments\n\n${marker}\n`;
+    assert.equal(workflowRecordSubstance(closedWithMarker), workflowRecordSubstance(accepted));
+    assert.notEqual(
+      workflowRecordSubstance(`${closedWithMarker}\nSubstantive comment\n`),
+      workflowRecordSubstance(accepted)
+    );
+  });
+
   it('binds appended closeout events to the path task, files backend, and unique event id', () => {
     const mismatch = validateWorkflowDeltaContent('event_log', {
       path: '.agenticloop/logs/T-001.jsonl',

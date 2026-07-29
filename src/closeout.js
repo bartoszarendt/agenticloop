@@ -45,6 +45,7 @@ import {
 import { resolveCoveredGitHubTask } from './github-task-identity.js';
 import { evaluatePullRequestLifecycle } from './closeout-github.js';
 import { validateEvent, DEFAULT_LOG_DIR } from './event-logging.js';
+import { deriveConfiguredGroupScopes, deriveExplicitScopes } from './terminal-scope.js';
 import {
   IMPROVEMENT_ID_PATTERN,
   IMPROVEMENTS_DIRECTORY_RELATIVE_PATH,
@@ -869,39 +870,41 @@ export function evaluateCloseout(target, params) {
  *
  * @param {string} target
  * @param {object} [config]
- * @returns {{ workUnit: string, tasks: string[], state: 'audit_due' }[]}
+ * @returns {(
+ *   { workUnit: string, tasks: string[], state: 'audit_due' } |
+ *   { workUnit: null, tasks: [], state: 'indeterminate', reason: string }
+ * )[]}
  */
 export function deriveAuditDueWorkUnits(target, config = PROJECT_MAP_DEFAULTS) {
-  const profile = String(config?.grouping_profile ?? 'flat');
-  if (profile === 'flat' || String(config?.task_backend ?? 'files') !== 'files') {
-    return [];
-  }
+  if (String(config?.task_backend ?? 'files') !== 'files') return [];
   if (resolveWorkUnitAudit(config) === 'disabled') return [];
-  const tasksDir = join(target, '.agenticloop', 'tasks');
-  if (!existsSync(tasksDir) || !statSync(tasksDir).isDirectory()) return [];
-  const membership = new Map();
-  for (const name of readdirSync(tasksDir).filter(item => item.endsWith('.md')).sort()) {
-    const content = readFileSync(join(tasksDir, name), 'utf-8');
-    const [frontmatter] = parseFrontmatter(content);
-    const status = String(frontmatter?.status ?? '').trim();
-    if (status !== 'accepted' && status !== 'closed') continue;
-    const taskId = String(frontmatter?.task_id ?? '').trim() || name.replace(/\.md$/, '');
-    const grouping = markdownSection(content, '## Grouping')?.body ?? '';
-    for (const token of grouping.split(/[\s,]+/).map(item => item.trim()).filter(Boolean)) {
-      const identity = parseWorkUnitIdentity(token);
-      if (!identity.ok || identity.kind !== profile) continue;
-      const list = membership.get(identity.canonical) ?? [];
-      list.push(taskId);
-      membership.set(identity.canonical, list);
-    }
-  }
   const audited = new Set(
     listAuditRecordFiles(target).map(entry => parseAuditRecord(entry.content).workUnit)
   );
-  return [...membership.entries()]
+  // Configured and explicit scope are derived through the same resolver and
+  // evidence that terminal enforcement consumes, so audit-due reporting and
+  // terminal refusal can never disagree about what a work unit covers.
+  const configured = deriveConfiguredGroupScopes(target, config);
+  const explicit = deriveExplicitScopes(target, config);
+  const inventoryErrors = [...new Set([
+    ...(configured.ok ? [] : configured.errors),
+    ...(explicit.ok ? [] : explicit.errors),
+  ])];
+  if (inventoryErrors.length > 0) {
+    return [{
+      workUnit: null,
+      tasks: [],
+      state: 'indeterminate',
+      reason: `current task inventory could not be validated: ${inventoryErrors.join('; ')}`,
+    }];
+  }
+  const scopes = [...configured.scopes, ...explicit.scopes];
+  const merged = new Map();
+  for (const scope of scopes) if (!merged.has(scope.workUnit)) merged.set(scope.workUnit, scope.tasks);
+  return [...merged.entries()]
     .filter(([workUnit]) => !audited.has(workUnit))
-    .map(([workUnit, tasks]) => ({ workUnit, tasks: tasks.sort(), state: 'audit_due' }))
-    .sort((left, right) => left.workUnit.localeCompare(right.workUnit));
+    .map(([workUnit, tasks]) => ({ workUnit, tasks, state: 'audit_due' }))
+    .sort((left, right) => (left.workUnit < right.workUnit ? -1 : left.workUnit > right.workUnit ? 1 : 0));
 }
 
 // ---------------------------------------------------------------------------

@@ -12,19 +12,28 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.js';
 import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
 import { defaultGhCommandRunner } from './gh-helpers.js';
 import { evaluateCloseout,
+  filesTaskInfo,
   renderMarkerForPacket,
   upsertCloseoutMarkerInTaskRecord,
   verifyCloseoutStatus,
 } from './closeout.js';
+import { parseFrontmatter as parseCarrierFrontmatter, replaceFrontmatterField as replaceCloseoutFrontmatterField } from './frontmatter.js';
+import { validateTaskRecordDiagnostics } from './validate-config.js';
+import { applyGitHubTaskBody, fetchGitHubTaskBody, setTaskBodyFrontmatterField } from './github-task-body.js';
+import { canonicalSha256 } from './canonical-json.js';
 import {
   validateCloseoutPacket,
   closeoutPacketDigest,
   closeoutProvenanceProjection,
+  parseCloseoutMarkers,
+  resolveCurrentCloseoutMarkers,
+  workflowRecordSubstance,
 } from './closeout-contract.js';
 import {
   checkGitHubMarkerCurrent,
@@ -52,6 +61,7 @@ import { createValidationResult, emitValidationResult } from './result-envelope.
 import { presentDiagnostic } from './diagnostic-presentation.js';
 import { getProjectRoleCapabilities } from './role-capabilities.js';
 import { PublicCommandError } from './public-error.js';
+import { evaluateTaskRecordRoot } from './task-record-root.js';
 
 function optionString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -409,12 +419,31 @@ export async function cmdCloseout(args, io = createIo()) {
       if (canonicalJson(comparablePacket(live.packet)) !== canonicalJson(comparablePacket(packet))) {
         staleReasons.push('live closeout facts or derived state no longer match the packet; re-run closeout prepare');
       }
-      if (staleReasons.length > 0) {
+      // A published marker is not a completed closeout. When publication is
+      // already done for this exact packet and nothing else drifted, the
+      // operation resumes at the terminal transition instead of reporting a
+      // stale packet; the alternative leaves covered tasks stranded in
+      // `accepted` with no rerun able to finish them.
+      const gitHubResume = staleReasons.length > 0 && closeoutGitHubResumeAvailable(packet, live);
+      if (gitHubResume) {
+        io.out(`Marker ${packet.digest} is already published on the GitHub carrier; resuming at the closeout-owned terminal transition.`);
+      }
+      if (staleReasons.length > 0 && !gitHubResume) {
         // Same-packet retry: the exact digest may already be the current
         // marker. That is idempotent success, never a misleading stale
         // failure - but only when every other live fact still matches.
         if (packet.backend !== 'github' && filesPacketAlreadyCurrent(target, packet, live).current) {
           io.out(`Marker ${packet.digest} is already current in ${packet.carrier?.reference}; nothing to do.`);
+          return 0;
+        }
+        // A completed closeout-owned terminal transition necessarily changes
+        // the covered task statuses, so the packet that authorized it will
+        // read as stale on rerun. Resuming from that already-verified terminal
+        // step is success, not a stale-packet failure.
+        const complete = closeoutTerminalAlreadyComplete(target, config, packet, live);
+        if (complete.current) {
+          io.out(`Marker ${packet.digest} is current and every covered task is already closed; nothing to do.`);
+          io.out(`  resumed step: closeout_owned_accepted_to_closed (${complete.tasks.join(', ')})`);
           return 0;
         }
         for (const message of staleReasons) io.err(`closeout record: stale packet: ${message}`);
@@ -440,7 +469,14 @@ export async function cmdCloseout(args, io = createIo()) {
           repo: optionString(opts.repo),
         }, io);
         const finalLive = evaluateCloseout(target, finalParams);
-        if (canonicalJson(comparablePacket(finalLive.packet)) !== canonicalJson(comparablePacket(packet))) {
+        // On a resume the marker this packet already published is part of live
+        // state, so the full comparison necessarily differs. The bounded
+        // projection still has to match exactly, so unrelated drift immediately
+        // before publication continues to fail closed.
+        const finalUnchanged = gitHubResume
+          ? packetFactsUnchanged(finalLive, packet)
+          : canonicalJson(comparablePacket(finalLive.packet)) === canonicalJson(comparablePacket(packet));
+        if (!finalUnchanged) {
           io.err('closeout record: stale packet: GitHub state changed immediately before publication; re-run closeout prepare');
           return 1;
         }
@@ -458,6 +494,361 @@ export async function cmdCloseout(args, io = createIo()) {
   }
 }
 
+/**
+ * The canonical `closeout_owned_accepted_to_closed` action.
+ *
+ * Generic `task status ... closed` is refused for every established closeout
+ * scope, so the terminal transition has to remain reachable somewhere: it lives
+ * here, behind a fresh, valid, completion-eligible closeout packet and a
+ * published marker. Blocking generic closure without this would make legitimate
+ * closeout impossible.
+ *
+ * The files backend applies the exact covered task set through one guarded
+ * transaction. GitHub cannot offer a cross-resource transaction, so its
+ * per-carrier transitions are individually guarded and partial external
+ * progress is reported exactly rather than described as atomic.
+ */
+/**
+ * True when this exact packet's marker is current and every covered task has
+ * already completed the closeout-owned terminal transition.
+ *
+ * The terminal transition changes the covered task statuses, so the authorizing
+ * packet always reads as stale afterwards. Recognizing that verified terminal
+ * state lets a safe rerun resume instead of reporting a confusing conflict.
+ * Anything less than a fully closed covered set falls through to the normal
+ * stale handling.
+ */
+function closeoutTerminalAlreadyComplete(target, config, packet, live) {
+  if (packet.recommended_status !== 'complete') return { current: false, tasks: [] };
+  const markers = live?.markerState?.current ?? [];
+  const marker = markers.length === 1 ? markers[0] : null;
+  if (!marker || !marker.provenanced || marker.malformed) return { current: false, tasks: [] };
+  if (String(marker.fields?.AGENT_CLOSEOUT_GATE ?? '') !== String(packet.digest)) return { current: false, tasks: [] };
+  if (packet.backend === 'github') {
+    // GitHub carrier statuses are only re-readable through the transport, which
+    // this read-only comparison does not own; the per-carrier transition below
+    // reports its own already-verified steps.
+    return { current: false, tasks: [] };
+  }
+  const tasks = [];
+  for (const taskId of packet.covered_tasks) {
+    const info = filesTaskInfo(target, config, taskId);
+    if (!info.exists || info.status !== 'closed') return { current: false, tasks: [] };
+    tasks.push(taskId);
+  }
+  if (tasks.length === 0) return { current: false, tasks: [] };
+  // Files carrier revisions already normalize the closeout marker and the
+  // accepted -> closed status transition. Any remaining revision change is
+  // substantive drift and must stay inside the canonical comparison.
+  if (!packetFactsUnchanged(live, packet)) {
+    return { current: false, tasks: [] };
+  }
+  return { current: true, tasks };
+}
+
+/**
+ * Compare every authoritative closeout fact between live state and the packet.
+ *
+ * The basis is the canonical `closeoutProvenanceProjection` — the same
+ * projection the packet digest is computed over — rather than a hand-picked
+ * subset. A narrower ad hoc list silently exempts whatever it forgets, and what
+ * it forgot here was backend, carrier identity and revision, gates, finding
+ * dispositions, `audit_opt_out`, and the predecessor marker: all authoritative
+ * inputs. The derived conclusions are compared alongside it.
+ *
+ * Publishing a marker leaves carrier revisions untouched: they are computed with
+ * marker blocks normalized out, precisely so publication cannot masquerade as a
+ * substantive carrier edit. A substantive carrier edit after publication
+ * therefore still fails closed.
+ *
+ * Exactly one field does shift as a consequence of publication:
+ * `predecessor_marker` becomes the marker this operation just published. That is
+ * tolerated only when the live value equals this packet's own digest — the
+ * marker this operation is provably responsible for. Any other predecessor is
+ * some other operation's marker and is genuine drift.
+ *
+ * @param {{packet?: object}} live
+ * @param {object} packet
+ */
+export function packetFactsUnchanged(live, packet) {
+  const livePacket = live?.packet ?? {};
+  const selfPublished = String(livePacket.predecessor_marker ?? 'none') === String(packet.digest ?? '');
+  const comparable = source => {
+    const provenance = closeoutProvenanceProjection(source);
+    if (selfPublished) provenance.predecessor_marker = '<this-operation>';
+    return canonicalJson({
+      provenance,
+      reasons: source.reasons,
+      publishable: source.publishable,
+      completion_eligible: source.completion_eligible,
+      recommended_status: source.recommended_status,
+    });
+  };
+  return comparable(livePacket) === comparable(packet);
+}
+
+/**
+ * True when this exact packet's marker is already published on the GitHub
+ * carrier and the operation may safely resume at the terminal transition.
+ *
+ * GitHub carrier statuses are only readable through the transport, so this
+ * cannot assert that the covered tasks are closed the way the files backend
+ * can; it asserts only that publication is done and no unrelated fact drifted.
+ * The per-carrier terminal transition re-reads each carrier and reports its own
+ * already-verified steps, so a resume that turns out to be complete is a no-op
+ * rather than a second write.
+ */
+function closeoutGitHubResumeAvailable(packet, live) {
+  if (packet.backend !== 'github' || packet.recommended_status !== 'complete') return false;
+  const markers = live?.markerState?.current ?? [];
+  const marker = markers.length === 1 ? markers[0] : null;
+  if (!marker || !marker.provenanced || marker.malformed) return false;
+  if (String(marker.fields?.AGENT_CLOSEOUT_GATE ?? '') !== String(packet.digest)) return false;
+  return packetFactsUnchanged(live, packet);
+}
+
+function closeoutContentDigest(content) {
+  return `sha256:${canonicalSha256(String(content ?? ''))}`;
+}
+
+function closeoutTerminalReceipt({ workUnit, backend, packetDigest, transitions, changedPaths, disposition, recovery }) {
+  return {
+    kind: 'agenticloop.closeout-terminal-receipt',
+    schemaVersion: 1,
+    action: 'closeout_owned_accepted_to_closed',
+    backend,
+    workUnit,
+    packetDigest,
+    transitions,
+    changedPaths: [...changedPaths].sort(),
+    mutationDisposition: disposition,
+    unresolved: disposition !== 'committed' && disposition !== 'already_current',
+    recovery: recovery ?? null,
+    atomicity: backend === 'files'
+      ? 'one guarded filesystem transaction across the exact covered task set'
+      : 'per-carrier guarded transitions; GitHub provides no cross-resource transaction',
+    revalidateCommand: `npx agenticloop closeout status --work-unit ${workUnit} --json`,
+  };
+}
+
+/**
+ * Transition the exact covered task set from `accepted` to `closed` on the
+ * files backend through one guarded transaction.
+ *
+ * A task already `closed` is a verified terminal step and is resumed, not
+ * rewritten. Any other current status blocks the whole action before a write.
+ */
+export function applyFilesCloseoutTerminalTransition(target, config, packet, io) {
+  const writes = [];
+  const transitions = [];
+  for (const taskId of packet.covered_tasks) {
+    const info = filesTaskInfo(target, config, taskId);
+    if (!info.exists) {
+      return {
+        ok: false,
+        receipt: closeoutTerminalReceipt({
+          workUnit: packet.work_unit, backend: 'files', packetDigest: packet.digest,
+          transitions, changedPaths: [], disposition: 'uncommitted',
+          recovery: `Covered task '${taskId}' has no current record at ${info.relPath}; nothing was written.`,
+        }),
+        errors: [`covered task '${taskId}' has no current record at ${info.relPath}`],
+      };
+    }
+    if (info.status === 'closed') {
+      transitions.push({ taskId, carrier: info.relPath, from: 'closed', to: 'closed', state: 'already_verified' });
+      continue;
+    }
+    if (info.status !== 'accepted') {
+      return {
+        ok: false,
+        receipt: closeoutTerminalReceipt({
+          workUnit: packet.work_unit, backend: 'files', packetDigest: packet.digest,
+          transitions, changedPaths: [], disposition: 'uncommitted',
+          recovery: `Covered task '${taskId}' is '${info.status || '(absent)'}' rather than 'accepted'; nothing was written.`,
+        }),
+        errors: [`covered task '${taskId}' is '${info.status || '(absent)'}' and cannot take the closeout-owned terminal transition`],
+      };
+    }
+    const file = resolve(target, info.relPath);
+    const currentBytes = readFileSync(file);
+    const current = currentBytes.toString('utf8');
+    io?.fsMutationOptions?.afterCarrierRead?.({ taskId, path: info.relPath });
+    const root = evaluateTaskRecordRoot(current, { bytes: currentBytes });
+    if (!root.ok) {
+      return {
+        ok: false,
+        receipt: closeoutTerminalReceipt({
+          workUnit: packet.work_unit, backend: 'files', packetDigest: packet.digest,
+          transitions, changedPaths: [], disposition: 'uncommitted',
+          recovery: `Covered task '${taskId}' is not a canonical current task record; repair it before closeout record.`,
+        }),
+        errors: root.diagnostics.map(item => `covered task '${taskId}': ${item.message ?? item.code}`),
+      };
+    }
+    const candidate = replaceCloseoutFrontmatterField(current, 'status', 'closed');
+    const diagnostics = validateTaskRecordDiagnostics(candidate, info.relPath);
+    if (diagnostics.length > 0) {
+      return {
+        ok: false,
+        receipt: closeoutTerminalReceipt({
+          workUnit: packet.work_unit, backend: 'files', packetDigest: packet.digest,
+          transitions, changedPaths: [], disposition: 'uncommitted',
+          recovery: `The terminal candidate for '${taskId}' is invalid; nothing was written.`,
+        }),
+        errors: diagnostics.map(item => `covered task '${taskId}': ${item.message}`),
+      };
+    }
+    writes.push({
+      type: 'write', path: info.relPath, content: candidate,
+      expectedDigest: createHash('sha256').update(currentBytes).digest('hex'), expectedKind: 'file',
+      validateCurrent: bytes => evaluateTaskRecordRoot(bytes.toString('utf8'), { bytes }),
+    });
+    transitions.push({
+      taskId, carrier: info.relPath, from: 'accepted', to: 'closed', state: 'planned',
+      beforeDigest: closeoutContentDigest(current), candidateDigest: closeoutContentDigest(candidate),
+    });
+  }
+
+  if (writes.length === 0) {
+    return {
+      ok: true,
+      receipt: closeoutTerminalReceipt({
+        workUnit: packet.work_unit, backend: 'files', packetDigest: packet.digest,
+        transitions, changedPaths: [], disposition: 'already_current',
+      }),
+      errors: [],
+    };
+  }
+
+  const committed = executeMutationBatch(target, writes, io?.fsMutationOptions ?? {});
+  if (!committed.ok) {
+    for (const error of committed.errors) io.err(`closeout terminal transition failed: ${error}`);
+    for (const error of committed.rollbackErrors) io.err(`rollback error: ${error}`);
+    const rolledBack = committed.rollbackErrors.length === 0;
+    return {
+      ok: false,
+      receipt: closeoutTerminalReceipt({
+        workUnit: packet.work_unit, backend: 'files', packetDigest: packet.digest,
+        transitions, changedPaths: rolledBack ? [] : writes.map(item => item.path),
+        disposition: rolledBack ? 'uncommitted' : 'partially_committed',
+        recovery: rolledBack
+          ? 'The guarded transaction rolled back; every covered task record is unchanged. Repair the reported cause and rerun closeout record.'
+          : `The guarded transaction failed and rollback reported errors: ${committed.rollbackErrors.join('; ')}. Inspect the covered task records before rerunning.`,
+      }),
+      errors: committed.errors,
+    };
+  }
+
+  const unresolved = [];
+  for (const transition of transitions) {
+    if (transition.state !== 'planned') continue;
+    const written = readFileSync(resolve(target, transition.carrier), 'utf-8');
+    const resultingDigest = closeoutContentDigest(written);
+    transition.resultingDigest = resultingDigest;
+    transition.state = resultingDigest === transition.candidateDigest &&
+      validateTaskRecordDiagnostics(written, transition.carrier).length === 0
+      ? 'committed'
+      : 'unresolved';
+    if (transition.state === 'unresolved') unresolved.push(transition.carrier);
+  }
+  if (unresolved.length > 0) {
+    return {
+      ok: false,
+      receipt: closeoutTerminalReceipt({
+        workUnit: packet.work_unit, backend: 'files', packetDigest: packet.digest,
+        transitions, changedPaths: committed.writtenFiles, disposition: 'unresolved',
+        recovery: `These carriers committed but do not equal their validated candidates: ${unresolved.join(', ')}. Preserve and inspect them before any further transition.`,
+      }),
+      errors: [`the committed terminal records do not equal their validated candidates: ${unresolved.join(', ')}`],
+    };
+  }
+  return {
+    ok: true,
+    receipt: closeoutTerminalReceipt({
+      workUnit: packet.work_unit, backend: 'files', packetDigest: packet.digest,
+      transitions, changedPaths: committed.writtenFiles, disposition: 'committed',
+    }),
+    errors: [],
+  };
+}
+
+/**
+ * Transition the exact covered task set on GitHub through guarded per-carrier
+ * body mutations. Partial external progress is reported exactly; no
+ * cross-resource atomicity is claimed.
+ */
+function applyGitHubCloseoutTerminalTransition(target, config, packet, liveParams, io) {
+  const commandRunner = liveParams.ghRunner ?? defaultGhCommandRunner;
+  const transitions = [];
+  const changedPaths = [];
+  let failed = null;
+  for (const taskId of packet.covered_tasks) {
+    const resolved = resolveCoveredGitHubTask(liveParams.inventory, taskId);
+    if (!resolved.found) {
+      failed = `covered task '${taskId}' has no current GitHub carrier`;
+      transitions.push({ taskId, carrier: null, state: 'unresolved' });
+      break;
+    }
+    const issue = resolved.issue.number;
+    const current = fetchGitHubTaskBody({ issue, repo: liveParams.repo, commandRunner, projectMapConfig: config });
+    const status = String(parseCarrierFrontmatter(current.body)[0]?.status ?? '').trim();
+    if (status === 'closed') {
+      transitions.push({ taskId, carrier: `issue:${issue}`, from: 'closed', to: 'closed', state: 'already_verified' });
+      continue;
+    }
+    if (status !== 'accepted') {
+      failed = `covered task '${taskId}' is '${status || '(absent)'}' and cannot take the closeout-owned terminal transition`;
+      transitions.push({ taskId, carrier: `issue:${issue}`, from: status, to: 'closed', state: 'blocked' });
+      break;
+    }
+    const candidate = setTaskBodyFrontmatterField(current.body, 'status', 'closed').body;
+    const applied = applyGitHubTaskBody({
+      issue,
+      repo: liveParams.repo,
+      body: candidate,
+      expectDigest: current.digest,
+      yes: true,
+      commandRunner,
+      recoveryDir: join(target, '.agenticloop', 'tmp'),
+      projectMapConfig: config,
+    });
+    if (!applied.ok) {
+      failed = `covered task '${taskId}' could not be transitioned: ${(applied.errors ?? ['unknown transport failure']).join('; ')}`;
+      transitions.push({ taskId, carrier: `issue:${issue}`, from: status, to: 'closed', state: 'unresolved', receipt: applied.receipt ?? null });
+      break;
+    }
+    changedPaths.push(`issue:${issue}`);
+    transitions.push({
+      taskId, carrier: `issue:${issue}`, from: status, to: 'closed',
+      state: applied.applied ? 'committed' : 'already_verified', receipt: applied.receipt ?? null,
+    });
+  }
+  if (failed) {
+    io.err(`closeout terminal transition failed: ${failed}`);
+    const progressed = changedPaths.length > 0;
+    return {
+      ok: false,
+      receipt: closeoutTerminalReceipt({
+        workUnit: packet.work_unit, backend: 'github', packetDigest: packet.digest,
+        transitions, changedPaths, disposition: progressed ? 'partially_committed' : 'uncommitted',
+        recovery: progressed
+          ? `These carriers already reached 'closed': ${changedPaths.join(', ')}. Rerun closeout record to resume at the remaining carriers; the completed ones are skipped as already verified.`
+          : 'No GitHub carrier was transitioned. Repair the reported cause and rerun closeout record.',
+      }),
+      errors: [failed],
+    };
+  }
+  return {
+    ok: true,
+    receipt: closeoutTerminalReceipt({
+      workUnit: packet.work_unit, backend: 'github', packetDigest: packet.digest,
+      transitions, changedPaths,
+      disposition: changedPaths.length > 0 ? 'committed' : 'already_current',
+    }),
+    errors: [],
+  };
+}
+
 function recordFilesMarker(target, config, packet, markerBody, live, mode, io) {
   const carrierRef = packet.carrier?.reference;
   if (!carrierRef) {
@@ -469,8 +860,20 @@ function recordFilesMarker(target, config, packet, markerBody, live, mode, io) {
     io.err(`closeout record: marker carrier '${carrierRef}' no longer exists`);
     return 1;
   }
-  const content = readFileSync(carrierFile, 'utf-8');
-  const priorMarkers = live.markerState.current;
+  const currentBytes = readFileSync(carrierFile);
+  const content = currentBytes.toString('utf-8');
+  const expectedRevision = live?.packet?.carrier?.revision ?? packet.carrier?.revision;
+  const currentRevision = `sha256:${createHash('sha256').update(workflowRecordSubstance(content), 'utf-8').digest('hex')}`;
+  if (!expectedRevision || currentRevision !== expectedRevision) {
+    io.err(`closeout record: marker carrier '${carrierRef}' changed after final evaluation; re-run closeout prepare`);
+    return 1;
+  }
+  const currentMarkerState = resolveCurrentCloseoutMarkers(parseCloseoutMarkers(content));
+  if (currentMarkerState.error) {
+    io.err(`closeout record: marker carrier '${carrierRef}' is contradictory: ${currentMarkerState.error}`);
+    return 1;
+  }
+  const priorMarkers = currentMarkerState.current;
   const updated = upsertCloseoutMarkerInTaskRecord(content, markerBody, { priorMarkers });
 
   if (mode.dryRun) {
@@ -478,17 +881,65 @@ function recordFilesMarker(target, config, packet, markerBody, live, mode, io) {
     io.out(markerBody);
     return 0;
   }
-  const committed = executeMutationBatch(target, [{ type: 'write', path: carrierRef, content: updated }]);
+  const committed = executeMutationBatch(target, [{
+    type: 'write',
+    path: carrierRef,
+    content: updated,
+    expectedDigest: createHash('sha256').update(currentBytes).digest('hex'),
+    expectedKind: 'file',
+    validateCurrent: bytes => evaluateTaskRecordRoot(bytes.toString('utf8'), { bytes }),
+  }], io?.fsMutationOptions ?? {});
   if (!committed.ok) {
     for (const error of committed.errors) io.err(`closeout record failed; the carrier is unchanged: ${error}`);
     for (const error of committed.rollbackErrors) io.err(`rollback error: ${error}`);
     return 1;
   }
+  const publishedContent = readFileSync(carrierFile, 'utf-8');
+  const publishedMarkerState = resolveCurrentCloseoutMarkers(parseCloseoutMarkers(publishedContent));
+  const publishedMarker = publishedMarkerState.current.length === 1
+    ? publishedMarkerState.current[0]
+    : null;
+  if (
+    publishedContent !== updated
+    || publishedMarkerState.error
+    || !publishedMarker?.provenanced
+    || publishedMarker.malformed
+    || String(publishedMarker.fields?.AGENT_CLOSEOUT_GATE ?? '') !== String(packet.digest)
+  ) {
+    io.err(
+      `closeout record: marker publication on '${carrierRef}' could not be verified as the unique current packet; ` +
+      'covered tasks were not closed'
+    );
+    return 1;
+  }
   io.out(`Recorded ${packet.recommended_status} marker in ${carrierRef} (${packet.digest})`);
   if (packet.recommended_status !== 'complete') {
     io.out('  This marker is truthful state, not completion; completion requires a completion-eligible packet.');
+    return 0;
   }
-  return 0;
+
+  // The marker is the last required gate before the closeout-owned terminal
+  // transition. Generic closure is refused for every established scope, so this
+  // is the only route by which a covered task set reaches `closed`.
+  const terminal = applyFilesCloseoutTerminalTransition(target, config, packet, io);
+  reportTerminalTransition(terminal, io);
+  return terminal.ok ? 0 : 1;
+}
+
+/** Print the closeout-owned terminal transition outcome and its receipt. */
+function reportTerminalTransition(terminal, io) {
+  const { receipt } = terminal;
+  if (terminal.ok) {
+    io.out(receipt.mutationDisposition === 'already_current'
+      ? `  closeout_owned_accepted_to_closed: every covered task was already closed (${receipt.workUnit}).`
+      : `  closeout_owned_accepted_to_closed: closed ${receipt.changedPaths.length} covered task carrier(s) for ${receipt.workUnit}.`);
+    io.out(`  atomicity: ${receipt.atomicity}`);
+    io.out(`  revalidate: ${receipt.revalidateCommand}`);
+    return;
+  }
+  for (const error of terminal.errors) io.err(`closeout record: ${error}`);
+  if (receipt.recovery) io.err(`  recovery: ${receipt.recovery}`);
+  io.err(`  atomicity: ${receipt.atomicity}`);
 }
 
 async function recordGitHubMarker(target, config, packet, markerBody, liveParams, mode, io) {
@@ -522,8 +973,20 @@ async function recordGitHubMarker(target, config, packet, markerBody, liveParams
     return 1;
   }
   if (current.alreadyCurrent) {
-    io.out(`Marker ${packet.digest} is already current on ${carrier.reference}; nothing to do.`);
-    return 0;
+    // Publication is done, but publication is not the whole operation. The
+    // covered tasks still have to complete the closeout-owned terminal
+    // transition, and a first run that published the marker and then failed
+    // partway through those transitions is exactly the case a rerun exists to
+    // finish. Returning success here would report completion while covered
+    // tasks remained accepted.
+    io.out(`Marker ${packet.digest} is already current on ${carrier.reference}; resuming at the terminal transition.`);
+    if (packet.recommended_status !== 'complete') {
+      io.out('  This marker is truthful state, not completion; completion requires a completion-eligible packet.');
+      return 0;
+    }
+    const resumed = applyGitHubCloseoutTerminalTransition(target, config, packet, liveParams, io);
+    reportTerminalTransition(resumed, io);
+    return resumed.ok ? 0 : 1;
   }
 
   // Final pre-mutation revalidation: the carrier comments and task states are
@@ -533,6 +996,17 @@ async function recordGitHubMarker(target, config, packet, markerBody, liveParams
   const comments = fetchCarrierComments(ghRunner, issueNumber, { repo: liveParams.repo });
   if (!comments.ok) {
     io.err(`closeout record: cannot revalidate the carrier before publication: ${comments.error}`);
+    return 1;
+  }
+  const currentResolution = resolveGitHubCurrentMarkers(comments.comments, liveParams.trustedAccount);
+  const expectedResolution = liveParams.markerResolution;
+  if (
+    currentResolution.error
+    || !expectedResolution
+    || gitHubCarrierRevision(comments.comments) !== liveParams.carrier?.revision
+    || canonicalJson(currentResolution) !== canonicalJson(expectedResolution)
+  ) {
+    io.err('closeout record: GitHub marker carrier changed after final evaluation; re-run closeout prepare');
     return 1;
   }
   const published = publishGitHubCloseoutMarker(ghRunner, {
@@ -546,11 +1020,27 @@ async function recordGitHubMarker(target, config, packet, markerBody, liveParams
     io.err(`closeout record: GitHub publication failed: ${published.error}`);
     return 1;
   }
+  const verified = checkGitHubMarkerCurrent(ghRunner, {
+    issueNumber,
+    digest: packet.digest,
+    repo: liveParams.repo,
+    expectedLogin: liveParams.trustedAccount,
+  });
+  if (verified.error || !verified.alreadyCurrent) {
+    io.err(
+      `closeout record: published GitHub marker is not the unique current packet` +
+      (verified.error ? `: ${verified.error}` : '')
+    );
+    return 1;
+  }
   io.out(published.ambiguousRecovered
     ? `Marker ${packet.digest} recovered after an ambiguous remote response on ${carrier.reference}; no duplicate posted.`
     : `Recorded ${packet.recommended_status} marker on ${carrier.reference} (${packet.digest})`);
   if (packet.recommended_status !== 'complete') {
     io.out('  This marker is truthful state, not completion; completion requires a completion-eligible packet.');
+    return 0;
   }
-  return 0;
+  const terminal = applyGitHubCloseoutTerminalTransition(target, config, packet, liveParams, io);
+  reportTerminalTransition(terminal, io);
+  return terminal.ok ? 0 : 1;
 }

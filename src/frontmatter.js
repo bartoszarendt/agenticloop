@@ -1,5 +1,7 @@
 // @ts-check
 
+import { VerificationContextMalformedError } from './public-error.js';
+
 /**
  * Minimal YAML-ish frontmatter parser for Markdown files.
  * Parses indentation-based nested mappings, scalar sequences, inline arrays,
@@ -290,4 +292,46 @@ export function parseFrontmatter(content) {
   }
 
   return [data, body];
+}
+
+/**
+ * Replace, insert, or remove one field inside the leading YAML frontmatter
+ * block. A matching `key:` line elsewhere in the body (for example inside a
+ * fenced example) is never touched.
+ *
+ * This is the one canonical frontmatter field mutator; the task command and the
+ * closeout-owned terminal transition both use it so their rendering cannot
+ * drift apart.
+ *
+ * @param {string} content
+ * @param {string} key
+ * @param {string|null} value  `null` removes the field.
+ * @returns {string}
+ */
+export function replaceFrontmatterField(content, key, value) {
+  // Operate only inside the leading YAML frontmatter block so a matching
+  // `key:` line elsewhere in the body (e.g. a fenced example) is never touched.
+  const fence = content.match(/^(---[ \t]*\r?\n)([\s\S]*?)(\r?\n---[ \t]*(?:\r?\n|$))/);
+  if (!fence || fence.index === undefined) {
+    throw new VerificationContextMalformedError('Task record missing YAML frontmatter');
+  }
+  const fenceIndex = fence.index;
+  const [full, open, block, close] = fence;
+  const eol = block.includes('\r\n') ? '\r\n' : '\n';
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const keyPattern = new RegExp(`^${escapedKey}:`);
+  const lines = block.split(/\r?\n/);
+  const index = lines.findIndex(l => keyPattern.test(l));
+
+  if (value === null) {
+    if (index === -1) return content;
+    lines.splice(index, 1);
+  } else if (index === -1) {
+    lines.unshift(`${key}: ${value}`);
+  } else {
+    lines[index] = `${key}: ${value}`;
+  }
+
+  const newBlock = lines.join(eol);
+  return content.slice(0, fenceIndex) + open + newBlock + close + content.slice(fenceIndex + full.length);
 }

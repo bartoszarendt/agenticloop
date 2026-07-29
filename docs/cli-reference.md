@@ -282,16 +282,70 @@ Routine edits avoid a whole-body rewrite:
 
 ```text
 npx agenticloop task-body set-field --issue <n> --field review_budget --value 3 --expect-digest <digest> --dry-run
-npx agenticloop task-body transition --issue <n> --status agent-ready --expect-digest <digest> --base <base-ref> --dry-run
+npx agenticloop task-body transition --issue <n> --status agent-ready --expect-digest <digest> --base <base-ref> --dependencies <dependency-snapshot.json> --dry-run
 npx agenticloop task-body establish-baseline --issue <n> --expect-digest <digest> --authority <ref> --actor <login> --dry-run
 npx agenticloop task-body authorize-correction --issue <n> --body-file <candidate.md> --expect-digest <digest> --reason <text> --authority <ref> --actor <login> --dry-run
 ```
 
 Repeat any dry run with `--yes` only after inspecting its patch plan. The first
 two commands make one bounded body change through the same lint/refetch/expected
-digest transaction. The latter two create and refetch a separate verified
-task-contract record carrier; body markers are only caches. An `agent-ready`
-transition fails closed without a base tree inventory.
+digest transaction. Agent-ready additionally binds the explicit base and
+dependency snapshot into its receipt; neither can be defaulted. The latter two
+create and refetch a separate verified task-contract record carrier; body
+markers are only caches. An `agent-ready` transition fails closed without a base
+tree inventory.
+
+The transition gates belong to the write, not to the `transition` subcommand.
+Whenever a candidate's `status` differs from the fetched remote status — through
+`transition`, through `set-field --field status`, or through an `apply` whose
+body-file carries a different status — the same contract applies: the change must
+be a legal transition, `agent-ready` requires the explicit base and dependency
+snapshot, and `closed` must pass the terminal-scope decision. There is no
+subcommand that reaches a protected status change unguarded. `set-field` and
+`apply` therefore accept `--dependencies` whenever their candidate becomes
+`agent-ready`. They also accept `--note` for a real status change. A note is
+rejected for a non-status update rather than silently discarded.
+
+A transition may also reconcile the projections it owns. `--note <text>` is
+persisted as an identified issue comment rather than accepted and discarded, and repeated
+`--label <name>` values are reconciled after a verified body write: every
+requested label is added, superseded labels inside the owned `status:` namespace
+are removed, and every unrelated label is left untouched. GitHub provides no
+cross-resource transaction, so a body success with a failed label or comment
+step returns an exact partial receipt whose per-projection `owned`, `attempted`,
+and `complete` facts let a rerun resume only the remaining projections without
+rewriting the body. The comment identity is a deterministic marker over the
+repository/issue, predecessor and candidate digests, and normalized note. The
+comment is complete only after an exact-body refetch from the authenticated
+publisher and a trusted actor/association. A copied marker, foreign author, or
+altered note body is not proof. An ambiguous post that landed is therefore
+recovered without a duplicate, while an untrusted pre-seeded marker cannot
+suppress publication. A genuine body no-op never invents a historical
+transition comment.
+
+Resume is provenance-typed. When the remote body already equals the candidate,
+the result distinguishes a genuinely current no-op (expected, candidate, and
+current all agree), a receipt-proven prior write, an ambiguous transport response
+recovered from that same operation evidence, and an unattributed matching
+external write. The last is never reported as proven publication: it returns a
+non-authoritative result requiring refetch and reconciliation.
+
+An ambiguous transport response whose refetch proves the candidate was not
+applied returns an `uncommitted` mutation receipt with no changed paths and an
+explicit recovery instruction. The attempted write is therefore represented by
+the same receipt contract as successful, partial, and resumed outcomes.
+
+A receipt-proven prior write requires a retained recovery artifact whose recorded
+outcome is `applied` — written after a refetch observed the candidate bytes on
+the carrier, and bound to that artifact's own operation id. The artifact files
+alone are not enough: they are written before the transport call, so an operation
+whose refetch confirmed the write did not apply leaves them behind too. Such an
+artifact stays `not_applied` and never attributes a later matching body to this
+toolkit. An operation that ends before its refetch stays `attempted` and proves
+nothing either, and an outcome marker that is malformed or names a different
+operation reads as no proof at all. Outcome markers use schema version 1 and
+the closed field set `kind`, `schemaVersion`, `operationId`, `outcome`, and
+`observedAt`; a missing, extra, mistyped, or invalid field is malformed.
 
 `fetch` preserves a live leading BOM exactly and writes a separately labelled
 sanitized candidate. `apply` refuses the BOM-bearing candidate, stale remote
@@ -321,6 +375,170 @@ A material contract change after the baseline uses
 --authority <kind:reference> --actor <git-author>`, also committed separately.
 Files history is verified append-only against first-parent Git history with
 per-record commit provenance (see `agenticloop/backends/files.md`).
+
+Every supported task mutation returns a versioned
+`agenticloop.task-mutation-receipt` that binds the task identity, the expected
+predecessor digest, the candidate and resulting digests, the exact evidence
+context and its derived digest, the verification-result identity, owned
+projections with their attempted and verified-complete state, changed paths, the
+mutation disposition, rollback facts when compensation was proven, and one copyable
+read-only revalidation command. A command is receipt-safe only when its exact
+canonical registry leaf is explicitly marked for revalidation; all unmarked,
+dynamic, unknown, or option-dependent forms fail closed. `init` and `setup`
+qualify only with `--dry-run`. A `rolled_back` receipt additionally requires
+closed rollback evidence whose predecessor and resulting digests exactly match
+the receipt, with zero changed paths. Obtain a files task's current digest from
+`task lint <id> --json`, then pass it to status:
+
+```text
+npx agenticloop task status T-001 in-progress --expect-digest sha256:<digest>
+```
+
+`--expect-digest` is required for every task-status transition, including
+records with no `task_contract_schema`. An `agent-ready` transition additionally
+requires exactly one of `--base <ref>` or `--base-paths <inventory.json>`, plus
+`--dependencies <snapshot.json>`. Supplying both base forms is refused. The CLI
+never selects `HEAD`, a default branch, or a dependency disposition on the
+author's behalf, and it resolves `--base <ref>` to that ref's exact Git tree
+object id so a later branch move cannot redefine the recorded baseline.
+
+The dependency snapshot is a validated document, not a bare status map:
+
+```json
+{
+  "kind": "agenticloop.dependency-snapshot",
+  "schemaVersion": 1,
+  "source": "files:.agenticloop/tasks",
+  "observedAt": "2026-07-29T10:00:00.000Z",
+  "freshnessPolicy": { "maxAgeSeconds": 86400 },
+  "statuses": { "T-002": "accepted" }
+}
+```
+
+An explicit empty `"statuses": {}` is a positive declaration that the task has
+no dependencies and evaluates as satisfied. It is not equivalent to omitting
+the dependency snapshot: every guarded `agent-ready` mutation still requires
+the versioned snapshot, source identity, observation time, and freshness policy.
+
+Missing, malformed, stale, and changed evidence stay distinct: a snapshot older
+than its own freshness policy is `stale`, an unparseable one is `malformed`, an
+absent one is `missing`, and a superseded `--expect-digest` is `changed`.
+
+Receipt revalidation is read-only and executable verbatim from the target
+directory. A readiness transition emits a `task-readiness` command carrying the
+resulting digest and the exact base and dependency inputs; a non-readiness
+transition emits the lint verifier bound to the resulting digest:
+
+Arguments that need quoting are emitted only when one double-quoted spelling is
+both inert and byte-exact in POSIX shells, PowerShell, and `cmd.exe`. Values with
+quotes, backticks, dollar/percent/exclamation expansion, a trailing backslash,
+doubled backslashes, CR, LF, or a backslash-newline pair are refused rather than emitted.
+An otherwise-safe value containing one interior backslash is double quoted
+because an unquoted POSIX shell would consume the backslash as an escape.
+
+```text
+npx agenticloop task-readiness --task-body <carrier> --mode authoring --expect-task-digest sha256:<digest> --base <tree-oid> --dependencies <snapshot.json>
+npx agenticloop task lint T-001 --expect-task-digest sha256:<digest>
+npx agenticloop task-body lint --issue <n> --expect-task-digest sha256:<digest>
+```
+
+The rendered command is presentation only; receipt validation parses its
+restricted inert argv, unwraps supported `agenticloop`, `.cmd`, local-bin,
+`node bin/agenticloop.js`, `npx`, and `pnpm exec` launchers, and rejects a
+recognized mutation regardless of launcher spelling.
+
+`task-readiness --expect-task-digest` also re-evaluates the trusted
+task-contract chain, so revalidating an already-`agent-ready` task is never
+confirmed on scope and dependency facts alone. A later verifier run without the
+exact base and dependency inputs reports missing context; it must not treat the
+committed record as invalid or compensate by rolling it back.
+
+The read-only command emits `agenticloop.task-readiness-evidence`, a separately
+validated summary that may record `dependencies: null`. It does not claim the
+mutation-only `agenticloop.task-evidence-context` kind because a read-only
+evaluation has no authoritative predecessor-to-successor transition. Guarded
+mutations continue to carry the complete mutation evidence context in their
+receipts.
+
+Generic `accepted -> closed` is allowed only when the canonical terminal-scope
+resolver proves `none`. Configured group scope, explicit durable task-set scope,
+and indeterminate scope refuse generic closure. Explicit scope is derived from
+any of three durable carriers: a typed human-selection receipt under
+`.agenticloop/scope/*.json`, a current validated audit record, or a provenanced
+closeout marker on the task carrier. Carrier freshness is deliberately distinct:
+human selection uses `observedAt` and its `maxAgeSeconds`; a closeout marker uses
+the supersession-resolved current marker plus the current carrier digest; an audit
+record uses its exact current validated durable record and its bound
+artifact/candidate and covered-task facts. Audit records do not claim a separate
+wall-clock expiry. Conflicting, stale, malformed, or incomplete evidence is
+`indeterminate` and blocks every terminal action until it is repaired and
+re-derived.
+
+Audit-due diagnostics preserve the same uncertainty. If the task inventory is
+unreadable or invalid, `doctor` reports an indeterminate audit scope with the
+inventory reason; it never turns that failure into an empty "nothing due" list.
+
+A typed human-selection receipt looks like:
+
+```json
+{
+  "kind": "agenticloop.human-scope-selection",
+  "schemaVersion": 1,
+  "workUnit": "selection:owner-1",
+  "tasks": ["T-001", "T-002"],
+  "authority": "human: repository owner",
+  "reason": "Owner selected this terminal scope.",
+  "observedAt": "2026-07-29T10:00:00.000Z",
+  "freshnessPolicy": { "maxAgeSeconds": 86400 }
+}
+```
+
+The terminal transition for an established scope is closeout-owned. After
+`closeout record` publishes a completion-eligible marker, it transitions the
+exact covered task set from `accepted` to `closed`: the files backend uses one
+guarded filesystem transaction, and GitHub uses guarded per-carrier transitions
+that report partial external progress rather than claiming cross-resource
+atomicity. A safe rerun resumes from already verified terminal steps.
+
+Publishing the marker is not the whole operation. A rerun that finds this exact
+packet's marker already current resumes at the terminal transition instead of
+reporting success, so a first run that published and then failed partway through
+the covered transitions can be finished.
+
+The rerun compares the canonical closeout provenance projection — the same
+projection the packet digest is computed over, so it cannot omit a fact the
+digest depends on. Marker publication changes nothing in it: carrier revisions
+are computed with marker blocks normalized out, so a substantive carrier edit
+after publication still fails closed as a stale packet. Only `predecessor_marker`
+is exempted, and only when the live value is this packet's own digest — the
+marker the operation provably published.
+
+`init`, `setup`, and `update` emit and persist a prior-gate
+`agenticloop.lifecycle-mutation-receipt` to
+`.agenticloop/lifecycle-receipt.json`. It separates two facts a prior gate must
+never conflate: `transactionDisposition` reports whether the filesystem
+transaction completed, and `commitDisposition` reports whether those exact paths
+are durably committed. A path written to disk but untracked is reported as
+untracked, never as committed. `unresolved: true` whenever required setup state
+remains uncommitted, untracked, partially applied, stale, or unverifiable, and
+`task-readiness` refuses to build a readiness claim on an unresolved prior gate.
+Both files and GitHub mutations also refuse to grant `agent-ready` under the
+same condition; the check belongs to the authoritative handoff write, not only
+to its read-only diagnostic.
+
+The receipt is unauthenticated JSON in the working tree, so it is verified rather
+than recognized on every read. Its schema version and every consumed field are
+checked, and `unresolved` must follow from the two dispositions recorded beside
+it. Each recorded path is then re-fingerprinted, and the commit disposition the
+consumer reads is re-derived from current per-path Git state rather than read
+back from the document.
+
+Re-deriving is what makes the gate correct in both directions. Committing the
+listed paths resolves it, exactly as the receipt's own next action offers. A path
+that leaves the index — `git rm --cached` changes no bytes at all — un-resolves
+it. Content that no longer matches what the transaction applied is reported as
+drift and blocks the handoff. Editing the receipt to say `unresolved: false`
+resolves nothing; changing the state it describes does.
 
 Attribution rewrite records are read-only CLI surfaces:
 
@@ -373,6 +591,36 @@ format requires all six perspectives and every finding field (`id`, `severity`,
 `verificationRequired`). Unknown fields fail rather than being dropped. A host
 receipt is `verified` only when an available host verifier validates it; otherwise
 the durable provenance is `asserted`.
+
+Each accepted audit report records a budget-consumption cause. Use
+`--cause substantive_audit` (the default), `human_authorized_retry`, or
+`other_plan_required`. `human_authorized_retry` additionally requires
+`--consumption-authority "human:<identity>"` and `--consumption-reason <text>`;
+`other_plan_required` requires a bounded `--consumption-plan <reference>` of at
+most 200 characters. Declared product-invalidation recovery remains unavailable
+and is refused before any budget is consumed; it requires the existing human
+budget override. A rejected or malformed report never consumes budget.
+
+`audit status` lists the cause of every consumed run in both human and `--json`
+output, so an exhausted budget always carries provenance.
+
+An audit history written before `Consumption cause` became required stays
+parseable and has exactly one explicit, non-destructive migration route:
+
+```text
+npx agenticloop audit baseline <audit-id> --migrate-consumption-cause
+```
+
+It records `unrecorded_legacy` for each affected run, preserving every other
+byte. That cause states honestly that the cause was never captured; it never
+asserts a substantive audit and never invents human authority. The migration is
+idempotent, fails closed on unrecognized live content, and cannot be combined
+with `--canonicalize`, `--artifact`, `--covered-tasks`, or `--evidence`.
+
+Audit baseline/report rewrites preserve recognized structure canonically and
+fail before mutation when an unrecognized live section cannot be proven
+lossless. JSON mutation results carry an exact before/after receipt and
+post-write revalidation route.
 
 Closeout is two-stage and packets are restricted to `.agenticloop/tmp/`:
 

@@ -59,6 +59,21 @@ export class VerificationContextMalformedError extends PublicCommandError {
   }
 }
 
+export class VerificationContextStaleError extends PublicCommandError {
+  constructor(message = 'Supplied verification context is stale.', options = {}) {
+    super(message, {
+      code: 'verification.context.stale',
+      evidenceState: 'stale',
+      disposition: 'superseded',
+      committedStateEvaluated: false,
+      safeRepair: 'Re-observe the verification context against current state, then rerun without changing committed state.',
+      requiredContext: ['a freshly observed verification context for the requested evaluation'],
+      ...options,
+    });
+    this.name = 'VerificationContextStaleError';
+  }
+}
+
 export class BaselineChangedError extends PublicCommandError {
   constructor(message = 'The current task contract differs from its trusted baseline.') {
     super(message, {

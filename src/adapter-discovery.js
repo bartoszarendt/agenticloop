@@ -327,7 +327,11 @@ export function printDoctor(repoRoot, io = createIo()) {
     io.out();
     io.out('Work-unit audit:');
     for (const entry of auditDue) {
-      io.out(`  - ${entry.workUnit}: audit due (${entry.tasks.length} accepted/closed covered tasks, no audit record)`);
+      if (entry.state === 'indeterminate') {
+        io.out(`  - scope indeterminate: ${entry.reason}`);
+      } else {
+        io.out(`  - ${entry.workUnit}: audit due (${entry.tasks.length} accepted/closed covered tasks, no audit record)`);
+      }
     }
   }
 

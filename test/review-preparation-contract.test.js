@@ -31,10 +31,44 @@ function baseBody({ check = '[RC-1] `npm test`', head = HEAD } = {}) {
   ].join('\n');
 }
 
+function canonicalTask(frontmatter = [], requiredCheck = '[RC-1] `npm test`') {
+  const fields = Array.isArray(frontmatter) ? frontmatter : String(frontmatter).split('\n');
+  if (!fields.some(line => /^task_id:/.test(line))) fields.unshift('task_id: T-007');
+  return [
+    '---',
+    ...fields,
+    '---',
+    '',
+    '# T-007 - Review preparation',
+    '',
+    '## Task', 'Prepare the task for review.',
+    '',
+    '## Source Documents Reviewed', '- README.md',
+    '',
+    '## Current State', 'The task is ready for contract evaluation.',
+    '',
+    '## Scope', 'Evaluate the declared paths and evidence.',
+    '',
+    '## Out of Scope', 'No unrelated implementation.',
+    '',
+    '## Acceptance Criteria', '- The review contract is enforced.',
+    '',
+    '## Required Checks', `- ${requiredCheck}`,
+    '',
+    '## Expected Files or Areas', '- src/',
+    '',
+    '## Implementation Notes', 'Keep evidence deterministic.',
+    '',
+    '## Completion Summary Template', 'Summarize the review result.',
+    '',
+    '## Reviewer Checklist', '- [ ] Confirm the evidence.',
+  ].join('\n');
+}
+
 function baseInput({ issueCheck = '[RC-1] `npm test`', prBody = baseBody(), comments = [], reviews = [] } = {}) {
   return createPreparationInput({
     prData: { number: 42, body: prBody, headRefOid: HEAD, baseRefOid: BASE, files: [], statusCheckRollup: [], commits: [], comments, reviews },
-    issueData: { number: 7, body: `---\ntask_id: T-007\n---\n# T\n\n## Required Checks\n- ${issueCheck}\n`, comments: [] },
+    issueData: { number: 7, body: canonicalTask([], issueCheck), comments: [] },
     expectedAccount: { login: 'loop-bot', type: 'User' }, reviewHistory: { events: [], errors: [] },
     basePaths: ['src/App.js'], mode: 'review', projectFacts: [], reviewBudget: 5,
   });
@@ -177,7 +211,7 @@ describe('review preparation contract - preparation-input parity', () => {
     const { runPreflight } = await import('../src/github-preflight.js');
     const defectiveBody = baseBody().replace('  Evidence: test completed with exit status 0.', '  Evidence:');
     const prData = { number: 42, body: defectiveBody, headRefOid: HEAD, baseRefOid: BASE, files: [], statusCheckRollup: [], commits: [], comments: [], reviews: [], closingIssuesReferences: [{ number: 7 }] };
-    const issueData = { number: 7, body: '---\ntask_id: T-007\n---\n# T\n\n## Required Checks\n- [RC-1] `npm test`\n', comments: [] };
+    const issueData = { number: 7, body: canonicalTask(), comments: [] };
     const offline = evaluatePreparationInput(createPreparationInput({
       prData, issueData, expectedAccount: { login: 'loop-bot', type: 'User' },
       reviewHistory: { events: [], errors: [] }, basePaths: [], mode: 'review', projectFacts: [], reviewBudget: 5,
@@ -203,7 +237,7 @@ describe('review preparation contract - preparation-input parity', () => {
     const { runPreflight } = await import('../src/github-preflight.js');
     const prData = { number: 42, headRefOid: HEAD, baseRefOid: BASE, files: [], statusCheckRollup: [], comments: [], reviews: [], closingIssuesReferences: [{ number: 7 }] };
     // The PR body is silently omitted from the live document.
-    const issueData = { number: 7, body: '---\ntask_id: T-007\n---\n# T\n\n## Required Checks\n- [RC-1] `npm test`\n', comments: [] };
+    const issueData = { number: 7, body: canonicalTask(), comments: [] };
     const runner = (command, args) => {
       if (args[0] === 'pr') return { status: 0, stdout: JSON.stringify(prData), stderr: '' };
       if (args[0] === 'issue') return { status: 0, stdout: JSON.stringify(issueData), stderr: '' };
@@ -226,7 +260,7 @@ describe('review preparation contract - preparation-input parity', () => {
 // ---------------------------------------------------------------------------
 
 describe('review preparation contract - live deviation integration', () => {
-  const scopedIssue = '---\ntask_id: T-007\nallowed_paths: ["src/**"]\n---\n# T\n\n## Required Checks\n- [RC-1] `npm test`\n';
+  const scopedIssue = canonicalTask(['task_id: T-007', 'allowed_paths: ["src/**"]']);
   function scopedInput({ prBody = baseBody(), files = ['src/app.js'], basePaths = ['src/app.js'] } = {}) {
     return {
       prData: { number: 42, body: prBody, headRefOid: HEAD, files, statusCheckRollup: [], commits: [], comments: [], reviews: [] },
@@ -303,7 +337,7 @@ describe('review preparation contract - live deviation integration', () => {
 
 describe('review preparation contract - task readiness', () => {
   it('does not re-reject a changed path authorized by the deviations mechanism', () => {
-    const task = '---\nallowed_paths: ["src/app/**"]\n---\n# Task';
+    const task = canonicalTask(['allowed_paths: ["src/app/**"]']);
     const result = evaluateTaskReadiness({
       taskBody: task, basePaths: ['src/app/core.js'], mode: 'review',
       changedPaths: ['src/app/core.js', 'src/generated/out.js'],
@@ -314,7 +348,7 @@ describe('review preparation contract - task readiness', () => {
   });
 
   it('rejects a changed path with no deviation or generated declaration', () => {
-    const task = '---\nallowed_paths: ["src/app/**"]\n---\n# Task';
+    const task = canonicalTask(['allowed_paths: ["src/app/**"]']);
     const result = evaluateTaskReadiness({
       taskBody: task, basePaths: ['src/app/core.js'], mode: 'review',
       changedPaths: ['src/app/core.js', 'src/elsewhere/rogue.js'], deviationEntries: [],
@@ -324,7 +358,14 @@ describe('review preparation contract - task readiness', () => {
   });
 
   it('authorizes an exact generated output with valid provenance', () => {
-    const task = '---\nallowed_paths: ["src/app/**"]\ngenerated_paths:\n  "dist/bundle.js":\n    generator: esbuild\n    source: src/app/index.js\n    verification: parity\n---\n# Task';
+    const task = canonicalTask([
+      'allowed_paths: ["src/app/**"]',
+      'generated_paths:',
+      '  "dist/bundle.js":',
+      '    generator: esbuild',
+      '    source: src/app/index.js',
+      '    verification: parity',
+    ]);
     const result = evaluateTaskReadiness({
       taskBody: task, basePaths: ['src/app/index.js'], mode: 'review',
       changedPaths: ['src/app/index.js', 'dist/bundle.js'], deviationEntries: [],
@@ -333,26 +374,25 @@ describe('review preparation contract - task readiness', () => {
   });
 
   it('rejects malformed generated provenance', () => {
-    const task = '---\nallowed_paths: ["src/app/**"]\ngenerated_paths:\n  "dist/bundle.js":\n    generator: esbuild\n---\n# Task';
+    const task = canonicalTask([
+      'allowed_paths: ["src/app/**"]',
+      'generated_paths:',
+      '  "dist/bundle.js":',
+      '    generator: esbuild',
+    ]);
     const result = evaluateTaskReadiness({ taskBody: task, basePaths: ['src/app/index.js'], mode: 'review' });
     assert.match(result.errors.join('\n'), /dist\/bundle\.js.*generator.*source.*verification/);
   });
 
   it('preserves task-readiness diagnostic categories through preflight', () => {
     const input = baseInput();
-    input.issueData.body = [
-      '---',
+    input.issueData.body = canonicalTask([
       'task_id: T-007',
       'allowed_paths: ["src/**"]',
       'generated_paths:',
       '  "dist/bundle.js":',
       '    generator: esbuild',
-      '---',
-      '# T',
-      '',
-      '## Required Checks',
-      '- [RC-1] `npm test`',
-    ].join('\n');
+    ]);
     input.basePaths = ['src/App.js'];
     input.pathInventoryRequired = true;
     const result = evaluatePreparationInput(input, evaluatePreflight);
@@ -361,13 +401,24 @@ describe('review preparation contract - task readiness', () => {
   });
 
   it('rejects a glob generated declaration that would bypass exact-path scope', () => {
-    const task = '---\nallowed_paths: ["src/app/**"]\ngenerated_paths:\n  "dist/**":\n    generator: esbuild\n    source: src/app/index.js\n    verification: parity\n---\n# Task';
+    const task = canonicalTask([
+      'allowed_paths: ["src/app/**"]',
+      'generated_paths:',
+      '  "dist/**":',
+      '    generator: esbuild',
+      '    source: src/app/index.js',
+      '    verification: parity',
+    ]);
     const result = evaluateTaskReadiness({ taskBody: task, basePaths: ['src/app/index.js'], mode: 'review' });
     assert.match(result.errors.join('\n'), /must be an exact repo-relative path/);
   });
 
   it('distinguishes authoring warnings from review errors and allows declared creation', () => {
-    const task = '---\nallowed_paths: ["src/App.tsx", "src/new.ts"]\nintended_creations: ["src/new.ts"]\ndepends_on: ["T-001"]\n---\n# Task';
+    const task = canonicalTask([
+      'allowed_paths: ["src/App.tsx", "src/new.ts"]',
+      'intended_creations: ["src/new.ts"]',
+      'depends_on: ["T-001"]',
+    ]);
     const authoring = evaluateTaskReadiness({ taskBody: task, basePaths: ['src/App.js'], mode: 'authoring', dependencies: { 'T-001': 'resolved' } });
     assert.equal(authoring.ok, true);
     assert.match(authoring.warnings.join('\n'), /App.tsx/);
@@ -376,7 +427,8 @@ describe('review preparation contract - task readiness', () => {
     assert.match(review.errors.join('\n'), /App.tsx/);
   });
 
-  it('bounds glob diagnostics to a count and small deterministic sample', () => {    const task = '---\nallowed_paths: ["src/**"]\n---\n# Task';
+  it('bounds glob diagnostics to a count and small deterministic sample', () => {
+    const task = canonicalTask(['allowed_paths: ["src/**"]']);
     const basePaths = Array.from({ length: 50 }, (_, i) => `src/file${i}.js`);
     const result = evaluateTaskReadiness({ taskBody: task, basePaths, mode: 'review' });
     const glob = result.paths.find(p => p.classification === 'glob');

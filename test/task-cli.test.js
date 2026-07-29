@@ -1,6 +1,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -22,6 +23,34 @@ after(() => {
 // surface for the binary lives in test/cli-smoke.test.js.
 function run(args) {
   return runCliInProcess(args);
+}
+
+// Real callers read the current digest before mutating and supply explicit
+// base and dependency evidence. These helpers only compute those values; every
+// call site below passes them as visible arguments, so a command that stops
+// requiring them fails observably here.
+function currentDigest(target, taskId) {
+  const content = readFileSync(taskPath(target, taskId), 'utf8');
+  return `sha256:${createHash('sha256').update(content, 'utf8').digest('hex')}`;
+}
+
+function baseTree(target) {
+  return git(target, ['rev-parse', 'HEAD^{tree}']);
+}
+
+function dependencySnapshot(target, statuses = {}) {
+  const relPath = '.agenticloop/tmp/dependencies.json';
+  mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
+  writeFileSync(join(target, relPath), `${JSON.stringify({
+    kind: 'agenticloop.dependency-snapshot',
+    schemaVersion: 1,
+    source: 'files:.agenticloop/tasks',
+    observedAt: new Date().toISOString(),
+    freshnessPolicy: { maxAgeSeconds: 86400 },
+    statuses,
+  })}
+`, 'utf8');
+  return relPath;
 }
 
 function assertOk(result) {
@@ -208,9 +237,9 @@ describe('task CLI', () => {
     assert.match(lint.stdout, /T-001\.md: ok/);
 
     await establishBaseline(target);
-    const status = await run(['task', 'status', 'T-001', 'agent-ready', '--target', target]);
+    const status = await run(['task', 'status', 'T-001', 'agent-ready', '--expect-digest', currentDigest(target, 'T-001'), '--base', baseTree(target), '--dependencies', dependencySnapshot(target), '--target', target]);
     assertOk(status);
-    const status2 = await run(['task', 'status', 'T-001', 'in-progress', '--note', 'Started implementation', '--target', target]);
+    const status2 = await run(['task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(target, 'T-001'), '--note', 'Started implementation', '--target', target]);
     assertOk(status2);
     const content = readFileSync(taskPath(target, 'T-001'), 'utf-8');
     assert.match(content, /^status: in-progress$/m);
@@ -331,7 +360,7 @@ describe('task CLI', () => {
     content = `${content.trimEnd()}\n\n${needsRevisionHistory(2)}\n`;
     writeFileSync(path, content, 'utf-8');
 
-    const result = await run(['task', 'status', 'T-001', 'in-progress', '--target', target]);
+    const result = await run(['task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /checkpoint.*required|budget.*exhausted/i);
     assert.match(readFileSync(path, 'utf-8'), /^status: needs_revision$/m);
@@ -377,7 +406,7 @@ describe('task CLI', () => {
     );
     writeFileSync(path, original, 'utf-8');
 
-    const result = await run(['task', 'status', 'T-001', 'closed', '--note', 'Live note', '--target', target]);
+    const result = await run(['task', 'status', 'T-001', 'closed', '--expect-digest', currentDigest(target, 'T-001'), '--note', 'Live note', '--target', target]);
     assertOk(result);
     const content = readFileSync(path, 'utf-8');
     assert.match(content, /```md\n## Comments\nexample only\n```/);
@@ -432,7 +461,7 @@ describe('task CLI', () => {
     const target = makeTarget('blocked');
     assertOk(await run(['task', 'new', 'Blocked task', '--target', target]));
 
-    const blocked = await run(['task', 'status', 'T-001', 'blocked', '--target', target]);
+    const blocked = await run(['task', 'status', 'T-001', 'blocked', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
     assert.notEqual(blocked.status, 0);
     assert.match(blocked.stderr, /requires --block-category/);
 
@@ -509,21 +538,21 @@ describe('task CLI', () => {
     const target = makeTarget('trans-dr-ar');
     assertOk(await run(['task', 'new', 'Test', '--target', target]));
     await establishBaseline(target);
-    const result = await run(['task', 'status', 'T-001', 'agent-ready', '--target', target]);
+    const result = await run(['task', 'status', 'T-001', 'agent-ready', '--expect-digest', currentDigest(target, 'T-001'), '--base', baseTree(target), '--dependencies', dependencySnapshot(target), '--target', target]);
     assertOk(result);
   });
 
   it('allows draft -> blocked with --note', async () => {
     const target = makeTarget('trans-dr-bl');
     assertOk(await run(['task', 'new', 'Test', '--target', target]));
-    const result = await run(['task', 'status', 'T-001', 'blocked', '--block-category', 'dependency', '--note', 'Waiting on API', '--target', target]);
+    const result = await run(['task', 'status', 'T-001', 'blocked', '--expect-digest', currentDigest(target, 'T-001'), '--block-category', 'dependency', '--note', 'Waiting on API', '--target', target]);
     assertOk(result);
   });
 
   it('rejects draft -> in-progress', async () => {
     const target = makeTarget('trans-dr-ip');
     assertOk(await run(['task', 'new', 'Test', '--target', target]));
-    const result = await run(['task', 'status', 'T-001', 'in-progress', '--target', target]);
+    const result = await run(['task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Cannot transition from 'draft' to 'in-progress'/);
   });
@@ -531,7 +560,7 @@ describe('task CLI', () => {
   it('rejects draft -> accepted', async () => {
     const target = makeTarget('trans-dr-ac');
     assertOk(await run(['task', 'new', 'Test', '--target', target]));
-    const result = await run(['task', 'status', 'T-001', 'accepted', '--target', target]);
+    const result = await run(['task', 'status', 'T-001', 'accepted', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
     assert.notEqual(result.status, 0);
     // Should fail on both transition and acceptance gate
   });
@@ -539,7 +568,7 @@ describe('task CLI', () => {
   it('rejects draft -> closed', async () => {
     const target = makeTarget('trans-dr-cl');
     assertOk(await run(['task', 'new', 'Test', '--target', target]));
-    const result = await run(['task', 'status', 'T-001', 'closed', '--target', target]);
+    const result = await run(['task', 'status', 'T-001', 'closed', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
     assert.notEqual(result.status, 0);
   });
 
@@ -547,8 +576,8 @@ describe('task CLI', () => {
     const target = makeTarget('trans-ar-ip');
     assertOk(await run(['task', 'new', 'Test', '--target', target]));
     await establishBaseline(target);
-    assertOk(await run(['task', 'status', 'T-001', 'agent-ready', '--target', target]));
-    const result = await run(['task', 'status', 'T-001', 'in-progress', '--note', 'Starting', '--target', target]);
+    assertOk(await run(['task', 'status', 'T-001', 'agent-ready', '--expect-digest', currentDigest(target, 'T-001'), '--base', baseTree(target), '--dependencies', dependencySnapshot(target), '--target', target]));
+    const result = await run(['task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(target, 'T-001'), '--note', 'Starting', '--target', target]);
     assertOk(result);
   });
 
@@ -556,8 +585,8 @@ describe('task CLI', () => {
     const target = makeTarget('trans-ip-ac');
     assertOk(await run(['task', 'new', 'Test', '--target', target]));
     await establishBaseline(target);
-    assertOk(await run(['task', 'status', 'T-001', 'agent-ready', '--target', target]));
-    assertOk(await run(['task', 'status', 'T-001', 'in-progress', '--target', target]));
+    assertOk(await run(['task', 'status', 'T-001', 'agent-ready', '--expect-digest', currentDigest(target, 'T-001'), '--base', baseTree(target), '--dependencies', dependencySnapshot(target), '--target', target]));
+    assertOk(await run(['task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]));
 
     // Write required evidence into the task record
     let content = readFileSync(taskPath(target, 'T-001'), 'utf-8');
@@ -570,14 +599,14 @@ describe('task CLI', () => {
     content += '\n## Evidence\n- npm test passed.\n';
     writeFileSync(taskPath(target, 'T-001'), content, 'utf-8');
 
-    const result = await run(['task', 'status', 'T-001', 'accepted', '--target', target]);
+    const result = await run(['task', 'status', 'T-001', 'accepted', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
     assertOk(result);
   });
 
   it('rejects accepted -> in-progress (terminal without reopen)', async () => {
     const target = makeTarget('trans-ac-ip');
     writeAcceptedTask(target, 'T-001');
-    const result = await run(['task', 'status', 'T-001', 'in-progress', '--target', target]);
+    const result = await run(['task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Cannot transition from 'accepted' to 'in-progress'/);
   });
@@ -589,7 +618,7 @@ describe('task CLI', () => {
     let content = readFileSync(taskPath(target, 'T-001'), 'utf-8');
     content = content.replace('review_status: needs_revision', 'review_status: accepted');
     writeFileSync(taskPath(target, 'T-001'), content, 'utf-8');
-    const result = await run(['task', 'status', 'T-001', 'closed', '--target', target]);
+    const result = await run(['task', 'status', 'T-001', 'closed', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
     assertOk(result);
   });
 
@@ -597,7 +626,7 @@ describe('task CLI', () => {
     const target = makeTarget('trans-ac-cl-rs');
     writeAcceptedTask(target, 'T-001');
     // review_status is needs_revision — closing should fail
-    const result = await run(['task', 'status', 'T-001', 'closed', '--target', target]);
+    const result = await run(['task', 'status', 'T-001', 'closed', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /review_status must be 'accepted'/);
   });
@@ -606,8 +635,8 @@ describe('task CLI', () => {
     const target = makeTarget('trans-ar-cl');
     assertOk(await run(['task', 'new', 'Test', '--target', target]));
     await establishBaseline(target);
-    assertOk(await run(['task', 'status', 'T-001', 'agent-ready', '--target', target]));
-    const result = await run(['task', 'status', 'T-001', 'closed', '--target', target]);
+    assertOk(await run(['task', 'status', 'T-001', 'agent-ready', '--expect-digest', currentDigest(target, 'T-001'), '--base', baseTree(target), '--dependencies', dependencySnapshot(target), '--target', target]));
+    const result = await run(['task', 'status', 'T-001', 'closed', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
     assert.notEqual(result.status, 0);
   });
 });

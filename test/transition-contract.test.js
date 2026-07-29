@@ -283,6 +283,14 @@ describe('canonical transition contract', () => {
     assert.match(TRANSITION_TERMINAL_CONTRACT.currentRecognition, /does not execute/);
   });
 
+  it('records positive current-runtime alignment rather than a stale mismatch assertion', () => {
+    assert.match(TRANSITION_TERMINAL_CONTRACT.currentRuntimeAlignment, /deriveAuditDueWorkUnits/i);
+    assert.doesNotMatch(TRANSITION_TERMINAL_CONTRACT.currentRuntimeAlignment, /ignores group_closeout|mismatch/i);
+    const candidate = clone(TRANSITION_CONTRACT_DEFINITION);
+    candidate.terminalContract.currentRuntimeAlignment = '';
+    assert.equal(validateTransitionContractDefinition(candidate).ok, false);
+  });
+
   it('declares audit recovery but marks it operationally unavailable', () => {
     const recovery = TRANSITION_AUDIT_BUDGET_POLICY.productInvalidationRecovery;
     assert.equal(recovery.kind, 'product_invalidation_recovery');

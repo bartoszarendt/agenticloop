@@ -60,6 +60,7 @@ export const COMMAND_REGISTRY = {
   init: {
     summary: 'Advanced files-only or direct adapter scaffold.',
     usage: 'agenticloop init [--target <dir>] [--adapter <host>] [--dry-run] [--json]',
+    receiptRevalidation: 'requires-dry-run',
     options: [
       targetOption(),
       adapterOption('Scaffold and generate output for one host: opencode, codex, claude-code, copilot, cursor, all.', { enum: ADAPTER_TARGETS }),
@@ -75,6 +76,7 @@ export const COMMAND_REGISTRY = {
   setup: {
     summary: 'Recommended guided onboarding; scaffolds or repairs as needed.',
     usage: 'agenticloop setup [--target <dir>] [--adapter <host>] [--non-interactive] [--dry-run] [--json]',
+    receiptRevalidation: 'requires-dry-run',
     options: [
       targetOption(),
       adapterOption('Preselect adapter: opencode, codex, claude-code, copilot, cursor, all.', { enum: ADAPTER_TARGETS }),
@@ -238,16 +240,18 @@ export const COMMAND_REGISTRY = {
   },
   'task-readiness': {
     summary: 'Read-only readiness check for files, GitHub, or supplied task input with explicit base-tree intent.',
-    usage: 'agenticloop task-readiness (--task <id>|--issue <n>|--task-body <path>) (--base <ref>|--base-paths <path>) --mode <authoring|review> [--json]',
+    usage: 'agenticloop task-readiness (--task <id>|--issue <n>|--task-body <path>) (--base <ref>|--base-paths <path>) --mode <authoring|review> [--expect-task-digest <digest>] [--dependencies <path>] [--json]',
+    receiptRevalidation: 'read-only',
     options: [
       targetOption(),
-      opt('task', 'string', 'Files-backend task id.'),
+      opt('task', 'string', 'Files-backend task id resolved through the configured task_file_template.'),
       opt('issue', 'string', 'GitHub task issue number.'),
-      opt('task-body', 'string', 'Offline task Markdown file.'),
+      opt('task-body', 'string', 'Task Markdown file, relative to the target.'),
       opt('base', 'string', 'Git ref or tree used for an explicit path inventory.'),
       opt('base-paths', 'string', 'JSON path inventory file for offline evaluation.'),
       opt('mode', 'string', 'Explicit readiness mode.', { enum: ['authoring', 'review'] }),
-      opt('dependencies', 'string', 'Optional JSON mapping of declared dependency ids to status.'),
+      opt('expect-task-digest', 'string', 'Exact SHA-256 digest the task carrier must still hold. Also re-evaluates the trusted contract chain.'),
+      opt('dependencies', 'string', 'Exact JSON dependency-status snapshot document.'),
       jsonOption,
     ],
   },
@@ -270,23 +274,24 @@ export const COMMAND_REGISTRY = {
       },
       lint: {
         summary: 'Live-context lint by default; use --offline only when GitHub provenance is intentionally unavailable.',
-        usage: 'agenticloop task-body lint --issue <number> --body-file <path> [--offline --trusted-records <snapshot.json>] [--base <ref>] [--base-paths <path>] [--json]',
-        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('body-file', 'string', 'Local task-body Markdown candidate. Required.'), opt('offline', 'boolean', 'Do not fetch live GitHub body or carrier provenance.'), opt('trusted-records', 'string', 'Validated offline carrier snapshot JSON.'), opt('base', 'string', 'Optional Git base ref for authoring readiness.'), opt('base-paths', 'string', 'Optional JSON base-tree path inventory.'), jsonOption],
+        usage: 'agenticloop task-body lint --issue <number> --body-file <path> [--offline --trusted-records <snapshot.json>] [--base <ref>] [--base-paths <path>] [--expect-task-digest <digest>] [--json]',
+        receiptRevalidation: 'read-only',
+        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('body-file', 'string', 'Local task-body Markdown candidate. Required.'), opt('offline', 'boolean', 'Do not fetch live GitHub body or carrier provenance.'), opt('trusted-records', 'string', 'Validated offline carrier snapshot JSON.'), opt('base', 'string', 'Optional Git base ref for authoring readiness.'), opt('base-paths', 'string', 'Optional JSON base-tree path inventory.'), opt('expect-task-digest', 'string', 'Exact SHA-256 digest the live issue body must still hold. Read-only.'), opt('dependencies', 'string', 'Exact JSON dependency-status snapshot document.'), jsonOption],
       },
       apply: {
         summary: 'Publish one linted issue-body candidate only after an optimistic digest check.',
-        usage: 'agenticloop task-body apply --issue <number> --body-file <path> --expect-digest <digest> (--dry-run|--yes) [--repo <owner/name>] [--base <ref>] [--base-paths <path>] [--json]',
-        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('body-file', 'string', 'Local linted task-body Markdown candidate. Required.'), opt('expect-digest', 'string', 'Exact digest printed by task-body fetch. Required.'), opt('repo', 'string', 'Target repository.'), opt('base', 'string', 'Optional Git base ref for authoring readiness.'), opt('base-paths', 'string', 'Optional JSON base-tree path inventory.'), dryRunOption, yesOption, jsonOption],
+        usage: 'agenticloop task-body apply --issue <number> --body-file <path> --expect-digest <digest> (--dry-run|--yes) [--note <text>] [--repo <owner/name>] [--base <ref>] [--base-paths <path>] [--json]',
+        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('body-file', 'string', 'Local linted task-body Markdown candidate. Required.'), opt('expect-digest', 'string', 'Exact digest printed by task-body fetch. Required.'), opt('repo', 'string', 'Target repository.'), opt('note', 'string', 'Transition note. Allowed only when the candidate changes status; required for blocked or needs_context and persisted as an identified issue comment.'), opt('base', 'string', 'Optional Git base ref for authoring readiness.'), opt('base-paths', 'string', 'Optional JSON base-tree path inventory.'), opt('dependencies', 'string', 'Exact JSON dependency-status snapshot required when the candidate becomes agent-ready.'), dryRunOption, yesOption, jsonOption],
       },
       'set-field': {
         summary: 'Set one top-level task frontmatter field through the guarded apply transaction.',
-        usage: 'agenticloop task-body set-field --issue <number> --field <name> --value <text> --expect-digest <digest> (--dry-run|--yes) [options]',
-        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('field', 'string', 'Top-level frontmatter field. Required.'), opt('value', 'string', 'One-line field value. Required.'), opt('expect-digest', 'string', 'Exact digest printed by task-body fetch. Required.'), opt('repo', 'string', 'Target repository.'), opt('base', 'string', 'Optional Git base ref.'), opt('base-paths', 'string', 'Optional JSON base-tree path inventory.'), dryRunOption, yesOption, jsonOption],
+        usage: 'agenticloop task-body set-field --issue <number> --field <name> --value <text> --expect-digest <digest> (--dry-run|--yes) [--note <text>] [options]',
+        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('field', 'string', 'Top-level frontmatter field. Required.'), opt('value', 'string', 'One-line field value. Required.'), opt('expect-digest', 'string', 'Exact digest printed by task-body fetch. Required.'), opt('repo', 'string', 'Target repository.'), opt('note', 'string', 'Transition note. Allowed only when the field mutation changes status; required for blocked or needs_context and persisted as an identified issue comment.'), opt('base', 'string', 'Optional Git base ref.'), opt('base-paths', 'string', 'Optional JSON base-tree path inventory.'), opt('dependencies', 'string', 'Exact JSON dependency-status snapshot required when status becomes agent-ready.'), dryRunOption, yesOption, jsonOption],
       },
       transition: {
         summary: 'Transition a task status through one guarded field mutation.',
-        usage: 'agenticloop task-body transition --issue <number> --status <status> --expect-digest <digest> (--dry-run|--yes) [--base <ref>|--base-paths <path>] [options]',
-        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('status', 'string', 'Target status. Required.'), opt('expect-digest', 'string', 'Exact digest printed by task-body fetch. Required.'), opt('repo', 'string', 'Target repository.'), opt('base', 'string', 'Git base ref required for agent-ready transition.'), opt('base-paths', 'string', 'JSON base-tree path inventory required for agent-ready transition.'), dryRunOption, yesOption, jsonOption],
+        usage: 'agenticloop task-body transition --issue <number> --status <status> --expect-digest <digest> (--dry-run|--yes) [--base <ref>|--base-paths <path>] [--dependencies <path>] [--label <name>] [options]',
+        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('status', 'string', 'Target status. Required.'), opt('expect-digest', 'string', 'Exact digest printed by task-body fetch. Required.'), opt('repo', 'string', 'Target repository.'), opt('note', 'string', 'Explanatory note. Required for blocked or needs_context; persisted as an issue comment.'), opt('base', 'string', 'Explicit Git base required for agent-ready; no default branch is selected.'), opt('base-paths', 'string', 'Explicit JSON base-tree path inventory required for agent-ready.'), opt('dependencies', 'string', 'Exact JSON dependency-status snapshot required for agent-ready.'), opt('label', 'string', 'Owned status label to reconcile after the body write. Repeatable.', { multiple: true }), dryRunOption, yesOption, jsonOption],
       },
       'establish-baseline': {
         summary: 'Create a separately carried trusted task-contract baseline record.',
@@ -362,9 +367,14 @@ export const COMMAND_REGISTRY = {
       },
       lint: {
         summary: 'Lint task records.',
-        usage: 'agenticloop task lint [<task-id>] [--json] [--target <dir>]',
+        usage: 'agenticloop task lint [<task-id>] [--expect-task-digest <digest>] [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only',
         positionals: [{ name: 'task-id', required: false }],
-        options: [targetOption(), jsonOption],
+        options: [
+          targetOption(),
+          opt('expect-task-digest', 'string', 'Exact SHA-256 digest the named task record must still hold. Read-only.'),
+          jsonOption,
+        ],
       },
       new: {
         summary: 'Create a task record.',
@@ -397,12 +407,16 @@ export const COMMAND_REGISTRY = {
       },
       status: {
         summary: 'Update task status.',
-        usage: 'agenticloop task status <id> <status> [--note <text>] [--block-category <category>] [--target <dir>]',
+        usage: 'agenticloop task status <id> <status> --expect-digest <digest> [--note <text>] [--base <ref>] [--base-paths <path>] [--dependencies <path>] [--block-category <category>] [--target <dir>]',
         positionals: [{ name: 'id', required: true }, { name: 'status', required: true }],
         options: [
           targetOption(),
+          opt('expect-digest', 'string', 'Exact SHA-256 digest of the current task record. Required before mutation.'),
           opt('note', 'string', 'Append a dated line under ## Comments.'),
           opt('block-category', 'string', 'Required when setting status to blocked.'),
+          opt('base', 'string', 'Explicit Git base required for agent-ready; no default branch is selected.'),
+          opt('base-paths', 'string', 'Explicit JSON base-tree inventory required for agent-ready.'),
+          opt('dependencies', 'string', 'Exact JSON dependency-status snapshot required for agent-ready.'),
           opt('accept', 'boolean', 'Accepted for compatibility.'),
           jsonOption,
         ],
@@ -443,13 +457,14 @@ export const COMMAND_REGISTRY = {
           opt('artifact', 'string', 'New exact candidate artifact after remediation was integrated (resolved to the full SHA).'),
           opt('covered-tasks', 'string', 'New exact covered task ids. Stale certification is cleared; history is preserved.'),
           opt('canonicalize', 'boolean', 'Migrate a legacy audit record: resolves the existing candidate to its full identity, upgrades the schema, preserves history, clears stale certification. Mutually exclusive with --artifact/--covered-tasks.'),
+          opt('migrate-consumption-cause', 'boolean', "Record 'unrecorded_legacy' budget provenance for history entries written before Consumption cause became required. Byte-preserving and idempotent; never invents human authority."),
           opt('evidence', 'string', 'Refreshed integrated evidence bound to the candidate. Required.'),
           jsonOption,
         ],
       },
       report: {
         summary: 'Append one consolidated Auditor report.',
-        usage: 'agenticloop audit report <audit-id|work-unit> (--file <path> | --stdin | legacy inline options) [--target <dir>]',
+        usage: 'agenticloop audit report <audit-id|work-unit> (--file <path> | --stdin | legacy inline options) [--cause <cause>] [--target <dir>]',
         positionals: [{ name: 'audit-id|work-unit', required: true }],
         options: [
           targetOption(),
@@ -462,6 +477,10 @@ export const COMMAND_REGISTRY = {
           opt('assessment', 'string', '[legacy inline] One consolidated assessment across all six perspectives.'),
           opt('evidence', 'string', '[legacy inline] Bounded evidence actually checked.'),
           opt('finding-json', 'string', '[legacy inline] JSON array of findings (id, severity, blocking, claim, evidenceRefs, consequence, requiredOutcome, verificationRequired). Recorded as legacy_inline_v1.'),
+          opt('cause', 'string', 'Budget-consumption provenance: substantive_audit (default), human_authorized_retry, or other_plan_required. product_invalidation_recovery is declared but unavailable.'),
+          opt('consumption-authority', 'string', "Required for --cause human_authorized_retry: a 'human:<identity>' authority reference."),
+          opt('consumption-reason', 'string', 'Required for --cause human_authorized_retry: why the human authorized this retry.'),
+          opt('consumption-plan', 'string', 'Required for --cause other_plan_required: a bounded plan or reference (max 200 characters).'),
           jsonOption,
         ],
       },
@@ -480,6 +499,7 @@ export const COMMAND_REGISTRY = {
       lint: {
         summary: 'Validate audit records.',
         usage: 'agenticloop audit lint [<audit-id|work-unit>] [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only',
         positionals: [{ name: 'audit-id|work-unit', required: false }],
         options: [targetOption(), jsonOption],
       },
@@ -547,6 +567,7 @@ export const COMMAND_REGISTRY = {
       status: {
         summary: 'Resolve the current closeout marker and verify its provenance digest.',
         usage: 'agenticloop closeout status --work-unit <id> [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only',
         options: [
           targetOption(),
           opt('work-unit', 'string', 'Canonical work-unit identity. Required.'),
@@ -793,6 +814,41 @@ export function resolveSubcommand(commandName, subName) {
   const spec = COMMAND_REGISTRY[commandName];
   if (!spec?.subcommands) return null;
   return spec.subcommands[subName] ?? null;
+}
+
+/**
+ * Decide whether parsed Agentic Loop argv names a canonical command leaf that
+ * is explicitly safe to execute as mutation-receipt revalidation.
+ *
+ * Unmarked commands, unknown subcommands, dynamic event types, invalid option
+ * shapes, and mutating commands all fail closed. Lifecycle commands are safe
+ * only when their canonical registry entry requires and receives --dry-run.
+ */
+export function isReceiptRevalidationArgv(argv) {
+  if (!Array.isArray(argv) || argv.length === 0) return false;
+  const commandName = resolveCommandName(argv[0]);
+  if (!commandName) return false;
+  const command = COMMAND_REGISTRY[commandName];
+  let leaf = command;
+  let args = argv.slice(1);
+  let label = commandName;
+  if (command.subcommands) {
+    const subName = args[0];
+    leaf = resolveSubcommand(commandName, subName);
+    if (!leaf) return false;
+    args = args.slice(1);
+    label = `${commandName} ${subName}`;
+  } else if (command.eventTypeOptions) {
+    return false;
+  }
+  try {
+    const parsed = parseCommandArgs(label, leaf, args);
+    if (leaf.receiptRevalidation === 'read-only') return true;
+    if (leaf.receiptRevalidation === 'requires-dry-run') return parsed.opts.dryRun === true;
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 function levenshtein(a, b) {

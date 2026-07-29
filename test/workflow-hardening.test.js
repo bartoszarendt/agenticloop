@@ -24,6 +24,15 @@ const VALID_BODY = [
   '',
   '# T-101 - Hardening',
   '',
+  '## Task',
+  'Harden workflow validation.',
+  '',
+  '## Source Documents Reviewed',
+  '- README.md',
+  '',
+  '## Current State',
+  'The workflow needs stricter validation.',
+  '',
   '## Scope',
   'Keep task records structurally valid.',
   '',
@@ -35,6 +44,18 @@ const VALID_BODY = [
   '',
   '## Required Checks',
   '- `npm test`',
+  '',
+  '## Expected Files or Areas',
+  '- src/',
+  '',
+  '## Implementation Notes',
+  'Keep the validation deterministic.',
+  '',
+  '## Completion Summary Template',
+  'Summarize validation changes.',
+  '',
+  '## Reviewer Checklist',
+  '- [ ] Confirm the task record remains canonical.',
 ].join('\n');
 
 describe('strict frontmatter regression coverage', () => {
@@ -184,13 +205,7 @@ describe('path intent and prospective commit attribution', () => {
 describe('github-preflight human diagnostics', () => {
   it('renders category, owner, next action, and first safe repair from structured diagnostics', async () => {
     const head = 'a'.repeat(40);
-    const issueBody = [
-      '---', 'task_id: T-101', 'allowed_paths:', '  - src/**', '---', '',
-      '## Scope', 'Keep the change scoped.', '',
-      '## Out of Scope', 'Do not change documentation.', '',
-      '## Acceptance Criteria', '- Scope is checked.', '',
-      '## Required Checks', '- `npm test`',
-    ].join('\n');
+    const issueBody = VALID_BODY;
     const prBody = [
       '## Scope Completed', 'Implemented.', '',
       '## Artifacts', `commit:${head}`, '',
