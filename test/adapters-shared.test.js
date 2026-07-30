@@ -10,7 +10,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -18,7 +18,10 @@ import {
   collectInstructionPaths,
   resolveRoleModel,
   buildRoleRecord,
+  readCanonicalBackendEntries,
+  readCanonicalSkillEntries,
 } from '../src/adapters/shared.js';
+import { resolveToolkitAssetLayout } from '../src/layout.js';
 import { seedTargetLayout } from './helpers/layout-fixture.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -243,5 +246,79 @@ describe('buildRoleRecord', () => {
       'promptBody should be non-empty');
     assert.ok(Array.isArray(requiredSkills));
     assert.ok(requiredSkills.includes('role-delegation'));
+  });
+});
+
+/**
+ * Backend discovery must follow the same package-source/installed-target
+ * resolution model as canonical skills.
+ *
+ * `repoRoot` is whichever root the caller reads assets from, and it has two
+ * shapes: an installed target with assets under `agenticloop/`, or a package
+ * source root with assets at the top level. Fresh atomic init reads from the
+ * package source root, so joining the target-facing `agenticloop/backends`
+ * prefix onto it finds nothing - and an adapter that discovers zero backends
+ * renders references to files it never wrote.
+ */
+describe('readCanonicalBackendEntries', () => {
+  const filenames = entries => entries.map(entry => entry.filename).sort();
+
+  it('resolves backends from a package-source root', () => {
+    assert.equal(resolveToolkitAssetLayout(REPO_ROOT).kind, 'package-source');
+    const entries = readCanonicalBackendEntries(REPO_ROOT, minimalConfig());
+    assert.deepEqual(filenames(entries), ['README.md', 'files.md', 'github.md']);
+    for (const entry of entries) {
+      assert.ok(entry.sourceFile.includes('backends'), entry.sourceFile);
+      assert.ok(readFileSync(entry.sourceFile, 'utf8').length > 0, entry.filename);
+    }
+  });
+
+  it('resolves backends from an installed target root', () => {
+    const target = mkdtempSync(join(tmpdir(), 'al-backends-installed-'));
+    try {
+      seedTargetLayout(REPO_ROOT, target, { includeDocs: false, includeScratch: false });
+      assert.equal(resolveToolkitAssetLayout(target).kind, 'installed');
+      assert.deepEqual(
+        filenames(readCanonicalBackendEntries(target, minimalConfig())),
+        ['README.md', 'files.md', 'github.md']
+      );
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('agrees with canonical skill discovery about which root holds the assets', () => {
+    // The two readers must never disagree: skills resolving while backends find
+    // nothing is exactly the split that produced reference-free artifacts, and
+    // it has to hold for both root shapes.
+    const installed = mkdtempSync(join(tmpdir(), 'al-backends-agree-'));
+    try {
+      seedTargetLayout(REPO_ROOT, installed, { includeDocs: false, includeScratch: false });
+      for (const root of [REPO_ROOT, installed]) {
+        const layout = resolveToolkitAssetLayout(root).kind;
+        assert.ok(readCanonicalSkillEntries(root, minimalConfig()).length > 0, `${layout} skills`);
+        assert.ok(readCanonicalBackendEntries(root, minimalConfig()).length > 0, `${layout} backends`);
+      }
+    } finally {
+      rmSync(installed, { recursive: true, force: true });
+    }
+  });
+
+  it('returns an empty inventory only when the root genuinely has no backends', () => {
+    const empty = mkdtempSync(join(tmpdir(), 'al-backends-absent-'));
+    try {
+      assert.equal(resolveToolkitAssetLayout(empty).kind, 'absent');
+      assert.deepEqual(readCanonicalBackendEntries(empty, minimalConfig()), []);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it('sorts entries by filename so generated reference indexes are stable', () => {
+    const names = readCanonicalBackendEntries(REPO_ROOT, minimalConfig()).map(entry => entry.filename);
+    // The reader's own comparator, so the assertion pins the emitted order
+    // rather than a different sort that happens to agree on this input.
+    assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b)));
+    assert.deepEqual(names, ['files.md', 'github.md', 'README.md']);
   });
 });

@@ -28,6 +28,17 @@ receipt, audit record, or closeout marker.
 Apply the shared freshness, terminal ordering, Markdown preservation, and
 audit-budget rules before adding GitHub publication or reconciliation mechanics.
 
+## Dispatch and return
+
+GitHub is a transport projection of the shared single-role dispatch packet and
+return contract. It may supply issue/PR facts through an injected or live
+transport, but it does not define an alternate readiness, packet, task, or
+attribution source of truth. A return remains raw role-produced wire data and is
+rejected/routed to its producer when packet, task, head, paths, checks, trailers,
+or refetched PR facts do not match current projected evidence. Injected transport
+fixtures must invoke their transport and prove the same shared semantic verdict as
+files; no live GitHub call is required for that proof.
+
 ## GitHub-Specific Configuration
 
 GitHub-only label and branch config lives under `backends.github` in
@@ -1008,3 +1019,12 @@ When using `gh ... --json`, extract the needed fields with `--jq` before
 quoting evidence. `Evidence Checked` should list commands, refs, and concise
 facts, not raw JSON payloads. `Evidence Checked` records what the reviewer
 inspected. It is review evidence, not implementation evidence.
+
+## Activation boundary
+
+Activation capture is a host boundary, not an issue-body claim. A supported v2
+capture must be signed for the exact intended task ID, canonical target
+repository, capture ID, and expiry before task authoring. Repository input,
+issue prose, labels, comments, and model-authored JSON cannot supply or upgrade
+that authority. All shipped adapters currently declare capture `unsupported`,
+so no shipped configuration provides a live supported dispatch path.

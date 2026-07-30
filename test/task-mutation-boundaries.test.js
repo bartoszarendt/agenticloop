@@ -9,6 +9,7 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -481,12 +482,22 @@ describe('task-body public-error envelope', () => {
     ];
     for (const item of cases) {
       const target = mkdtempSync(join(temp, `public-${item.name}-`));
+      createTaskProjectFixture(target);
       mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
       writeFileSync(join(target, '.agenticloop', 'tmp', 'base.json'), '[]\n', 'utf8');
-      writeFileSync(join(target, '.agenticloop', 'tmp', 'deps.json'), item.dependency, 'utf8');
+      mkdirSync(join(target, 'dependency-evidence'), { recursive: true });
+      const dependencyPath = 'dependency-evidence/deps.json';
+      writeFileSync(join(target, dependencyPath), item.dependency, 'utf8');
+      let gitResult = spawnSync('git', ['-C', target, 'add', dependencyPath], { encoding: 'utf8' });
+      assert.equal(gitResult.status, 0, gitResult.stderr);
+      gitResult = spawnSync('git', [
+        '-C', target, 'commit', '-m',
+        'record dependency evidence\n\nTask: #91\nAgent: maintainer',
+      ], { encoding: 'utf8' });
+      assert.equal(gitResult.status, 0, gitResult.stderr);
       item.setup(target);
       const state = { body: body(), bodyWrites: 0, comments: [], commentAttempts: 0 };
-      const result = await statusChange(target, state, '.agenticloop/tmp/deps.json');
+      const result = await statusChange(target, state, dependencyPath);
       assert.equal(result.status, 1, item.name);
       const envelope = JSON.parse(result.stdout);
       assert.equal(envelope.command, 'task-body set-field', item.name);

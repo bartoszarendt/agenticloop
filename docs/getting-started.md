@@ -325,8 +325,11 @@ On the setup edit path, choose the task-ID convention from the numbered
 selector. Presets write the human-readable pattern and regex together so they
 cannot drift. The custom option requires an anchored regex and a safe matching
 example. Automatic allocation currently supports only the recommended
-`T-###` convention; use `agenticloop task new --id <TASK-ID> ...` for other
-conventions.
+`T-###` convention. For other conventions, create non-activated Markdown with
+`agenticloop task new "Title" --scaffold --id <TASK-ID>`, or pass the same
+explicit ID with `--activation-input <host-capture.json>` when a supported
+host-produced v2 capture exists. No shipped adapter currently supplies that
+supported capture path.
 
 Document roles are typed: `rules`, `plan`, `overview`, `process`, `spec`,
 `design`, `context`, and `history`.

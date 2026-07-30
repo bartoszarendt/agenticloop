@@ -44,26 +44,44 @@ import {
   VerificationContextError,
   VerificationContextMalformedError,
   VerificationContextStaleError,
+  VerificationContextUnsupportedBoundaryError,
+  publicErrorFromFindings,
 } from './public-error.js';
 import { commandFailure, printGateResult } from './public-result.js';
+import { presentGateResultForTarget } from './diagnostic-presentation.js';
 import { canonicalJson } from './canonical-json.js';
 import {
+  createTaskReadinessEvidence,
   createTaskEvidenceContext,
   createTaskMutationReceipt,
   dependencyStatusMap,
   parseDependencySnapshot,
   shellQuoteArgument,
 } from './task-evidence-contract.js';
+import { evaluateCommitAttribution } from './commit-attribution.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
+import { fileMatchesScopePattern } from './scope-matcher.js';
 import { createValidationResult, validationResultDigest, VALIDATION_RESULT_KIND } from './result-envelope.js';
 import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
 import { evaluateTaskReadiness } from './task-readiness.js';
 import { executeMutationBatch } from './fs-mutation-kernel.js';
-import { createTaskContractBaselineRecord, createTaskContractCorrectionRecord, taskContractDigest, trustedChainTerminal, validateTaskContractBaseline } from './task-contract-baseline.js';
+import { createTaskContractBaselineRecord, createTaskContractCorrectionRecord, taskContractDigest, trustedChainTerminal, validActivationCaptureRef, validateTaskContractBaseline } from './task-contract-baseline.js';
 import { appendFilesTaskContractRecord, loadFilesTaskContractRecords } from './files-task-contract.js';
 import { resolveCanonicalTerminalScope } from './terminal-scope.js';
 import { validateTaskStatusTransition } from './task-transition.js';
 import { assertLifecycleHandoffResolved } from './lifecycle-plan.js';
+import {
+  activationCapabilityInventory,
+  activationCaptureDisposition,
+  prepareRoleDispatch,
+  receiveRoleReturn,
+  validateActivationCapture,
+  verifyDispatchBeforeMutation,
+} from './dispatch-envelope.js';
+import { loadHostTrustStore, targetRepositoryIdentity } from './host-trust.js';
+import { CommitRangeError, deriveCommitRange } from './commit-range.js';
+import { gitTreeObjectId, isGitObjectId } from './git-oid.js';
+import { verifyCommittedAttributedSource } from './committed-source.js';
 
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -208,6 +226,227 @@ function taskRecordDigest(content) {
 }
 
 /**
+ * Resolve the single authoritative activation capability inventory for a target.
+ *
+ * Every public edge - creation, preparation, persisted-packet validation, and
+ * receive-side verification - goes through this function, so no surface can
+ * recognize an adapter identity another surface rejects. The shipped inventory
+ * is fail-closed. Registry documents are parsed for diagnostics, but no
+ * supported adapter can enter through this public in-process boundary.
+ */
+function resolveActivationCapabilities(target, io, assertedPath) {
+  const store = loadHostTrustStore(target, {
+    operatorTrustRoot: io.operatorTrustRoot ?? undefined,
+    assertedPath,
+  });
+  if (store.state === 'unsupported_boundary') {
+    throw new VerificationContextUnsupportedBoundaryError(
+      `Host trust registry is well-formed but declares dynamic supported adapters: ${store.errors.join('; ')}`
+    );
+  }
+  if (!store.ok) {
+    throw new VerificationContextMalformedError(`Host trust store is invalid: ${store.errors.join('; ')}`);
+  }
+  return activationCapabilityInventory(store.adapters);
+}
+
+/** Resolve one pinned host adapter for return-receipt verification. */
+function resolveTrustedHostAdapter(target, io, assertedPath, expectedAdapterId) {
+  const store = loadHostTrustStore(target, {
+    operatorTrustRoot: io.operatorTrustRoot ?? undefined,
+    assertedPath,
+  });
+  if (store.state === 'unsupported_boundary') {
+    throw new VerificationContextUnsupportedBoundaryError(
+      `Host trust registry is well-formed but declares dynamic supported adapters: ${store.errors.join('; ')}`
+    );
+  }
+  if (!store.ok) {
+    throw new VerificationContextMalformedError(`Host trust store is invalid: ${store.errors.join('; ')}`);
+  }
+  const adapter = store.adapters[String(expectedAdapterId ?? '')];
+  if (!adapter) {
+    throw new VerificationContextError(
+      `packet-bound host adapter '${String(expectedAdapterId ?? '')}' is not pinned in the fixed operator trust registry`
+    );
+  }
+  return adapter;
+}
+
+function readActivationCaptureInput(target, relPath, capabilities, intendedTaskId) {
+  const path = resolve(target, String(relPath));
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    throw new VerificationContextMalformedError(`Activation capture input '${String(relPath)}' is unreadable or invalid JSON: ${error.message}`);
+  }
+  const checked = validateActivationCapture(parsed, {
+    capabilities,
+    intendedTaskId,
+    repositoryIdentity: targetRepositoryIdentity(target),
+  });
+  if (!checked.ok) {
+    throw publicErrorFromFindings(checked.findings, {
+      fallbackMessage: `Activation capture input '${String(relPath)}' is malformed.`,
+    });
+  }
+  return parsed;
+}
+
+/** Run one Git command inside the target and return a plain spawn result. */
+function targetGitRunner(target) {
+  return args => spawnSync('git', args, { cwd: target, encoding: 'utf8' });
+}
+
+function refetchDispatchRepository(target, readiness) {
+  const baseTree = gitTreeObjectId(readiness?.evidence?.base?.identity);
+  if (!baseTree) throw new VerificationContextMalformedError('dispatch readiness must bind a full git-tree base identity');
+  const verifiedTree = spawnSync('git', ['rev-parse', '--verify', `${baseTree}^{tree}`], { cwd: target, encoding: 'utf8' });
+  if (verifiedTree.status !== 0 || String(verifiedTree.stdout ?? '').trim() !== baseTree) {
+    throw new VerificationContextStaleError(`dispatch base tree '${baseTree}' is unavailable or changed`);
+  }
+  const branch = spawnSync('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: target, encoding: 'utf8' });
+  const head = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: target, encoding: 'utf8' });
+  const branchName = String(branch.stdout ?? '').trim();
+  const headId = String(head.stdout ?? '').trim();
+  if (branch.status !== 0 || !branchName || head.status !== 0 || !isGitObjectId(headId)) {
+    throw new VerificationContextMalformedError('dispatch requires a current named Git branch and full HEAD identity');
+  }
+  return { worktree: resolve(target), branch: branchName, head: headId, baseHead: headId, baseTree };
+}
+
+/**
+ * Re-run readiness from the exact base and dependency sources named by the
+ * request. Caller-authored result/evidence claims are never copied forward.
+ */
+function refetchDispatchReadiness(target, snapshot, requested) {
+  const baseArgs = requested?.evidence?.base?.revalidationArgs;
+  const dependencyArgs = requested?.evidence?.dependencies?.revalidationArgs;
+  if (!Array.isArray(baseArgs) || baseArgs.length !== 2 || baseArgs[0] !== '--base') {
+    throw new VerificationContextMalformedError('dispatch readiness requires exact --base <git-tree> revalidation arguments');
+  }
+  if (!Array.isArray(dependencyArgs) || dependencyArgs.length !== 2 || dependencyArgs[0] !== '--dependencies') {
+    throw new VerificationContextMalformedError('dispatch readiness requires exact --dependencies <path> revalidation arguments');
+  }
+  const base = readExplicitBaseEvidence(target, { base: baseArgs[1] });
+  const dependency = readDependencyEvidence(target, dependencyArgs[1], snapshot.taskId);
+  const evaluated = evaluateTaskReadiness({
+    taskBody: snapshot.body,
+    basePaths: base.paths,
+    mode: 'authoring',
+    dependencies: dependency.statuses,
+  });
+  const result = createValidationResult({
+    command: 'task-readiness',
+    ok: evaluated.ok,
+    evidenceState: evaluated.evidenceState,
+    disposition: evaluated.disposition,
+    errors: evaluated.errors,
+    warnings: evaluated.warnings,
+    diagnostics: evaluated.diagnostics,
+  });
+  const evidence = createTaskReadinessEvidence({
+    backend: snapshot.backend,
+    task: {
+      id: snapshot.taskId,
+      carrier: snapshot.carrier,
+      expectedDigest: snapshot.digest,
+    },
+    base: base.evidence,
+    dependencies: dependency.evidence,
+    trustedRecordCount: snapshot.trustedRecords.length,
+    trustedRecordErrors: snapshot.trustedRecordErrors,
+  });
+  return { evidence, result, resultDigest: validationResultDigest(result) };
+}
+
+/**
+ * Read decomposition from the exact committed source and require canonical
+ * Maintainer attribution on the source's last durable commit.
+ */
+function refetchDispatchDecomposition(target, requested, taskId) {
+  const sourceRef = requested?.sourceRef;
+  const verified = verifyCommittedAttributedSource(target, sourceRef, { taskId });
+  if (!verified.ok) {
+    const ErrorType = verified.evidenceState === 'missing' ? VerificationContextError
+      : verified.evidenceState === 'changed' ? VerificationContextStaleError
+        : VerificationContextMalformedError;
+    throw new ErrorType(verified.error);
+  }
+  let value;
+  try {
+    value = JSON.parse(verified.source);
+  } catch (error) {
+    throw new VerificationContextMalformedError(`decomposition source '${sourceRef}' is invalid JSON: ${error.message}`);
+  }
+  if (value?.sourceRef !== sourceRef) {
+    throw new VerificationContextMalformedError('decomposition sourceRef does not identify its exact carrier');
+  }
+  return value;
+}
+
+/**
+ * Reconstruct files-backed return evidence from current durable Git state.
+ * Host-signed checks remain transport evidence; repository identity, paths, and
+ * attribution are always derived again before the receipt is authenticated.
+ */
+function refetchFilesReturnEvidence(target, packet, signedEvidence) {
+  const readGit = (args, label) => {
+    const result = spawnSync('git', args, { cwd: target, encoding: 'utf8' });
+    if (result.status !== 0) {
+      throw new VerificationContextStaleError(`${label} is unavailable: ${String(result.stderr ?? '').trim()}`);
+    }
+    return String(result.stdout ?? '').trim();
+  };
+  const branch = readGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], 'current return branch');
+  const head = readGit(['rev-parse', '--verify', 'HEAD'], 'current return head');
+  if (!isGitObjectId(head)) throw new VerificationContextMalformedError('current return head is not a full Git identity');
+  for (const args of [['diff', '--quiet'], ['diff', '--cached', '--quiet']]) {
+    const dirty = spawnSync('git', args, { cwd: target, encoding: 'utf8' });
+    if (dirty.status !== 0) throw new VerificationContextStaleError('tracked repository state changed after the role-return evidence was collected');
+  }
+  const untracked = readGit(['ls-files', '--others', '--exclude-standard'], 'untracked return paths')
+    .split(/\r?\n/)
+    .filter(Boolean);
+  const untrackedInScope = untracked.filter(path =>
+    (packet?.task?.allowedPaths ?? []).some(pattern => fileMatchesScopePattern(path, pattern))
+  );
+  if (untrackedInScope.length > 0) {
+    throw new VerificationContextStaleError(`untracked task-scope paths are not represented by durable return evidence: ${untrackedInScope.join(', ')}`);
+  }
+  const baseHead = packet?.repository?.head;
+  if (!isGitObjectId(baseHead)) throw new VerificationContextMalformedError('dispatch packet lacks a full return base identity');
+  // One canonical derivation proves contiguous ancestry before it lists commits,
+  // changed paths, or trailers, so a reset or rebase cannot present a truncated
+  // range as the returned work.
+  const derived = deriveCommitRange({
+    runGit: targetGitRunner(target),
+    baseHead,
+    head,
+    taskId: packet?.task?.id,
+    roleId: packet?.assignment?.roleId,
+  });
+  if (!derived.ok) {
+    throw derived.evidenceState === 'malformed'
+      ? new VerificationContextMalformedError(derived.message)
+      : new VerificationContextStaleError(derived.message);
+  }
+  return {
+    backend: 'files',
+    task: signedEvidence?.task,
+    worktree: resolve(target),
+    branch,
+    baseHead,
+    head,
+    changedPaths: derived.changedPaths,
+    attribution: { range: derived.range, commits: derived.commits },
+    checks: signedEvidence?.checks,
+    pr: { state: 'not_applicable', number: null, url: null },
+  };
+}
+
+/**
  * Resolve explicit base evidence. There is no implicit HEAD and no default
  * branch: exactly one of `--base` or `--base-paths` must be supplied, and a
  * `--base` ref is resolved to its exact tree object id so a later branch move
@@ -262,7 +501,7 @@ function readExplicitBaseEvidence(target, options = {}) {
   const ref = String(options.base);
   const tree = spawnSync('git', ['rev-parse', '--verify', `${ref}^{tree}`], { cwd: target, encoding: 'utf8' });
   const treeOid = String(tree.stdout ?? '').trim();
-  if (tree.status !== 0 || !/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(treeOid)) {
+  if (tree.status !== 0 || !isGitObjectId(treeOid)) {
     throw new VerificationContextMalformedError(`Base ref '${ref}' cannot be resolved to an exact Git tree object id.`);
   }
   const listed = spawnSync('git', ['ls-tree', '-r', '--name-only', treeOid], { cwd: target, encoding: 'utf8' });
@@ -285,24 +524,27 @@ function readExplicitBaseEvidence(target, options = {}) {
 }
 
 /** Read and validate the exact dependency-status snapshot for this transition. */
-function readDependencyEvidence(target, option) {
+function readDependencyEvidence(target, option, taskId) {
   if (!option) {
     throw new VerificationContextError(
       'An agent-ready transition requires --dependencies <path> naming the exact dependency-status snapshot.',
       { requiredContext: ['--dependencies <path>'] }
     );
   }
-  const relPath = String(option).replace(/\\/g, '/');
-  const path = resolve(target, String(option));
-  let source;
-  try {
-    source = readFileSync(path, 'utf8');
-  } catch {
-    throw new VerificationContextError(`Dependency evidence '${relPath}' is unavailable.`, {
-      requiredContext: [`a readable dependency snapshot at '${relPath}'`],
+  const relPath = String(option);
+  const verified = verifyCommittedAttributedSource(target, relPath, { taskId });
+  if (!verified.ok) {
+    const ErrorType = verified.evidenceState === 'missing' ? VerificationContextError
+      : verified.evidenceState === 'changed' ? VerificationContextStaleError
+        : VerificationContextMalformedError;
+    throw new ErrorType(verified.error, {
+      requiredContext: [`a committed Maintainer-attributed dependency snapshot at '${relPath}'`],
     });
   }
-  const parsed = parseDependencySnapshot(source, { sourceRef: relPath });
+  const parsed = parseDependencySnapshot(verified.source, {
+    sourceRef: relPath,
+    provenance: verified.provenance,
+  });
   if (!parsed.ok) {
     const stale = parsed.errors.some(error => /stale|future/i.test(error));
     if (stale) throw new VerificationContextStaleError(parsed.errors[0]);
@@ -468,7 +710,7 @@ export async function cmdTask(args, io = createIo()) {
     const suggestion = sub ? suggestName(sub, Object.keys(TASK_SUBCOMMANDS)) : null;
     io.err(suggestion
       ? `task: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
-      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, status.');
+      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-dispatch, verify-return, status.');
     io.err('Run "agenticloop help task" for usage.');
     return EXIT_USAGE;
   }
@@ -538,6 +780,18 @@ export async function cmdTask(args, io = createIo()) {
         io.err('task new requires a title');
         return EXIT_USAGE;
       }
+      if (!opts.activationInput && !opts.scaffold) {
+        return printGateResult('task new', commandFailure('task new', new PublicCommandError(
+          'Task creation refused before mutation: parser-owned activation capture is required.', {
+            code: 'activation.capture.missing', evidenceState: 'missing', disposition: 'needs_context',
+            committedStateEvaluated: false,
+            safeRepair: 'Use --scaffold for non-activated Markdown scaffolding, or use a supported host-produced activation capture when one exists. Never author capture JSON in model-visible text.',
+          }
+        ), 'operational_error', {}, target), Boolean(opts.json), io);
+      }
+      // Resolve the exact prospective identity before reading or validating a
+      // one-task activation authorization. The capture can never float to a
+      // different auto-allocated id after a conflict.
       const defaultRegex = PROJECT_MAP_DEFAULTS.task_id_regex;
       const taskId = opts.id
         ? String(opts.id)
@@ -556,6 +810,48 @@ export async function cmdTask(args, io = createIo()) {
       if (existsSync(filePath)) {
         io.err(`Task record already exists: ${relative(target, filePath).replace(/\\/g, '/')}`);
         return 1;
+      }
+      let activationCapture;
+      let activationCaptureRef = null;
+      if (opts.activationInput) {
+        if (opts.scaffold) {
+          io.err('task new --scaffold cannot be combined with --activation-input');
+          return EXIT_USAGE;
+        }
+        let capabilities;
+        try {
+          capabilities = resolveActivationCapabilities(target, io, opts.hostTrustStore);
+          activationCaptureRef = relative(target, resolve(target, String(opts.activationInput))).replace(/\\/g, '/');
+          if (!validActivationCaptureRef(activationCaptureRef)) {
+            throw new VerificationContextMalformedError(
+              `Activation capture input '${String(opts.activationInput)}' must resolve to a safe repository-relative path inside the target`
+            );
+          }
+          activationCapture = readActivationCaptureInput(target, opts.activationInput, capabilities, taskId);
+        } catch (error) {
+          return printGateResult('task new', commandFailure('task new', error, 'operational_error', {}, target), Boolean(opts.json), io);
+        }
+        const disposition = activationCaptureDisposition(activationCapture, {
+          capabilities,
+          intendedTaskId: taskId,
+          repositoryIdentity: targetRepositoryIdentity(target),
+        });
+        if (!disposition.ok) {
+          const code = disposition.evidenceState === 'missing'
+            ? 'activation.capture.missing'
+            : disposition.evidenceState === 'changed'
+              ? 'activation.capture.mismatch'
+              : disposition.evidenceState === 'negative'
+                ? 'activation.capture.unsupported'
+                : 'activation.capture.malformed';
+          return printGateResult('task new', commandFailure('task new', new PublicCommandError(
+            `Task creation refused before mutation: ${disposition.errors.join('; ')}`, {
+              code, evidenceState: disposition.evidenceState, disposition: disposition.disposition,
+              committedStateEvaluated: false,
+              safeRepair: 'Use --scaffold for non-activated Markdown scaffolding, or obtain a fresh task-bound capture from a supported host adapter. Never edit or author capture JSON.',
+            }
+          ), 'operational_error', {}, target), Boolean(opts.json), io);
+        }
       }
       const reviewBudget = resolveProjectReviewBudget(projectConfig);
       if (reviewBudget.error) {
@@ -578,6 +874,13 @@ export async function cmdTask(args, io = createIo()) {
       newContent = replaceFrontmatterField(newContent, 'attempt_budget', String(attemptBudget.budget));
       newContent = replaceFrontmatterField(newContent, 'review_budget', String(reviewBudget.budget));
       newContent = replaceFrontmatterField(newContent, 'task_contract_schema', '2');
+      if (activationCapture) {
+        // Both fields are recorded: the digest binds the exact authorized bytes,
+        // and the reference binds the verifiable host-signed capture artifact so
+        // a hand-written digest alone cannot claim parser-owned authoring.
+        newContent = replaceFrontmatterField(newContent, 'activation_input_digest', activationCapture.normalizedActivationDigest);
+        newContent = replaceFrontmatterField(newContent, 'activation_capture_ref', activationCaptureRef);
+      }
       const prospectiveDiagnostics = validateTaskRecordDiagnostics(newContent, relative(target, filePath).replace(/\\/g, '/'));
       const prospectiveErrors = [
         ...prospectiveDiagnostics.map(item => item.message),
@@ -668,6 +971,191 @@ export async function cmdTask(args, io = createIo()) {
       if (opts.json) io.out(JSON.stringify({ task_id: taskId, file: relPath, receipt }, null, 2));
       else io.out(`Created ${relPath}`);
       return 0;
+    }
+
+    if (sub === 'prepare-dispatch') {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      if (!taskId || (!opts.input && !opts.packet) || (opts.input && opts.packet)) {
+        io.err('task prepare-dispatch requires <id> and exactly one of --input <dispatch-input.json> or --packet <packet.json>');
+        return EXIT_USAGE;
+      }
+      const readJson = (relPath, label) => {
+        try {
+          return JSON.parse(readFileSync(resolve(target, String(relPath)), 'utf8'));
+        } catch (error) {
+          throw new VerificationContextMalformedError(`${label} is unreadable or invalid JSON: ${error.message}`);
+        }
+      };
+      let input = null;
+      let capabilities;
+      let priorGateReceipts = [];
+      try {
+        input = opts.input ? readJson(opts.input, 'dispatch input') : null;
+        capabilities = resolveActivationCapabilities(target, io, opts.hostTrustStore);
+        if (opts.priorReceipts) {
+          priorGateReceipts = readJson(opts.priorReceipts, 'prior-gate receipts');
+        } else if (Array.isArray(input?.priorGateReceipts)) {
+          priorGateReceipts = input.priorGateReceipts;
+        }
+      } catch (error) {
+        return printGateResult('task prepare-dispatch', commandFailure('task prepare-dispatch', error, 'operational_error', {}, target), asJson, io);
+      }
+      const filePath = taskPathForId(target, projectConfig, taskId);
+      const carrier = relative(target, filePath).replace(/\\/g, '/');
+      const refetchTask = () => {
+        if (!existsSync(filePath)) throw new VerificationContextError(`task record not found: ${carrier}`);
+        const body = readFileSync(filePath, 'utf8');
+        const history = loadFilesTaskContractRecords(target, taskId);
+        return {
+          backend: 'files', taskId, carrier, body, digest: taskRecordDigest(body),
+          trustedRecords: history.trustedRecords,
+          trustedRecordErrors: history.errors,
+        };
+      };
+      const refetchReadiness = ({ snapshot }) => refetchDispatchReadiness(
+        target,
+        snapshot,
+        input?.readiness ?? packet?.readiness
+      );
+      const refetchRepository = ({ readiness }) => refetchDispatchRepository(target, readiness);
+      const refetchDecomposition = ({ snapshot }) => refetchDispatchDecomposition(
+        target,
+        input?.decomposition ?? packet?.decomposition,
+        snapshot.taskId
+      );
+      const readCarrierDigest = relPath => {
+        const carrierPath = resolve(target, String(relPath));
+        if (!existsSync(carrierPath)) return null;
+        return taskRecordDigest(readFileSync(carrierPath, 'utf8'));
+      };
+      // The activation capture is read from the task's own authoring reference,
+      // never from the dispatch request: a caller cannot substitute a capture for
+      // the one the authored contract is bound to.
+      const refetchActivation = ({ snapshot }) => {
+        const contract = taskContractDigest(snapshot.body);
+        if (!contract.ok) throw new VerificationContextMalformedError(contract.error);
+        const ref = contract.projection.activation_capture_ref;
+        if (!ref) {
+          throw new VerificationContextError(
+            `task '${snapshot.taskId}' has no activation_capture_ref; it cannot authorize dispatch in this state, and when no separately authorized activation-binding conversion exists a fresh activation-bound task is required`
+          );
+        }
+        const capture = readActivationCaptureInput(target, ref, capabilities, snapshot.taskId);
+        if (capture.normalizedActivationDigest !== contract.projection.activation_input_digest) {
+          throw new VerificationContextStaleError(
+            `activation capture '${ref}' no longer matches the task contract activation_input_digest`
+          );
+        }
+        return capture;
+      };
+      const stateInputs = {
+        runGit: targetGitRunner(target),
+        priorGateReceipts,
+        readCarrierDigest,
+        refetchActivation,
+      };
+      let packet = null;
+      let prepared;
+      if (opts.packet) {
+        try {
+          packet = readJson(opts.packet, 'dispatch packet');
+        } catch (error) {
+          return printGateResult('task prepare-dispatch', commandFailure('task prepare-dispatch', error, 'operational_error', {}, target), asJson, io);
+        }
+        prepared = verifyDispatchBeforeMutation({
+          packet,
+          refetchTask,
+          refetchReadiness,
+          refetchRepository,
+          refetchDecomposition,
+          ...stateInputs,
+          roleId: opts.role,
+        }, { capabilities });
+      } else {
+        prepared = prepareRoleDispatch({
+          refetchTask,
+          refetchReadiness,
+          refetchRepository,
+          refetchDecomposition,
+          ...stateInputs,
+          activation: input?.activation,
+          assignment: input?.assignment,
+        }, { capabilities });
+      }
+      const presentedValidation = presentGateResultForTarget(prepared.validation, target);
+      if (asJson) {
+        if (prepared.ok && opts.packet) printGateResult('task prepare-dispatch', presentedValidation, true, io);
+        else if (prepared.ok) io.out(JSON.stringify(prepared.packet, null, 2));
+        else printGateResult('task prepare-dispatch', presentedValidation, true, io);
+      }
+      else if (prepared.ok) io.out(JSON.stringify(prepared.packet, null, 2));
+      else for (const error of prepared.validation.errors) io.err(error);
+      return prepared.ok ? 0 : 1;
+    }
+
+    if (sub === 'verify-return') {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      if (!taskId || !opts.packet || !opts.return) {
+        io.err('task verify-return requires <id>, --packet <packet.json>, and --return <role-return.json>');
+        return EXIT_USAGE;
+      }
+      const readJsonText = (relPath, label) => {
+        try {
+          return readFileSync(resolve(target, String(relPath)), 'utf8');
+        } catch (error) {
+          throw new VerificationContextMalformedError(`${label} is unreadable: ${error.message}`);
+        }
+      };
+      let packet;
+      let raw;
+      let repositoryEvidence = null;
+      let producerReceipt = null;
+      let capabilities;
+      try {
+        packet = JSON.parse(readJsonText(opts.packet, 'dispatch packet'));
+        raw = readJsonText(opts.return, 'role return');
+        capabilities = resolveActivationCapabilities(target, io, opts.hostTrustStore);
+        repositoryEvidence = opts.repositoryEvidence
+          ? JSON.parse(readJsonText(opts.repositoryEvidence, 'repository evidence'))
+          : null;
+        producerReceipt = opts.producerReceipt
+          ? JSON.parse(readJsonText(opts.producerReceipt, 'producer receipt'))
+          : null;
+      } catch (error) {
+        return printGateResult('task verify-return', commandFailure('task verify-return', error, 'operational_error', {}, target), asJson, io);
+      }
+      const filePath = taskPathForId(target, projectConfig, taskId);
+      const carrier = relative(target, filePath).replace(/\\/g, '/');
+      const refetchTask = () => {
+        if (!existsSync(filePath)) throw new VerificationContextError(`task record not found: ${carrier}`);
+        const body = readFileSync(filePath, 'utf8');
+        const history = loadFilesTaskContractRecords(target, taskId);
+        return { backend: 'files', taskId, carrier, body, digest: taskRecordDigest(body), trustedRecords: history.trustedRecords, trustedRecordErrors: history.errors };
+      };
+      const refetchRepositoryEvidence = repositoryEvidence
+        ? () => refetchFilesReturnEvidence(target, packet, repositoryEvidence)
+        : null;
+      // Verification consumes only the operator-pinned public key. No signing
+      // secret is read from the environment, so an agent invoking this command
+      // cannot mint a receipt for itself. The raw receipt travels into the
+      // core boundary, which authenticates it against the pinned adapter
+      // itself; this wrapper never claims verification happened.
+      const received = receiveRoleReturn({
+        raw,
+        packet,
+        refetchTask,
+        refetchRepositoryEvidence,
+        producerReceipt,
+        resolveTrustedAdapter: adapterId => resolveTrustedHostAdapter(target, io, opts.hostTrustStore, adapterId),
+        runGit: targetGitRunner(target),
+      }, { capabilities });
+      const presentedValidation = presentGateResultForTarget(received.validation, target);
+      if (asJson) printGateResult('task verify-return', presentedValidation, true, io);
+      else if (received.ok) io.out('Role return is current.');
+      else for (const error of received.validation.errors) io.err(error);
+      return received.ok ? 0 : 1;
     }
 
     if (sub === 'establish-baseline') {
@@ -904,7 +1392,7 @@ export async function cmdTask(args, io = createIo()) {
         let dependencies;
         try {
           base = readExplicitBaseEvidence(target, opts);
-          dependencies = readDependencyEvidence(target, opts.dependencies);
+          dependencies = readDependencyEvidence(target, opts.dependencies, taskId);
         } catch (error) {
           if (error instanceof PublicCommandError) return failure(error);
           throw error;
@@ -1146,11 +1634,10 @@ export async function cmdTask(args, io = createIo()) {
       }));
     }
 
-    io.err(`Unknown task subcommand '${sub}'. Expected: list, lint, new, establish-baseline, authorize-correction, status.`);
+    io.err(`Unknown task subcommand '${sub}'. Expected: list, lint, new, establish-baseline, authorize-correction, prepare-dispatch, verify-return, status.`);
     return EXIT_USAGE;
   } catch (error) {
     if (error instanceof CliUsageError) throw error;
-    io.err(error.message);
-    return 1;
+    return printGateResult(`task ${sub}`, commandFailure(`task ${sub}`, error, 'operational_error', {}, target), Boolean(opts?.json), io);
   }
 }

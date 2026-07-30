@@ -45,6 +45,11 @@ function opt(name, type, description, extra = {}) {
 
 const targetOption = (description = 'Target directory (default: current directory).') =>
   opt('target', 'string', description);
+const hostTrustStoreOption = opt(
+  'host-trust-store',
+  'string',
+  "Absolute assertion of this target's pre-registered store under the host-owned operator trust root. It cannot select an arbitrary external trust file."
+);
 const jsonOption = opt('json', 'boolean', 'Emit machine-readable JSON instead of human-readable output.');
 const dryRunOption = opt('dry-run', 'boolean', 'Print the plan without making changes.');
 const yesOption = opt('yes', 'boolean', 'Confirm the mutating action.');
@@ -353,8 +358,8 @@ export const COMMAND_REGISTRY = {
     options: [targetOption('Directory containing agenticloop.json (default: current).')],
   },
   task: {
-    summary: 'Manage files-backed task records (list, lint, new, establish-baseline, authorize-correction, status).',
-    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|status> [options]',
+    summary: 'Manage files-backed task records and read-only dispatch preparation.',
+    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-dispatch|verify-return|status> [options]',
     subcommands: {
       list: {
         summary: 'List task records.',
@@ -378,11 +383,14 @@ export const COMMAND_REGISTRY = {
       },
       new: {
         summary: 'Create a task record.',
-        usage: 'agenticloop task new <title> [--id <id>] [--target <dir>]',
+        usage: 'agenticloop task new <title> (--activation-input <capture.json> [--host-trust-store <expected-path>] | --scaffold) [--id <id>] [--target <dir>]',
         positionals: [{ name: 'title', required: true, variadic: true }],
         options: [
           targetOption(),
           opt('id', 'string', 'Explicit task id. Omit to allocate the next default T-### id.'),
+          opt('activation-input', 'string', 'Host-signed activation-capture artifact. Only a supported and verified capture from the fixed operator trust registry can authorize creation; no shipped adapter qualifies.'),
+          hostTrustStoreOption,
+          opt('scaffold', 'boolean', 'Create generic non-activated task scaffolding. It cannot authorize dispatch without a current valid host-signed activation binding; when no authorized conversion exists, create a fresh activation-bound task.'),
           jsonOption,
         ],
       },
@@ -402,6 +410,28 @@ export const COMMAND_REGISTRY = {
           opt('reason', 'string', 'Human-readable correction reason. Required.'),
           opt('authority', 'string', 'Durable authorization reference. Required.'),
           opt('actor', 'string', 'Expected committed Git author. Required.'),
+          jsonOption,
+        ],
+      },
+      'prepare-dispatch': {
+        summary: 'Refetch and bind one files-backed role dispatch without mutating the task.',
+        usage: 'agenticloop task prepare-dispatch <id> (--input <dispatch-input.json> | --packet <packet.json> --role engineer) [--host-trust-store <expected-path>] [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only',
+        positionals: [{ name: 'id', required: true }],
+        options: [targetOption(), opt('input', 'string', 'Closed dispatch input carrying activation, canonical readiness, decomposition, and assignment facts.'), opt('packet', 'string', 'Existing dispatch packet to revalidate read-only before receiver mutation.'), opt('role', 'string', 'Immutable receiving role required with --packet.', { enum: ['engineer'] }), opt('prior-receipts', 'string', 'JSON array of prior-gate or setup task-mutation receipts that must be resolved and undrifted before dispatch.'), hostTrustStoreOption, jsonOption],
+      },
+      'verify-return': {
+        summary: 'Read-only role-return verifier using an authenticated host receipt and its exact repository evidence.',
+        usage: 'agenticloop task verify-return <id> --packet <packet.json> --return <role-return.json> [--repository-evidence <evidence.json>] [--producer-receipt <receipt.json>] [--host-trust-store <expected-path>] [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only',
+        positionals: [{ name: 'id', required: true }],
+        options: [
+          targetOption(),
+          opt('packet', 'string', 'Dispatch packet consumed by the raw role return. Required.'),
+          opt('return', 'string', 'Raw role-return JSON wire artifact. Required.'),
+          opt('repository-evidence', 'string', 'Repository evidence signed by the host receipt. Required for successful verification.'),
+          opt('producer-receipt', 'string', 'Ed25519 host-adapter receipt verified against the packet-bound adapter/key from the fixed operator trust registry. Required for successful verification.'),
+          hostTrustStoreOption,
           jsonOption,
         ],
       },

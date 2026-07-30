@@ -222,7 +222,7 @@ describe('schema-less readiness transitions require baseline migration', () => {
     const target = mkdtempSync(join(tmpdir(), 'al-schemaless-ready-'));
     try {
       createTaskProjectFixture(target);
-      const created = await runCliInProcess(['task', 'new', 'Schema-less readiness', '--target', target]);
+      const created = await runCliInProcess(['task', 'new', 'Schema-less readiness', '--scaffold', '--target', target]);
       assert.equal(created.status, 0, created.stderr);
       const path = join(target, '.agenticloop', 'tasks', 'T-001.md');
       writeFileSync(path, readFileSync(path, 'utf8').replace(/^task_contract_schema: 2\n/m, ''), 'utf8');
@@ -239,6 +239,13 @@ describe('schema-less readiness transitions require baseline migration', () => {
         freshnessPolicy: { maxAgeSeconds: 86400 },
         statuses: {},
       })}\n`, 'utf8');
+      let gitResult = spawnSync('git', ['-C', target, 'add', dependencies], { encoding: 'utf8' });
+      assert.equal(gitResult.status, 0, gitResult.stderr);
+      gitResult = spawnSync('git', [
+        '-C', target, 'commit', '-m',
+        'record dependency evidence\n\nTask: T-001\nAgent: maintainer',
+      ], { encoding: 'utf8' });
+      assert.equal(gitResult.status, 0, gitResult.stderr);
       const digest = `sha256:${createHash('sha256').update(readFileSync(path, 'utf8'), 'utf8').digest('hex')}`;
       const result = await runCliInProcess([
         'task', 'status', 'T-001', 'agent-ready', '--expect-digest', digest,

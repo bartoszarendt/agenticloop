@@ -1,6 +1,7 @@
 # OpenCode Setup
 
-Status: supported.
+Adapter generation status: supported. Parser-owned activation capture:
+`unsupported`.
 
 OpenCode uses command-first activation. Agentic Loop generates repo-local
 OpenCode agents plus a repo-local `/agenticloop` command. Normal OpenCode
@@ -97,11 +98,20 @@ generated `.opencode/agents/*.md` file disagrees with
 `adapters.opencode.roleSettings` in `agenticloop.json`, the doctor output
 reports the stale roles and suggests `agenticloop update --adapter opencode`.
 
-The command body tells OpenCode to:
+The generated command currently reports activation capture as `unsupported` and
+stops before task authoring. OpenCode documents positional arguments as prompt
+template substitutions, not a lossless parser-owned byte artifact, so the command
+does not expose `$ARGUMENTS`, `$1`, or `$2` as activation proof and never asks the
+model to construct a capture JSON file. It remains a safe orientation/blocked
+capability surface until a separately proven adapter-owned capture producer and
+protected host-authority boundary exist. It is not a supported live dispatch
+path.
+
+Apart from that activation boundary, the command body tells OpenCode to:
 
 1. read `.agenticloop/project.md` first and stop for setup/profile confirmation when setup is unconfirmed or `development_stage` is not human-confirmed
 2. follow `agenticloop/AGENTIC_LOOP.md` plus the canonical role contracts in `agenticloop/agents/`
-3. create or refine the durable task record before implementation
+3. report the typed capture limitation before creating or refining a durable task record
 4. route task-record, review, acceptance, and closeout work through maintainer
 5. route scoped implementation and revision work through engineer
 
@@ -218,4 +228,5 @@ review, blocked state, and closeout.
 
 If Codex output is also generated in the same target, OpenCode can see
 `.agents/skills/agenticloop/SKILL.md`. That is not fatal, but Agentic Loop's
-supported OpenCode activation remains `/agenticloop`.
+generated OpenCode entry point remains `/agenticloop`; capture remains
+unsupported.

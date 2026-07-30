@@ -70,7 +70,31 @@ A gate failure names an owner; it does not transfer that owner's edit authority
 to Orchestrator. Orchestrator re-delegates to the diagnostic owner, escalates to
 the human when named authority is required, or stops at the hard checkpoint. It
 must not repair Engineer-owned PR bodies or commits, or Maintainer-owned task
-records, while a legal delegation path exists.
+   records, while a legal delegation path exists.
+
+### Exact implementation dispatch
+
+Before one Engineer implementation delegation, the orchestrator emits one
+read-only `agenticloop.role-preparation` packet from the current task. It binds
+the parser-controlled activation identity, trusted task and contract digests,
+current mechanically reevaluated readiness/base/dependency evidence, committed
+Maintainer-attributed decomposition provenance, scope, checks, role and invocation
+IDs, canonical references, branch/worktree, attribution, liveness,
+and cancellation boundary. Its activation capture is verified by a target-scoped
+Ed25519 public key from the fixed host-owned operator registry; repository-local
+or caller-selected external adapter/key data cannot authorize it. The packet references canonical role, skill, and
+backend documents; it does not copy their procedures or select a solution.
+
+The Engineer invokes the read-only packet verifier before its first mutation.
+The result is raw `agenticloop.role-return` JSON from that role, bound to the
+exact packet digest. A successful result uses canonical `disposition: proceed`
+with a separate non-authoritative implementation outcome, never a fake review
+receipt or completion claim. The orchestrator validates/reroutes invalid returns;
+it does not rewrite, summarize, or reconstruct them. Authenticated host producer
+provenance bound to the target repository, adapter/key identity, invocation,
+packet, return, liveness, and exact repository evidence is mandatory at the
+handoff edge. The verifier selects the adapter/key from the verified packet, not
+the receipt; replayed, unsigned, or repository-self-attested receipts fail closed.
 
 Work-unit certification is auditor-owned and is a fresh, separate invocation
 every time; see [[work-unit-audit]]. The auditor never implements, never accepts

@@ -104,6 +104,7 @@ function detectColor(env, stdoutIsTTY, ci) {
  * @param {(input: NodeJS.ReadableStream, output: NodeJS.WritableStream) => object} [options.promptFactory]
  * @param {Function} [options.ghCommandRunner]  Injectable read-only GitHub command runner for tests.
  * @param {Function} [options.auditProvenanceVerifier] Host receipt verifier for Auditor delegations.
+ * @param {string} [options.operatorTrustRoot] Test-only alternate registry root; it cannot authorize supported adapters.
  * @returns {object} io context
  */
 export function createIo(options = {}) {
@@ -134,6 +135,7 @@ export function createIo(options = {}) {
     warn: makeWriter(stderr),
     ghCommandRunner: options.ghCommandRunner ?? null,
     auditProvenanceVerifier: options.auditProvenanceVerifier ?? null,
+    operatorTrustRoot: options.operatorTrustRoot ?? null,
     fsMutationOptions: options.fsMutationOptions ?? null,
   };
 

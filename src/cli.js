@@ -15,7 +15,7 @@
  *   agenticloop event-logging report [--task <id>] [--features] [--target <dir>]
  *   agenticloop task list [--status <s>] [--json] [--target <dir>]
  *   agenticloop task lint [<task-id>] [--json] [--target <dir>]
- *   agenticloop task new <title> [--id <id>] [--target <dir>]
+ *   agenticloop task new <title> (--activation-input <capture.json> | --scaffold) [--id <id>] [--target <dir>]
  *   agenticloop task status <id> <status> [--note <text>] [--block-category <category>] [--target <dir>]
  *   agenticloop audit new --work-unit <id> --covered-tasks <ids> --artifact <ref> --goal <text> --completion-oracle <text> --evidence <text> [--budget <n>] [--target <dir>]
  *   agenticloop audit baseline <audit-id|work-unit> [--artifact <ref>] [--covered-tasks <ids>] --evidence <text> [--target <dir>]
@@ -96,6 +96,7 @@ import { deepMerge, loadAgenticLoopConfig } from './json.js';
 import { loadProjectMap, PROJECT_MAP_DEFAULTS } from './project-map.js';
 import { loadFilesTaskContractRecords } from './files-task-contract.js';
 import { canonicalJson } from './canonical-json.js';
+import { isGitObjectId } from './git-oid.js';
 import { resolveTaskBackend } from './task-backend.js';
 import { cmdTask } from './task-cli.js';
 import {
@@ -175,6 +176,7 @@ import { resolveCanonicalTerminalScope } from './terminal-scope.js';
 import { validateTaskStatusTransition } from './task-transition.js';
 import { parseFrontmatterStrict } from './frontmatter.js';
 import { evaluateCommitAttribution, lintAttributionRepairRecord, renderAttributionRepairRecord } from './commit-attribution.js';
+import { verifyCommittedAttributedSource } from './committed-source.js';
 import { planGitHubCheckpointRepair, renderGitHubCheckpoint } from './github-checkpoint.js';
 import { runGitHubReviewPrepare } from './github-review-prepare.js';
 import {
@@ -1582,7 +1584,7 @@ function readBaseEvidence(opts, target) {
   const ref = String(opts.base);
   const tree = spawnSync('git', ['rev-parse', '--verify', `${ref}^{tree}`], { cwd: target, encoding: 'utf8' });
   const treeOid = String(tree.stdout ?? '').trim();
-  if (tree.status !== 0 || !/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(treeOid)) {
+  if (tree.status !== 0 || !isGitObjectId(treeOid)) {
     throw new VerificationContextMalformedError(`Base tree '${ref}' cannot be resolved.`, {
       requiredContext: [`a resolvable Git tree or commit for --base '${ref}'`],
     });
@@ -1607,22 +1609,26 @@ function readBaseEvidence(opts, target) {
 }
 
 /** Read and validate the exact dependency-status snapshot for one evaluation. */
-function readDependencyEvidence(target, dependencyPath, command) {
+function readDependencyEvidence(target, dependencyPath, command, taskId) {
   if (!dependencyPath) {
     throw new VerificationContextError(`${command} requires --dependencies <path> naming the exact dependency-status snapshot.`, {
       requiredContext: ['--dependencies <path>'],
     });
   }
-  const relPath = String(dependencyPath).replace(/\\/g, '/');
-  let source;
-  try {
-    source = readFileSync(resolve(target, dependencyPath), 'utf8');
-  } catch {
-    throw new VerificationContextError(`Dependency evidence '${relPath}' is unavailable.`, {
-      requiredContext: [`a readable dependency snapshot at '${relPath}'`],
+  const relPath = String(dependencyPath);
+  const verified = verifyCommittedAttributedSource(target, relPath, { taskId });
+  if (!verified.ok) {
+    const ErrorType = verified.evidenceState === 'missing' ? VerificationContextError
+      : verified.evidenceState === 'changed' ? VerificationContextStaleError
+        : VerificationContextMalformedError;
+    throw new ErrorType(verified.error, {
+      requiredContext: [`a committed Maintainer-attributed dependency snapshot at '${relPath}'`],
     });
   }
-  const parsed = parseDependencySnapshot(source, { sourceRef: relPath });
+  const parsed = parseDependencySnapshot(verified.source, {
+    sourceRef: relPath,
+    provenance: verified.provenance,
+  });
   if (!parsed.ok) {
     if (parsed.errors.some(error => /stale|future/i.test(error))) {
       throw new VerificationContextStaleError(parsed.errors[0]);
@@ -1706,7 +1712,7 @@ async function cmdTaskReadiness(args, io) {
     assertLifecycleHandoffResolved(target);
     const base = readBaseEvidence(opts, target);
     const dependency = opts.dependencies
-      ? readDependencyEvidence(target, opts.dependencies, 'task-readiness')
+      ? readDependencyEvidence(target, opts.dependencies, 'task-readiness', source.taskId)
       : null;
     const result = evaluateTaskReadiness({
       taskBody: source.body,
@@ -1836,7 +1842,7 @@ async function cmdTaskBody(args, io) {
     const baseContext = opts.base || opts.basePaths ? readBaseEvidence(opts, target) : null;
     const basePaths = baseContext ? baseContext.paths : undefined;
     const dependencySnapshot = opts.dependencies
-      ? readDependencyEvidence(target, opts.dependencies, `task-body ${sub}`)
+      ? readDependencyEvidence(target, opts.dependencies, `task-body ${sub}`, `#${opts.issue}`)
       : null;
     if (sub === 'fetch') {
       if (!opts.output) throw new CliUsageError('task-body fetch requires --output <path>');

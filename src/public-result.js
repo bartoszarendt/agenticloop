@@ -47,7 +47,8 @@ export function printGateResult(command, result, asJson, io, exitCode = null) {
   io.out(`  status: ${result.ok ? 'passed' : 'FAILED'}`);
   for (const warning of result.warnings ?? []) io.warn(`  WARN: ${warning}`);
   for (const error of result.errors ?? []) io.err(`  ERROR: ${error}`);
-  if (result.firstSafeRepair) io.out(`  first safe repair: ${result.firstSafeRepair}`);
+  const firstSafeRepair = result.firstSafeRepair ?? result.diagnostics?.[0]?.repairHint ?? null;
+  if (firstSafeRepair) io.out(`  first safe repair: ${firstSafeRepair}`);
   io.out();
   return status;
 }

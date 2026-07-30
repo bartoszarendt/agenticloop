@@ -633,7 +633,8 @@ describe('OpenCode subagent mode validation', () => {
         'Read `.agenticloop/project.md` first.',
         'Then follow `agenticloop/AGENTIC_LOOP.md` and the canonical role contracts in `agenticloop/agents/`.',
         'Create or refine the durable task record before any implementation.',
-        'Requested task or context: `$ARGUMENTS`',
+        'operator expected request SHA-256: `$1`',
+        'Requested task or context: `$2`',
         '',
       ].join('\n'),
     });
@@ -654,7 +655,8 @@ describe('OpenCode subagent mode validation', () => {
         'Read `.agenticloop/project.md` first.',
         'Then follow `agenticloop/AGENTIC_LOOP.md` and the canonical role contracts in `agenticloop/agents/`.',
         'Create or refine the durable task record before any implementation.',
-        'Requested task or context: `$ARGUMENTS`',
+        'operator expected request SHA-256: `$1`',
+        'Requested task or context: `$2`',
         '',
       ].join('\n'),
     });
@@ -671,7 +673,8 @@ describe('OpenCode subagent mode validation', () => {
         'agent: orchestrator',
         '---',
         '',
-        'Requested task or context: `$ARGUMENTS`',
+        'operator expected request SHA-256: `$1`',
+        'Requested task or context: `$2`',
         '',
       ].join('\n'),
     });
@@ -680,6 +683,18 @@ describe('OpenCode subagent mode validation', () => {
     assert.ok(errors.some(e => e.includes('`.agenticloop/project.md`')));
     assert.ok(errors.some(e => e.includes('`agenticloop/AGENTIC_LOOP.md`')));
     assert.ok(errors.some(e => e.includes('Create or refine the durable task record')));
+  });
+
+  it('rejects an OpenCode command that retains the aggregate argument macro', () => {
+    const d = makeTarget('aggregate-opencode-command');
+    const commandPath = join(d, '.opencode', 'commands', 'agenticloop.md');
+    writeFileSync(
+      commandPath,
+      `${readFileSync(commandPath, 'utf-8')}\n$ARGUMENTS\n`
+    );
+
+    const { errors } = validateConfig(d);
+    assert.ok(errors.some(error => error.includes('must not claim positional or aggregate parser capture placeholders')));
   });
 
   it('errors when an OpenCode activation command omits the exact stop route', () => {

@@ -4,6 +4,23 @@ argument-hint: "[task-id or task description]"
 disable-model-invocation: true
 ---
 
+<!-- AGENTICLOOP_ADAPTER_SLOT:activation_capability -->
+Activation adapter: `claude-code.plugin.command.v1`.
+Activation capture capability: `unsupported`.
+
+This file is the live Claude Code plugin command `/agenticloop:start`, registered
+through `.claude-plugin/plugin.json`. The Claude Code plugin surface has no
+host-owned parser capture channel, so model-visible command arguments are
+advisory context only and are never activation proof. Do not serialize the
+substituted argument, the surrounding prompt, or any other model-visible text
+into activation capture JSON.
+<!-- /AGENTICLOOP_ADAPTER_SLOT:activation_capability -->
+
+Each generated host artifact replaces the capability slot above with its own
+adapter's declaration. When activation capture is `unsupported`, report that
+typed blocked result and stop before activation-bound task authoring or role
+dispatch. Prompt-visible input must never be converted into capture JSON.
+
 Before any setup check, orientation, document loading, task selection, or
 delegation, normalize the supplied argument by trimming surrounding whitespace.
 If and only if it equals `stop` (case-insensitive), immediately follow
@@ -79,4 +96,10 @@ If no task ID or task description is provided:
    Do not treat connector failure alone as proof of missing credentials.
 8. Ask the human to select a task or provide a task description.
 
+<!-- AGENTICLOOP_ADAPTER_SLOT:requested_input -->
 Requested task or context: `$ARGUMENTS`
+
+Claude Code substitutes this argument when `/agenticloop:start` is invoked. Treat
+it as advisory context for orientation and task selection only; it is never
+activation proof.
+<!-- /AGENTICLOOP_ADAPTER_SLOT:requested_input -->

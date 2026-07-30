@@ -220,7 +220,7 @@ describe('relative --target resolves against the injected cwd', () => {
   it('task new creates the record under the injected-cwd target', async () => {
     freshInjectedCwd();
     seededProbe();
-    const result = await runCliInProcess(['task', 'new', 'Probe', 'title', '--target', REL], { cwd: injectedCwd });
+    const result = await runCliInProcess(['task', 'new', 'Probe', 'title', '--scaffold', '--target', REL], { cwd: injectedCwd });
     assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
     assert.ok(existsSync(join(probeTarget(), '.agenticloop', 'tasks', 'T-001.md')));
     assertProcessCwdUntouched();
@@ -229,7 +229,7 @@ describe('relative --target resolves against the injected cwd', () => {
   it('task list reads records from the injected-cwd target', async () => {
     freshInjectedCwd();
     seededProbe();
-    const created = await runCliInProcess(['task', 'new', 'Probe', 'title', '--target', REL], { cwd: injectedCwd });
+    const created = await runCliInProcess(['task', 'new', 'Probe', 'title', '--scaffold', '--target', REL], { cwd: injectedCwd });
     assert.equal(created.status, 0, created.stderr);
     const result = await runCliInProcess(['task', 'list', '--target', REL, '--json'], { cwd: injectedCwd });
     assert.equal(result.status, 0, result.stderr);

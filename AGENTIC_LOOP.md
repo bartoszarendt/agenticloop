@@ -227,14 +227,49 @@ operator input.
 
 | Boundary | Authoritative identity and owner | Required evidence and freshness | Permitted disposition / absent or invalid evidence |
 | --- | --- | --- | --- |
-| `operator_request` | Operator-supplied expected SHA-256 | Digest of the exact authorized UTF-8 request; fixed for the activation attempt | `proceed` or `rejected`; without it, report original-input capture unsupported rather than inventing proof. |
-| `activation_input` | Parser-controlled normalized-input digest | Normalized bytes, their digest, and comparison to the operator digest before task authoring | `proceed` or `rejected`; mismatch or unavailable parser capture stops before mutation. |
+| `operator_request` | Operator-supplied expected SHA-256 | Digest of the exact authorized UTF-8 request; fixed for the activation attempt | Supported/missing is `needs_context`; model prose cannot substitute. |
+| `activation_input` | Adapter-issued parser-capture receipt and normalized-input digest | A target-scoped Ed25519 public key in the fixed host-owned operator registry pins the canonical checkout and adapter/key. The signed capture binds exact UTF-8 bytes, target identity, their digest, and comparison to the operator digest before task authoring. Prompt text, model-created JSON, repository-local trust data, and caller-selected alternative stores are never evidence. | Supported/verified proceeds; mismatch is rejected and unsupported capture is blocked before mutation. |
 | `authored_task` | Task ID and trusted contract digest; owner is typed by the boundary | Current durable task record plus trusted baseline/correction chain; digest equals material task projection | `proceed`, `needs_context`, or `rejected`; quarantine mutation and dispatch until repaired by the boundary owner. |
 | `dispatch` | Preparation-packet ID and task digest; owner is typed by the boundary | Refetched task digest, base/dependency evidence, role, and capability references | `proceed`, `blocked`, `needs_context`, or `rejected`; do not dispatch an under-specified packet. |
 | `role_return` | Producing-role return ID and consumed packet digest | Schema-valid role return naming its producer and exact artifact or blocker evidence | `proceed`, `blocked`, `needs_context`, or `rejected`; reject and re-route invalid returns to the producing role. |
 | `review` | Review-entry receipt and reviewed artifact; owner is typed by the boundary | Passing exact-head receipt plus durable verdict; reviewed artifact remains current | `proceed`, `blocked`, `rejected`, or `superseded`; prose cannot publish review-ready or acceptance. |
 | `audit` | Audit ID, run, and frozen candidate; owner is typed by the boundary | Fresh schema-valid report persisted unchanged; candidate and covered set still match | `proceed`, `blocked`, `exception_requested`, or `rejected`; invalid reports return to the owning role. |
 | `terminal_closeout` | Closeout packet and marker digest; owner is typed by the boundary | Current closeout gate packet and provenanced marker against current candidate/carriers | `proceed`, `blocked`, `superseded`, or `rejected`; changed inputs make the marker stale and require reprepare. |
+
+### Single-role dispatch and return
+
+One implementation handoff uses `agenticloop.role-preparation`, schema version
+`2`, defined in the bundled `src/dispatch-envelope.js` module. It is a read-only
+handoff artifact, not a controller, lane-result store, task mutation, or shared
+durable-state import. Its canonical digest is
+`sha256:agenticloop.role-preparation.v2:<64-lowercase-hex>` and it binds the
+current task/contract/activation identities, freshly reevaluated P35-03
+readiness and base/dependency sources, committed Maintainer-attributed
+decomposition evidence, scoped checks, immutable role and invocation IDs, canonical
+references, capabilities, branch/worktree, attribution, liveness, and
+cancellation. Any bound input changing stales the packet. The receiver verifies
+its ID, digest, role, and current bindings before its first mutation.
+
+The single-role execution result is `agenticloop.role-return`, schema version
+`2`, with digest `sha256:agenticloop.role-return.v2:<64-lowercase-hex>`. It
+binds a unique return ID, immutable producer, exact packet ID/digest, backend and
+task digest, exact branch/worktree and full 40- or 64-character base/head, changed paths,
+structured checks, actual contiguous commit-range attribution, PR state,
+blocker/resumption facts, and freshness invalidators. Its transition disposition
+uses the canonical vocabulary: a successful Engineer result is
+`disposition: proceed` plus the separate non-authoritative
+`implementation_ready_for_review` outcome with `completion: false`; it is never
+review-entry evidence or completion. Raw wire returns are schema-validated and
+compared with refetched task, Git, check, and backend transport evidence plus an
+authenticated host-adapter producer receipt. The host receipt is bound to the
+exact target repository, packet-selected adapter/key, invocation, packet, return,
+liveness, and repository-evidence digest and is authenticated with an
+operator-pinned Ed25519 public key from the fixed host-owned registry outside the
+target repository. A malformed,
+stale, replayed, abbreviated, mismatched, repository-self-attested, or manually
+reconstructed return is a typed rejection routed only to its producer.
+Commit attribution is reconstructed from durable full identities and one final
+contiguous `Task: <resolved task id>` / `Agent: <immutable role id>` pair.
 
 ### Lifecycle and source of truth
 
@@ -423,7 +458,7 @@ plan is an artifact of that relation, not a new `managed_join_plan` synonym. Use
 `cancellation_boundary`, `review_no_mutation_window`, and
 `digest_guarded_rollback` precisely. None is a lock or authority transfer.
 
-A blocked role return has kind `agenticloop.role-return`, schema version `1`,
+A blocked role return has kind `agenticloop.role-return`, schema version `2`,
 and separately declares required fields plus constant `disposition: blocked`.
 Its fields include return ID, producing role, consumed transition ID/digest,
 blocker category/evidence, resume owner/transition, and resume preconditions. An exceptional-verification return has kind
@@ -431,6 +466,19 @@ blocker category/evidence, resume owner/transition, and resume preconditions. An
 ID, producing role, transition ID, exact failed/unavailable check, evidence,
 proposed disposition, disposition authority, and next resumable transition.
 Neither packet authorizes another role to repair, accept, or reconstruct it.
+
+Request capture is independent from capability enforcement. Before task
+authoring, the selected adapter implementation derives
+`captureCapability: supported|unsupported` and computes
+`integrity: verified|missing|mismatch` from its own receipt fields. A supported
+verified parser-normalized payload digest matching the operator expected SHA-256
+may proceed. Supported missing is `needs_context`; supported mismatch is
+`rejected`; unsupported is `blocked` and never claims original-input proof. A
+serialized capture is revalidated for every cross-field relation; unknown fields,
+unknown adapter identities, duplicate identities, and contradictory states fail
+closed. Model-authored prose, a restated prompt, or a model-created JSON file is
+advisory only. No degraded continuation or human acceptance substitute exists for
+this boundary.
 
 ## Activation Boundary
 

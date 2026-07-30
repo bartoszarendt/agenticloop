@@ -13,6 +13,24 @@ source of truth.
 Adapters are status-bearing in `agenticloop.json` so downstream projects can
 see what is supported and what is reserved.
 
+The table below describes artifact generation and ordinary host integration,
+not parser-owned activation capture. Every shipped adapter currently declares
+activation capture `unsupported` through the shared generated slots because its
+request text is model-visible. Consequently, no shipped configuration provides
+a runnable supported live dispatch path. This is intentional fail-closed
+behavior.
+
+A registry document may describe a target-bound key and supported capabilities,
+but the current public and delegated in-process CLI always rejects such entries.
+A callback, derived filesystem path, JSON flag, environment variable visible to
+the delegated process, or same-user writable registry is not mechanical
+protection. Future support requires authenticated host-controlled IPC, OS
+isolation, or an equivalent external boundary. With no derived store, the CLI
+safely reports shipped adapters as typed unsupported; malformed existing stores
+still fail as malformed/rejected input, while a well-formed store that declares
+dynamic supported capabilities is typed negative/blocked unsupported-boundary
+evidence, never malformed evidence and never trusted authority.
+
 Agentic Loop-owned adapter settings use strict JSON (`agenticloop.json` and
 `agenticloop/config.json`).
 
@@ -149,7 +167,8 @@ at the canonical `agenticloop/skills/<name>/SKILL.md` files by explicit path ins
 OpenCode in the same target), so it must not contain per-procedure Agentic Loop
 skills. Only the single public `.agents/skills/agenticloop/SKILL.md` is
 discoverable there; everything else lives under its `references/`. OpenCode's
-supported Agentic Loop entry point remains `/agenticloop`.
+generated Agentic Loop entry point remains `/agenticloop`; its parser-owned
+activation capture capability is unsupported.
 
 `.github/skills` is a shared Copilot customization location, so the Copilot
 adapter also keeps exactly one public `.github/skills/agenticloop/SKILL.md`
@@ -190,6 +209,87 @@ branch, or removes a worktree. Codex `/stop` is a separate built-in control for
 background terminals, and `/exit` or `/quit` exits the host rather than Agentic
 Loop. Use the dedicated task closeout and worktree cleanup commands only when
 their normal authorization rules are satisfied.
+
+## Role-return handoff receipts
+
+A host that supports exact role-return transport creates an
+`agenticloop.role-return-producer` receipt only after receiving the raw role wire
+and collecting its repository/transport evidence. Use the packaged
+`createHostHandoffReceipt` helper with a host-held Ed25519 private key. The
+receipt authenticates the adapter/key identity and binds the target repository,
+invocation ID, packet ID/digest, return ID/digest, packet-liveness expiry, and
+canonical repository-evidence digest.
+
+The receiving CLI verifies that receipt with an operator-pinned public key from
+the fixed host-owned registry. It never receives a signing secret. The core
+receive boundary authenticates the raw receipt itself against the
+packet-selected adapter/key and the exact repository evidence; for a files
+backend it additionally requires a Git reader and rederives the current head,
+contiguous ancestry, commit list, and changed paths, so caller-authored
+repository evidence cannot replace durable Git state. An adapter that
+cannot isolate an Ed25519 private key or cannot produce parser-controlled bytes
+reports the corresponding capability as unsupported; an Orchestrator-authored
+receipt is not a degraded substitute.
+
+## Operator Trust Stores
+
+The public CLI reads one pre-registered store from the fixed per-user operator
+registry at `~/.agenticloop/host-trust/<target-sha256>.json`. The filename is
+derived from the canonical real path identity of the target checkout; use the
+packaged `operatorTrustStorePath(target)` helper when provisioning it. A host
+integration may inject a different registry root through its in-process I/O
+context, but an agent-callable CLI argument cannot choose that root.
+
+`--host-trust-store <absolute-path>` is optional and only asserts the exact
+pre-registered path the CLI already derived. A different external path is
+rejected, even when it contains a valid target and key controlled by the caller.
+The store's `target.repositoryIdentity` uses `file:<canonical-real-path>` form,
+and each adapter has one Ed25519 SPKI-DER public key encoded as base64:
+
+```json
+{
+  "kind": "agenticloop.host-trust",
+  "schemaVersion": 1,
+  "target": { "repositoryIdentity": "file:/absolute/target" },
+  "adapters": [{
+    "adapterId": "operator.parser.v1",
+    "keyId": "rotation-2026-07",
+    "algorithm": "ed25519",
+    "publicKey": "<base64-spki-der>",
+    "capabilities": { "activationCapture": "supported", "returnReceipt": "supported" }
+  }]
+}
+```
+
+The store is target-scoped registry metadata, not sufficient operator/host
+authority. The current public loader rejects every entry that declares a
+supported capability, even when the path is outside the target and its key is
+well formed. A repository actor can commit an adapter, public key, or private
+key they retain, but the CLI neither discovers nor trusts repository-local
+data. In particular,
+`.agenticloop/host-trust.json` may be carried as a portable manifest but grants
+no authority. A future external integration may consume separately protected
+registry material only through an authenticated out-of-process boundary. The
+current CLI never uses the repository-local file as a fallback.
+
+The loader resolves the target and registry through their real filesystem paths,
+rejects a registry that resolves inside the target, and rejects a symbolic-link
+store. These checks prevent path aliases from turning target-owned data into an
+apparent external trust root.
+
+The capture signature, dispatch packet, and return receipt all bind the same
+target identity. Return verification chooses the expected adapter and key from
+the packet's verified activation capture, not from a receipt-controlled adapter
+field. A wrong target, adapter, key ID, public key, malformed signature, future
+timestamp, expired packet liveness, missing store, or unreadable store fails
+closed with a typed result before mutation or acceptance.
+
+For key rotation, generate a new Ed25519 pair outside the repository, update the
+external store with the replacement `keyId` and public key, then switch the host
+signer. Reissue captures, packets, and receipts after the rotation; old artifacts
+remain intentionally unverifiable once their key is no longer pinned. Never put a
+private key in source, fixtures, archives, prompts, packets, returns, receipts,
+environment variables, or generated adapter output.
 
 ## Adapter Status
 
@@ -303,7 +403,10 @@ implemented adapter artifact.
 OpenCode is explicitly activated by command. After generating the adapter, run
 `/agenticloop [task-id or task description]` from the target project root.
 Normal OpenCode prompts stay outside Agentic Loop mode until that command is
-invoked.
+invoked. The current command reports parser-owned activation capture as
+`unsupported` and blocks before task authoring: OpenCode positional placeholders
+are documented prompt substitutions, not lossless parser-produced bytes. Do not
+use prompt text or a model-created JSON file as a capture substitute.
 
 ## Codex Activation
 

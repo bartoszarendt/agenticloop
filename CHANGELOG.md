@@ -3,6 +3,19 @@
 ## Unreleased
 
 ### Added
+- Guarded dispatch/return public commands now bind the complete current task
+  carrier and material contract, preserve primary plus independent structured
+  diagnostics, and support one canonical command/manual required-check model.
+- Host activation-capture schema v2 adds a unique capture ID, signed intended
+  task ID, canonical repository binding, and expiry. All five shipped adapters
+  now fill shared activation/request slots with stable typed unsupported
+  capability declarations.
+- Public task handoff commands include `task prepare-dispatch` and
+  `task verify-return`; every shipped adapter and every dynamic `supported`
+  registry entry remains fail-closed through public and delegated in-process
+  APIs. Future support requires authenticated host-controlled IPC, OS isolation,
+  or an equivalent external boundary.
+
 - Shared transition contract: one deeply immutable, backend-neutral definition
   now covers evidence, lifecycle claims, typed ownership, terminal scope,
   Markdown, audit-budget availability, provenance, and liveness. Its executable
@@ -150,6 +163,16 @@
   candidate rather than silently accepted.
 
 ### Changed
+- **Breaking:** `task new` now requires either `--scaffold` or a supported
+  host-produced v2 `--activation-input`. Supported v1 captures are rejected,
+  prospective auto IDs are resolved before capture verification, and
+  command/manual required checks use stable `[RC-N]` identities.
+- A missing derived trust store is safe empty configuration that exposes the
+  shipped typed unsupported inventory; malformed existing stores still fail,
+  and a well-formed store that declares dynamic `supported` adapters is typed
+  negative/blocked unsupported-boundary evidence rather than malformed input.
+- The 16,384-byte dispatch packet assertion is a measured regression threshold,
+  not an enforced production protocol limit.
 - Tightened `parseReviewMarker()` so every `needs_revision` marker requires
   exactly one `AGENT_REVIEW_FINDINGS` field containing unique canonical
   `F-<positive integer>` IDs; accepted markers reject findings. Trusted stale
@@ -182,6 +205,26 @@
   freeze, then certifies the resulting exact candidate before publishing complete.
 
 ### Fixed
+- Dispatch and return hardening corrective pass: the Claude Code production
+  planner (init/setup/generate) now fills the canonical activation slots
+  through the same single rendering as direct generation, so every shipped
+  adapter's production surface declares its typed unsupported capability with
+  a concrete requested input and no `$ARGUMENTS`/`$1`/`$2` placeholders; the
+  role-return core boundary now authenticates the raw producer receipt itself
+  (pinned adapter/key, repository, invocation, packet, return, liveness, and
+  evidence digests) and requires a Git reader to rederive files-backend head,
+  ancestry, commits, and changed paths instead of trusting caller-authored
+  evidence; pre-existing ignored files inside task scope, intended creations,
+  or shared workflow state now fail the dispatch clean gate, and scratch
+  paths can never be returned as implementation work; `deepFreeze` reaches
+  mutable descendants beneath already-frozen parents; one shared Git object
+  identity rule accepts full lowercase 40- or 64-character identities across
+  dispatch, commit-range, and committed-source checks; a well-formed dynamic
+  `supported` host trust registry is now classified as typed negative/blocked
+  unsupported-boundary evidence rather than malformed; and `## Required
+  Checks` rejects unexpected non-bullet content instead of silently dropping
+  it. No shipped adapter provides production supported/verified activation
+  capture; the boundary remains fail-closed.
 - Required-check policy is now validated before PR-body or status-check
   satisfaction, so malformed kinds/sources, command proofs without exact
   backticked identities, non-command status substitution, and status-only

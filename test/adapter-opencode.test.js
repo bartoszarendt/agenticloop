@@ -182,7 +182,9 @@ describe('renderOpencodeCommandMarkdown', () => {
     assert.equal(frontmatter?.model, undefined);
     assert.match(body, /\.agenticloop\/project\.md/);
     assert.match(body, /Create or refine the durable task record before any implementation\./);
-    assert.match(body, /\$ARGUMENTS/);
+    assert.match(body, /Activation capture capability: `unsupported`/);
+    assert.match(body, /parser-owned byte artifact/);
+    assert.doesNotMatch(body, /\$(?:ARGUMENTS|\d+)/);
   });
 });
 

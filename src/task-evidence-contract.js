@@ -24,6 +24,7 @@
 
 import { canonicalJson, canonicalSha256 } from './canonical-json.js';
 import { isReceiptRevalidationArgv } from './cli-registry.js';
+import { GIT_OBJECT_ID_RE, GIT_TREE_IDENTITY_RE } from './git-oid.js';
 import { TRANSITION_BACKENDS } from './transition-contract.js';
 
 export const TASK_EVIDENCE_CONTEXT_KIND = 'agenticloop.task-evidence-context';
@@ -64,7 +65,7 @@ export const TASK_MUTATION_DISPOSITIONS = Object.freeze([
 
 const FINAL_DISPOSITIONS = new Set(['committed', 'already_current', 'dry_run', 'rolled_back']);
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
-const GIT_TREE_IDENTITY_PATTERN = /^git-tree:([0-9a-f]{40}|[0-9a-f]{64})$/;
+const GIT_TREE_IDENTITY_PATTERN = GIT_TREE_IDENTITY_RE;
 const PATH_INVENTORY_IDENTITY_PATTERN = /^path-inventory:\S.*$/;
 const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 /**
@@ -183,10 +184,10 @@ function evaluateDependencyStatuses(statuses) {
  * not evidence of a satisfied dependency.
  *
  * @param {string} source  Raw document bytes.
- * @param {{sourceRef: string, now?: number, digest?: string}} options
+ * @param {{sourceRef: string, now?: number, digest?: string, provenance?: object|null}} options
  * @returns {{ok: boolean, errors: string[], evidence: object|null}}
  */
-export function parseDependencySnapshot(source, { sourceRef, now = Date.now(), digest = null } = {}) {
+export function parseDependencySnapshot(source, { sourceRef, now = Date.now(), digest = null, provenance = null } = {}) {
   const text = String(source ?? '');
   let document;
   try {
@@ -259,6 +260,7 @@ export function parseDependencySnapshot(source, { sourceRef, now = Date.now(), d
       evaluatedState: evaluateDependencyStatuses(document.statuses),
       statuses,
       revalidationArgs: ['--dependencies', sourceRef],
+      ...(provenance === null ? {} : { provenance }),
     },
   };
 }
@@ -308,10 +310,12 @@ function normalizeBaseEvidence(base) {
 
 function normalizeDependencyEvidence(dependencies) {
   if (!isPlainObject(dependencies)) fail('dependency evidence is required and must be an object');
-  assertExactKeys(dependencies, 'dependency evidence', [
+  const dependencyFields = [
     'source', 'digest', 'observedAt', 'evaluatedAt', 'freshnessPolicy',
     'freshnessState', 'evaluatedState', 'statuses', 'revalidationArgs',
-  ]);
+  ];
+  if (Object.hasOwn(dependencies, 'provenance')) dependencyFields.push('provenance');
+  assertExactKeys(dependencies, 'dependency evidence', dependencyFields);
   assertExactKeys(dependencies.freshnessPolicy, 'dependency evidence freshnessPolicy', ['maxAgeSeconds']);
   if (!nonEmptyString(dependencies.source)) fail('dependency evidence requires a source identity');
   if (!DIGEST_PATTERN.test(String(dependencies.digest ?? ''))) {
@@ -367,6 +371,25 @@ function normalizeDependencyEvidence(dependencies) {
   }
   const revalidationArgs = stringList(dependencies.revalidationArgs, 'dependency evidence revalidationArgs');
   if (revalidationArgs.length === 0) fail('dependency evidence must carry the exact revalidation arguments');
+  if (Object.hasOwn(dependencies, 'provenance')) {
+    assertExactKeys(dependencies.provenance, 'dependency evidence provenance', ['path', 'blob', 'commit', 'role']);
+    if (!nonEmptyString(dependencies.provenance?.path) ||
+        !/^[A-Za-z0-9._/-]+$/.test(dependencies.provenance.path) ||
+        dependencies.provenance.path.startsWith('/') ||
+        dependencies.provenance.path.includes('\\') ||
+        dependencies.provenance.path.split('/').some(segment => !segment || segment === '.' || segment === '..')) {
+      fail('dependency evidence provenance path must be a safe canonical repository-relative path');
+    }
+    if (!GIT_OBJECT_ID_RE.test(String(dependencies.provenance?.blob ?? ''))) {
+      fail('dependency evidence provenance blob must be an exact Git object identity');
+    }
+    if (!GIT_OBJECT_ID_RE.test(String(dependencies.provenance?.commit ?? ''))) {
+      fail('dependency evidence provenance commit must be an exact Git commit identity');
+    }
+    if (dependencies.provenance?.role !== 'maintainer') {
+      fail('dependency evidence provenance role must be maintainer');
+    }
+  }
   return {
     source: dependencies.source,
     digest: dependencies.digest,
@@ -379,6 +402,12 @@ function normalizeDependencyEvidence(dependencies) {
       .map(item => ({ id: item.id, status: item.status }))
       .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)),
     revalidationArgs,
+    ...(Object.hasOwn(dependencies, 'provenance') ? { provenance: {
+      path: dependencies.provenance.path,
+      blob: dependencies.provenance.blob,
+      commit: dependencies.provenance.commit,
+      role: dependencies.provenance.role,
+    } } : {}),
   };
 }
 

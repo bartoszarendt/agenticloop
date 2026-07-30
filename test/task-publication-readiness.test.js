@@ -438,7 +438,8 @@ function currentTaskDigest(target, taskId) {
 }
 
 function writeDependencySnapshot(target, relPath, statuses = {}, observedAt = new Date().toISOString()) {
-  const full = join(target, relPath);
+  const canonicalRelPath = `dependency-evidence/${relPath.split(/[\\/]/).pop()}`;
+  const full = join(target, canonicalRelPath);
   mkdirSync(join(full, '..'), { recursive: true });
   writeFileSync(full, `${JSON.stringify({
     kind: DEPENDENCY_SNAPSHOT_KIND,
@@ -448,7 +449,10 @@ function writeDependencySnapshot(target, relPath, statuses = {}, observedAt = ne
     freshnessPolicy: { maxAgeSeconds: 86400 },
     statuses,
   }, null, 2)}\n`, 'utf8');
-  return relPath;
+  git(target, ['add', canonicalRelPath]);
+  const attributionTask = relPath.includes('github-') ? '#71' : 'T-001';
+  git(target, ['commit', '-m', `record dependency evidence\n\nTask: ${attributionTask}\nAgent: maintainer`]);
+  return canonicalRelPath;
 }
 
 const DRAFT_SECTIONS = [
@@ -640,6 +644,8 @@ describe('exact readiness evidence for every task record', () => {
 
     const malformedPath = '.agenticloop/tmp/malformed.json';
     writeFileSync(join(root, malformedPath), '{ not json', 'utf8');
+    git(root, ['add', '-f', malformedPath]);
+    git(root, ['commit', '-m', 'record malformed dependency evidence\n\nTask: T-001\nAgent: maintainer']);
     const malformed = await runCliInProcess([
       'task', 'status', 'T-001', 'agent-ready', '--expect-digest', digest,
       '--base', 'HEAD', '--dependencies', malformedPath, '--target', root, '--json',
@@ -1769,7 +1775,7 @@ describe('transactional files mutation and executable revalidation', () => {
   it('reports whether a newly created task record was committed', async () => {
     const root = mkdtempSync(join(temp, 'create-receipt-'));
     createTaskProjectFixture(root);
-    const created = await runCliInProcess(['task', 'new', 'Guarded creation', '--target', root, '--json']);
+    const created = await runCliInProcess(['task', 'new', 'Guarded creation', '--scaffold', '--target', root, '--json']);
     assert.equal(created.status, 0, created.stderr);
     const payload = JSON.parse(created.stdout);
     assert.equal(payload.receipt.mutationDisposition, 'committed');

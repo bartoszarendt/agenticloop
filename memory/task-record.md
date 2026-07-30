@@ -1,6 +1,10 @@
 ---
 task_id: T-001
 task_contract_schema: 2
+# Activation-bound tasks record both fields after a host-produced v2 capture
+# is verified for this exact task id and target repository. Scaffolds omit them.
+# activation_input_digest: sha256:<64 lowercase hex>
+# activation_capture_ref: .agenticloop/activation/T-001.json
 status: agent-ready
 backend: files
 implementation_artifact:
@@ -25,6 +29,12 @@ review_mode:
 # verifies the referenced review is approved, on the current head, and by a
 # different human account.
 # human_review_ref:
+# Required Checks syntax: the ## Required Checks section is machine-parsed and
+# may contain only blank lines and canonical bullets. Use one stable [RC-N] id
+# and an explicit `command:` or `manual:` kind per bullet. Commands are
+# backtick-delimited. Manual checks name the exact inspection identity and
+# return evidence without inventing a process exit code. At least one required
+# check is mandatory. Any other prose in the section is rejected.
 # Minimalism discipline: none | lite | full | ultra.
 # Omitted or none means no task-record-selected Ponytail.
 # lite/full activate Ponytail for maintainer/engineer roles.
@@ -120,11 +130,8 @@ Name nearby work that must not be bundled into this task.
 - One observable outcome per bullet.
 
 ## Required Checks
-- [RC-1] Exact command the engineer must run on the final state.
-- [RC-2] Additional command or specific manual check when independently required.
-
-Use one stable `[RC-N]` id per bullet. Include linked verification decisions
-when a check has a known non-obvious execution strategy.
+- [RC-1] command: `npm test`
+- [RC-2] manual: Inspect the final state against the task acceptance criteria.
 
 ## Verification Attempts
 

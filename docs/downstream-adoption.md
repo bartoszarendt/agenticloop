@@ -134,6 +134,18 @@ settings under `backends.*`; it does not select the active backend.
 Agentic Loop-owned adapter config uses strict JSON. Agentic Loop does not own
 `opencode.jsonc`.
 
+### External host trust
+
+Activation captures and authenticated role returns use an operator-controlled
+public-key store under the fixed per-user
+`~/.agenticloop/host-trust/` registry. Its target-derived filename and contents
+pin one canonical checkout identity plus adapter, key ID, Ed25519 public key, and
+capability values. An optional `--host-trust-store` argument can assert that
+pre-registered path but cannot select another file. Host/OS policy must prevent
+agents from writing the operator registry. Do not place private keys or the trust
+store inside the target. A target-local `.agenticloop/host-trust.json` is not
+authority and is ignored by the CLI. See [Host Adapters](./host-adapters.md#operator-trust-stores).
+
 Event logging is optional. `.agenticloop/project.md` stores the project intent:
 
 - `event_logging: disabled` means agents should not attempt CLI event logging.
@@ -274,7 +286,10 @@ plugins/agenticloop/skills/agenticloop/references/skills/<name>/reference.md
 
 OpenCode is command-activated in this shape: after generating the adapter, run
 `/agenticloop [task-id or task description]` in OpenCode to enter Agentic Loop
-mode for that task.
+mode for that task. The current OpenCode command stops at a typed unsupported
+activation-capture result before task authoring because documented positional
+substitution does not prove lossless parser-owned bytes; it must not be bypassed
+with model-created capture JSON.
 
 If Codex output is also generated in the same target, OpenCode may also see
 `.agents/skills/agenticloop/SKILL.md`. Agentic Loop's supported OpenCode entry

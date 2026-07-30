@@ -1,0 +1,75 @@
+/**
+ * Isolated host trust fixture.
+ *
+ * Agentic Loop ships no adapter with a parser-owned activation channel, and it
+ * deliberately contains no fixture adapter identity: a `supported` capture is
+ * only ever granted by an operator who pins a real Ed25519 public key. Tests
+ * therefore act as that operator. Every key pair is generated in-process, the
+ * private half never touches the repository or an archive, and the resulting
+ * capability inventory is injected explicitly.
+ */
+
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
+import { activationCapabilityInventory } from '../../src/dispatch-envelope.js';
+import {
+  generateHostSigningKey,
+  operatorTrustStorePath,
+  targetRepositoryIdentity,
+} from '../../src/host-trust.js';
+
+export const TEST_ADAPTER_ID = 'agenticloop.test.parser.v1';
+export const TEST_KEY_ID = 'agenticloop-test-key-1';
+
+/**
+ * Create one operator-pinned host adapter with a freshly generated key pair.
+ *
+ * @param {{ adapterId?: string, keyId?: string, activationCapture?: string, returnReceipt?: string, target?: string }} [options]
+ */
+export function createTestHostTrust(options = {}) {
+  const {
+    adapterId = TEST_ADAPTER_ID,
+    keyId = TEST_KEY_ID,
+    activationCapture = 'supported',
+    returnReceipt = 'supported',
+    target = join(process.cwd(), 'operator-test-target'),
+  } = options;
+  const { privateKey, publicKey, publicKeyBase64 } = generateHostSigningKey();
+  const repositoryIdentity = targetRepositoryIdentity(target);
+  const adapter = {
+    adapterId,
+    keyId,
+    algorithm: 'ed25519',
+    publicKey: publicKeyBase64,
+    capabilities: { activationCapture, returnReceipt },
+    repositoryIdentity,
+  };
+  return {
+    target,
+    adapterId,
+    keyId,
+    privateKey,
+    publicKey,
+    publicKeyBase64,
+    adapter,
+    repositoryIdentity,
+    document: {
+      kind: 'agenticloop.host-trust', schemaVersion: 1,
+      target: { repositoryIdentity },
+      adapters: [{
+        adapterId, keyId, algorithm: 'ed25519', publicKey: publicKeyBase64,
+        capabilities: { activationCapture, returnReceipt },
+      }],
+    },
+    capabilities: activationCapabilityInventory({ [adapterId]: adapter }),
+  };
+}
+
+/** Persist a trust document outside the target repository. */
+export function writeHostTrustStore(operatorRoot, trust) {
+  const path = operatorTrustStorePath(trust.target, operatorRoot);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(trust.document, null, 2)}\n`, 'utf8');
+  return path;
+}

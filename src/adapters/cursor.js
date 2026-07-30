@@ -30,7 +30,6 @@ import { fileURLToPath } from 'node:url';
 import { parseFrontmatter } from '../frontmatter.js';
 import { assertSharedAgenticLoopPluginCompatibility } from '../adapter-plugin-compatibility.js';
 import {
-  BACKENDS_SOURCE_DIRECTORY,
   PROCESS_DOC_RELATIVE_PATH,
   bundledToolkitPath,
 } from '../layout.js';
@@ -38,12 +37,15 @@ import {
   AGENTIC_LOOP_OPERATION_DESCRIPTION,
   STANDALONE_ENGINEER_PREAMBLE_LINES,
   buildRoleRecord,
+  readCanonicalBackendEntries,
   readCanonicalSkillEntries,
   resolveRoleModel,
   planReferenceTree,
 } from './shared.js';
+import { fillUnsupportedActivationSlots } from '../adapter-slots.js';
 
 const CURSOR_START_COMMAND = bundledToolkitPath('agenticloop/commands/start.md');
+export const CURSOR_ACTIVATION_ADAPTER_ID = 'cursor.command.input.v1';
 const PACKAGE_JSON_PATH = fileURLToPath(
   new URL('../../package.json', import.meta.url)
 );
@@ -145,22 +147,6 @@ function renderCursorGeneratedText(text, skillReferenceMap) {
 
 function renderReferenceMarkdown(sourceText, skillReferenceMap) {
   return renderCursorGeneratedText(sourceText, skillReferenceMap);
-}
-
-function readCanonicalBackendEntries(repoRoot, alConfig) {
-  const backendsSrc = alConfig.backends?.sourceDirectory ?? BACKENDS_SOURCE_DIRECTORY;
-  const srcDir = join(repoRoot, backendsSrc);
-  if (!existsSync(srcDir)) return [];
-
-  const entries = [];
-  for (const entry of readdirSync(srcDir)) {
-    if (!entry.endsWith('.md')) continue;
-    const sourceFile = join(srcDir, entry);
-    if (!statSync(sourceFile).isFile()) continue;
-    entries.push({ filename: entry, sourceFile });
-  }
-
-  return entries.sort((a, b) => a.filename.localeCompare(b.filename));
 }
 
 function copyCursorReferenceTree(
@@ -288,6 +274,11 @@ function renderCursorPublicSkill(skillReferenceMap, agentNames, backendEntries, 
   const engineerAgent = agentNames.engineer ?? 'engineer';
   const agentRootDisplay = options.agentRootDisplay ?? '.cursor/agents';
   let body = loadCursorStartCommandBody();
+  body = fillUnsupportedActivationSlots(body, {
+    adapterId: CURSOR_ACTIVATION_ADAPTER_ID,
+    limitation: 'Cursor command input is visible to the delegated model and is not a host-owned capture channel.',
+    requestedInput: 'Requested task or context: use the current user request or selected task id as advisory context.',
+  });
 
   body = replaceRequiredTemplateText(
     body,
@@ -309,13 +300,6 @@ Use real Cursor subagent delegation where the current surface supports it. If de
 
 Follow \`${roleDelegationReferencePath}\` for delegation capability checks, backend enforcement, bounded fallback, and \`role.invoked\` event logging. Respect the Advance Authorization Boundary, \`${blockedStateReferencePath}\`, decision records, event logging rules, and configured group approval gates.`,
     'coordinator delegation'
-  );
-
-  body = replaceRequiredTemplateText(
-    body,
-    'Requested task or context: `$ARGUMENTS`',
-    'Requested task or context: use the current user request or selected task id as the work unit to coordinate.',
-    'argument placeholder'
   );
 
   body = renderCursorGeneratedText(body, skillReferenceMap);

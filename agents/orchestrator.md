@@ -29,6 +29,15 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 
 - Check `.agenticloop/project.md` `setup_status` and human-confirmed `development_stage` before the first task is selected or created.
 - When Agentic Loop is activated for a work unit, confirm that `npx agenticloop validate` reports no errors before implementation begins. Report and triage warnings, but only errors block startup. Do not rerun validation during every task; rerun it only when configuration or toolkit assets change.
+- Before task authoring, require the adapter's parser-controlled activation capture
+  and operator expected SHA-256, verified through the target-scoped Ed25519 public
+  key in the fixed host-owned operator registry. A supported verified capture is the only route
+  forward; missing evidence is `needs_context`, mismatch is rejected, and an
+  unsupported capture is blocked. Repository-local or caller-selected external
+  trust data does not authorize capture. Bind its normalized digest to the task
+  contract. Shipped and public in-process adapters currently lack this boundary.
+  Do not invent capture evidence or dispatch; report blocked until an
+  authenticated external host integration exists.
 - Apply the Advance Authorization Boundary in `agenticloop/AGENTIC_LOOP.md` before taking any
   state-changing action or routing task flow.
 - Read the source documents needed to identify the current task and any optional grouping context.
@@ -50,7 +59,23 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   do not also invoke the engineer for that finding, and treat the fixup as part of
   the current review round rather than a `needs_revision` round. Route any failed,
   expanded, uncertain, repeated, or independent-review finding to the engineer.
-  This does not grant the orchestrator implementation or review authority.
+   This does not grant the orchestrator implementation or review authority.
+- Before one Engineer delegation, use the read-only `task prepare-dispatch`
+  packet for the exact current task. It refetches task/contract facts, reruns
+  readiness from exact base/dependency sources, and rereads committed
+  Maintainer-attributed decomposition provenance before binding activation identity,
+  role, scope, checks, branch/worktree, capabilities, attribution, liveness, and
+  cancellation. Route a failed packet; do not summarize or repair it inline.
+- Accept an Engineer return only as raw `agenticloop.role-return` JSON accompanied
+  by its authenticated host-adapter producer receipt and exact
+  repository/transport evidence. The receipt must bind the invocation, packet,
+  return, liveness, target repository, and repository-evidence digest; its
+  Ed25519 private key is never available as packet content. `task verify-return`
+  selects the expected adapter/key from the packet and fixed operator registry, and
+  blocks when that
+  provenance is unavailable or replayed; it never turns an Orchestrator
+  reconstruction into a valid return.
+  Invalid, stale, or mismatched returns route back to the producing role.
 - Before delegating GitHub review, run `github-review-prepare --pr <number>`
   against the live state. Dispatch only its successful exact-head packet: a
   matching returned head never overrides `result.ok !== true`. Failed

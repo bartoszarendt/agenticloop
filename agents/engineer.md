@@ -142,7 +142,16 @@ task-record obligation.
 - Read the task record before editing; if it includes a stepped
   `## Implementation Notes` plan, treat it as the primary execution prior, verify
   its assumptions, and record divergences under `## Deviations From Plan` instead
-  of blindly following stale steps.
+   of blindly following stale steps.
+- Before the first mutation, invoke the read-only `task prepare-dispatch <id>
+  --packet <packet.json> --role engineer` verifier. It refetches the task and
+  current Git branch/head/base facts, reruns readiness from the bound dependency
+  source, rereads the committed Maintainer decomposition source, and checks every
+  packet and invocation binding.
+  A stale or malformed packet is a status return, not permission to edit.
+  Shipped and public in-process adapters cannot establish this authority.
+  Without an externally authenticated packet, return blocked; never substitute
+  callbacks, repository keys, environment values, or model-authored capture.
 - Confirm scope, out of scope, acceptance criteria, required checks, proof
   pressure when present, and expected files or areas.
 - Read the confirmed `development_stage` as a task-shaping prior. Use it only
@@ -240,8 +249,14 @@ task-record obligation.
   If a discovery could invalidate another active lane's assumptions, stop or
   return it. For routed findings, return exactly one disposition per finding:
   `applied`, `already satisfied`, `rejected` with evidence, or `deferred` with
-  reason and effect on correctness, safety, acceptance, and evidence. Deferral
-  remains blocking pending Maintainer disposition.
+   reason and effect on correctness, safety, acceptance, and evidence. Deferral
+   remains blocking pending Maintainer disposition.
+- Return one raw versioned `agenticloop.role-return` for the consumed preparation
+  packet. Derive full commit IDs, changed paths, trailer attribution, check facts,
+  head, and PR state from current repository/transport evidence. A successful
+  result uses `disposition: proceed` and the separate non-authoritative
+  `implementation_ready_for_review` outcome; it is eligible only for a later
+  review-preparation gate and never claims review entry or completion.
 - Perform an integration rehearsal only when the orchestrator explicitly
   assigns it. Compose a disposable non-published candidate; record its exact
   tree/commit, artifact order, commands, and results. Return conflicts as a

@@ -40,6 +40,35 @@ advisory. Apply the shared freshness, terminal ordering, Markdown preservation,
 and audit-budget rules before adding a files mutation mechanism. Carrier absence
 uses typed applicability (`applicable: false`, `carrier: null`), never prose.
 
+## Dispatch and return
+
+`task prepare-dispatch <id> --input <dispatch-input.json>` is the read-only files
+projection for one role handoff. `task prepare-dispatch <id> --packet
+<packet.json> --role engineer` is the matching receive-side revalidator. An
+optional `--host-trust-store` can assert, but cannot select, the target's
+pre-registered path under the fixed operator registry. They
+refetch task/Git facts, rerun readiness from its exact base/dependency sources,
+and reread decomposition from a byte-current committed source whose last change
+has canonical Maintainer attribution. Inline readiness results or decomposition
+authority strings cannot authorize dispatch. Missing, malformed, stale, changed,
+or contradictory evidence blocks before a digest-bound packet is emitted or
+accepted. The packet is transient handoff data, not task state.
+
+The receiving role verifies the packet before mutation and returns raw
+`agenticloop.role-return` JSON. Its full base/head, changed paths, checks,
+canonical `Task:`/`Agent:` trailers, and attribution range are checked against
+repository evidence. Files CLI return verification requires that exact evidence
+plus an Ed25519 host receipt bound to the target repository, packet, invocation,
+return, liveness, adapter/key identity, and evidence digest. The verifier
+receives only the packet-bound public key from the fixed host-owned operator
+registry; it never reads a shared secret, repository-local trust file, or
+caller-selected alternative store.
+Missing, replayed, target-mismatched, or caller-edited receipts block. The
+verifier first reconstructs the current branch, head, changed paths, commit range,
+and attribution from live Git and rejects dirty tracked or untracked in-scope
+state. Invalid wire returns retain the packet's producer route.
+`implementation_ready_for_review` is a non-authoritative outcome, not completion.
+
 New files-backed tasks materialize `attempt_budget` from project
 `default_attempt_budget`, then built-in `5`. A task-specific override is an
 explicit task-record edit made before work begins; the files `task new` command
@@ -274,7 +303,12 @@ consistency layer, not a required runtime. Agents may still edit files directly.
 
 Operation mapping:
 
-- Create task record: `agenticloop task new <title> [--id <id>]`.
+- Create a non-activated Markdown scaffold: `agenticloop task new <title>
+  --scaffold [--id <id>]`.
+- Create an activation-bound task only from a supported host-produced v2
+  capture: `agenticloop task new <title> --activation-input <capture.json>
+  [--host-trust-store <derived-path>] [--id <id>]`. No shipped adapter currently
+  provides that supported capture path.
 - Read task record: open `.agenticloop/tasks/<TASK-ID>.md` directly.
 - List task records: `agenticloop task list [--status <status>] [--json]`.
 - Update status: `agenticloop task status <id> <status> [--note <text>]`.
@@ -289,6 +323,15 @@ Operation mapping:
   --actor <git-author>`, then commit separately.
 
 ### Create Task Record
+
+`task new` is intentionally fail closed. A v2 capture binds a unique capture
+ID, the intended task ID, the canonical target repository, capture/expiry
+timestamps, the operator and normalized activation digests, and the host key.
+The CLI resolves an automatic `T-###` ID before verifying the capture; a
+conflict or mismatch fails before authoring. A scaffold has no verified
+activation binding and cannot authorize dispatch in that state. Unless a
+separately authorized binding conversion exists, create a fresh
+activation-bound task when a supported host capture becomes available.
 
 Create `.agenticloop/tasks/<TASK-ID>.md` using `agenticloop/memory/task-record.md`.
 Do not leave placeholder sections.

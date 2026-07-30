@@ -31,7 +31,7 @@ All commands:
 | `guidance` | Manage the activation-guidance block (`apply`, `check`, `remove`) |
 | `generate` | Generate adapter artifacts (`opencode`, `codex`, `claude-code`, `copilot`, `cursor`, `all`) |
 | `configure models` | Set per-host role model settings in `agenticloop.json` |
-| `task` | Files-backed task records (`list`, `lint`, `new`, `status`) |
+| `task` | Files-backed task records (`list`, `lint`, `new`, `prepare-dispatch`, `verify-return`, `status`) |
 | `audit` | Work-unit audit certificates (`new`, `baseline`, `report`, `status`, `gate`, `lint`, `override`, `resolve`) |
 | `closeout` | Composite closeout packets (`prepare`, `status`, `record`) |
 | `improvement` | Bounded improvement proposals (`new`, `lint`, `status`) |
@@ -265,6 +265,121 @@ or force-pushes.
 Every review-preparation gate supports `--json`. Normal, usage, loader, and operational
 failures use a versioned envelope with diagnostics, categories, ownership, and a
 first safe repair; human output is rendered from the same result.
+
+## Activation and implementation dispatch
+
+All five shipped generators (OpenCode, Claude Code, Codex, Copilot, and Cursor)
+fill the shared activation slots with a stable adapter ID and the typed
+capability `unsupported`. Their request text is model-visible and does not
+establish a lossless parser-owned byte artifact. Generated activation surfaces
+therefore contain no `$ARGUMENTS`, `$1`, or `$2` capture claims, never ask a
+model to create capture JSON, and block before activation-bound task authoring.
+No shipped configuration currently provides a supported live dispatch path.
+This is an intentional fail-closed state, not successful live-host support.
+
+An adapter with a future proven parser-owned capture producer may issue a verified
+receipt to task creation:
+
+```text
+npx agenticloop task new "Title" --activation-input .agenticloop/tmp/activation-capture.json [--host-trust-store <expected-registered-path>]
+```
+
+The v2 receipt has a unique canonical capture ID, signed intended task ID,
+canonical target repository, capture and expiry timestamps, closed adapter/key
+identity, derived capability, and operator/normalized proof digests. The CLI
+resolves the prospective task ID before validation and requires the signed ID
+to match. Expired, future-dated, cross-task, cross-repository, tampered, and v1
+supported captures fail before mutation. Caller-authored capability, integrity,
+or payload JSON cannot authorize task creation. A verified task records both
+`activation_input_digest` and `activation_capture_ref`.
+
+A capture is freshness-bound, not single-use. The same exact capture may be
+revalidated for its signed task and repository while its time window remains
+current. It never authorizes another task, repository, or payload. Expiry does
+not permit silent renewal or rebinding; a future supported host integration
+must produce a fresh capture and activation-bound task.
+
+The CLI derives the only permitted store path from the target's canonical real
+path and the fixed per-user registry root
+`~/.agenticloop/host-trust/`. The optional absolute `--host-trust-store` value
+asserts that derived path; it cannot select an arbitrary external file. The
+store is target-scoped registry metadata. A missing derived store safely yields
+the shipped unsupported inventory; an existing malformed store remains an
+error. A well-formed store that declares a `supported` capture or return
+capability is typed negative/blocked unsupported-boundary evidence, not
+malformed input: the public and delegated in-process CLI rejects every such
+registry. Neither a callback, environment
+value, CLI option, nor same-user writable filesystem path can promote one. A
+future supported integration requires authenticated host-controlled IPC, OS
+isolation, or an equivalent boundary outside the delegated process. A
+repository-local
+`.agenticloop/host-trust.json` is ordinary untrusted data and cannot authorize a
+capture, packet, or return.
+
+For ordinary non-activated Markdown scaffolding only, use `task new <title>
+--scaffold`. This route creates no verified activation binding and cannot
+authorize Agentic Loop dispatch in that state. The toolkit does not claim a
+durable non-upgrade property. Unless a separately authorized binding conversion
+is implemented, create a fresh activation-bound task when implementation
+handoff is required.
+
+New task contracts declare required checks with stable identities and explicit
+kinds:
+
+```text
+- [RC-1] command: `npm test`
+- [RC-2] manual: Inspect the generated adapter output.
+```
+
+The `## Required Checks` section is machine-parsed: it may contain only blank
+lines and canonical bullets. Any other prose is rejected rather than ignored.
+Command returns carry the same ID/kind/command, evidence, outcome, and an
+integer exit code. Manual returns carry the same ID/kind/instruction, evidence,
+and outcome with `exitCode: null`. Matching is order-insensitive by RC ID.
+
+Prepare one exact Engineer handoff without task mutation:
+
+```text
+npx agenticloop task prepare-dispatch T-001 --input .agenticloop/tmp/dispatch-input.json [--host-trust-store <expected-registered-path>] --json
+```
+
+The input supplies verified activation capture, selected role/worktree facts,
+and only the source selectors from prior readiness/decomposition evidence.
+Caller-authored readiness results and decomposition claims are ignored. The
+command reruns readiness from the exact Git tree and dependency snapshot, reads
+decomposition from its committed `sourceRef`, and requires the source commit to
+carry canonical `Task:` and `Agent: maintainer` attribution before emitting a versioned
+`agenticloop.role-preparation` packet only when every binding is current. The
+Engineer revalidates it with `task prepare-dispatch T-001 --packet <packet.json>
+--role engineer [--host-trust-store <expected-registered-path>]` before
+mutation. A scaffold made with `task new --scaffold` has no verified activation
+identity and cannot dispatch in that state; use a fresh activation-bound task
+unless a separately authorized conversion is implemented.
+
+A raw return is checked with the exact repository evidence and an authenticated
+host-adapter receipt:
+
+```text
+npx agenticloop task verify-return T-001 --packet packet.json --return role-return.json [--repository-evidence repository-evidence.json] [--producer-receipt producer-receipt.json] [--host-trust-store <expected-registered-path>] --json
+```
+
+The CLI never receives a signing secret. The operator registry contains only
+Ed25519 public keys and scopes them to one canonical target checkout. A host or
+OS policy must keep that fixed registry non-writable by agents; the CLI rejects
+caller-selected alternative stores. The
+receipt binds its target repository, adapter/key identity, invocation ID, packet,
+return, liveness, and canonical repository evidence digest. Before authenticating
+that receipt, the files verifier
+reconstructs the current branch, head, changed paths, durable commit range, and
+canonical attribution from Git and rejects dirty tracked or untracked in-scope
+state. Missing, stale, or invalid authentication blocks rather than trusting
+Orchestrator assertions. A successful result uses
+`disposition: proceed` plus a separate non-completion implementation outcome; it
+is never review-entry evidence or completion.
+
+See [Host Adapters](./host-adapters.md#operator-trust-stores) for the external
+store format, key rotation, and failure behavior. Every shipped adapter remains
+unsupported for activation capture and cannot be upgraded by this option.
 
 ## Task-body editing and attribution
 

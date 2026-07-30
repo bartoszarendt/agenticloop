@@ -1,8 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 
 import {
   GitHubTaskBodyError,
@@ -25,6 +26,7 @@ import { runCliInProcess } from './helpers/run-cli.js';
 import { serializeValidationResult } from '../src/result-envelope.js';
 import { validateTaskMutationReceipt } from '../src/task-evidence-contract.js';
 import { getProjectRoleCapabilities } from '../src/role-capabilities.js';
+import { createTaskProjectFixture } from './helpers/task-fixture.js';
 
 function taskBody({ title = 'Draft task', status = 'draft' } = {}) {
   return [
@@ -359,6 +361,7 @@ describe('transactional GitHub task-body application', () => {
   it('keeps the explicit-base transition and standalone lint positive paths successful', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'agenticloop-task-body-explicit-base-'));
     try {
+      createTaskProjectFixture(directory);
       const state = { body: taskBody(), edits: 0, comments: [] };
       const projected = taskContractDigest(state.body);
       const record = createTaskContractBaselineRecord({
@@ -375,10 +378,11 @@ describe('transactional GitHub task-body application', () => {
         body: renderTaskContractRecord(record),
       });
       const paths = join(directory, 'base-paths.json');
-      const dependencies = join(directory, 'dependencies.json');
+      const dependencies = 'dependency-evidence/dependencies.json';
       const bodyFile = join(directory, 'task.md');
       writeFileSync(paths, JSON.stringify(['src/existing.js']), 'utf8');
-      writeFileSync(dependencies, JSON.stringify({
+      mkdirSync(join(directory, 'dependency-evidence'), { recursive: true });
+      writeFileSync(join(directory, dependencies), JSON.stringify({
         kind: 'agenticloop.dependency-snapshot',
         schemaVersion: 1,
         source: 'github:issues',
@@ -386,6 +390,15 @@ describe('transactional GitHub task-body application', () => {
         freshnessPolicy: { maxAgeSeconds: 86400 },
         statuses: {},
       }), 'utf8');
+      const committed = spawnSync('git', [
+        '-C', directory, 'add', dependencies,
+      ], { encoding: 'utf8' });
+      assert.equal(committed.status, 0, committed.stderr);
+      const committedResult = spawnSync('git', [
+        '-C', directory, 'commit', '-m',
+        'record dependency evidence\n\nTask: #31\nAgent: maintainer',
+      ], { encoding: 'utf8' });
+      assert.equal(committedResult.status, 0, committedResult.stderr);
       writeFileSync(bodyFile, state.body, 'utf8');
 
       const lint = await runCliInProcess([

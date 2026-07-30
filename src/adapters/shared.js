@@ -221,6 +221,40 @@ export function readCanonicalSkillEntries(repoRoot, alConfig) {
 }
 
 /**
+ * Read the canonical backend projection docs under the configured backends
+ * source. Each entry exposes the source filename and its absolute path, sorted
+ * by filename so generated reference indexes are stable across hosts.
+ *
+ * Discovery goes through `resolveToolkitAssetPath`, exactly like
+ * `readCanonicalSkillEntries`, because `repoRoot` here is whichever root the
+ * caller is reading assets from and that root has two shapes: an installed
+ * target (assets under `agenticloop/`) or a package source root (assets at the
+ * top level). Fresh atomic init reads from the package source root, so joining
+ * the target-facing `agenticloop/backends` prefix onto it silently finds
+ * nothing - and an adapter that renders zero backend references emits dangling
+ * bare backend paths that only fail later, during installed validation.
+ *
+ * @param {string} repoRoot
+ * @param {object} alConfig
+ * @returns {{ filename: string, sourceFile: string }[]}
+ */
+export function readCanonicalBackendEntries(repoRoot, alConfig) {
+  const backendsSrc = alConfig.backends?.sourceDirectory ?? BACKENDS_SOURCE_DIRECTORY;
+  const srcDir = resolveToolkitAssetPath(repoRoot, backendsSrc, resolveToolkitAssetLayout(repoRoot));
+  if (!existsSync(srcDir)) return [];
+
+  const entries = [];
+  for (const entry of readdirSync(srcDir)) {
+    if (!entry.endsWith('.md')) continue;
+    const sourceFile = join(srcDir, entry);
+    if (!statSync(sourceFile).isFile()) continue;
+    entries.push({ filename: entry, sourceFile });
+  }
+
+  return entries.sort((a, b) => a.filename.localeCompare(b.filename));
+}
+
+/**
  * Compute a target-relative file path for an instruction entry. Adapters
  * that copy skills into host skill directories (Claude Code, Codex)
  * need to translate canonical `skills/<name>/SKILL.md` paths to their

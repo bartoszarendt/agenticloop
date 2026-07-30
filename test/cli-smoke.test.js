@@ -73,7 +73,7 @@ describe('CLI binary smoke tests', () => {
     const init = runBin(['init', '--target', target]);
     assert.equal(init.status, 0, `init failed:\n${init.stdout}\n${init.stderr}`);
 
-    const created = runBin(['task', 'new', 'Smoke e2e task', '--target', target]);
+    const created = runBin(['task', 'new', 'Smoke e2e task', '--scaffold', '--target', target]);
     assert.equal(created.status, 0);
     assert.match(created.stdout, /Created \.agenticloop\/tasks\/T-001\.md/);
     assert.ok(existsSync(join(target, '.agenticloop', 'tasks', 'T-001.md')));

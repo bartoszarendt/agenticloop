@@ -40,6 +40,8 @@ class MemoryStream {
  * @param {boolean} [options.color]
  * @param {Function} [options.promptFactory]
  * @param {Function} [options.ghCommandRunner]  Injectable read-only GitHub command runner.
+ * @param {string} [options.operatorTrustRoot]  Injectable host-owned trust registry root.
+ * @param {Function} [options.hostAuthority] Protected test host-authority callback.
  * @param {object} [options.fsMutationOptions]  Injectable filesystem mutation hooks.
  * @returns {Promise<{ status: number, stdout: string, stderr: string }>}
  */
@@ -59,6 +61,8 @@ export async function runCliInProcess(argv, options = {}) {
     color: options.color,
     promptFactory: options.promptFactory,
     ghCommandRunner: options.ghCommandRunner,
+    operatorTrustRoot: options.operatorTrustRoot,
+    hostAuthority: options.hostAuthority,
     fsMutationOptions: options.fsMutationOptions,
   });
   return {

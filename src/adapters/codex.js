@@ -45,7 +45,6 @@ import { fileURLToPath } from 'node:url';
 import { parseFrontmatter } from '../frontmatter.js';
 import { assertSharedAgenticLoopPluginCompatibility } from '../adapter-plugin-compatibility.js';
 import {
-  BACKENDS_SOURCE_DIRECTORY,
   PROCESS_DOC_RELATIVE_PATH,
   bundledToolkitPath,
 } from '../layout.js';
@@ -54,9 +53,11 @@ import {
   STANDALONE_ENGINEER_PREAMBLE_LINES,
   buildRoleRecord,
   resolveRoleModel,
+  readCanonicalBackendEntries,
   readCanonicalSkillEntries,
   planReferenceTree,
 } from './shared.js';
+import { fillUnsupportedActivationSlots } from '../adapter-slots.js';
 import {
   normalizeCodexModel,
   normalizeCodexReasoningEffort,
@@ -74,6 +75,7 @@ const CODEX_REQUIRED_PUBLIC_REFERENCES = [
   'blocked-state',
 ];
 const CODEX_START_COMMAND = bundledToolkitPath('agenticloop/commands/start.md');
+export const CODEX_ACTIVATION_ADAPTER_ID = 'codex.skill.request.v1';
 const PACKAGE_JSON_PATH = fileURLToPath(
   new URL('../../package.json', import.meta.url)
 );
@@ -200,21 +202,6 @@ function renderReferenceMarkdown(sourceText, skillReferenceMap) {
   }
   lines.push('');
   return lines.join('\n');
-}
-
-function readCanonicalBackendEntries(repoRoot, alConfig) {
-  const backendsSrc = alConfig.backends?.sourceDirectory ?? BACKENDS_SOURCE_DIRECTORY;
-  const srcDir = join(repoRoot, backendsSrc);
-  if (!existsSync(srcDir)) return [];
-
-  const entries = [];
-  for (const entry of readdirSync(srcDir)) {
-    if (!entry.endsWith('.md')) continue;
-    const sourceFile = join(srcDir, entry);
-    if (!statSync(sourceFile).isFile()) continue;
-    entries.push({ filename: entry, sourceFile });
-  }
-  return entries.sort((a, b) => a.filename.localeCompare(b.filename));
 }
 
 function copyCodexSkillTree(
@@ -346,6 +333,11 @@ function renderCodexPublicSkill(skillReferenceMap, agentNames, backendEntries) {
   const maintainerAgent = agentNames.maintainer ?? 'maintainer';
   const engineerAgent = agentNames.engineer ?? 'engineer';
   let body = loadCodexStartCommandBody();
+  body = fillUnsupportedActivationSlots(body, {
+    adapterId: CODEX_ACTIVATION_ADAPTER_ID,
+    limitation: 'Codex skill request text is visible to the delegated model and is not a host-owned capture channel.',
+    requestedInput: 'Requested task or context: use the current user request or selected task id as advisory context.',
+  });
 
   body = replaceRequiredTemplateText(
     body,
@@ -366,13 +358,6 @@ Use real Codex custom-agent delegation when role work is needed. Spawn those age
 
 Follow ${internalReferencePhrase(roleDelegationReferencePath)} for delegation capability checks, backend enforcement, bounded fallback, and \`role.invoked\` event logging. Respect the Advance Authorization Boundary, ${internalReferencePhrase(blockedStateReferencePath)}, decision records, event logging rules, and configured group approval gates.`,
     'coordinator delegation'
-  );
-
-  body = replaceRequiredTemplateText(
-    body,
-    'Requested task or context: `$ARGUMENTS`',
-    'Requested task or context: use the current user request or selected task id as the work unit to coordinate.',
-    'argument placeholder'
   );
 
   body = renderCodexGeneratedText(body, skillReferenceMap);

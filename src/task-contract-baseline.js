@@ -3,11 +3,34 @@
 import { canonicalSha256 } from './canonical-json.js';
 import { parseFrontmatterStrict } from './frontmatter.js';
 import { markdownSection } from './markdown.js';
+import { parseRequiredCheckInventory } from './required-checks.js';
 
 export const TASK_CONTRACT_DIGEST_VERSION = 'v1';
 export const TASK_CONTRACT_RECORD_SCHEMA_VERSION = 2;
 export const TASK_CONTRACT_RECORD_KIND = 'agenticloop.task-contract-record';
 const DIGEST_RE = /^sha256:v1:[a-f0-9]{64}$/;
+const ACTIVATION_DIGEST_RE = /^sha256:[a-f0-9]{64}$/;
+
+/**
+ * Activation provenance carried by task frontmatter. Both fields are structural:
+ * a free-text digest or an unsafe reference would let a task claim
+ * parser-owned authoring that nothing can verify.
+ */
+export const ACTIVATION_PROVENANCE_FIELDS = Object.freeze(['activation_input_digest', 'activation_capture_ref']);
+
+/** Structural validation for one frontmatter activation digest. */
+export function validActivationInputDigest(value) {
+  return ACTIVATION_DIGEST_RE.test(String(value ?? '').trim());
+}
+
+/** Structural validation for one frontmatter activation capture reference. */
+export function validActivationCaptureRef(value) {
+  const path = String(value ?? '').trim();
+  return /^[A-Za-z0-9._/-]+$/.test(path) &&
+    !path.startsWith('/') &&
+    !path.includes('//') &&
+    !path.split('/').some(segment => segment === '.' || segment === '..');
+}
 const BASELINE_MARKER_RE = /<!--\s*AGENTIC_LOOP_TASK_CONTRACT_BASELINE\s*\n([\s\S]*?)\n?-->/g;
 const CORRECTION_MARKER_RE = /<!--\s*AGENTIC_LOOP_TASK_CONTRACT_CORRECTION\s*\n([\s\S]*?)\n?-->/g;
 const RECORD_MARKER_RE = /<!--\s*AGENTIC_LOOP_TASK_CONTRACT_RECORD\s*\n([\s\S]*?)\n?-->/g;
@@ -64,6 +87,29 @@ export function taskContractProjection(taskBody) {
   const taskId = typeof frontmatter.task_id === 'string' ? frontmatter.task_id.trim() : '';
   if (!taskId) return { ok: false, projection: null, error: 'task contract requires non-empty task_id' };
   const section = heading => normalizedText(markdownSection(body, heading)?.body ?? '');
+  const activationDigest = String(frontmatter.activation_input_digest ?? '').trim();
+  const activationCaptureRef = String(frontmatter.activation_capture_ref ?? '').trim();
+  const requiredChecks = section('## Required Checks');
+  // Existing trusted baselines may contain the pre-P35 command-only syntax.
+  // Projection keeps those records verifiable; dispatch separately requires
+  // the explicit command/manual syntax before authorizing work.
+  const requiredCheckInventory = parseRequiredCheckInventory(requiredChecks, { allowLegacy: true });
+  if (activationDigest && !validActivationInputDigest(activationDigest)) {
+    return { ok: false, projection: null, error: 'task contract activation_input_digest must be sha256:<64 lowercase hex>' };
+  }
+  if (activationCaptureRef && !validActivationCaptureRef(activationCaptureRef)) {
+    return { ok: false, projection: null, error: 'task contract activation_capture_ref must be a safe repository-relative path' };
+  }
+  if (activationCaptureRef && !activationDigest) {
+    return { ok: false, projection: null, error: 'task contract activation_capture_ref requires a matching activation_input_digest' };
+  }
+  if (!requiredCheckInventory.ok) {
+    return {
+      ok: false,
+      projection: null,
+      error: `task contract required checks are invalid: ${requiredCheckInventory.errors.join('; ')}`,
+    };
+  }
   return {
     ok: true,
     error: null,
@@ -75,9 +121,11 @@ export function taskContractProjection(taskBody) {
       allowed_paths: normalizedPaths(frontmatter.allowed_paths),
       intended_creations: normalizedPaths(frontmatter.intended_creations),
       acceptance_criteria: section('## Acceptance Criteria'),
-      required_checks: section('## Required Checks'),
+      required_checks: requiredChecks,
       independent_review_required: String(frontmatter.independent_review_required ?? '').trim().toLowerCase(),
       locked_decision_refs: normalizedPaths(frontmatter.locked_decision_refs ?? frontmatter.decision_refs),
+      ...(activationDigest ? { activation_input_digest: activationDigest } : {}),
+      ...(activationCaptureRef ? { activation_capture_ref: activationCaptureRef } : {}),
     },
   };
 }

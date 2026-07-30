@@ -1,0 +1,956 @@
+import { after, before, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+import {
+  SHIPPED_ACTIVATION_ADAPTERS,
+  DISPATCH_PREPARATION_SCHEMA_VERSION,
+  ROLE_RETURN_SCHEMA_VERSION,
+  activationCapabilityInventory,
+  activationCaptureDisposition,
+  captureActivationInput,
+  createRoleReturn,
+  dispatchPreparationDigest,
+  prepareRoleDispatch,
+  receiveRoleReturn,
+  validateActivationCapture,
+  validateDispatchPreparation,
+  verifyDispatchBeforeMutation,
+} from '../src/dispatch-envelope.js';
+import { createHostHandoffReceipt, signActivationCapture } from '../src/host-handoff.js';
+import { canonicalJson } from '../src/canonical-json.js';
+import { validationResultDigest } from '../src/result-envelope.js';
+import { createTaskReadinessEvidence } from '../src/task-evidence-contract.js';
+import { generateOpencodeArtifacts } from '../src/adapters/opencode.js';
+import { loadAgenticLoopConfig } from '../src/json.js';
+import { createTaskProjectFixture } from './helpers/task-fixture.js';
+import { createTestHostTrust, writeHostTrustStore } from './helpers/host-trust-fixture.js';
+import {
+  DEFAULT_ACTIVATION_PAYLOAD,
+  activation,
+  createDispatchFixture,
+  git,
+  prepare,
+  producerBinding,
+  readyReturn,
+  repositoryEvidence,
+  sha256,
+} from './helpers/dispatch-fixture.js';
+import { runCliInProcess } from './helpers/run-cli.js';
+import { seedTargetLayout } from './helpers/layout-fixture.js';
+
+const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+let temp;
+
+const currentFilesTask = name => createDispatchFixture(temp, name);
+
+before(() => { temp = mkdtempSync(join(tmpdir(), 'al-dispatch-envelope-')); });
+after(() => rmSync(temp, { recursive: true, force: true }));
+
+describe('activation adapter authority', () => {
+  it('ships a fail-closed inventory with no fixture identity and no supported host', () => {
+    assert.deepEqual(Object.keys(SHIPPED_ACTIVATION_ADAPTERS), [
+      'opencode.command.positional.v1',
+      'claude-code.command.arguments.v1',
+      'codex.skill.request.v1',
+      'copilot.prompt.input.v1',
+      'cursor.command.input.v1',
+    ]);
+    for (const entry of Object.values(SHIPPED_ACTIVATION_ADAPTERS)) {
+      assert.equal(entry.captureCapability, 'unsupported');
+      assert.equal(entry.trustedAdapter, null);
+    }
+  });
+
+  it('recognizes a parser adapter only through an explicitly injected inventory', () => {
+    const trust = createTestHostTrust();
+    assert.throws(
+      () => captureActivationInput({
+        adapter: trust.adapterId,
+        parserNormalizedPayload: 'x',
+        sign: { keyId: trust.keyId, privateKey: trust.privateKey },
+      }),
+      /not in the resolved capability inventory/
+    );
+    const capture = activation(trust);
+    assert.equal(capture.captureCapability, 'supported');
+    assert.equal(validateActivationCapture(capture, { capabilities: trust.capabilities }).ok, true);
+    // Without the injected inventory the same bytes are simply an unknown adapter.
+    assert.equal(validateActivationCapture(capture).ok, false);
+    assert.match(
+      validateActivationCapture(capture).errors.join('\n'),
+      /is not in the resolved capability inventory/
+    );
+  });
+
+  it('refuses to let configuration upgrade a shipped fail-closed adapter', () => {
+    const inventory = activationCapabilityInventory({
+      'opencode.command.positional.v1': {
+        adapterId: 'opencode.command.positional.v1',
+        keyId: 'k', algorithm: 'ed25519', publicKey: 'AAAA',
+        capabilities: { activationCapture: 'supported', returnReceipt: 'supported' },
+      },
+    });
+    assert.equal(inventory['opencode.command.positional.v1'].captureCapability, 'unsupported');
+    assert.equal(inventory['opencode.command.positional.v1'].trustedAdapter, null);
+  });
+
+  it('rejects a supported capture whose host signature is missing, forged, or wrong-keyed', () => {
+    const trust = createTestHostTrust();
+    const other = createTestHostTrust({ adapterId: trust.adapterId, keyId: trust.keyId });
+    const capture = activation(trust);
+    const unsigned = { ...capture, signature: null };
+    assert.match(validateActivationCapture(unsigned, { capabilities: trust.capabilities }).errors.join('\n'), /requires a host signature/);
+    const forged = { ...capture, signature: { ...capture.signature, value: `ed25519:${Buffer.from('nope').toString('base64')}` } };
+    assert.match(validateActivationCapture(forged, { capabilities: trust.capabilities }).errors.join('\n'), /does not verify/);
+    // Same adapter and key identity, different key material.
+    assert.match(validateActivationCapture(capture, { capabilities: other.capabilities }).errors.join('\n'), /does not verify/);
+    const tampered = { ...capture, normalizedActivationDigest: sha256('other'), integrity: 'mismatch' };
+    assert.match(validateActivationCapture(tampered, { capabilities: trust.capabilities }).errors.join('\n'), /does not verify/);
+  });
+
+  it('produces the four exact capture dispositions before any task mutation', () => {
+    const trust = createTestHostTrust();
+    const payload = 'Do the exact thing.';
+    const verified = activation(trust, payload, sha256(payload));
+    assert.deepEqual(activationCaptureDisposition(verified, { capabilities: trust.capabilities }), {
+      ok: true, evidenceState: 'current', disposition: 'proceed', errors: [], findings: [],
+    });
+    // Supported adapter, parser digest present, operator digest absent.
+    const missing = captureActivationInput({
+      adapter: trust.adapterId, expectedRequestSha256: null, parserNormalizedPayload: payload,
+      intendedTaskId: 'T-001',
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      sign: { keyId: trust.keyId, privateKey: trust.privateKey },
+    }, { capabilities: trust.capabilities });
+    assert.equal(missing.captureCapability, 'supported');
+    assert.equal(missing.normalizedActivationDigest, sha256(payload));
+    assert.equal(missing.operatorExpectedDigest, null);
+    const missingDisposition = activationCaptureDisposition(missing, { capabilities: trust.capabilities });
+    assert.equal(missingDisposition.evidenceState, 'missing');
+    assert.equal(missingDisposition.disposition, 'needs_context');
+    const mismatch = activation(trust, payload, sha256('a different authorized request'));
+    const mismatchDisposition = activationCaptureDisposition(mismatch, { capabilities: trust.capabilities });
+    assert.equal(mismatchDisposition.evidenceState, 'changed');
+    assert.equal(mismatchDisposition.disposition, 'rejected');
+    const unsupported = captureActivationInput({ adapter: 'opencode.command.positional.v1' });
+    const unsupportedDisposition = activationCaptureDisposition(unsupported);
+    assert.equal(unsupportedDisposition.evidenceState, 'negative');
+    assert.equal(unsupportedDisposition.disposition, 'blocked');
+    assert.match(unsupportedDisposition.errors.join('\n'), /parser-owned byte artifact/);
+  });
+
+  it('fails closed on unknown and self-contradicting adapters', () => {
+    const trust = createTestHostTrust();
+    const capture = activation(trust);
+    const unknown = { ...capture, adapter: 'invented.host.v1' };
+    assert.equal(activationCaptureDisposition(unknown, { capabilities: trust.capabilities }).disposition, 'rejected');
+    const contradictory = { ...capture, adapter: 'opencode.command.positional.v1' };
+    const checked = validateActivationCapture(contradictory, { capabilities: trust.capabilities });
+    assert.equal(checked.ok, false);
+    assert.match(checked.errors.join('\n'), /contradicts the resolved adapter capability/);
+    const declaresUnsupported = { ...capture, captureCapability: 'unsupported' };
+    assert.equal(validateActivationCapture(declaresUnsupported, { capabilities: trust.capabilities }).ok, false);
+  });
+
+  it('rejects a forged verified capture whose digests differ', () => {
+    const trust = createTestHostTrust();
+    const valid = activation(trust);
+    const forged = { ...valid, normalizedActivationDigest: sha256('different'), integrity: 'verified' };
+    const checked = validateActivationCapture(forged, { capabilities: trust.capabilities });
+    assert.equal(checked.ok, false);
+    assert.equal(activationCaptureDisposition(forged, { capabilities: trust.capabilities }).disposition, 'rejected');
+  });
+
+  it('derives capture capability from the adapter and never from input data', () => {
+    assert.throws(() => captureActivationInput({ captureCapability: 'supported' }), /derived/);
+    const unsupported = captureActivationInput({ adapter: 'opencode.command.positional.v1' });
+    assert.equal(unsupported.signature, null);
+    assert.equal(unsupported.capturedAt, null);
+    assert.equal(unsupported.integrity, 'missing');
+  });
+
+  it('keeps exact UTF-8 payload distinctions in parser-owned capture digests', () => {
+    const trust = createTestHostTrust();
+    const payloads = ['line one\nline two', 'line one\r\nline two', ' leading ', 'backtick ` and "quotes"', 'Unicode: café'];
+    for (const payload of payloads) {
+      const capture = activation(trust, payload, sha256(payload));
+      assert.equal(capture.normalizedActivationDigest, sha256(payload));
+      assert.equal(capture.integrity, 'verified');
+    }
+  });
+
+  it('binds v2 captures to one task, repository, capture id, and expiry', () => {
+    const firstRoot = mkdtempSync(join(temp, 'capture-root-a-'));
+    const secondRoot = mkdtempSync(join(temp, 'capture-root-b-'));
+    const trust = createTestHostTrust({ target: firstRoot });
+    const valid = activation(trust);
+    assert.equal(valid.schemaVersion, 2);
+    assert.equal(valid.intendedTaskId, 'T-001');
+    assert.match(valid.captureId, /^capture:[0-9a-f-]{36}$/);
+    assert.equal(validateActivationCapture(valid, {
+      capabilities: trust.capabilities,
+      intendedTaskId: 'T-001',
+      repositoryIdentity: trust.adapter.repositoryIdentity,
+    }).ok, true);
+    for (const [field, value] of [
+      ['intendedTaskId', 'T-002'],
+      ['captureId', 'capture:11111111-1111-4111-8111-111111111111'],
+      ['expiresAt', new Date(Date.now() + 7_200_000).toISOString()],
+    ]) {
+      const tampered = { ...valid, [field]: value };
+      assert.equal(validateActivationCapture(tampered, { capabilities: trust.capabilities }).ok, false, field);
+    }
+    assert.equal(activationCaptureDisposition(valid, {
+      capabilities: trust.capabilities,
+      intendedTaskId: 'T-002',
+    }).ok, false);
+    assert.equal(activationCaptureDisposition(valid, {
+      capabilities: trust.capabilities,
+      repositoryIdentity: `file:${secondRoot.replace(/\\/g, '/')}`,
+    }).ok, false);
+  });
+
+  it('rejects expired, future-dated, and old supported captures', () => {
+    const trust = createTestHostTrust();
+    const expired = activation(trust, DEFAULT_ACTIVATION_PAYLOAD, sha256(DEFAULT_ACTIVATION_PAYLOAD), {
+      capturedAt: new Date(Date.now() - 7_200_000).toISOString(),
+      expiresAt: new Date(Date.now() - 3_600_000).toISOString(),
+    });
+    const expiredResult = activationCaptureDisposition(expired, { capabilities: trust.capabilities });
+    assert.equal(expiredResult.ok, false);
+    assert.equal(expiredResult.evidenceState, 'stale');
+
+    const futureSkeleton = {
+      ...structuredClone(activation(trust)),
+      capturedAt: new Date(Date.now() + 3_600_000).toISOString(),
+      expiresAt: new Date(Date.now() + 7_200_000).toISOString(),
+      signature: null,
+    };
+    const future = signActivationCapture(futureSkeleton, {
+      keyId: trust.keyId,
+      privateKey: trust.privateKey,
+    });
+    assert.match(validateActivationCapture(future, { capabilities: trust.capabilities }).errors.join('\n'), /capturedAt/);
+
+    const old = structuredClone(activation(trust));
+    old.schemaVersion = 1;
+    assert.match(validateActivationCapture(old, { capabilities: trust.capabilities }).errors.join('\n'), /schemaVersion must be 2/);
+  });
+
+  it('uses one injected clock for exact expiry and future-skew boundaries', () => {
+    const trust = createTestHostTrust();
+    const now = Date.parse('2026-07-30T12:00:00.000Z');
+    const base = structuredClone(activation(trust));
+    const withTimes = (capturedAt, expiresAt) => signActivationCapture({
+      ...base,
+      capturedAt,
+      expiresAt,
+      signature: null,
+    }, { keyId: trust.keyId, privateKey: trust.privateKey });
+    const atExpiry = withTimes('2026-07-30T11:59:59.000Z', '2026-07-30T12:00:00.000Z');
+    const common = {
+      capabilities: trust.capabilities,
+      intendedTaskId: 'T-001',
+      repositoryIdentity: trust.repositoryIdentity,
+      now,
+    };
+    const expired = activationCaptureDisposition(atExpiry, common);
+    assert.equal(expired.ok, false);
+    assert.match(expired.errors.join('\n'), /expired/);
+
+    const withinWindow = withTimes('2026-07-30T12:00:01.000Z', '2026-07-30T12:00:01.001Z');
+    assert.equal(activationCaptureDisposition(withinWindow, common).ok, true);
+
+    const beyondSkew = withTimes('2026-07-30T12:00:01.001Z', '2026-07-30T12:00:02.000Z');
+    const rejected = activationCaptureDisposition(beyondSkew, common);
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.errors.join('\n'), /capturedAt/);
+  });
+
+  it('returns typed unsupported v2 captures for every shipped adapter without invented proof', () => {
+    for (const adapter of Object.keys(SHIPPED_ACTIVATION_ADAPTERS)) {
+      const capture = captureActivationInput({ adapter });
+      assert.equal(capture.schemaVersion, 2);
+      assert.equal(capture.captureId, null);
+      assert.equal(capture.intendedTaskId, null);
+      assert.equal(capture.expiresAt, null);
+      const disposition = activationCaptureDisposition(capture);
+      assert.equal(disposition.evidenceState, 'negative');
+      assert.equal(disposition.disposition, 'blocked');
+    }
+  });
+});
+
+describe('task-bound activation creation', () => {
+  it('revalidates one signed task within its window, rejects cross-task replay, and keeps the public CLI fail-closed', async () => {
+    const root = mkdtempSync(join(temp, 'task-new-v2-'));
+    createTaskProjectFixture(root);
+    const trust = createTestHostTrust({ target: root });
+    const operatorTrustRoot = mkdtempSync(join(temp, 'task-new-v2-trust-'));
+    const trustStorePath = writeHostTrustStore(operatorTrustRoot, trust);
+    const capture = activation(trust, DEFAULT_ACTIVATION_PAYLOAD, sha256(DEFAULT_ACTIVATION_PAYLOAD), {
+      intendedTaskId: 'T-002',
+    });
+    const validationOptions = {
+      capabilities: trust.capabilities,
+      intendedTaskId: 'T-002',
+      repositoryIdentity: trust.repositoryIdentity,
+    };
+    assert.equal(activationCaptureDisposition(capture, validationOptions).ok, true);
+    // Captures are freshness-bound rather than single-use. Revalidation of the
+    // same task and bytes remains valid until the expiry boundary.
+    assert.equal(activationCaptureDisposition(capture, validationOptions).ok, true);
+    const crossTask = activationCaptureDisposition(capture, {
+      ...validationOptions,
+      intendedTaskId: 'T-003',
+    });
+    assert.equal(crossTask.ok, false);
+    assert.match(crossTask.errors.join('\n'), /intended task/);
+
+    writeFileSync(join(root, 'capture.json'), JSON.stringify(capture), 'utf8');
+    const created = await runCliInProcess([
+      'task', 'new', 'bound task', '--id', 'T-002', '--activation-input', 'capture.json',
+      '--host-trust-store', trustStorePath, '--json', '--target', root,
+    ], { operatorTrustRoot });
+    assert.equal(created.status, 1);
+    const createdResult = JSON.parse(created.stdout);
+    assert.equal(createdResult.evidenceState, 'negative');
+    assert.equal(createdResult.disposition, 'blocked');
+    assert.match(createdResult.errors.join('\n'), /authenticated host-controlled IPC|unsupported.*in-process/i);
+    assert.equal(spawnSync('git', ['-C', root, 'status', '--short', '.agenticloop/tasks/T-002.md'], { encoding: 'utf8' }).stdout, '');
+  });
+
+  it('rejects expired capture, unsupported shipped adapter, and malformed store before mutation', async () => {
+    const root = mkdtempSync(join(temp, 'task-new-negative-'));
+    createTaskProjectFixture(root);
+    const trust = createTestHostTrust({ target: root });
+    const operatorTrustRoot = mkdtempSync(join(temp, 'task-new-negative-trust-'));
+    const trustStorePath = writeHostTrustStore(operatorTrustRoot, trust);
+    const expired = activation(trust, DEFAULT_ACTIVATION_PAYLOAD, sha256(DEFAULT_ACTIVATION_PAYLOAD), {
+      intendedTaskId: 'T-004',
+      capturedAt: new Date(Date.now() - 7_200_000).toISOString(),
+      expiresAt: new Date(Date.now() - 3_600_000).toISOString(),
+    });
+    const expiredDisposition = activationCaptureDisposition(expired, {
+      capabilities: trust.capabilities,
+      intendedTaskId: 'T-004',
+      repositoryIdentity: trust.repositoryIdentity,
+    });
+    assert.equal(expiredDisposition.ok, false);
+    assert.match(expiredDisposition.errors.join('\n'), /expired/);
+    writeFileSync(join(root, 'expired.json'), JSON.stringify(expired), 'utf8');
+    const expiredRun = await runCliInProcess([
+      'task', 'new', 'expired', '--id', 'T-004', '--activation-input', 'expired.json',
+      '--host-trust-store', trustStorePath, '--json', '--target', root,
+    ], { operatorTrustRoot });
+    assert.equal(expiredRun.status, 1);
+    assert.match(JSON.parse(expiredRun.stdout).errors.join('\n'), /authenticated host-controlled IPC|unsupported.*in-process/i);
+
+    writeFileSync(join(root, 'unsupported.json'), JSON.stringify(captureActivationInput({
+      adapter: 'cursor.command.input.v1',
+    })), 'utf8');
+    const unsupported = await runCliInProcess([
+      'task', 'new', 'unsupported', '--id', 'T-005', '--activation-input', 'unsupported.json',
+      '--json', '--target', root,
+    ]);
+    assert.equal(unsupported.status, 1);
+    assert.equal(JSON.parse(unsupported.stdout).diagnostics[0].code, 'activation.capture.unsupported');
+
+    writeFileSync(trustStorePath, '{', 'utf8');
+    const malformed = await runCliInProcess([
+      'task', 'new', 'malformed store', '--id', 'T-006', '--activation-input', 'expired.json',
+      '--host-trust-store', trustStorePath, '--json', '--target', root,
+    ], { operatorTrustRoot });
+    assert.equal(malformed.status, 1);
+    const malformedResult = JSON.parse(malformed.stdout);
+    assert.equal(malformedResult.evidenceState, 'malformed');
+    assert.equal(malformedResult.disposition, 'rejected');
+    assert.match(malformedResult.errors.join('\n'), /Host trust store is invalid/);
+    for (const id of ['T-004', 'T-005', 'T-006']) {
+      assert.equal(spawnSync('git', ['-C', root, 'status', '--short', `.agenticloop/tasks/${id}.md`], { encoding: 'utf8' }).stdout, '');
+    }
+  });
+});
+
+describe('public activation edges reject unpinned adapters identically', () => {
+  it('rejects omitted activation capture before task creation with a canonical needs-context result', async () => {
+    const root = mkdtempSync(join(temp, 'activation-omitted-'));
+    createTaskProjectFixture(root);
+    const run = await runCliInProcess(['task', 'new', 'must not exist', '--id', 'T-001', '--json', '--target', root]);
+    assert.equal(run.status, 1);
+    const result = JSON.parse(run.stdout);
+    assert.equal(result.kind, 'agenticloop.validation-result');
+    assert.equal(result.disposition, 'needs_context');
+    assert.equal(result.diagnostics[0].code, 'activation.capture.missing');
+    assert.match(result.diagnostics[0].repairHint, /--scaffold/);
+    assert.match(result.diagnostics[0].repairHint, /supported host-produced activation capture/);
+    assert.match(result.diagnostics[0].repairHint, /Never author capture JSON/);
+    assert.equal(spawnSync('git', ['-C', root, 'status', '--short'], { encoding: 'utf8' }).stdout.includes('T-001.md'), false);
+
+    const human = await runCliInProcess(['task', 'new', 'human repair', '--id', 'T-002', '--target', root]);
+    assert.equal(human.status, 1);
+    const humanOutput = `${human.stdout}\n${human.stderr}`;
+    assert.match(humanOutput, /--scaffold/);
+    assert.match(humanOutput, /supported host-produced activation capture/);
+    assert.match(humanOutput, /Never author capture JSON/);
+    assert.equal(existsSync(join(root, '.agenticloop', 'tasks', 'T-002.md')), false);
+  });
+
+  it('rejects --scaffold with --activation-input before mutation', async () => {
+    const root = mkdtempSync(join(temp, 'activation-combination-'));
+    createTaskProjectFixture(root);
+    writeFileSync(join(root, 'capture.json'), '{}\n', 'utf8');
+    const run = await runCliInProcess([
+      'task', 'new', 'invalid combination', '--id', 'T-001',
+      '--scaffold', '--activation-input', 'capture.json', '--target', root,
+    ]);
+    assert.equal(run.status, 2);
+    assert.match(run.stderr, /cannot be combined/);
+    assert.equal(existsSync(join(root, '.agenticloop', 'tasks', 'T-001.md')), false);
+  });
+
+  it('rejects the same unpinned capture through public creation and public preparation', async () => {
+    const root = mkdtempSync(join(temp, 'unpinned-capture-'));
+    createTaskProjectFixture(root);
+    const trust = createTestHostTrust();
+    const capture = activation(trust);
+    writeFileSync(join(root, 'capture.json'), JSON.stringify(capture), 'utf8');
+    const created = await runCliInProcess([
+      'task', 'new', 'unpinned', '--id', 'T-001', '--activation-input', 'capture.json', '--json', '--target', root,
+    ]);
+    assert.equal(created.status, 1);
+    const createdResult = JSON.parse(created.stdout);
+    assert.equal(createdResult.kind, 'agenticloop.validation-result');
+    assert.match(createdResult.errors.join('\n'), /not in the resolved capability inventory/);
+    assert.equal(spawnSync('git', ['-C', root, 'status', '--short'], { encoding: 'utf8' }).stdout.includes('T-001.md'), false);
+
+    // The identical capture must also fail the preparation edge, not only creation.
+    writeFileSync(join(root, 'dispatch-input.json'), JSON.stringify({ activation: capture }), 'utf8');
+    const prepared = await runCliInProcess([
+      'task', 'prepare-dispatch', 'T-001', '--input', 'dispatch-input.json', '--host-trust-store', 'C:/operator/trust.json', '--json', '--target', root,
+    ]);
+    assert.equal(prepared.status, 1);
+    assert.equal(JSON.parse(prepared.stdout).ok, false);
+  });
+
+  it('rejects an unpinned capture at packet validation even when its digest is recomputed', async () => {
+    const fixture = await currentFilesTask('recomputed-digest');
+    const prepared = prepare(fixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    // Recomputing the digest makes the packet internally consistent; adapter
+    // authority is still resolved from the production inventory and refuses it.
+    const forged = structuredClone(prepared.packet);
+    forged.digest = dispatchPreparationDigest(forged);
+    assert.equal(validateDispatchPreparation(forged).ok, false);
+    assert.match(validateDispatchPreparation(forged).errors.join('\n'), /capability inventory/);
+    assert.equal(validateDispatchPreparation(forged, fixture.options).ok, true);
+  });
+});
+
+describe('dispatch preparation and receipt verification', () => {
+  it('rejects caller-authored readiness/decomposition claims without authoritative refetch providers', async () => {
+    const fixture = await currentFilesTask('missing-providers');
+    const prepared = prepareRoleDispatch({
+      activation: fixture.activation,
+      assignment: fixture.assignment,
+      readiness: fixture.readiness,
+      decomposition: fixture.decomposition,
+      refetchTask: fixture.refetchTask,
+      refetchRepository: fixture.refetchRepository,
+      runGit: fixture.runGit,
+    }, fixture.options);
+    assert.equal(prepared.ok, false);
+    assert.equal(prepared.validation.evidenceState, 'missing');
+    assert.equal(prepared.validation.diagnostics[0].code, 'dispatch.packet.invalid');
+    assert.match(prepared.validation.errors.join('\n'), /readiness refetch/);
+  });
+
+  it('refuses to prove dispatch without a Git reader for the initial repository state', async () => {
+    const fixture = await currentFilesTask('no-git-reader');
+    const prepared = prepareRoleDispatch({ ...fixture, runGit: undefined }, fixture.options);
+    assert.equal(prepared.ok, false);
+    assert.equal(prepared.validation.evidenceState, 'missing');
+    assert.match(prepared.validation.errors.join('\n'), /Git reader is required/);
+  });
+
+  it('rejects an activation-mismatched packet even when its digest is recomputed', async () => {
+    const fixture = await currentFilesTask('activation-mismatch');
+    const prepared = prepare(fixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    const forged = structuredClone(prepared.packet);
+    forged.activation.normalizedActivationDigest = sha256('forged');
+    forged.digest = dispatchPreparationDigest(forged);
+    assert.equal(validateDispatchPreparation(forged, fixture.options).ok, false);
+  });
+
+  it('rejects invented packet references and a mismatched branch even when its digest is recomputed', async () => {
+    const fixture = await currentFilesTask('invented-bindings');
+    const prepared = prepare(fixture);
+    const forged = structuredClone(prepared.packet);
+    forged.assignment.branch = 'invented-branch';
+    forged.assignment.canonicalReferences = ['invented/reference'];
+    forged.assignment.requiredCapabilities = ['invented_capability'];
+    forged.digest = dispatchPreparationDigest(forged);
+    const checked = validateDispatchPreparation(forged, fixture.options);
+    assert.equal(checked.ok, false);
+    assert.match(checked.errors.join('\n'), /branch|canonicalReferences|requiredCapabilities/);
+  });
+
+  it('preserves the full canonical readiness result and verifies an unchanged packet before mutation', async () => {
+    const fixture = await currentFilesTask('unchanged');
+    const prepared = prepare(fixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    assert.equal(prepared.packet.readiness.resultDigest, validationResultDigest(fixture.readiness.result));
+    assert.deepEqual(prepared.packet.readiness.result, fixture.readiness.result);
+    const received = verifyDispatchBeforeMutation({
+      packet: prepared.packet,
+      refetchTask: fixture.refetchTask,
+      refetchReadiness: fixture.refetchReadiness,
+      refetchRepository: fixture.refetchRepository,
+      refetchDecomposition: fixture.refetchDecomposition,
+      runGit: fixture.runGit,
+      roleId: 'engineer',
+    }, fixture.options);
+    assert.equal(received.ok, true, received.validation.errors?.join('\n'));
+  });
+
+  it('deep-freezes the emitted packet so nested mutation cannot rewrite it', async () => {
+    const fixture = await currentFilesTask('frozen-packet');
+    const prepared = prepare(fixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    assert.throws(() => { prepared.packet.task.allowedPaths.push('etc/**'); }, TypeError);
+    assert.throws(() => { prepared.packet.activation.integrity = 'verified'; }, TypeError);
+    assert.throws(() => { prepared.packet.repository.cleanState.priorGates.push({}); }, TypeError);
+    assert.equal(validateDispatchPreparation(prepared.packet, fixture.options).ok, true);
+  });
+
+  it('measures the canonical preparation packet against the 16,384-byte regression threshold', async () => {
+    const fixture = await currentFilesTask('packet-budget');
+    const prepared = prepare(fixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    const packetBytes = Buffer.byteLength(canonicalJson(prepared.packet), 'utf8');
+    assert.ok(packetBytes <= 16_384, `dispatch packet is ${packetBytes} bytes`);
+    assert.ok(packetBytes > 0);
+  });
+
+  it('invalidates a packet when task, branch, or repository base changes after preparation', async () => {
+    const fixture = await currentFilesTask('stale');
+    const prepared = prepare(fixture);
+    writeFileSync(fixture.taskPath, `${readFileSync(fixture.taskPath, 'utf8')}\n`, 'utf8');
+    const staleTask = verifyDispatchBeforeMutation({
+      packet: prepared.packet,
+      refetchTask: fixture.refetchTask,
+      refetchReadiness: fixture.refetchReadiness,
+      refetchRepository: fixture.refetchRepository,
+      refetchDecomposition: fixture.refetchDecomposition,
+      runGit: fixture.runGit,
+      roleId: 'engineer',
+    }, fixture.options);
+    assert.equal(staleTask.ok, false);
+    assert.notEqual(staleTask.validation.disposition, 'proceed');
+    git(fixture.root, ['checkout', '--', '.agenticloop/tasks/T-001.md']);
+    const changedBranch = verifyDispatchBeforeMutation({
+      packet: prepared.packet,
+      refetchTask: fixture.refetchTask,
+      refetchReadiness: fixture.refetchReadiness,
+      refetchRepository: () => ({ ...fixture.repository(), branch: 'other-branch' }),
+      refetchDecomposition: fixture.refetchDecomposition,
+      runGit: fixture.runGit,
+      roleId: 'engineer',
+    }, fixture.options);
+    assert.equal(changedBranch.ok, false);
+  });
+
+  it('keeps incomplete decomposition distinct from a complete empty ready inventory', async () => {
+    const fixture = await currentFilesTask('decomposition');
+    const incomplete = structuredClone(fixture.decomposition);
+    incomplete.completeness = 'incomplete';
+    delete incomplete.sourceDigest;
+    incomplete.sourceDigest = sha256(canonicalJson(incomplete));
+    const empty = structuredClone(fixture.decomposition);
+    empty.inventory.readyTaskIds = [];
+    empty.inventory.digest = sha256(canonicalJson({ taskId: 'T-001', readyTaskIds: [] }));
+    delete empty.sourceDigest;
+    empty.sourceDigest = sha256(canonicalJson(empty));
+    const incompleteResult = prepare(fixture, { refetchDecomposition: () => incomplete });
+    const emptyResult = prepare(fixture, { refetchDecomposition: () => empty });
+    assert.match(incompleteResult.validation.errors.join('\n'), /incomplete/);
+    assert.match(emptyResult.validation.errors.join('\n'), /does not authorize/);
+  });
+
+  it('emits a canonical validation result for unreadable dispatch JSON', async () => {
+    const fixture = await currentFilesTask('cli-json');
+    writeFileSync(join(fixture.root, 'invalid.json'), '{', 'utf8');
+    const run = await runCliInProcess([
+      'task', 'prepare-dispatch', 'T-001', '--input', 'invalid.json', '--json', '--target', fixture.root,
+    ]);
+    assert.equal(run.status, 1);
+    const result = JSON.parse(run.stdout);
+    assert.equal(result.kind, 'agenticloop.validation-result');
+    assert.equal(result.ok, false);
+  });
+
+  it('keeps public dispatch fail-closed while the trusted pure seam remains usable', async () => {
+    const fixture = await currentFilesTask('cli-roundtrip');
+    writeFileSync(join(fixture.root, 'dispatch-input.json'), JSON.stringify({
+      readiness: {
+        ...fixture.readiness,
+        result: { callerAuthored: true },
+        resultDigest: 'caller-authored',
+      },
+      decomposition: {
+        sourceRef: fixture.decomposition.sourceRef,
+        completeness: 'incomplete',
+        authority: 'orchestrator',
+      },
+      assignment: fixture.assignment,
+    }), 'utf8');
+    const prepared = await runCliInProcess([
+      'task', 'prepare-dispatch', 'T-001', '--input', 'dispatch-input.json', '--host-trust-store', fixture.trustStorePath, '--json', '--target', fixture.root,
+    ], { operatorTrustRoot: fixture.operatorTrustRoot });
+    assert.equal(prepared.status, 1);
+    assert.match(JSON.parse(prepared.stdout).errors.join('\n'), /authenticated host-controlled IPC|unsupported.*in-process/i);
+    assert.equal(prepare(fixture).ok, true);
+  });
+
+  it('refuses a scaffold task that has no activation authoring reference at the trusted pure seam', async () => {
+    const fixture = await currentFilesTask('scaffold-refusal');
+    const scaffold = readFileSync(fixture.taskPath, 'utf8')
+      .split('\n')
+      .filter(line => !line.startsWith('activation_input_digest:') && !line.startsWith('activation_capture_ref:'))
+      .join('\n');
+    writeFileSync(fixture.taskPath, scaffold, 'utf8');
+    git(fixture.root, ['add', '.agenticloop/tasks/T-001.md']);
+    git(fixture.root, ['commit', '-m', 'record scaffold task\n\nTask: T-001\nAgent: maintainer']);
+    const result = prepare(fixture);
+    assert.equal(result.ok, false);
+    assert.match(result.validation.errors.join('\n'), /scaffold task cannot authorize dispatch|activation_capture_ref/);
+  });
+});
+
+describe('role-return handoff evidence', () => {
+  it('accepts an unchanged raw producer return only with adapter provenance and repository evidence', async () => {
+    const fixture = await currentFilesTask('return-positive');
+    const prepared = prepare(fixture);
+    writeFileSync(join(fixture.root, 'src', 'existing.js'), 'export const current = "returned";\n', 'utf8');
+    git(fixture.root, ['add', 'src/existing.js']);
+    git(fixture.root, ['commit', '-m', 'implement return\n\nTask: T-001\nAgent: engineer']);
+    const returnHead = git(fixture.root, ['rev-parse', 'HEAD']);
+    const evidence = repositoryEvidence(prepared.packet, { head: returnHead });
+    evidence.attribution = {
+      range: { base: prepared.packet.repository.head, head: returnHead },
+      commits: git(fixture.root, ['rev-list', '--reverse', `${prepared.packet.repository.head}..${returnHead}`])
+        .split(/\r?\n/)
+        .filter(Boolean),
+    };
+    const roleReturn = readyReturn(prepared.packet, evidence);
+    const received = receiveRoleReturn({
+      raw: JSON.stringify(roleReturn), packet: prepared.packet, refetchTask: fixture.refetchTask,
+      refetchRepositoryEvidence: () => evidence,
+      ...producerBinding(fixture.trust, prepared.packet, roleReturn, evidence),
+      runGit: fixture.runGit,
+    }, fixture.options);
+    assert.equal(received.ok, true, received.validation.errors?.join('\n'));
+  });
+
+  it('rejects recomputed packets whose material task contract binding differs from the authoritative task', async () => {
+    const fixture = await currentFilesTask('return-contract-drift');
+    const prepared = prepare(fixture);
+    const mutations = [
+      ['scope', value => `${value}\nattacker expansion`],
+      ['allowedPaths', value => [...value, 'other/**']],
+      ['activationCaptureRef', () => '.agenticloop/activation/other.json'],
+      ['requiredChecks', value => value.map(check => check.id === 'RC-1' ? { ...check, command: 'npm run attacker' } : check)],
+      ['contractDigest', () => `sha256:v1:${'f'.repeat(64)}`],
+    ];
+    for (const [field, mutate] of mutations) {
+      const packet = structuredClone(prepared.packet);
+      packet.task[field] = mutate(packet.task[field]);
+      packet.digest = dispatchPreparationDigest(packet);
+      assert.equal(validateDispatchPreparation(packet, fixture.options).ok, true, field);
+      const evidence = repositoryEvidence(packet);
+      const roleReturn = readyReturn(packet, evidence);
+      const received = receiveRoleReturn({
+        raw: JSON.stringify(roleReturn),
+        packet,
+        refetchTask: fixture.refetchTask,
+        refetchRepositoryEvidence: () => evidence,
+        ...producerBinding(fixture.trust, packet, roleReturn, evidence),
+      }, fixture.options);
+      assert.equal(received.ok, false, field);
+      assert.equal(received.validation.producerRole, 'engineer', field);
+      assert.match(received.validation.errors.join('\n'), /authoritative task and contract/, field);
+    }
+  });
+
+  it('rejects stale packet bytes when return and repository evidence are updated to the newer task', async () => {
+    const fixture = await currentFilesTask('return-task-bytes-drift');
+    const prepared = prepare(fixture);
+    const current = fixture.snapshot();
+    const changedBody = `${current.body}\n`;
+    const changed = { ...current, body: changedBody, digest: sha256(changedBody) };
+    const evidence = repositoryEvidence(prepared.packet);
+    evidence.task.digest = changed.digest;
+    const oldReturn = readyReturn(prepared.packet, evidence);
+    const roleReturn = createRoleReturn({ ...oldReturn, task: { ...oldReturn.task, digest: changed.digest }, digest: undefined });
+    const received = receiveRoleReturn({
+      raw: JSON.stringify(roleReturn),
+      packet: prepared.packet,
+      refetchTask: () => changed,
+      refetchRepositoryEvidence: () => evidence,
+      ...producerBinding(fixture.trust, prepared.packet, roleReturn, evidence),
+    }, fixture.options);
+    assert.equal(received.ok, false);
+    assert.equal(received.validation.producerRole, 'engineer');
+    assert.match(received.validation.errors.join('\n'), /packet task binding|persisted dispatch packet/);
+  });
+
+  it('rejects changed backend, task id, carrier, digest, and activation binding even with a recomputed packet digest', async () => {
+    const fixture = await currentFilesTask('return-identity-drift');
+    const prepared = prepare(fixture);
+    const mutations = [
+      packet => { packet.backend = 'github'; },
+      packet => { packet.task.id = 'T-002'; },
+      packet => { packet.task.carrier = 'issue:77'; },
+      packet => { packet.task.digest = sha256('different task bytes'); },
+      packet => { packet.task.activationDigest = sha256('different activation'); },
+    ];
+    for (const mutate of mutations) {
+      const packet = structuredClone(prepared.packet);
+      mutate(packet);
+      packet.digest = dispatchPreparationDigest(packet);
+      const evidence = repositoryEvidence(packet);
+      const candidate = readyReturn(packet, evidence);
+      const received = receiveRoleReturn({
+        raw: JSON.stringify(candidate),
+        packet,
+        refetchTask: fixture.refetchTask,
+        refetchRepositoryEvidence: () => evidence,
+        ...producerBinding(fixture.trust, packet, candidate, evidence),
+      }, fixture.options);
+      assert.equal(received.ok, false);
+      assert.equal(received.validation.producerRole, 'engineer');
+    }
+  });
+
+  it('rejects ready returns with non-zero passed checks, empty paths, empty attribution, or omitted repository evidence', async () => {
+    const fixture = await currentFilesTask('return-negative');
+    const prepared = prepare(fixture);
+    const variants = [
+      { checks: [
+        { id: 'RC-1', kind: 'command', command: 'npm test', outcome: 'passed', exitCode: 9, evidence: 'wrong' },
+        { id: 'RC-2', kind: 'command', command: 'npm run typecheck', outcome: 'passed', exitCode: 0, evidence: 'ok' },
+      ] },
+      { changedPaths: [] },
+    ];
+    for (const patch of variants) {
+      const candidate = { ...readyReturn(prepared.packet, repositoryEvidence(prepared.packet)), ...patch, digest: undefined };
+      assert.throws(() => createRoleReturn(candidate), /invalid role return/);
+    }
+    const goodEvidence = repositoryEvidence(prepared.packet);
+    const candidate = readyReturn(prepared.packet, goodEvidence);
+    const missingEvidence = receiveRoleReturn({
+      raw: JSON.stringify(candidate),
+      packet: prepared.packet,
+      refetchTask: fixture.refetchTask,
+      ...producerBinding(fixture.trust, prepared.packet, candidate, goodEvidence),
+    }, fixture.options);
+    assert.equal(missingEvidence.ok, false);
+    assert.equal(missingEvidence.validation.evidenceState, 'missing');
+    const emptyAttribution = structuredClone(goodEvidence);
+    emptyAttribution.attribution.commits = [];
+    const malformed = { ...candidate, attribution: emptyAttribution.attribution };
+    const received = receiveRoleReturn({
+      raw: JSON.stringify(malformed),
+      packet: prepared.packet,
+      refetchTask: fixture.refetchTask,
+      refetchRepositoryEvidence: () => emptyAttribution,
+      ...producerBinding(fixture.trust, prepared.packet, candidate, emptyAttribution),
+    }, fixture.options);
+    assert.equal(received.ok, false);
+  });
+
+  it('rejects replayed producer receipts across return identities and invocation bindings', async () => {
+    const fixture = await currentFilesTask('return-replay');
+    const prepared = prepare(fixture);
+    const evidence = repositoryEvidence(prepared.packet);
+    const first = readyReturn(prepared.packet, evidence);
+    const receipt = createHostHandoffReceipt({
+      adapterId: fixture.trust.adapterId,
+      keyId: fixture.trust.keyId,
+      packet: prepared.packet,
+      roleReturn: first,
+      repositoryEvidence: evidence,
+    }, fixture.trust.privateKey);
+    const second = readyReturn(prepared.packet, evidence);
+    const replayed = receiveRoleReturn({
+      raw: JSON.stringify(second),
+      packet: prepared.packet,
+      refetchTask: fixture.refetchTask,
+      refetchRepositoryEvidence: () => evidence,
+      producerReceipt: receipt,
+      resolveTrustedAdapter: () => fixture.trust.adapter,
+    }, fixture.options);
+    assert.equal(replayed.ok, false);
+    assert.match(replayed.validation.errors.join('\n'), /authentication failed|does not bind/);
+  });
+
+  it('requires complete blocker and resumption facts', async () => {
+    const fixture = await currentFilesTask('blocked-return');
+    const prepared = prepare(fixture);
+    const evidence = repositoryEvidence(prepared.packet);
+    const invalid = {
+      producerRole: 'engineer', packet: { packetId: prepared.packet.packetId, digest: prepared.packet.digest },
+      task: { backend: 'files', id: 'T-001', digest: prepared.packet.task.digest },
+      worktree: evidence.worktree, branch: evidence.branch, head: evidence.head, baseHead: evidence.baseHead,
+      changedPaths: [], checks: [
+        { id: 'RC-1', kind: 'command', command: 'npm test', outcome: 'blocked', exitCode: 1, evidence: 'blocked' },
+        { id: 'RC-2', kind: 'command', command: 'npm run typecheck', outcome: 'not_run', exitCode: -1, evidence: 'not run' },
+      ],
+      attribution: evidence.attribution, pr: evidence.pr,
+      outcome: { kind: 'implementation_blocked', completion: false, authority: 'non_authoritative_role_outcome' }, disposition: 'blocked',
+      blocker: { category: '', evidence: { kind: '', detail: '' }, resumeOwner: '', resumeTransition: '', resumePreconditions: { items: [], justification: '' } },
+      freshness: {
+        invalidatedBy: [
+          'task_or_contract_changes', 'packet_or_assignment_changes', 'branch_or_head_changes',
+          'check_or_transport_evidence_changes', 'initial_repository_state_changes',
+        ],
+      },
+    };
+    assert.throws(() => createRoleReturn(invalid), /category|blocker|resume/i);
+  });
+
+  it('rejects manually reconstructed orchestrator returns and exposes a read-only return verifier', async () => {
+    const fixture = await currentFilesTask('manual-return');
+    const prepared = prepare(fixture);
+    writeFileSync(join(fixture.root, 'src', 'existing.js'), 'export const current = "returned";\n', 'utf8');
+    git(fixture.root, ['add', 'src/existing.js']);
+    git(fixture.root, ['commit', '-m', 'implement return\n\nTask: T-001\nAgent: engineer']);
+    const returnHead = git(fixture.root, ['rev-parse', 'HEAD']);
+    const evidence = repositoryEvidence(prepared.packet, { head: returnHead });
+    evidence.attribution = {
+      range: { base: prepared.packet.repository.head, head: returnHead },
+      commits: git(fixture.root, ['rev-list', '--reverse', `${prepared.packet.repository.head}..${returnHead}`])
+        .split(/\r?\n/)
+        .filter(Boolean),
+    };
+    const roleReturn = readyReturn(prepared.packet, evidence);
+    const manual = receiveRoleReturn({
+      raw: JSON.stringify(roleReturn), packet: prepared.packet, refetchTask: fixture.refetchTask,
+      refetchRepositoryEvidence: () => evidence,
+      ...producerBinding(fixture.trust, prepared.packet, roleReturn, evidence, { source: 'orchestrator' }),
+    }, fixture.options);
+    assert.equal(manual.ok, false);
+    const packetPath = join(fixture.root, 'packet.json');
+    const returnPath = join(fixture.root, 'return.json');
+    writeFileSync(packetPath, JSON.stringify(prepared.packet), 'utf8');
+    writeFileSync(returnPath, JSON.stringify(roleReturn), 'utf8');
+    const run = await runCliInProcess(
+      ['task', 'verify-return', 'T-001', '--packet', 'packet.json', '--return', 'return.json', '--host-trust-store', fixture.trustStorePath, '--json', '--target', fixture.root],
+      { operatorTrustRoot: fixture.operatorTrustRoot }
+    );
+    assert.equal(run.status, 1);
+    const result = JSON.parse(run.stdout);
+    assert.equal(result.kind, 'agenticloop.validation-result');
+    assert.equal(result.disposition, 'blocked');
+    assert.match(result.errors.join('\n'), /authenticated host-controlled IPC|unsupported.*in-process/i);
+  });
+
+  it('refetches an injected GitHub transport instead of swapping a projection object', async () => {
+    const fixture = await currentFilesTask('github-transport');
+    let calls = 0;
+    const transport = {
+      fetchIssue() {
+        calls += 1;
+        return { ...fixture.snapshot(), backend: 'github', carrier: 'issue:42' };
+      },
+    };
+    const githubFixture = {
+      ...fixture,
+      refetchTask: () => transport.fetchIssue(),
+      assignment: { ...fixture.assignment, canonicalReferences: ['agents/engineer.md', 'skills/role-delegation/SKILL.md', 'backends/github.md'] },
+      readiness: {
+        ...fixture.readiness,
+        evidence: createTaskReadinessEvidence({
+          ...fixture.readiness.evidence,
+          backend: 'github', task: { id: 'T-001', carrier: 'issue:42', expectedDigest: fixture.snapshot().digest },
+        }),
+      },
+    };
+    githubFixture.refetchReadiness = () => githubFixture.readiness;
+    const prepared = prepare(githubFixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    const githubEvidence = repositoryEvidence(prepared.packet, {
+      pr: { state: 'open', number: 42, url: 'https://example.test/pull/42' },
+    });
+    const roleReturn = readyReturn(prepared.packet, githubEvidence);
+    const received = receiveRoleReturn({
+      raw: JSON.stringify(roleReturn), packet: prepared.packet, refetchTask: () => transport.fetchIssue(),
+      refetchRepositoryEvidence: () => {
+        calls += 1;
+        return githubEvidence;
+      },
+      ...producerBinding(fixture.trust, prepared.packet, roleReturn, githubEvidence),
+    }, fixture.options);
+    assert.equal(received.ok, true, received.validation.errors?.join('\n'));
+    assert.ok(calls >= 3, 'injected transport must refetch GitHub issue and PR facts at dispatch and return');
+
+    const attacked = structuredClone(prepared.packet);
+    attacked.task.scope += '\nrecomputed GitHub packet expansion';
+    attacked.digest = dispatchPreparationDigest(attacked);
+    assert.equal(validateDispatchPreparation(attacked, fixture.options).ok, true);
+    const attackedEvidence = repositoryEvidence(attacked, {
+      pr: { state: 'open', number: 42, url: 'https://example.test/pull/42' },
+    });
+    const attackedReturn = readyReturn(attacked, attackedEvidence);
+    const rejected = receiveRoleReturn({
+      raw: JSON.stringify(attackedReturn),
+      packet: attacked,
+      refetchTask: () => transport.fetchIssue(),
+      refetchRepositoryEvidence: () => attackedEvidence,
+      ...producerBinding(fixture.trust, attacked, attackedReturn, attackedEvidence),
+    }, fixture.options);
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.validation.producerRole, 'engineer');
+    assert.match(rejected.validation.errors.join('\n'), /authoritative task and contract/);
+  });
+});
+
+describe('OpenCode activation capability', () => {
+  it('generates an explicit unsupported result instead of placeholder capture text', () => {
+    const target = mkdtempSync(join(temp, 'opencode-target-'));
+    const output = mkdtempSync(join(temp, 'opencode-output-'));
+    mkdirSync(target, { recursive: true });
+    seedTargetLayout(REPO_ROOT, target, { includeDocs: false, includeScratch: false });
+    generateOpencodeArtifacts(loadAgenticLoopConfig(join(target, 'agenticloop.json')), target, output);
+    const command = readFileSync(join(output, '.opencode', 'commands', 'agenticloop.md'), 'utf8');
+    assert.match(command, /Activation capture capability: `unsupported`/);
+    assert.doesNotMatch(command, /\$(?:ARGUMENTS|\d+)/);
+    assert.match(command, /parser-owned byte artifact/);
+  });
+});
+
+describe('documented envelope identity contract', () => {
+  it('AGENTIC_LOOP.md names the exact schema versions and digests the implementation emits', async () => {
+    const doc = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf8');
+    assert.match(doc, /agenticloop\.role-preparation`, schema version\s*\n?`2`/);
+    assert.match(doc, /sha256:agenticloop\.role-preparation\.v2:<64-lowercase-hex>/);
+    assert.match(doc, /agenticloop\.role-return`, schema version\s*\n?`2`/);
+    assert.match(doc, /sha256:agenticloop\.role-return\.v2:<64-lowercase-hex>/);
+    assert.doesNotMatch(doc, /agenticloop\.role-preparation\.v1/);
+    assert.doesNotMatch(doc, /agenticloop\.role-return\.v1/);
+    assert.equal(DISPATCH_PREPARATION_SCHEMA_VERSION, 2);
+    assert.equal(ROLE_RETURN_SCHEMA_VERSION, 2);
+    const fixture = await currentFilesTask('doc-contract');
+    const prepared = prepare(fixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    assert.ok(prepared.packet.digest.startsWith('sha256:agenticloop.role-preparation.v2:'));
+    const roleReturn = readyReturn(prepared.packet, repositoryEvidence(prepared.packet));
+    assert.ok(roleReturn.digest.startsWith('sha256:agenticloop.role-return.v2:'));
+  });
+});

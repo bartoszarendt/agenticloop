@@ -72,6 +72,40 @@ describe('GitHub carrier normalization', () => {
 });
 
 describe('trusted task-contract graph', () => {
+  it('preserves the historical v1 projection and digest exactly', () => {
+    const historical = [
+      '---',
+      'task_id: T-LEGACY',
+      'status: draft',
+      'backend: files',
+      'allowed_paths:',
+      '  - src/**',
+      '---',
+      '',
+      '# T-LEGACY - Legacy',
+      '',
+      '## Scope',
+      'One file.',
+      '',
+      '## Out of Scope',
+      'None.',
+      '',
+      '## Acceptance Criteria',
+      '- done',
+      '',
+      '## Required Checks',
+      '- `npm test`',
+    ].join('\n');
+    const contract = taskContractDigest(historical);
+    assert.equal(contract.ok, true);
+    assert.equal(
+      contract.digest,
+      'sha256:v1:e8f261478c86c4d78c4a66cae04fc0fdce8d5bdebc687ee108dfde421f75f06d'
+    );
+    assert.equal(Object.hasOwn(contract.projection, 'required_check_inventory'), false);
+    assert.equal(contract.projection.required_checks, '- `npm test`');
+  });
+
   it('separates parsing from carrier trust and rejects self-attested payload carriers', () => {
     const record = baseline();
     const wire = { ...record, carrier: { id: 'forged', verifiedAuthority: true } };

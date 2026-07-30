@@ -47,6 +47,11 @@ import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { loadAgenticLoopConfig, loadJsonFile } from './json.js';
 import {
+  CLAUDE_CODE_PLUGIN_ACTIVATION_ADAPTER_ID,
+  validateFilledAdapterSlots,
+  validateStaticPluginCommandSlots,
+} from './adapter-slots.js';
+import {
   generateOpencodeAgentRecords,
   OPENCODE_COMMAND_RELATIVE_PATH,
   OPENCODE_DELEGATION_TARGET_ROLES,
@@ -57,6 +62,7 @@ import {
   rewriteOpencodeSkillReferences,
 } from './adapters/opencode.js';
 import {
+  COPILOT_ACTIVATION_ADAPTER_ID,
   COPILOT_PUBLIC_SKILL_NAME,
   COPILOT_REQUIRED_PUBLIC_REFERENCES,
   generatedCopilotArtifactsPresent,
@@ -78,6 +84,7 @@ import {
 import { getDocumentRoleRegistry } from './document-roles.js';
 import { parseFrontmatter } from './frontmatter.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
+import { validActivationCaptureRef, validActivationInputDigest } from './task-contract-baseline.js';
 import {
   AGENTS_SOURCE_DIRECTORY,
   BACKENDS_SOURCE_DIRECTORY,
@@ -456,6 +463,24 @@ export function validateTaskRecord(content, filename) {
 
   if (hasMarkdownHeading(content, '## Proof Pressure') && !sectionBody(content, '## Proof Pressure')) {
     errors.push(`Task record '${filename}' has empty '## Proof Pressure' section`);
+  }
+
+  // Activation provenance is structural wherever a task contract is parsed: a
+  // free-text digest or an unsafe capture reference would let a record claim
+  // parser-owned authoring that nothing can verify.
+  const [activationFrontmatter] = parseFrontmatter(content);
+  if (activationFrontmatter) {
+    const digest = String(activationFrontmatter.activation_input_digest ?? '').trim();
+    const captureRef = String(activationFrontmatter.activation_capture_ref ?? '').trim();
+    if (digest && !validActivationInputDigest(digest)) {
+      errors.push(`Task record '${filename}' activation_input_digest must be sha256:<64 lowercase hex characters>`);
+    }
+    if (captureRef && !validActivationCaptureRef(captureRef)) {
+      errors.push(`Task record '${filename}' activation_capture_ref must be a safe repository-relative path`);
+    }
+    if (captureRef && !digest) {
+      errors.push(`Task record '${filename}' activation_capture_ref requires a matching activation_input_digest`);
+    }
   }
 
   return errors;
@@ -1779,10 +1804,24 @@ function validateCanonicalStopContract(assetLayout, errors) {
   if (!existsSync(startPath)) {
     errors.push(`Canonical start command missing: ${startPath.replace(/\\/g, '/')}`);
   } else {
+    const displayStartPath = startPath.replace(/\\/g, '/');
     try {
-      validateStopRouting(readFileSync(startPath, 'utf-8'), startPath.replace(/\\/g, '/'), errors);
+      const startText = readFileSync(startPath, 'utf-8');
+      validateStopRouting(startText, displayStartPath, errors);
+      // `commands/start.md` is not only the adapter template: it is the live
+      // `/agenticloop:start` command that .claude-plugin/plugin.json registers.
+      // Its default slots must therefore carry a real fail-closed declaration,
+      // checked by the static-command rule rather than the generated-artifact
+      // rule, so the one host-substituted `$ARGUMENTS` stays legal here and
+      // stays illegal in every generated surface.
+      const [, startBody] = parseFrontmatter(startText);
+      errors.push(...validateStaticPluginCommandSlots(
+        startBody,
+        displayStartPath,
+        CLAUDE_CODE_PLUGIN_ACTIVATION_ADAPTER_ID
+      ));
     } catch (error) {
-      errors.push(`${startPath.replace(/\\/g, '/')}: ${error.message}`);
+      errors.push(`${displayStartPath}: ${error.message}`);
     }
   }
 
@@ -1871,7 +1910,8 @@ function validateOpencodeCommand(repoRoot, errors, warnings) {
     '`.agenticloop/project.md`',
     `\`${PROCESS_DOC_RELATIVE_PATH}\``,
     'Create or refine the durable task record before any implementation.',
-    '`$ARGUMENTS`',
+    'Activation adapter: `opencode.command.positional.v1`.',
+    'Activation capture capability: `unsupported`.',
   ];
 
   for (const snippet of requiredSnippets) {
@@ -1879,6 +1919,12 @@ function validateOpencodeCommand(repoRoot, errors, warnings) {
       errors.push(`${displayPath}: command body is missing required activation text: ${snippet}`);
     }
   }
+
+  if (/\$(?:ARGUMENTS|\d+)/.test(body)) {
+    errors.push(`${displayPath}: command body must not claim positional or aggregate parser capture placeholders`);
+  }
+
+  errors.push(...validateFilledAdapterSlots(body, displayPath));
 
   validateStopRouting(body, displayPath, errors);
 
@@ -2185,6 +2231,7 @@ function validateCodexPublicSkill(skillDir, errors, label = 'Codex adapter', age
       errors.push(`${skillPath.replace(/\\/g, '/')}: skill body is missing required activation text: ${snippet}`);
     }
   }
+  errors.push(...validateFilledAdapterSlots(body, skillPath.replace(/\\/g, '/')));
   validateStopRouting(body, skillPath.replace(/\\/g, '/'), errors);
   validateNoCodexLegacyEventLoggingFallback(skillText, skillPath.replace(/\\/g, '/'), errors);
   validateNoDanglingBackendPaths(skillText, skillPath.replace(/\\/g, '/'), errors);
@@ -2481,6 +2528,7 @@ function validateClaudeCodePublicSkill(skillDir, errors, agentNames = {}) {
       errors.push(`${skillPath.replace(/\\/g, '/')}: skill body is missing required activation text: ${snippet}`);
     }
   }
+  errors.push(...validateFilledAdapterSlots(body, skillPath.replace(/\\/g, '/')));
   validateStopRouting(body, skillPath.replace(/\\/g, '/'), errors);
 
   const referencesRoot = join(skillDir, 'references', 'skills');
@@ -2573,6 +2621,7 @@ function validateClaudeCodeAdapter(config, repoRoot, errors, warnings) {
     try {
       const [, commandBody] = parseFrontmatter(readFileSync(commandPath, 'utf-8'));
       validateStopRouting(commandBody, commandPath.replace(/\\/g, '/'), errors);
+      errors.push(...validateFilledAdapterSlots(commandBody, commandPath.replace(/\\/g, '/')));
     } catch (error) {
       errors.push(`${commandPath.replace(/\\/g, '/')}: ${error.message}`);
     }
@@ -2661,6 +2710,7 @@ function validateCopilotPublicSkill(skillDir, errors, agentNames = {}) {
       errors.push(`${skillPath.replace(/\\/g, '/')}: skill body is missing required activation text: ${snippet}`);
     }
   }
+  errors.push(...validateFilledAdapterSlots(body, skillPath.replace(/\\/g, '/')));
   validateStopRouting(body, skillPath.replace(/\\/g, '/'), errors);
 
   const referencesRoot = join(skillDir, 'references', 'skills');
@@ -2726,6 +2776,11 @@ function validateCopilotPromptFile(promptPath, orchestratorAgent, errors) {
     '`.github/skills/agenticloop/SKILL.md`',
     'Agentic Loop',
     `Copilot custom agent \`${orchestratorAgent}\``,
+    // The prompt file is a live activation surface, not a pointer: it must carry
+    // the same typed Copilot declaration as the public skill.
+    `Activation adapter: \`${COPILOT_ACTIVATION_ADAPTER_ID}\`.`,
+    'Activation capture capability: `unsupported`.',
+    'advisory only',
   ];
 
   for (const snippet of requiredSnippets) {
@@ -2733,6 +2788,8 @@ function validateCopilotPromptFile(promptPath, orchestratorAgent, errors) {
       errors.push(`${promptPath.replace(/\\/g, '/')}: prompt body is missing required activation text: ${snippet}`);
     }
   }
+
+  errors.push(...validateFilledAdapterSlots(body, promptPath.replace(/\\/g, '/')));
 }
 
 function validateCopilotAgent(config, repoRoot, roleName, agentName, mdPath, errors, agentNames = {}) {
@@ -3000,6 +3057,7 @@ function validateCursorPublicSkill(skillDir, errors, agentNames = {}, options = 
       errors.push(`${skillPath.replace(/\\/g, '/')}: skill body is missing required activation text: ${snippet}`);
     }
   }
+  errors.push(...validateFilledAdapterSlots(body, skillPath.replace(/\\/g, '/')));
   validateStopRouting(body, skillPath.replace(/\\/g, '/'), errors);
 
   const referencesRoot = join(skillDir, 'references', 'skills');

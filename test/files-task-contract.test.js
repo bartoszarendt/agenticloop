@@ -262,7 +262,7 @@ describe('files correction lifecycle commands', () => {
   }
 
   async function newTaskWithBaseline(target) {
-    const created = await runCliInProcess(['task', 'new', 'Correction lifecycle', '--target', target]);
+    const created = await runCliInProcess(['task', 'new', 'Correction lifecycle', '--scaffold', '--target', target]);
     assert.equal(created.status, 0, created.stderr);
     git(target, ['add', '.agenticloop/tasks']);
     git(target, ['commit', '-m', 'task']);
@@ -322,7 +322,7 @@ describe('files correction lifecycle commands', () => {
     assert.notEqual(dirty.status, 0);
 
     git(target, ['add', '.agenticloop']);
-    git(target, ['commit', '-m', 'correction and task update']);
+    git(target, ['commit', '-m', 'correction and task update\n\nTask: T-001\nAgent: maintainer']);
     const ready = await runCliInProcess([
       'task', 'status', 'T-001', 'agent-ready', '--expect-digest', digestOfRecord(),
       '--base', 'HEAD', '--dependencies', dependencies, '--target', target,

@@ -105,12 +105,31 @@ const TOLERANCE = 0.05;
 // carrier-state, append-only provenance, and offline-lint contracts. This is
 // new canonical contract delivered through the existing role/backend sources,
 // not adapter duplication.
+// OpenCode's P35-04 baseline is deliberately rebased to its measured 11,845
+// words. The increase is the compact parser-controlled activation identity and
+// exact single-role dispatch/return boundary inherited from canonical command,
+// role, and delegation source; it replaces a lossy aggregate argument rather
+// than adding adapter-local workflow payload.
+//
+// The P35-04 corrective pass deliberately rebases every baseline to its freshly
+// measured value. Three activation surfaces gained a typed declaration they were
+// missing: the Copilot IDE prompt fallback previously shipped as a live
+// activation surface stating nothing about its capture capability, and the
+// canonical activation command's default capability slot previously shipped
+// empty even though `.claude-plugin/plugin.json` registers it as the live
+// `/agenticloop:start` command. Codex, Copilot, and Cursor also move because
+// fresh atomic init now discovers the canonical backend docs it previously
+// missed, so their reference libraries contain the backend projections the
+// generated skills already linked. These are measured values for required
+// fail-closed content and recovered references, not adapter-local duplication -
+// and rebasing from a true current measurement restores real 5% headroom
+// instead of leaving three budgets a handful of words from failing.
 const ADAPTERS = [
-  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 11005, agentDefinitions: 10727, activationSurface: 687 } },
-  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 65335, agentDefinitions: 11303, activationSurface: 977, referenceLibrary: 52930 } },
-  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 50201, agentDefinitions: 10084, activationSurface: 1568, referenceLibrary: 38456 } },
-  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 63204, agentDefinitions: 10913, activationSurface: 978, referenceLibrary: 51177 } },
-  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 62992, agentDefinitions: 10899, activationSurface: 786, referenceLibrary: 51177 } },
+  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 12019, agentDefinitions: 11228, activationSurface: 791 } },
+  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 66889, agentDefinitions: 11794, activationSurface: 1074, referenceLibrary: 54021 } },
+  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 51941, agentDefinitions: 10572, activationSurface: 1785, referenceLibrary: 39584 } },
+  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 64810, agentDefinitions: 11414, activationSurface: 1128, referenceLibrary: 52268 } },
+  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 64550, agentDefinitions: 11400, activationSurface: 882, referenceLibrary: 52268 } },
 ];
 
 let tmpDir;
