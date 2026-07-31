@@ -117,6 +117,7 @@ describe('renderOpencodeAgentMarkdown', () => {
     assert.equal(frontmatter?.model, agent.model);
     assert.equal(frontmatter?.variant, agent.variant);
     assert.equal(frontmatter?.permission?.edit, 'deny');
+    assert.notEqual(frontmatter?.permission?.bash, 'deny');
     assert.equal(frontmatter?.permission?.task?.['*'], 'deny');
     assert.equal(frontmatter?.permission?.task?.maintainer, 'allow');
     assert.equal(frontmatter?.permission?.task?.engineer, 'allow');
@@ -139,6 +140,7 @@ describe('renderOpencodeAgentMarkdown', () => {
 
     assert.equal(frontmatter?.mode, 'subagent');
     assert.equal(frontmatter?.permission?.edit, 'deny');
+    assert.notEqual(frontmatter?.permission?.bash, 'deny');
     assert.equal(frontmatter?.permission?.task, undefined);
     assert.match(body, /You are the Auditor for the target project\./);
     assert.match(body, /read-only with respect to implementation/);
@@ -211,7 +213,7 @@ describe('generateOpencodeArtifacts', () => {
     }
   });
 
-  it('writes only markdown agents and the OpenCode command', () => {
+  it('writes markdown agents, the OpenCode command, and the canonical capability sidecar', () => {
     const outputDir = join(tmpDir, 'generated');
     const fx = makeFixture();
     const alConfig = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
@@ -219,6 +221,7 @@ describe('generateOpencodeArtifacts', () => {
     const { files } = generateOpencodeArtifacts(alConfig, fx, outputDir);
 
     assert.deepEqual(files.sort(), [
+      '.agenticloop/host-role-capabilities/opencode.json',
       '.opencode/agents/auditor.md',
       '.opencode/agents/engineer.md',
       '.opencode/agents/maintainer.md',

@@ -370,22 +370,83 @@ const DEFINITION = {
   ],
   capabilityVocabulary: {
     enforcementStates: ['enforced', 'advisory', 'unavailable'],
-    capabilities: ['task_terminal_closeout'],
-    actions: ['closeout_owned_accepted_to_closed', 'generic_accepted_to_closed'],
+    capabilities: [
+      'implementation_mutation',
+      'task_workflow_mutation',
+      'role_dispatch',
+      'role_result_production',
+      'role_result_import',
+      'blocked_result_resumption',
+      'blocked_result_redelegation',
+      'human_authorized_recovery',
+      'task_terminal_closeout',
+    ],
+    actions: [
+      'implementation_mutate',
+      'task_workflow_mutate',
+      'role_dispatch',
+      'role_result_produce',
+      'role_result_import',
+      'blocked_result_resume',
+      'blocked_result_redelegate',
+      'destructive_recovery',
+      'scope_changing_recovery',
+      'host_state_repair',
+      'closeout_owned_accepted_to_closed',
+      'generic_accepted_to_closed',
+    ],
+    actionPolicies: ['allowed', 'denied', 'requires_human_disposition'],
+    hostRoleDeclaration: {
+      requiredFields: [
+        'kind',
+        'schemaVersion',
+        'host',
+        'roleId',
+        'defaultLabel',
+        'allowedActions',
+        'deniedActions',
+        'humanDispositionActions',
+        'actionBindings',
+        'detectionBoundary',
+        'limitation',
+        'recoveryRoute',
+        'digest',
+      ],
+      actionBindingFields: ['action', 'capability', 'policy', 'enforcement', 'mechanism'],
+      constants: {
+        kind: 'agenticloop.host-role-capability',
+        schemaVersion: 1,
+      },
+    },
     degradedReport: {
       requiredFields: [
         'kind',
         'schemaVersion',
         'host',
-        'role',
+        'roleId',
+        'diagnosticCode',
+        'action',
         'capability',
         'enforcement',
-        'reason',
+        'limitation',
         'detectionBoundary',
+        'recoveryRoute',
+        'declarationDigest',
       ],
       constants: {
         kind: 'agenticloop.degraded-enforcement-report',
-        schemaVersion: 1,
+        schemaVersion: 3,
+      },
+    },
+    authorityRecords: {
+      redelegation: {
+        kind: 'agenticloop.blocked-result-redelegation',
+        schemaVersion: 2,
+      },
+      humanDisposition: {
+        kind: 'agenticloop.human-disposition',
+        schemaVersion: 2,
+        recoveryClasses: ['destructive', 'scope_changing', 'host_state_repair'],
       },
     },
   },
@@ -521,7 +582,12 @@ export const TRANSITION_FACTS = TRANSITION_CONTRACT_DEFINITION.facts;
 export const TRANSITION_IDENTITY_CHAIN = TRANSITION_CONTRACT_DEFINITION.identityChain;
 export const TRANSITION_AUTHORITIES = TRANSITION_CONTRACT_DEFINITION.authorityRules;
 export const TRANSITION_CAPABILITY_ENFORCEMENT = TRANSITION_CONTRACT_DEFINITION.capabilityVocabulary.enforcementStates;
+export const TRANSITION_CAPABILITIES = TRANSITION_CONTRACT_DEFINITION.capabilityVocabulary.capabilities;
+export const TRANSITION_CAPABILITY_ACTIONS = TRANSITION_CONTRACT_DEFINITION.capabilityVocabulary.actions;
+export const TRANSITION_CAPABILITY_ACTION_POLICIES = TRANSITION_CONTRACT_DEFINITION.capabilityVocabulary.actionPolicies;
+export const TRANSITION_HOST_ROLE_CAPABILITY_SCHEMA = TRANSITION_CONTRACT_DEFINITION.capabilityVocabulary.hostRoleDeclaration;
 export const TRANSITION_DEGRADED_ENFORCEMENT_REPORT = TRANSITION_CONTRACT_DEFINITION.capabilityVocabulary.degradedReport;
+export const TRANSITION_CAPABILITY_AUTHORITY_RECORDS = TRANSITION_CONTRACT_DEFINITION.capabilityVocabulary.authorityRecords;
 export const TRANSITION_RETURN_SHAPES = TRANSITION_CONTRACT_DEFINITION.returnShapes;
 export const TRANSITION_TERMINAL_CONTRACT = TRANSITION_CONTRACT_DEFINITION.terminalContract;
 export const TRANSITION_MARKDOWN_POLICY = TRANSITION_CONTRACT_DEFINITION.markdownPolicy;
@@ -546,7 +612,9 @@ const EXPECTED = deepFreeze({
   contextualRoles: ['producing_role', 'explicitly_redelegated_owner', 'named_disposition_owner'],
   envelopeFields: ['kind', 'schemaVersion', 'transition.id', 'transition.expectedPredecessor', 'artifact.kind', 'artifact.id', 'digest.algorithm', 'digest.format', 'digest.canonicalization', 'digest.value', 'provenance.state', 'provenance.producer', 'freshness.observedAt', 'freshness.invalidatedBy', 'validation.resultKind', 'validation.evidenceState', 'validation.diagnostics', 'disposition'],
   envelopeConstants: ['kind', 'schemaVersion', 'digest.algorithm', 'digest.format', 'digest.canonicalization', 'validation.resultKind'],
-  degradedFields: ['kind', 'schemaVersion', 'host', 'role', 'capability', 'enforcement', 'reason', 'detectionBoundary'],
+  hostRoleDeclarationFields: ['kind', 'schemaVersion', 'host', 'roleId', 'defaultLabel', 'allowedActions', 'deniedActions', 'humanDispositionActions', 'actionBindings', 'detectionBoundary', 'limitation', 'recoveryRoute', 'digest'],
+  hostRoleActionBindingFields: ['action', 'capability', 'policy', 'enforcement', 'mechanism'],
+  degradedFields: ['kind', 'schemaVersion', 'host', 'roleId', 'diagnosticCode', 'action', 'capability', 'enforcement', 'limitation', 'detectionBoundary', 'recoveryRoute', 'declarationDigest'],
   degradedConstants: ['kind', 'schemaVersion'],
   blockedFields: ['kind', 'schemaVersion', 'returnId', 'producer.role', 'consumedTransition.id', 'consumedTransition.digest', 'disposition', 'blocker.category', 'blocker.evidence', 'resume.owner', 'resume.transition', 'resume.preconditions'],
   blockedConstants: ['kind', 'schemaVersion', 'disposition'],
@@ -560,8 +628,13 @@ const EXPECTED = deepFreeze({
   boundaries: ['operator_request', 'activation_input', 'authored_task', 'dispatch', 'role_return', 'review', 'audit', 'terminal_closeout'],
   actions: ['request_and_activation_identity', 'blocked_result_resumption', 'exceptional_verification', 'destructive_or_scope_changing_recovery', 'terminal_closeout'],
   enforcementStates: ['enforced', 'advisory', 'unavailable'],
-  capabilities: ['task_terminal_closeout'],
-  transitionActions: ['closeout_owned_accepted_to_closed', 'generic_accepted_to_closed'],
+  capabilities: ['implementation_mutation', 'task_workflow_mutation', 'role_dispatch', 'role_result_production', 'role_result_import', 'blocked_result_resumption', 'blocked_result_redelegation', 'human_authorized_recovery', 'task_terminal_closeout'],
+  transitionActions: ['implementation_mutate', 'task_workflow_mutate', 'role_dispatch', 'role_result_produce', 'role_result_import', 'blocked_result_resume', 'blocked_result_redelegate', 'destructive_recovery', 'scope_changing_recovery', 'host_state_repair', 'closeout_owned_accepted_to_closed', 'generic_accepted_to_closed'],
+  actionPolicies: ['allowed', 'denied', 'requires_human_disposition'],
+  authorityRecordKeys: ['redelegation', 'humanDisposition'],
+  redelegationRecordKeys: ['kind', 'schemaVersion'],
+  humanDispositionRecordKeys: ['kind', 'schemaVersion', 'recoveryClasses'],
+  recoveryClasses: ['destructive', 'scope_changing', 'host_state_repair'],
   orderedTerminalSteps: ['review_accepted', 'integrated_or_frozen_candidate', 'current_audit_gate_when_required', 'closeout_prepare', 'closeout_record', 'closeout_owned_accepted_to_closed'],
   scopeKinds: ['configured_group', 'explicit_task_set', 'none', 'indeterminate'],
   auditModes: ['enabled', 'disabled'],
@@ -906,11 +979,34 @@ export function validateTransitionContractDefinition(candidate = TRANSITION_CONT
   }
 
   const capability = candidate.capabilityVocabulary;
-  if (!exactKeys(capability, ['enforcementStates', 'capabilities', 'actions', 'degradedReport']) ||
+  if (!exactKeys(capability, ['enforcementStates', 'capabilities', 'actions', 'actionPolicies', 'hostRoleDeclaration', 'degradedReport', 'authorityRecords']) ||
       !exactInventory(capability.enforcementStates, EXPECTED.enforcementStates) ||
       !exactInventory(capability.capabilities, EXPECTED.capabilities) ||
-      !exactInventory(capability.actions, EXPECTED.transitionActions)) errors.push('capability enforcement vocabulary is incomplete');
+      !exactInventory(capability.actions, EXPECTED.transitionActions) ||
+      !exactInventory(capability.actionPolicies, EXPECTED.actionPolicies)) errors.push('capability enforcement vocabulary is incomplete');
+  if (!exactKeys(capability?.hostRoleDeclaration, ['requiredFields', 'actionBindingFields', 'constants']) ||
+      !exactInventory(capability?.hostRoleDeclaration?.requiredFields, EXPECTED.hostRoleDeclarationFields) ||
+      !exactInventory(capability?.hostRoleDeclaration?.actionBindingFields, EXPECTED.hostRoleActionBindingFields) ||
+      !exactKeys(capability?.hostRoleDeclaration?.constants, EXPECTED.degradedConstants) ||
+      capability?.hostRoleDeclaration?.constants?.kind !== 'agenticloop.host-role-capability' ||
+      capability?.hostRoleDeclaration?.constants?.schemaVersion !== 1) {
+    errors.push('host-role capability declaration schema is incomplete');
+  }
   validateShape(capability?.degradedReport, 'degraded-enforcement report', EXPECTED.degradedFields, EXPECTED.degradedConstants, errors);
+  if (capability?.degradedReport?.constants?.kind !== 'agenticloop.degraded-enforcement-report' ||
+      capability?.degradedReport?.constants?.schemaVersion !== 3) {
+    errors.push('degraded-enforcement report identity is invalid');
+  }
+  if (!exactKeys(capability?.authorityRecords, EXPECTED.authorityRecordKeys) ||
+      !exactKeys(capability?.authorityRecords?.redelegation, EXPECTED.redelegationRecordKeys) ||
+      capability?.authorityRecords?.redelegation?.kind !== 'agenticloop.blocked-result-redelegation' ||
+      capability?.authorityRecords?.redelegation?.schemaVersion !== 2 ||
+      !exactKeys(capability?.authorityRecords?.humanDisposition, EXPECTED.humanDispositionRecordKeys) ||
+      capability?.authorityRecords?.humanDisposition?.kind !== 'agenticloop.human-disposition' ||
+      capability?.authorityRecords?.humanDisposition?.schemaVersion !== 2 ||
+      !exactInventory(capability?.authorityRecords?.humanDisposition?.recoveryClasses, EXPECTED.recoveryClasses)) {
+    errors.push('capability authority-record schemas are incomplete');
+  }
 
   if (!exactKeys(candidate.returnShapes, ['blocked', 'exceptionalVerification'])) errors.push('return-shape registry is incomplete or contains unknown properties');
   validateShape(candidate.returnShapes?.blocked, 'blocked return shape', EXPECTED.blockedFields, EXPECTED.blockedConstants, errors);

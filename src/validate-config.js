@@ -104,6 +104,49 @@ import { hasMarkdownHeading, markdownLines, markdownProseBlocks, markdownSection
 import { validateCanonicalTemplates } from './template-contract.js';
 import { validateTransitionContractDefinition, WORKFLOW_ROLES } from './transition-contract.js';
 import {
+  HOST_ROLE_CAPABILITIES,
+  buildEffectiveHostRoleCapabilityInventory,
+  hostRoleCapabilitySidecarRelativePath,
+  renderHostRoleCapabilityNotice,
+  validateHostRoleCapabilitySidecar,
+  validateHostRoleCapabilityInventory,
+} from './host-role-capabilities.js';
+import {
+  getWorkflowRoleLabel,
+  isWorkflowRoleId,
+  resolveWorkflowRoleRegistry,
+} from './workflow-roles.js';
+
+function effectiveHostCapabilityInventory(config, host) {
+  return {
+    [host]: buildEffectiveHostRoleCapabilityInventory(
+      host,
+      config.adapters?.[host] ?? {}
+    ),
+  };
+}
+
+function validateGeneratedHostCapabilitySidecar(config, repoRoot, host, errors) {
+  const relPath = hostRoleCapabilitySidecarRelativePath(host);
+  const path = join(repoRoot, relPath);
+  if (!existsSync(path)) {
+    errors.push(`Generated ${host} capability sidecar not found: ${relPath}`);
+    return;
+  }
+  let value;
+  try {
+    value = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    errors.push(`Generated ${host} capability sidecar is unreadable or malformed: ${error.message}`);
+    return;
+  }
+  const checked = validateHostRoleCapabilitySidecar(value, {
+    host,
+    adapterConfig: config.adapters?.[host] ?? {},
+  });
+  errors.push(...checked.errors.map(error => `${host} capability sidecar: ${error}`));
+}
+import {
   isValidTaskId,
   loadProjectMap,
   PROJECT_MAP_DEFAULTS,
@@ -1141,6 +1184,10 @@ export function validateConfig(repoRoot, options = {}) {
   if (!transitionContractValidation.ok) {
     errors.push(`Bundled transition contract is invalid: ${transitionContractValidation.errors.join('; ')}`);
   }
+  const hostRoleCapabilities = validateHostRoleCapabilityInventory(HOST_ROLE_CAPABILITIES);
+  if (!hostRoleCapabilities.ok) {
+    errors.push(`Bundled host-role capability inventory is invalid: ${hostRoleCapabilities.errors.join('; ')}`);
+  }
 
   if (toolkitSourceRepo) {
     const bundledConfig = loadJsonFile(join(repoRoot, 'config.json'));
@@ -1530,8 +1577,16 @@ function validateResolvedTaskBackend(repoRoot, taskBackendResolution, config, er
 function validateWorkflowRoleProjection(config, agentsDir, errors) {
   const roles = config.roles ?? {};
   const configuredRoleIds = Object.keys(roles);
-  const missingRoleIds = WORKFLOW_ROLES.filter(roleId => !configuredRoleIds.includes(roleId));
-  const unexpectedRoleIds = configuredRoleIds.filter(roleId => !WORKFLOW_ROLES.includes(roleId));
+  let registry;
+  try {
+    registry = resolveWorkflowRoleRegistry(config);
+  } catch (error) {
+    errors.push(`Workflow role registry is invalid: ${error.message}`);
+    return;
+  }
+  const workflowRoles = registry.map(entry => entry.roleId);
+  const missingRoleIds = workflowRoles.filter(roleId => !configuredRoleIds.includes(roleId));
+  const unexpectedRoleIds = configuredRoleIds.filter(roleId => !workflowRoles.includes(roleId));
   let migrationRequired = false;
   if (missingRoleIds.length > 0) {
     errors.push(`Config roles missing registry role IDs: ${missingRoleIds.join(', ')}`);
@@ -1546,12 +1601,12 @@ function validateWorkflowRoleProjection(config, agentsDir, errors) {
     const agentMarkdownFiles = readdirSync(agentsDir).filter(name => name.endsWith('.md'));
     const agentRoleIds = agentMarkdownFiles
       .map(name => name.slice(0, -3))
-      .filter(roleId => /^[a-z][a-z0-9_]*$/.test(roleId));
+      .filter(roleId => isWorkflowRoleId(roleId));
     const unexpectedAgentFiles = agentMarkdownFiles.filter(name =>
-      !/^[a-z][a-z0-9_]*\.md$/.test(name)
+      !name.endsWith('.md') || !isWorkflowRoleId(name.slice(0, -3))
     );
-    const missingAgentRoleIds = WORKFLOW_ROLES.filter(roleId => !agentRoleIds.includes(roleId));
-    const unexpectedAgentRoleIds = agentRoleIds.filter(roleId => !WORKFLOW_ROLES.includes(roleId));
+    const missingAgentRoleIds = workflowRoles.filter(roleId => !agentRoleIds.includes(roleId));
+    const unexpectedAgentRoleIds = agentRoleIds.filter(roleId => !workflowRoles.includes(roleId));
     if (missingAgentRoleIds.length > 0) {
       errors.push(`Agent sources missing registry role IDs: ${missingAgentRoleIds.join(', ')}`);
       migrationRequired = true;
@@ -1583,10 +1638,9 @@ function validateWorkflowRoleProjection(config, agentsDir, errors) {
   }
   if (migrationRequired) {
     errors.push(
-      "Workflow role registry migration required: transition contract v1 permits only canonical role IDs. " +
-      "Preserve host-only custom agents outside agenticloop/agents, make agenticloop.json extend " +
-      "'./agenticloop/config.json', remove non-registry roles and adapter roleSettings, run " +
-      "'npx agenticloop update', then run 'npx agenticloop validate'."
+      "Workflow role registry migration required: make config roles, agent sources, and " +
+      "workflowRoles extensions use the same immutable role IDs, run 'npx agenticloop update', " +
+      "then run 'npx agenticloop validate'."
     );
   }
 }
@@ -1851,6 +1905,7 @@ function validateCanonicalStopContract(assetLayout, errors) {
 }
 
 function validateOpencodeAdapter(_ocAdapter, config, repoRoot, errors, warnings) {
+  validateGeneratedHostCapabilitySidecar(config, repoRoot, 'opencode', errors);
   const expectedAgents = generateOpencodeAgentRecords(config, repoRoot);
 
   for (const roleName of OPENCODE_ROLE_NAMES) {
@@ -1978,10 +2033,11 @@ function validateOpencodeAgent(roleName, expectedAgent, config, repoRoot, errors
     displayPath,
     body,
     [
-      `You are the ${roleName[0].toUpperCase()}${roleName.slice(1)} for the target project.`,
+      `You are the ${getWorkflowRoleLabel(roleName)} for the target project.`,
       `Follow ${expectedAgent?.sourceFile ?? `${AGENTS_SOURCE_DIRECTORY}/${roleName}.md`} as the canonical role contract.`,
       '.agenticloop/project.md',
       'Agentic Loop methodology.',
+      renderHostRoleCapabilityNotice('opencode', roleName, effectiveHostCapabilityInventory(config, 'opencode')),
     ],
     errors,
     'prompt body is missing required methodology text'
@@ -2297,6 +2353,8 @@ function validateCodexAgentToml(config, roleName, agentName, tomlPath, errors, a
     'npx agenticloop --help',
     'Do not assume `npx agenticloop` exists before that check succeeds.',
     'If no working event logging command is available, do not block the workflow.',
+    `You are the Agentic Loop ${getWorkflowRoleLabel(roleName)} custom agent`,
+    renderHostRoleCapabilityNotice('codex', roleName, effectiveHostCapabilityInventory(config, 'codex')),
   ];
 
   if (requiredSkills.length > 0) {
@@ -2422,6 +2480,7 @@ function validateCodexPluginDistribution(config, repoRoot, errors, agentNames) {
 }
 
 function validateCodexAdapter(config, repoRoot, errors, warnings) {
+  validateGeneratedHostCapabilitySidecar(config, repoRoot, 'codex', errors);
   const agentsDir = join(repoRoot, '.codex', 'agents');
   const repoSkillsRoot = join(repoRoot, '.agents', 'skills');
   const publicSkillDir = join(repoSkillsRoot, CODEX_PUBLIC_SKILL_NAME);
@@ -2435,7 +2494,7 @@ function validateCodexAdapter(config, repoRoot, errors, warnings) {
 
   const roleBindings = config.adapters?.codex?.roleBindings ?? {};
   const agentNames = Object.fromEntries(
-    Object.keys(config.roles ?? {}).map(roleName => [
+    WORKFLOW_ROLES.map(roleName => [
       roleName,
       roleBindings[roleName]?.agent ?? roleName,
     ])
@@ -2444,7 +2503,7 @@ function validateCodexAdapter(config, repoRoot, errors, warnings) {
   validateCodexPublicSkill(publicSkillDir, errors, 'Codex adapter', agentNames);
   validateNoLegacyCodexDiscoverableSkills(repoSkillsRoot, 'Codex adapter', errors);
 
-  for (const roleName of Object.keys(config.roles ?? {})) {
+  for (const roleName of WORKFLOW_ROLES) {
     const agentName = roleBindings[roleName]?.agent ?? roleName;
     const tomlPath = join(agentsDir, `${agentName}.toml`);
     validateCodexAgentToml(config, roleName, agentName, tomlPath, errors, agentNames);
@@ -2559,7 +2618,6 @@ function claudeAgentReferenceAbsolutePath(skillName) {
 
 function validateClaudeCodeAgentReferences(config, roleName, mdPath, errors) {
   const requiredSkills = config.roles?.[roleName]?.requiredSkills ?? [];
-  if (requiredSkills.length === 0) return;
 
   let text = '';
   try {
@@ -2567,6 +2625,23 @@ function validateClaudeCodeAgentReferences(config, roleName, mdPath, errors) {
   } catch (error) {
     errors.push(`${mdPath.replace(/\\/g, '/')}: ${error.message}`);
     return;
+  }
+
+  const [frontmatter, body] = parseFrontmatter(text);
+  const expectedPermissionMode =
+    roleName === 'orchestrator' || roleName === 'auditor' ? 'plan' : 'acceptEdits';
+  if (frontmatterString(frontmatter?.permissionMode) !== expectedPermissionMode) {
+    errors.push(
+      `${mdPath.replace(/\\/g, '/')}: permissionMode must be '${expectedPermissionMode}' for registry role '${roleName}'`
+    );
+  }
+  const capabilityNotice = renderHostRoleCapabilityNotice(
+    'claude-code',
+    roleName,
+    effectiveHostCapabilityInventory(config, 'claude-code')
+  );
+  if (!body.includes(capabilityNotice)) {
+    errors.push(`${mdPath.replace(/\\/g, '/')}: generated agent is missing the canonical host-role capability declaration`);
   }
 
   for (const skillName of requiredSkills) {
@@ -2584,6 +2659,7 @@ function validateClaudeCodeAgentReferences(config, roleName, mdPath, errors) {
 }
 
 function validateClaudeCodeAdapter(config, repoRoot, errors, warnings) {
+  validateGeneratedHostCapabilitySidecar(config, repoRoot, 'claude-code', errors);
   const agentsDir = join(repoRoot, '.claude', 'agents');
   const commandPath = join(repoRoot, '.claude', 'commands', 'agenticloop.md');
   const generatedSkillDir = join(repoRoot, '.claude', 'skills', CLAUDE_PUBLIC_SKILL_NAME);
@@ -2594,13 +2670,13 @@ function validateClaudeCodeAdapter(config, repoRoot, errors, warnings) {
 
   const roleBindings = config.adapters?.['claude-code']?.roleBindings ?? {};
   const agentNames = Object.fromEntries(
-    Object.keys(config.roles ?? {}).map(roleName => [
+    WORKFLOW_ROLES.map(roleName => [
       roleName,
       roleBindings[roleName]?.agent ?? roleName,
     ])
   );
   if (existsSync(agentsDir)) {
-    for (const roleName of Object.keys(config.roles ?? {})) {
+    for (const roleName of WORKFLOW_ROLES) {
       const agentName = roleBindings[roleName]?.agent ?? roleName;
       const mdPath = join(agentsDir, `${agentName}.md`);
       if (!existsSync(mdPath)) {
@@ -2858,6 +2934,8 @@ function validateCopilotAgent(config, repoRoot, roleName, agentName, mdPath, err
     `Canonical role source: \`${roleRecord.sourceFile}\`.`,
     'Read `.agenticloop/project.md` before acting',
     `Follow \`${PROCESS_DOC_RELATIVE_PATH}\` as the workflow methodology.`,
+    `You are the Agentic Loop ${getWorkflowRoleLabel(roleName)} custom agent`,
+    renderHostRoleCapabilityNotice('copilot', roleName, effectiveHostCapabilityInventory(config, 'copilot')),
   ];
 
   for (const skillName of roleRecord.requiredSkills ?? []) {
@@ -2946,9 +3024,10 @@ function validateCopilotAgent(config, repoRoot, roleName, agentName, mdPath, err
 }
 
 function validateCopilotAdapter(config, repoRoot, errors, warnings) {
+  validateGeneratedHostCapabilitySidecar(config, repoRoot, 'copilot', errors);
   const roleBindings = config.adapters?.copilot?.roleBindings ?? {};
   const agentNames = Object.fromEntries(
-    Object.keys(config.roles ?? {}).map(roleName => [
+    WORKFLOW_ROLES.map(roleName => [
       roleName,
       roleBindings[roleName]?.agent ?? roleName,
     ])
@@ -2961,7 +3040,7 @@ function validateCopilotAdapter(config, repoRoot, errors, warnings) {
     errors.push(`Copilot adapter: .github/agents/ not found; run 'agenticloop generate copilot'`);
   }
 
-  for (const roleName of Object.keys(config.roles ?? {})) {
+  for (const roleName of WORKFLOW_ROLES) {
     const agentName = agentNames[roleName] ?? roleName;
     validateCopilotAgent(
       config,
@@ -3140,6 +3219,8 @@ function validateCursorAgent(config, repoRoot, roleName, agentName, mdPath, erro
     `Canonical role source: \`${roleRecord.sourceFile}\`.`,
     'Read `.agenticloop/project.md` before acting',
     `Follow \`${PROCESS_DOC_RELATIVE_PATH}\` as the workflow methodology.`,
+    `You are the Agentic Loop ${getWorkflowRoleLabel(roleName)} subagent`,
+    renderHostRoleCapabilityNotice('cursor', roleName, effectiveHostCapabilityInventory(config, 'cursor')),
   ];
 
   for (const backendFile of CURSOR_REQUIRED_BACKEND_REFERENCES) {
@@ -3229,7 +3310,7 @@ function validateCursorPluginDistribution(config, repoRoot, errors, agentNames) 
     { label: 'Cursor plugin', agentRootDisplay: 'plugins/agenticloop/agents' }
   );
 
-  for (const roleName of Object.keys(config.roles ?? {})) {
+  for (const roleName of WORKFLOW_ROLES) {
     const agentName = agentNames[roleName] ?? roleName;
     validateCursorAgent(
       config,
@@ -3245,9 +3326,10 @@ function validateCursorPluginDistribution(config, repoRoot, errors, agentNames) 
 }
 
 function validateCursorAdapter(config, repoRoot, errors, warnings) {
+  validateGeneratedHostCapabilitySidecar(config, repoRoot, 'cursor', errors);
   const roleBindings = config.adapters?.cursor?.roleBindings ?? {};
   const agentNames = Object.fromEntries(
-    Object.keys(config.roles ?? {}).map(roleName => [
+    WORKFLOW_ROLES.map(roleName => [
       roleName,
       roleBindings[roleName]?.agent ?? roleName,
     ])
@@ -3261,7 +3343,7 @@ function validateCursorAdapter(config, repoRoot, errors, warnings) {
     errors.push(`Cursor adapter: .cursor/agents/ not found; run 'agenticloop generate cursor'`);
   }
 
-  for (const roleName of Object.keys(config.roles ?? {})) {
+  for (const roleName of WORKFLOW_ROLES) {
     const agentName = agentNames[roleName] ?? roleName;
     validateCursorAgent(
       config,

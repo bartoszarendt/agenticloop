@@ -18,7 +18,6 @@ import { parseFrontmatter } from './frontmatter.js';
 import {
   OPENCODE_AGENT_RELATIVE_PATHS,
   OPENCODE_COMMAND_RELATIVE_PATH,
-  OPENCODE_ROLE_NAMES,
 } from './adapters/opencode.js';
 import { resolveRoleModel } from './adapters/shared.js';
 import { generatedCopilotArtifactsPresent } from './adapters/copilot.js';
@@ -28,6 +27,7 @@ import { createIo } from './cli-io.js';
 import { formatGitGuardDoctor } from './worktree.js';
 import { deriveAuditDueWorkUnits } from './closeout.js';
 import { loadProjectMap } from './project-map.js';
+import { WORKFLOW_ROLE_IDS } from './workflow-roles.js';
 
 function hasModelSettings(adapterCfg, roles) {
   const rs = adapterCfg?.roleSettings ?? {};
@@ -42,7 +42,7 @@ function hasModelSettings(adapterCfg, roles) {
 function detectStaleOpencodeModels(repoRoot, config) {
   const ocAdapter = config.adapters?.opencode ?? {};
   const staleRoles = [];
-  for (const roleName of OPENCODE_ROLE_NAMES) {
+  for (const roleName of WORKFLOW_ROLE_IDS) {
     const relPath = OPENCODE_AGENT_RELATIVE_PATHS[roleName];
     const agentPath = join(repoRoot, relPath);
     if (!existsSync(agentPath)) continue;
@@ -144,7 +144,7 @@ export function adapterDiscoverySummary(repoRoot) {
     };
   }
 
-  const roles = Object.keys(config.roles ?? {});
+  const roles = WORKFLOW_ROLE_IDS;
   const adapters = [];
   const generateSteps = [];
   const configureSteps = [];

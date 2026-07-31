@@ -19,6 +19,7 @@ import {
   TARGET_CONFIG_TEMPLATE_RELATIVE_PATH,
   bundledToolkitPath,
 } from './layout.js';
+import { WORKFLOW_ROLE_IDS } from './workflow-roles.js';
 
 const IMPLEMENTED_ADAPTERS = ['opencode', 'codex', 'claude-code', 'copilot', 'cursor'];
 
@@ -62,7 +63,7 @@ export function reconcileTargetAdapterConfig(target, hosts) {
   try {
     const rawConfig = loadJsonFile(targetConfigPath);
     const effectiveConfig = loadAgenticLoopConfig(targetConfigPath);
-    const canonicalRoles = Object.keys(effectiveConfig.roles ?? {});
+    const canonicalRoles = WORKFLOW_ROLE_IDS;
     const { added, preserved } = reconcileAdapterRoleSettings(rawConfig, hosts, canonicalRoles);
     if (added.length > 0) {
       writeFileSync(targetConfigPath, JSON.stringify(rawConfig, null, 2) + '\n', 'utf-8');

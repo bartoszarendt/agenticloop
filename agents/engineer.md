@@ -147,7 +147,8 @@ task-record obligation.
   --packet <packet.json> --role engineer` verifier. It refetches the task and
   current Git branch/head/base facts, reruns readiness from the bound dependency
   source, rereads the committed Maintainer decomposition source, and checks every
-  packet and invocation binding.
+  packet and invocation binding, including the selected host's exact canonical
+  Engineer capability declaration. It must allow implementation mutation.
   A stale or malformed packet is a status return, not permission to edit.
   Shipped and public in-process adapters cannot establish this authority.
   Without an externally authenticated packet, return blocked; never substitute
@@ -257,6 +258,11 @@ task-record obligation.
   result uses `disposition: proceed` and the separate non-authoritative
   `implementation_ready_for_review` outcome; it is eligible only for a later
   review-preparation gate and never claims review entry or completion.
+- A blocked return remains Engineer-owned unless `role_return_receive` verifies
+  a fresh version 2 redelegation signed by the exact operator-pinned authority
+  for that return, packet, producer, and new owner. Comments, labels, commit
+  trailers, caller-supplied keys, semantic digests, and the identity of a later
+  editor do not transfer it.
 - Perform an integration rehearsal only when the orchestrator explicitly
   assigns it. Compose a disposable non-published candidate; record its exact
   tree/commit, artifact order, commands, and results. Return conflicts as a

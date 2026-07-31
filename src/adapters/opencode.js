@@ -22,24 +22,29 @@ import {
   buildRoleRecord,
 } from './shared.js';
 import { fillUnsupportedActivationSlots } from '../adapter-slots.js';
+import {
+  buildEffectiveHostRoleCapabilityInventory,
+  hostRoleCapabilitySidecarRelativePath,
+  renderHostRoleCapabilityNotice,
+  renderHostRoleCapabilitySidecar,
+} from '../host-role-capabilities.js';
+import {
+  getWorkflowRoleLabel,
+  WORKFLOW_ROLE_IDS,
+} from '../workflow-roles.js';
 
-export const OPENCODE_ROLE_NAMES = Object.freeze(['orchestrator', 'maintainer', 'engineer', 'auditor']);
-export const OPENCODE_AGENT_RELATIVE_PATHS = Object.freeze({
-  orchestrator: '.opencode/agents/orchestrator.md',
-  maintainer: '.opencode/agents/maintainer.md',
-  engineer: '.opencode/agents/engineer.md',
-  auditor: '.opencode/agents/auditor.md',
-});
+export const OPENCODE_ROLE_NAMES = WORKFLOW_ROLE_IDS;
+export const OPENCODE_AGENT_RELATIVE_PATHS = Object.freeze(Object.fromEntries(
+  WORKFLOW_ROLE_IDS.map(roleId => [roleId, `.opencode/agents/${roleId}.md`])
+));
 // Orchestrator delegation targets. Everything else stays denied.
-export const OPENCODE_DELEGATION_TARGET_ROLES = Object.freeze(['maintainer', 'engineer', 'auditor']);
+export const OPENCODE_DELEGATION_TARGET_ROLES = Object.freeze(
+  WORKFLOW_ROLE_IDS.filter(roleId => roleId !== 'orchestrator')
+);
 export const OPENCODE_COMMAND_RELATIVE_PATH = '.opencode/commands/agenticloop.md';
 
 const OPENCODE_START_COMMAND = bundledToolkitPath('agenticloop/commands/start.md');
 export const OPENCODE_ACTIVATION_ADAPTER_ID = 'opencode.command.positional.v1';
-
-function capitalize(str) {
-  return str ? str[0].toUpperCase() + str.slice(1) : '';
-}
 
 function quoteYamlScalar(value) {
   return JSON.stringify(String(value ?? ''));
@@ -56,9 +61,9 @@ export function rewriteOpencodeSkillReferences(text, skillsSrc) {
   );
 }
 
-function buildPrompt(roleName, roleSourceFile, requiredSkills, roleBody, skillsSourceDir) {
+function buildPrompt(roleName, roleSourceFile, requiredSkills, roleBody, skillsSourceDir, capabilityInventory) {
   const skillsSrc = normalizeSkillsSourceDir(skillsSourceDir);
-  let prompt = `You are the ${capitalize(roleName)} for the target project. `;
+  let prompt = `You are the ${getWorkflowRoleLabel(roleName)} for the target project. `;
   prompt += `Follow ${roleSourceFile} as the canonical role contract. `;
   prompt += `Follow the selected project documents from .agenticloop/project.md and ${PROCESS_DOC_RELATIVE_PATH} as the Agentic Loop methodology.`;
   prompt += ' Path convention: toolkit source (agents/, skills/, backends/) lives under agenticloop/ (no leading dot); target project state (project.md, tasks/, decisions/, improvements/) lives under .agenticloop/ (leading dot). .agenticloop/agents, .agenticloop/skills, and .agenticloop/backends are invalid paths.';
@@ -84,6 +89,7 @@ function buildPrompt(roleName, roleSourceFile, requiredSkills, roleBody, skillsS
   if (roleBody) {
     prompt += `\n\n${rewriteOpencodeSkillReferences(roleBody, skillsSrc)}`;
   }
+  prompt += `\n\n${renderHostRoleCapabilityNotice('opencode', roleName, capabilityInventory)}`;
   return prompt;
 }
 
@@ -134,7 +140,7 @@ export function renderOpencodeCommandMarkdown() {
   ].join('\n');
 }
 
-function buildOpencodeAgentRecord(alConfig, repoRoot, roleName) {
+function buildOpencodeAgentRecord(alConfig, repoRoot, roleName, capabilityInventory) {
   const ocAdapter = alConfig.adapters?.opencode ?? {};
   const skillsSourceDir = alConfig.skills?.sourceDirectory ?? SKILLS_SOURCE_DIRECTORY;
   const { model, variant } = resolveRoleModel(alConfig, 'opencode', roleName, ocAdapter);
@@ -152,13 +158,20 @@ function buildOpencodeAgentRecord(alConfig, repoRoot, roleName) {
     // 'auto' is the shared unset fallback, not an explicit OpenCode variant;
     // only a configured reasoning effort renders frontmatter `variant`.
     variant: variant === 'auto' ? undefined : variant,
-    prompt: buildPrompt(roleName, sourceFile, requiredSkills, promptBody, skillsSourceDir),
+    prompt: buildPrompt(roleName, sourceFile, requiredSkills, promptBody, skillsSourceDir, capabilityInventory),
   };
 }
 
 export function generateOpencodeAgentRecords(alConfig, repoRoot) {
+  const ocAdapter = alConfig.adapters?.opencode ?? {};
+  const capabilityInventory = {
+    opencode: buildEffectiveHostRoleCapabilityInventory('opencode', ocAdapter),
+  };
   return Object.fromEntries(
-    OPENCODE_ROLE_NAMES.map(roleName => [roleName, buildOpencodeAgentRecord(alConfig, repoRoot, roleName)])
+    OPENCODE_ROLE_NAMES.map(roleName => [
+      roleName,
+      buildOpencodeAgentRecord(alConfig, repoRoot, roleName, capabilityInventory),
+    ])
   );
 }
 
@@ -216,6 +229,15 @@ export function generateOpencodeArtifacts(alConfig, repoRoot, outputDir) {
   mkdirSync(dirname(commandPath), { recursive: true });
   writeFileSync(commandPath, renderOpencodeCommandMarkdown(), 'utf-8');
   files.push(relative(outputDir, commandPath).replace(/\\/g, '/'));
+  const sidecarRelPath = hostRoleCapabilitySidecarRelativePath('opencode');
+  const sidecarPath = join(outputDir, sidecarRelPath);
+  mkdirSync(dirname(sidecarPath), { recursive: true });
+  writeFileSync(
+    sidecarPath,
+    renderHostRoleCapabilitySidecar('opencode', alConfig.adapters?.opencode ?? {}),
+    'utf-8'
+  );
+  files.push(sidecarRelPath);
 
   return { files };
 }
@@ -256,6 +278,14 @@ export function planOpencodeArtifacts(alConfig, repoRoot, outputDir) {
     marker: GENERATED_BANNER,
   });
   files.push(OPENCODE_COMMAND_RELATIVE_PATH);
+  const sidecarRelPath = hostRoleCapabilitySidecarRelativePath('opencode');
+  actions.push({
+    type: 'write-file',
+    adapter: 'opencode',
+    relPath: sidecarRelPath,
+    content: renderHostRoleCapabilitySidecar('opencode', alConfig.adapters?.opencode ?? {}),
+  });
+  files.push(sidecarRelPath);
 
   return { actions, files, adapter: 'opencode' };
 }

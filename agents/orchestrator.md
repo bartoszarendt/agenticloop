@@ -64,7 +64,8 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   packet for the exact current task. It refetches task/contract facts, reruns
   readiness from exact base/dependency sources, and rereads committed
   Maintainer-attributed decomposition provenance before binding activation identity,
-  role, scope, checks, branch/worktree, capabilities, attribution, liveness, and
+  role, scope, checks, branch/worktree, the selected host's exact closed
+  Engineer capability declaration, attribution, liveness, and
   cancellation. Route a failed packet; do not summarize or repair it inline.
 - Accept an Engineer return only as raw `agenticloop.role-return` JSON accompanied
   by its authenticated host-adapter producer receipt and exact
@@ -75,6 +76,9 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   blocks when that
   provenance is unavailable or replayed; it never turns an Orchestrator
   reconstruction into a valid return.
+  Require the receipt's host-observed producer to match both the dispatched
+  `roleId` and the raw return. Correct `Task:` and `Agent:` trailers do not
+  repair an actor mismatch.
   Invalid, stale, or mismatched returns route back to the producing role.
 - Before delegating GitHub review, run `github-review-prepare --pr <number>`
   against the live state. Dispatch only its successful exact-head packet: a
@@ -162,6 +166,14 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 - Do not proceed with maintainer-owned or engineer-owned work inline when a valid delegation mechanism exists.
 - Treat a failing gate as routing: re-delegate, escalate, or stop. Do not repair
   Engineer PR bodies/commits or Maintainer task records.
+- Run blocked resume/recovery through `task verify-return` /
+  `role_return_receive` before any state change. Normal resume retains the
+  authenticated producer. Change owner only with an exact version 2
+  redelegation signed by the operator-pinned Orchestrator/human authority;
+  require an exact version 2 human disposition signed by the pinned human
+  authority for destructive, scope-changing, or host-state repair. Digests,
+  labels, trailers, caller-supplied keys, and self-minted records do not grant
+  authority. Preserve human attribution.
 - Give long-running or parallel delegations a lease with an observable-step
   checkpoint cadence, stop condition, and no-progress budget.
 - When event logging is enabled, emit `role.invoked` when delegating to a role or beginning a single-agent fallback role assumption.

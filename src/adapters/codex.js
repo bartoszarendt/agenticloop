@@ -62,6 +62,16 @@ import {
   normalizeCodexModel,
   normalizeCodexReasoningEffort,
 } from '../codex-models.js';
+import {
+  buildEffectiveHostRoleCapabilityInventory,
+  hostRoleCapabilitySidecarRelativePath,
+  renderHostRoleCapabilityNotice,
+  renderHostRoleCapabilitySidecar,
+} from '../host-role-capabilities.js';
+import {
+  getWorkflowRoleLabel,
+  WORKFLOW_ROLE_IDS,
+} from '../workflow-roles.js';
 
 const CODEX_PUBLIC_SKILL_NAME = 'agenticloop';
 const CODEX_PUBLIC_SKILL_DESCRIPTION = AGENTIC_LOOP_OPERATION_DESCRIPTION;
@@ -87,10 +97,6 @@ function quoteTomlString(value) {
 
 function quoteYamlScalar(value) {
   return JSON.stringify(String(value));
-}
-
-function capitalize(value) {
-  return value ? value[0].toUpperCase() + value.slice(1) : '';
 }
 
 function replaceAll(value, search, replacement) {
@@ -440,7 +446,8 @@ function buildCodexDeveloperInstructions(
   roleBody,
   skillReferenceMap,
   agentNames,
-  backendEntries
+  backendEntries,
+  capabilityInventory
 ) {
   const maintainerAgent = agentNames.maintainer ?? 'maintainer';
   const engineerAgent = agentNames.engineer ?? 'engineer';
@@ -451,7 +458,7 @@ function buildCodexDeveloperInstructions(
     codexSkillReferenceAbsolutePath
   );
   const lines = [];
-  lines.push(`You are the Agentic Loop ${capitalize(roleName)} custom agent for the target project in Codex TUI.`);
+  lines.push(`You are the Agentic Loop ${getWorkflowRoleLabel(roleName)} custom agent for the target project in Codex TUI.`);
   lines.push(`Canonical role source: \`${roleSourceFile}\`.`);
   lines.push('Read `.agenticloop/project.md` before acting for setup status, task backend, document selections, naming, grouping, and event logging.');
   lines.push(`Follow \`${PROCESS_DOC_RELATIVE_PATH}\` as the workflow methodology.`);
@@ -496,6 +503,8 @@ function buildCodexDeveloperInstructions(
     lines.push('Return one consolidated report to the orchestrator. Persistence into the audit record is mechanical and belongs to the orchestrator or the `agenticloop audit` CLI.');
   }
 
+  lines.push('');
+  lines.push(renderHostRoleCapabilityNotice('codex', roleName, capabilityInventory));
   lines.push('');
   lines.push('Canonical role contract follows with Codex event logging command-resolution guidance:');
   lines.push('');
@@ -647,10 +656,12 @@ export function generateCodexArtifacts(alConfig, repoRoot, outputDir) {
   assertSharedAgenticLoopPluginCompatibility(alConfig);
 
   const codexAdapter = alConfig.adapters?.codex ?? {};
-  const roles = alConfig.roles ?? {};
+  const capabilityInventory = {
+    codex: buildEffectiveHostRoleCapabilityInventory('codex', codexAdapter),
+  };
   const roleBindings = codexAdapter.roleBindings ?? {};
   const agentNames = Object.fromEntries(
-    Object.keys(roles).map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
+    WORKFLOW_ROLE_IDS.map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
   );
   const skillEntries = readCanonicalSkillEntries(repoRoot, alConfig);
   const backendEntries = readCanonicalBackendEntries(repoRoot, alConfig);
@@ -671,7 +682,7 @@ export function generateCodexArtifacts(alConfig, repoRoot, outputDir) {
 
   const agentsDir = join(outputDir, '.codex', 'agents');
   mkdirSync(agentsDir, { recursive: true });
-  for (const [roleName] of Object.entries(roles)) {
+  for (const roleName of WORKFLOW_ROLE_IDS) {
     const agentName = roleBindings[roleName]?.agent ?? roleName;
     const { description, sourceFile, promptBody, requiredSkills } = buildRoleRecord(
       alConfig,
@@ -685,7 +696,8 @@ export function generateCodexArtifacts(alConfig, repoRoot, outputDir) {
       promptBody,
       absoluteSkillReferenceMap,
       agentNames,
-      backendEntries
+      backendEntries,
+      capabilityInventory
     );
     const modelSettings = resolveRoleModel(alConfig, 'codex', roleName, codexAdapter);
     const toml = roleToToml(
@@ -718,6 +730,11 @@ export function generateCodexArtifacts(alConfig, repoRoot, outputDir) {
       backendEntries
     ));
   }
+  const sidecarRelPath = hostRoleCapabilitySidecarRelativePath('codex');
+  const sidecarPath = join(outputDir, sidecarRelPath);
+  mkdirSync(join(outputDir, '.agenticloop', 'host-role-capabilities'), { recursive: true });
+  writeFileSync(sidecarPath, renderHostRoleCapabilitySidecar('codex', codexAdapter), 'utf-8');
+  files.push(sidecarRelPath);
 
   return { files };
 }
@@ -732,10 +749,12 @@ export function generateCodexArtifacts(alConfig, repoRoot, outputDir) {
  */
 export function planCodexArtifacts(alConfig, repoRoot, outputDir) {
   const codexAdapter = alConfig.adapters?.codex ?? {};
-  const roles = alConfig.roles ?? {};
+  const capabilityInventory = {
+    codex: buildEffectiveHostRoleCapabilityInventory('codex', codexAdapter),
+  };
   const roleBindings = codexAdapter.roleBindings ?? {};
   const agentNames = Object.fromEntries(
-    Object.keys(roles).map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
+    WORKFLOW_ROLE_IDS.map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
   );
   const skillEntries = readCanonicalSkillEntries(repoRoot, alConfig);
   const backendEntries = readCanonicalBackendEntries(repoRoot, alConfig);
@@ -759,14 +778,14 @@ export function planCodexArtifacts(alConfig, repoRoot, outputDir) {
   actions.push({ type: 'clear-owned-directory', adapter: 'codex', relPath: 'plugins/agenticloop' });
 
   // .codex/agents/<name>.toml
-  for (const [roleName] of Object.entries(roles)) {
+  for (const roleName of WORKFLOW_ROLE_IDS) {
     const agentName = roleBindings[roleName]?.agent ?? roleName;
     const { description, sourceFile, promptBody, requiredSkills } = buildRoleRecord(
       alConfig, repoRoot, roleName
     );
     const developerInstructions = buildCodexDeveloperInstructions(
       roleName, sourceFile, requiredSkills, promptBody,
-      absoluteSkillReferenceMap, agentNames, backendEntries
+      absoluteSkillReferenceMap, agentNames, backendEntries, capabilityInventory
     );
     const modelSettings = resolveRoleModel(alConfig, 'codex', roleName, codexAdapter);
     const toml = roleToToml(agentName, { description, developerInstructions }, modelSettings);
@@ -918,6 +937,14 @@ export function planCodexArtifacts(alConfig, repoRoot, outputDir) {
     });
     files.push('.agents/plugins/marketplace.json');
   }
+  const sidecarRelPath = hostRoleCapabilitySidecarRelativePath('codex');
+  actions.push({
+    type: 'write-file',
+    adapter: 'codex',
+    relPath: sidecarRelPath,
+    content: renderHostRoleCapabilitySidecar('codex', codexAdapter),
+  });
+  files.push(sidecarRelPath);
 
   return { actions, files, adapter: 'codex' };
 }

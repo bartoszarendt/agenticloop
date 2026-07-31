@@ -158,6 +158,7 @@ describe('generateCursorArtifacts', () => {
     assert.match(orchestrator, /^readonly: true$/m);
     assert.match(maintainer, /^readonly: false$/m);
     assert.match(engineer, /^readonly: false$/m);
+    assert.match(orchestrator, /implementation_mutate: denied \(enforced\)/);
     assert.doesNotMatch(engineer, /^reasoningEffort:/m);
     assert.doesNotMatch(engineer, /^variant:/m);
   });

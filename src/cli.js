@@ -143,6 +143,7 @@ import { removeAgenticLoop } from './remove.js';
 import { applyGuidance, checkGuidance, removeGuidance } from './guidance.js';
 import { preserveExistingAdapterModelSettings } from './adapter-model-preservation.js';
 import { reconcileTargetAdapterConfig } from './setup-generate.js';
+import { WORKFLOW_ROLE_IDS } from './workflow-roles.js';
 import {
   appendEventLog,
   auditTaskEventLog,
@@ -547,7 +548,7 @@ async function cmdInit(args, io) {
   if (setup && errors.length === 0 && adapter && adapter !== 'all') {
     const alConfig = loadAlConfigOrNull(target, '', io);
     if (alConfig) {
-      const roles = Object.keys(alConfig.roles ?? {});
+      const roles = WORKFLOW_ROLE_IDS;
       const prompts = io.createPrompts();
       try {
         const mutations = await promptModelSettings(roles, adapter, prompts);
@@ -2683,7 +2684,7 @@ async function cmdConfigureModels(args, io) {
     if (!alConfig) {
       return 1;
     }
-    const roles = Object.keys(alConfig.roles ?? {});
+    const roles = WORKFLOW_ROLE_IDS;
     const currentSettings = alConfig.adapters?.[adapter]?.roleSettings ?? {};
     const prompts = io.createPrompts();
     try {

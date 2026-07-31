@@ -20,12 +20,18 @@ import { gitTreeObjectId, isGitObjectId, sameGitObjectFormat } from './git-oid.j
 import { deepFreeze, frozenClone } from './immutable.js';
 import { createDiagnostic } from './repair-policy.js';
 import {
+  authorizeBlockedResultRecovery,
+  authorizeBlockedResultResume,
+} from './blocked-result-authority.js';
+import {
   createValidationResult,
   validateValidationResult,
   validationResultDigest,
 } from './result-envelope.js';
 import { fileMatchesScopePattern, parseDeviations } from './scope-matcher.js';
 import {
+  HostReceiptStaleVersionError,
+  HostProducerMismatchError,
   signActivationCapture,
   verifyActivationCaptureSignature,
   verifyHostHandoffReceipt,
@@ -49,11 +55,19 @@ import {
 } from './required-checks.js';
 import { validateTaskRecord } from './validate-config.js';
 import { WORKFLOW_ROLE_SET } from './workflow-vocabulary.js';
+import {
+  HOST_ROLE_CAPABILITIES,
+  createDegradedEnforcementReports,
+  validateDegradedEnforcementReport,
+  validateHostRoleCapabilityDeclaration,
+} from './host-role-capabilities.js';
 
 export const ACTIVATION_CAPTURE_KIND = 'agenticloop.activation-capture';
 export const ACTIVATION_CAPTURE_SCHEMA_VERSION = 2;
 export const DISPATCH_PREPARATION_KIND = 'agenticloop.role-preparation';
-export const DISPATCH_PREPARATION_SCHEMA_VERSION = 2;
+export const BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION = 2;
+export const LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION = 3;
+export const DISPATCH_PREPARATION_SCHEMA_VERSION = 4;
 export const ROLE_RETURN_KIND = 'agenticloop.role-return';
 export const ROLE_RETURN_SCHEMA_VERSION = 2;
 
@@ -365,6 +379,26 @@ function validation(command, ok, evidenceState, disposition, findings, domain = 
     diagnostics,
     ...domain,
   });
+}
+
+function degradedWarningDiagnostics(reports) {
+  return (reports ?? []).map(report => createDiagnostic({
+    level: 'warning',
+    code: report.diagnosticCode,
+    message: `${report.host}/${report.roleId} action '${report.action}' is ${report.enforcement}; ${report.detectionBoundary} must evaluate compatible authenticated actor/evidence. Recovery: ${report.recoveryRoute}`,
+    evidence: {
+      state: 'current',
+      supplied: true,
+      rollbackAuthorized: false,
+      host: report.host,
+      roleId: report.roleId,
+      action: report.action,
+      enforcement: report.enforcement,
+      declarationDigest: report.declarationDigest,
+      detectionBoundary: report.detectionBoundary,
+      recoveryRoute: report.recoveryRoute,
+    },
+  }));
 }
 
 /** Build a failure envelope from typed findings; nothing is reclassified here. */
@@ -817,12 +851,82 @@ function validateRepositoryBinding(value, findings, label = 'dispatch repository
   validateCleanStateBinding(value?.cleanState, findings, `${label} cleanState`);
 }
 
-function validateAssignment(value, { backend, taskId, repository }, findings) {
+function validateAssignment(
+  value,
+  { backend, taskId, repository, hostRoleCapabilities = HOST_ROLE_CAPABILITIES },
+  findings
+) {
   exactKeys(value, [
-    'roleId', 'worktree', 'branch', 'requiredCapabilities', 'canonicalReferences',
+    'roleId', 'host', 'hostRoleCapability', 'degradedEnforcementReports',
+    'worktree', 'branch', 'requiredCapabilities', 'canonicalReferences',
     'attribution', 'liveness', 'cancellationBoundary', 'invocationId',
   ], 'dispatch assignment', findings);
   if (value?.roleId !== 'engineer' || !WORKFLOW_ROLE_SET.has(value?.roleId)) findings.malformed('dispatch assignment must name immutable roleId engineer');
+  if (typeof value?.host !== 'string' || !value.host.trim()) {
+    findings.malformed('dispatch assignment host is required', { code: 'capability.declaration.invalid' });
+  } else {
+    const declaration = validateHostRoleCapabilityDeclaration(value?.hostRoleCapability, {
+      expectedHost: value.host,
+      expectedRoleId: value.roleId,
+    });
+    if (!declaration.ok) {
+      findings.malformed(
+        `dispatch assignment host-role capability declaration is invalid: ${declaration.errors.join('; ')}`,
+        { code: 'capability.declaration.invalid' }
+      );
+    } else {
+      let canonical = null;
+      try {
+        canonical = hostRoleCapabilities?.[value.host]?.[value.roleId] ?? null;
+        if (!canonical) throw new TypeError(
+          `no effective host-role capability declaration for '${String(value.host)}/${String(value.roleId)}'`
+        );
+      } catch (error) {
+        findings.malformed(error.message, { code: 'capability.declaration.invalid' });
+      }
+      if (canonical && !sameCanonical(value.hostRoleCapability, canonical)) {
+        findings.malformed(
+          'dispatch assignment host-role capability declaration must equal the canonical shipped declaration',
+          { code: 'capability.declaration.invalid' }
+        );
+      }
+      const reports = Array.isArray(value.degradedEnforcementReports)
+        ? value.degradedEnforcementReports
+        : [];
+      if (!Array.isArray(value.degradedEnforcementReports)) {
+        findings.malformed(
+          'dispatch assignment degradedEnforcementReports must be an array',
+          { code: 'capability.declaration.invalid' }
+        );
+      } else {
+        for (const report of reports) {
+          const reportValidation = validateDegradedEnforcementReport(report, {
+            declaration: value.hostRoleCapability,
+          });
+          if (!reportValidation.ok) {
+            findings.malformed(
+              `dispatch assignment degraded-enforcement report is invalid: ${reportValidation.errors.join('; ')}`,
+              { code: 'capability.declaration.invalid' }
+            );
+          }
+        }
+        const expectedReports = createDegradedEnforcementReports(value.hostRoleCapability);
+        if (!sameCanonical(reports, expectedReports)) {
+          findings.malformed(
+            'dispatch assignment degradedEnforcementReports must equal the canonical declaration-derived reports',
+            { code: 'capability.declaration.invalid' }
+          );
+        }
+      }
+      const implementation = value.hostRoleCapability?.actionBindings?.find(item => item.action === 'implementation_mutate');
+      if (implementation?.policy !== 'allowed') {
+        findings.negative(
+          'dispatch assignment role is denied implementation mutation by the bound host-role capability declaration',
+          { code: 'capability.action.denied' }
+        );
+      }
+    }
+  }
   if (typeof value?.invocationId !== 'string' || !/^invocation:[0-9a-f-]{36}$/.test(value.invocationId)) {
     findings.malformed('dispatch assignment invocationId must be an immutable invocation UUID');
   }
@@ -929,7 +1033,16 @@ function evaluateInitialState({ runGit, scopePatterns, intendedCreations, priorG
 }
 
 function dispatchBindings(input, findings) {
-  const { snapshot, activation, readiness, decomposition, assignment, repository, capabilities } = input;
+  const {
+    snapshot,
+    activation,
+    readiness,
+    decomposition,
+    assignment,
+    repository,
+    capabilities,
+    hostRoleCapabilities,
+  } = input;
   const capture = activationCaptureDisposition(activation, {
     capabilities,
     intendedTaskId: snapshot?.taskId,
@@ -950,7 +1063,12 @@ function dispatchBindings(input, findings) {
     findings.changed('activation capture target repository does not match dispatch repository');
   }
   validateDecomposition(decomposition, snapshot?.taskId, findings);
-  validateAssignment(assignment, { backend: snapshot?.backend, taskId: snapshot?.taskId, repository }, findings);
+  validateAssignment(assignment, {
+    backend: snapshot?.backend,
+    taskId: snapshot?.taskId,
+    repository,
+    hostRoleCapabilities,
+  }, findings);
   if (contract?.projection?.activation_input_digest !== activation?.normalizedActivationDigest) {
     findings.changed('task contract activation_input_digest does not match verified activation digest');
   }
@@ -1041,7 +1159,15 @@ function packetFromBindings({ snapshot, activation, readiness, decomposition, as
 
 /** Public canonical digest helper for persisted packet readers and fixtures. */
 export function dispatchPreparationDigest(packet) {
-  return semanticDigest('agenticloop.role-preparation.v2', projection(packet));
+  return semanticDigest('agenticloop.role-preparation.v4', projection(packet));
+}
+
+export function legacyDispatchPreparationDigest(packet, schemaVersion = packet?.schemaVersion) {
+  if (![BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION, LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION]
+    .includes(schemaVersion)) {
+    return null;
+  }
+  return semanticDigest(`agenticloop.role-preparation.v${schemaVersion}`, projection(packet));
 }
 
 /**
@@ -1093,6 +1219,19 @@ export function prepareRoleDispatch(input = {}, options = {}) {
       return singleFailure(command, state, disposition, `authoritative refetch failed: ${error.message}`);
     }
     const findings = findingSet(command);
+    let boundAssignment = assignment;
+    try {
+      boundAssignment = {
+        ...assignment,
+        degradedEnforcementReports: createDegradedEnforcementReports(assignment?.hostRoleCapability),
+      };
+    } catch (error) {
+      findings.malformed(
+        `dispatch assignment host-role capability declaration is invalid: ${error.message}`,
+        { code: 'capability.declaration.invalid' }
+      );
+      return failure(command, findings);
+    }
     // Task scope decides which untracked additions are relevant, so it is read
     // from the refetched record rather than supplied by the dispatch caller.
     const scopeContract = taskContractDigest(snapshot?.body);
@@ -1106,11 +1245,19 @@ export function prepareRoleDispatch(input = {}, options = {}) {
     if (!cleanState) return failure(command, findings);
     const bound = { ...repository, cleanState };
     const checked = dispatchBindings({
-      snapshot, activation, readiness, decomposition, assignment, repository: bound, capabilities: options.capabilities,
+      snapshot,
+      activation,
+      readiness,
+      decomposition,
+      assignment: boundAssignment,
+      repository: bound,
+      capabilities: options.capabilities,
+      hostRoleCapabilities: options.hostRoleCapabilities,
     }, findings);
     if (findings.length) return failure(command, findings);
     const packet = packetFromBindings({
-      snapshot, activation, readiness, decomposition, assignment, repository: bound, contract: checked.contract,
+      snapshot, activation, readiness, decomposition, assignment: boundAssignment,
+      repository: bound, contract: checked.contract,
     });
     const packetValidation = validateDispatchPreparation(packet, options);
     if (!packetValidation.ok) {
@@ -1118,7 +1265,14 @@ export function prepareRoleDispatch(input = {}, options = {}) {
       emitted.extend(packetValidation.findings);
       return failure(command, emitted);
     }
-    return { ok: true, packet: frozenClone(packet), validation: validation(command, true, 'current', 'proceed', null) };
+    return {
+      ok: true,
+      packet: frozenClone(packet),
+      validation: validation(command, true, 'current', 'proceed', null, {
+        warningDiagnostics: degradedWarningDiagnostics(boundAssignment.degradedEnforcementReports),
+        degradedEnforcementReports: boundAssignment.degradedEnforcementReports,
+      }),
+    };
   } catch (error) {
     return singleFailure(command, 'malformed', 'rejected', `dispatch preparation could not be evaluated: ${error.message}`);
   }
@@ -1131,13 +1285,71 @@ export function prepareRoleDispatch(input = {}, options = {}) {
  * @param {any} packet
  * @param {{ capabilities?: Record<string, any> }} [options]
  */
-export function validateDispatchPreparation(packet, options = {}) {
+function closedKeys(value, expected) {
+  if (!isObject(value)) return false;
+  const wanted = new Set(expected);
+  const actual = Object.keys(value);
+  return actual.length === wanted.size && actual.every(key => wanted.has(key));
+}
+
+const DISPATCH_FIELDS = Object.freeze([
+  'kind', 'schemaVersion', 'packetId', 'backend', 'task', 'activation', 'readiness',
+  'decomposition', 'assignment', 'repository', 'freshness', 'digest',
+]);
+const V2_ASSIGNMENT_FIELDS = Object.freeze([
+  'roleId', 'worktree', 'branch', 'requiredCapabilities', 'canonicalReferences',
+  'attribution', 'liveness', 'cancellationBoundary', 'invocationId',
+]);
+const V3_ASSIGNMENT_FIELDS = Object.freeze([
+  'roleId', 'host', 'hostRoleCapability',
+  'worktree', 'branch', 'requiredCapabilities', 'canonicalReferences',
+  'attribution', 'liveness', 'cancellationBoundary', 'invocationId',
+]);
+
+function legacyDispatchCandidate(packet, schemaVersion) {
+  const assignmentFields = schemaVersion === BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION
+    ? V2_ASSIGNMENT_FIELDS
+    : V3_ASSIGNMENT_FIELDS;
+  return packet?.kind === DISPATCH_PREPARATION_KIND &&
+    packet?.schemaVersion === schemaVersion &&
+    closedKeys(packet, DISPATCH_FIELDS) &&
+    closedKeys(packet.assignment, assignmentFields) &&
+    typeof packet.packetId === 'string' &&
+    /^dispatch:[0-9a-f-]{36}$/.test(packet.packetId) &&
+    packet.digest === legacyDispatchPreparationDigest(packet, schemaVersion);
+}
+
+function currentProjectionOfLegacy(packet, schemaVersion, options) {
+  const projected = structuredClone(packet);
+  projected.schemaVersion = DISPATCH_PREPARATION_SCHEMA_VERSION;
+  if (schemaVersion === BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION) {
+    const inventory = options.hostRoleCapabilities ?? HOST_ROLE_CAPABILITIES;
+    const host = inventory.opencode ? 'opencode' : Object.keys(inventory)[0];
+    const declaration = inventory?.[host]?.[projected.assignment.roleId];
+    if (!declaration) return null;
+    projected.assignment.host = host;
+    projected.assignment.hostRoleCapability = structuredClone(declaration);
+  }
+  projected.assignment.degradedEnforcementReports =
+    createDegradedEnforcementReports(projected.assignment.hostRoleCapability);
+  projected.digest = dispatchPreparationDigest(projected);
+  return projected;
+}
+
+function staleDispatchVersionResult(observedVersion) {
+  const findings = findingSet('task prepare-dispatch');
+  findings.changed(
+    `dispatch preparation schemaVersion ${observedVersion} is stale; ` +
+    `regenerate the packet as schemaVersion ${DISPATCH_PREPARATION_SCHEMA_VERSION} before dispatch or return import`,
+    { code: 'dispatch.packet.stale', disposition: 'superseded' }
+  );
+  return { ok: false, errors: findings.messages, findings: findings.items };
+}
+
+function validateCurrentDispatchPreparation(packet, options = {}) {
   const findings = findingSet('task prepare-dispatch');
   try {
-    const shapeOk = exactKeys(packet, [
-      'kind', 'schemaVersion', 'packetId', 'backend', 'task', 'activation', 'readiness',
-      'decomposition', 'assignment', 'repository', 'freshness', 'digest',
-    ], 'dispatch preparation', findings);
+    const shapeOk = exactKeys(packet, DISPATCH_FIELDS, 'dispatch preparation', findings);
     if (packet?.kind !== DISPATCH_PREPARATION_KIND) findings.malformed(`dispatch preparation kind must be '${DISPATCH_PREPARATION_KIND}'`);
     if (packet?.schemaVersion !== DISPATCH_PREPARATION_SCHEMA_VERSION) findings.malformed(`dispatch preparation schemaVersion must be ${DISPATCH_PREPARATION_SCHEMA_VERSION}`);
     if (typeof packet?.packetId !== 'string' || !/^dispatch:[0-9a-f-]{36}$/.test(packet.packetId)) findings.malformed('dispatch preparation packetId is invalid');
@@ -1182,7 +1394,12 @@ export function validateDispatchPreparation(packet, options = {}) {
     if (packet?.activation?.repositoryIdentity !== targetRepositoryIdentity(packet?.repository?.worktree)) {
       findings.changed('packet activation target repository does not match dispatch repository');
     }
-    validateAssignment(packet?.assignment, { backend: packet?.backend, taskId: packet?.task?.id, repository: packet?.repository }, findings);
+    validateAssignment(packet?.assignment, {
+      backend: packet?.backend,
+      taskId: packet?.task?.id,
+      repository: packet?.repository,
+      hostRoleCapabilities: options.hostRoleCapabilities,
+    }, findings);
     const baseIdentity = gitTreeObjectId(packet?.readiness?.evidence?.base?.identity);
     if (!baseIdentity) findings.malformed('packet readiness base identity must be a full git-tree identity');
     else if (packet?.repository?.baseTree !== baseIdentity) findings.changed('packet repository baseTree must equal readiness base Git-tree identity');
@@ -1195,6 +1412,25 @@ export function validateDispatchPreparation(packet, options = {}) {
     findings.malformed(`dispatch preparation could not be validated: ${error.message}`);
   }
   return { ok: findings.length === 0, errors: findings.messages, findings: findings.items };
+}
+
+export function validateDispatchPreparation(packet, options = {}) {
+  for (const version of [
+    BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION,
+    LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION,
+  ]) {
+    if (!legacyDispatchCandidate(packet, version)) continue;
+    try {
+      const projected = currentProjectionOfLegacy(packet, version, options);
+      if (projected && validateCurrentDispatchPreparation(projected, options).ok) {
+        return staleDispatchVersionResult(version);
+      }
+    } catch {
+      // A structurally plausible but semantically malformed packet is not
+      // promoted into the trusted legacy class.
+    }
+  }
+  return validateCurrentDispatchPreparation(packet, options);
 }
 
 /**
@@ -1543,6 +1779,13 @@ export function receiveRoleReturn(input = {}, options = {}) {
       refetchRepositoryEvidence,
       producerReceipt,
       resolveTrustedAdapter,
+      requestedOwner,
+      redelegationAuthority = null,
+      recovery = null,
+      humanDisposition = null,
+      resolveTrustedAuthority,
+      workflowRoleRegistry,
+      now = Date.now(),
       runGit = null,
     } = input;
     let wire;
@@ -1624,15 +1867,126 @@ export function receiveRoleReturn(input = {}, options = {}) {
         packet,
         roleReturn: wire,
         repositoryEvidence,
+        now,
       });
     } catch (error) {
-      return singleFailure(command, 'negative', 'rejected', `host producer authentication failed: ${error.message}`, producerDomain);
+      const producerMismatch = error instanceof HostProducerMismatchError;
+      const staleReceipt = error instanceof HostReceiptStaleVersionError;
+      return singleFailure(
+        command,
+        staleReceipt ? 'stale' : 'negative',
+        staleReceipt ? 'superseded' : 'rejected',
+        producerMismatch || staleReceipt
+          ? error.message
+          : `host producer authentication failed: ${error.message}`,
+        producerDomain,
+        producerMismatch || staleReceipt ? error.code : 'role_return.invalid'
+      );
     }
     const findings = findingSet(command);
     validateCurrentTask(snapshot, findings);
     validateReturnAgainstCurrent({ wire, packet, snapshot, repositoryEvidence, producerEvidence, runGit }, findings);
+    const degradedReports = packet.assignment.degradedEnforcementReports;
+    const implementation = packet.assignment.hostRoleCapability.actionBindings
+      .find(binding => binding.action === 'implementation_mutate');
+    if ((wire.changedPaths?.length ?? 0) > 0 && implementation?.policy !== 'allowed') {
+      findings.negative(
+        `authenticated role '${wire.producerRole}' returned implementation changes while implementation_mutate is ${implementation?.policy ?? 'unbound'}`,
+        { code: 'capability.action.denied', disposition: 'rejected' }
+      );
+    }
     if (findings.length) return failure(command, findings, { producerRole: wire.producerRole });
-    return { ok: true, roleReturn: deepFreeze(wire), validation: validation(command, true, 'current', 'proceed', null) };
+    let blockedAuthority = null;
+    if (wire.disposition === 'blocked') {
+      if (recovery !== null) {
+        if (requestedOwner !== undefined || redelegationAuthority !== null) {
+          return singleFailure(
+            command,
+            'malformed',
+            'rejected',
+            'blocked recovery cannot simultaneously request workflow-role redelegation',
+            { producerRole: wire.producerRole },
+            'human_disposition.invalid'
+          );
+        }
+        blockedAuthority = authorizeBlockedResultRecovery({
+          blockedReturn: wire,
+          recovery,
+          humanDisposition,
+          resolveTrustedAuthority,
+          now,
+          registry: workflowRoleRegistry,
+        });
+      } else {
+        if (humanDisposition !== null) {
+          return singleFailure(
+            command,
+            'malformed',
+            'rejected',
+            'human disposition requires an exact blocked recovery request',
+            { producerRole: wire.producerRole },
+            'human_disposition.invalid'
+          );
+        }
+        if (redelegationAuthority !== null &&
+            (requestedOwner === undefined || requestedOwner === wire.producerRole)) {
+          return singleFailure(
+            command,
+            'malformed',
+            'rejected',
+            'redelegation authority requires an explicit owner change from the authenticated producer role',
+            { producerRole: wire.producerRole },
+            'blocked_result.owner_mismatch'
+          );
+        }
+        blockedAuthority = authorizeBlockedResultResume({
+          blockedReturn: wire,
+          requestedOwner: requestedOwner ?? wire.producerRole,
+          redelegationAuthority,
+          resolveTrustedAuthority,
+          now,
+          registry: workflowRoleRegistry,
+        });
+      }
+      const authorityValidation = blockedAuthority.validation;
+      if (!blockedAuthority.ok) {
+        const authorityFindings = findingSet(command);
+        for (const diagnostic of authorityValidation.diagnostics ?? []) {
+          authorityFindings.add(
+            diagnostic.evidence?.state ?? authorityValidation.evidenceState,
+            diagnostic.message,
+            { code: diagnostic.code, disposition: authorityValidation.disposition }
+          );
+        }
+        return failure(command, authorityFindings, { producerRole: wire.producerRole });
+      }
+    } else if (
+      requestedOwner !== undefined ||
+      redelegationAuthority !== null ||
+      recovery !== null ||
+      humanDisposition !== null
+    ) {
+      return singleFailure(
+        command,
+        'malformed',
+        'rejected',
+        'blocked-result authority inputs cannot be applied to a non-blocked role return',
+        { producerRole: wire.producerRole },
+        'role_return.invalid'
+      );
+    }
+    const warningDiagnostics = degradedWarningDiagnostics(degradedReports);
+    return {
+      ok: true,
+      roleReturn: deepFreeze(wire),
+      blockedAuthority: blockedAuthority ? blockedAuthority.value : null,
+      validation: validation(command, true, 'current', 'proceed', null, {
+        producerRole: wire.producerRole,
+        blockedAuthority: blockedAuthority ? structuredClone(blockedAuthority.value) : null,
+        degradedEnforcementReports: degradedReports,
+        warningDiagnostics,
+      }),
+    };
   } catch (error) {
     return singleFailure(command, 'malformed', 'rejected', `role return could not be evaluated: ${error.message}`, producerDomain);
   }

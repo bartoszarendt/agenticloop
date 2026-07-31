@@ -53,6 +53,15 @@ acting.
 - For a multi-task unit, fill [[task-record-contract]] `## Parallel Safety` with owned paths/backend objects, dependencies, shared/generated and writable test surfaces, decision scope, shared design questions, eligibility/reason, knowledge coupling (`independent | coupled | unknown`), shared assumptions, and sibling-affecting discoveries. Coupled work uses read-only diagnosis, join reconciliation, then serial or newly justified parallel implementation. Resolve code/collision/knowledge unknowns with one bounded read-only pass; remaining unknowns recommend serial. Host/lane unknowns stay with orchestrator. For a managed join, Maintainer alone classifies code/collision joinability and exact operations; [[parallel-delegation]] owns the full law.
 - After the ready set for a bounded multi-task unit exists, return source proposals and a batch-level recommendation for the orchestrator: eligible groupings with collision and knowledge-coupling rationale, the two-wave recommendation for coupled groupings, or concrete serial reasons. This recommendation is input only; the orchestrator owns the current scan decision.
 - Create or refine task records with concrete scope, out of scope, acceptance criteria, required checks, proof pressure when the work is ambiguous or long-running, and expected files or areas.
+- Use the host capability declaration's task/workflow mutation, review, and
+  closeout path. That responsibility does not grant general implementation
+  mutation outside the bounded Maintainer Review Fixup.
+- When explicitly redelegated a blocked result, require the typed authority to
+  bind the exact return, packet, producer, target role, issuer, issue/expiry
+  times, and invalidators before changing ownership. Accept it only after
+  `role_return_receive` verifies its Ed25519 signature and current revocation
+  state against the fixed operator-pinned authority; record digest consistency
+  alone is not authorization.
 - Before `agent-ready`, run readiness and establish the trusted baseline. Own
   correction/recovery provenance; never widen `allowed_paths`.
 - Use the confirmed development stage to shape task boundaries, expected core areas,

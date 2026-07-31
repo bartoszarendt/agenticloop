@@ -350,6 +350,15 @@ command reruns readiness from the exact Git tree and dependency snapshot, reads
 decomposition from its committed `sourceRef`, and requires the source commit to
 carry canonical `Task:` and `Agent: maintainer` attribution before emitting a versioned
 `agenticloop.role-preparation` packet only when every binding is current. The
+current packet is schema version 4 and binds the selected host, the exact closed
+Engineer capability declaration and digest, and the canonical derived
+degraded-enforcement report inventory. The real shipped baseline was schema
+version 2. Authentic version 2 packets, and authentic transitional version 3
+packets, fail with typed `dispatch.packet.stale`; regenerate them as version 4
+instead of repairing them in place. Merely setting an old version number on
+malformed input does not classify it as a legacy packet. A missing, malformed, non-canonical, or
+implementation-denying declaration fails before dispatch.
+The
 Engineer revalidates it with `task prepare-dispatch T-001 --packet <packet.json>
 --role engineer [--host-trust-store <expected-registered-path>]` before
 mutation. A scaffold made with `task new --scaffold` has no verified activation
@@ -360,7 +369,7 @@ A raw return is checked with the exact repository evidence and an authenticated
 host-adapter receipt:
 
 ```text
-npx agenticloop task verify-return T-001 --packet packet.json --return role-return.json [--repository-evidence repository-evidence.json] [--producer-receipt producer-receipt.json] [--host-trust-store <expected-registered-path>] --json
+npx agenticloop task verify-return T-001 --packet packet.json --return role-return.json [--repository-evidence repository-evidence.json] [--producer-receipt producer-receipt.json] [--resume-owner <role-id> --redelegation-authority redelegation.json | --recovery-request recovery.json --human-disposition disposition.json --human-disposition-authority <authority-id> --human-disposition-key-id <key-id>] [--host-trust-store <expected-registered-path>] --json
 ```
 
 The CLI never receives a signing secret. The operator registry contains only
@@ -368,14 +377,54 @@ Ed25519 public keys and scopes them to one canonical target checkout. A host or
 OS policy must keep that fixed registry non-writable by agents; the CLI rejects
 caller-selected alternative stores. The
 receipt binds its target repository, adapter/key identity, invocation ID, packet,
-return, liveness, and canonical repository evidence digest. Before authenticating
-that receipt, the files verifier
-reconstructs the current branch, head, changed paths, durable commit range, and
-canonical attribution from Git and rejects dirty tracked or untracked in-scope
-state. Missing, stale, or invalid authentication blocks rather than trusting
-Orchestrator assertions. A successful result uses
+return, host-observed producer role, liveness, and canonical repository evidence
+digest. Receipt-controlled semantic fields are evaluated only after the pinned
+key verifies the signature over canonical bytes. A forged `producerRole`
+therefore yields generic authentication failure; an authentically signed wrong
+producer yields `role_return.producer_mismatch`. After authentication, the
+observed producer must match both packet assignment and return claim;
+cooperative `Task:`/`Agent:` trailers cannot repair a mismatch. The files
+verifier also reconstructs the current branch, head, changed paths, durable
+commit range, and canonical attribution from Git and rejects dirty tracked or
+untracked in-scope state. Missing, stale, or invalid authentication blocks
+rather than trusting Orchestrator assertions. The shipped receipt baseline,
+schema version 1, receives typed `role_return.receipt_stale` reissue guidance
+only when its complete canonical bytes authenticate. A successful result uses
 `disposition: proceed` plus a separate non-completion implementation outcome; it
 is never review-entry evidence or completion.
+
+For a blocked return, omitting `--resume-owner` retains the authenticated
+producer role. A different owner requires `--redelegation-authority`; the
+version 2 record must be signed by the exact pinned Orchestrator/human authority
+and bind the current return, packet, producer, target owner, issuer, issue and
+expiry times, and invalidators. Destructive, scope-changing, and host-state
+recovery instead uses `--recovery-request` plus a version 2
+`--human-disposition` signed by the pinned human authority, with the authority
+and key selected explicitly by `--human-disposition-authority` and
+`--human-disposition-key-id`. The import edge
+validates these records before persistence, repair, transition, or host-state
+change and preserves human attribution. Labels, trailers, producer strings,
+record digests, or public keys carried by a record cannot grant authority.
+
+The ordinary CLI still refuses a trust store with supported dynamic adapters.
+A supported host integration reaches verification only through the protected
+in-process host-authority seam, which approves the exact target, derived trust
+path, and supported adapter IDs after authenticating its own host-controlled
+capture/receipt boundary. No public flag enables that seam. Use
+`scripts/sign-blocked-authority.mjs` to create signed redelegation or human
+disposition records with the canonical serializers; the request shapes and
+safe key-handling procedure are documented in
+[Host Adapters](./host-adapters.md#constructing-signed-blocked-authority-records).
+
+The packet also carries the canonical version 3 degraded-enforcement report set.
+`prepare-dispatch` emits `capability.enforcement.degraded` warnings through the
+repair policy, and `verify-return` performs the canonical
+packet/report/declaration check at the receive edge. A duplicate
+post-validation report branch is not counted as another enforcement layer.
+Malformed, contradictory, or declaration-drifted reports fail closed. The
+report names the deterministic recovery route. This is an
+Agentic Loop evidence boundary, not a claim that arbitrary external writes are
+prevented.
 
 See [Host Adapters](./host-adapters.md#operator-trust-stores) for the external
 store format, key rotation, and failure behavior. Every shipped adapter remains

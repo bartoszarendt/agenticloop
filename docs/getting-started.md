@@ -522,7 +522,32 @@ Roles live in `agenticloop/agents/`. They define who does what:
 - `auditor` certifies a finished work unit against its exact integrated baseline
 
 Host adapters bind their native agent, mode, command, or prompt mechanism to
-these role files.
+these role files. Generated role labels come from the canonical registry while
+durable config keys and filenames remain immutable `roleId`. Each generated
+agent carries a short capability summary plus its declaration schema/digest and
+the deterministic `.agenticloop/host-role-capabilities/<host>.json` path. The
+sidecar holds the complete canonical declarations once per host. It records
+whether implementation restrictions are native (`enforced`), instruction-only
+(`advisory`), or unavailable and where incompatible evidence is detected.
+`enforced` means every shipped tool path capable of that action is constrained:
+OpenCode and Copilot Orchestrator/Auditor mutation denial is advisory while
+their shell-capable routes remain, Codex is advisory, and the generated Claude
+Code plan mode and Cursor read-only mode are whole-agent mechanical controls.
+Advisory/unavailable bindings become version 3 typed degraded reports in the
+dispatch packet and are validated with the canonical packet at authenticated
+role-return import.
+
+A blocked return normally resumes with its authenticated producer role. The
+existing `task verify-return` command is also the blocked resume/recovery gate:
+`--resume-owner` needs an exact signed redelegation record when it differs from
+the producer, while `--recovery-request` needs an exact signed
+`--human-disposition`. Both signatures are verified against schemaVersion 2
+authority roots in the fixed external operator trust store. Repository-local,
+caller-selected, unsigned, self-minted, stale, or cross-return records do not
+authorize a transition. Recovery also requires explicit
+`--human-disposition-authority` and `--human-disposition-key-id` selectors.
+Use `scripts/sign-blocked-authority.mjs` to construct records with the canonical
+serializer and signing input.
 
 Auditor has its own model slot at `adapters.<host>.roleSettings.auditor`. The
 maintainer model is never silently reused for it, because the audit exists to be

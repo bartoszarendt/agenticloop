@@ -106,6 +106,7 @@ describe('generateCopilotArtifacts', () => {
     assert.equal(publicSkillFrontmatter?.['disable-model-invocation'], 'true');
 
     assert.match(orchestratorAgent, /^tools:\n  - "agent"\n  - "execute"\n  - "read"\n  - "search"$/m);
+    assert.match(orchestratorAgent, /implementation_mutate: denied \(advisory\)/);
     assert.match(orchestratorAgent, /^agents:\n  - "maintainer"\n  - "engineer"$/m);
     assert.match(orchestratorAgent, /^user-invocable: true$/m);
     assert.match(orchestratorAgent, /^disable-model-invocation: true$/m);
@@ -115,6 +116,9 @@ describe('generateCopilotArtifacts', () => {
     assert.match(engineerAgent, /^user-invocable: false$/m);
     assert.match(engineerAgent, /^disable-model-invocation: false$/m);
     assert.doesNotMatch(engineerAgent, /^agents:$/m);
+    const auditorAgent = readFileSync(join(out, '.github', 'agents', 'auditor.agent.md'), 'utf-8');
+    assert.match(auditorAgent, /^tools:\n  - "execute"\n  - "read"\n  - "search"$/m);
+    assert.match(auditorAgent, /implementation_mutate: denied \(advisory\)/);
   });
 
   it('uses one public skill with reference-only internal procedures and copied backend docs', () => {

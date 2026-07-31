@@ -132,8 +132,9 @@ The generated frontmatter uses:
   `permission.task` allow rules for `maintainer`, `engineer`, and `auditor`
 - `maintainer`: `mode: subagent`
 - `engineer`: `mode: subagent`
-- `auditor`: `mode: subagent` and `permission.edit: deny`, so the read-only audit
-  posture is enforced by OpenCode rather than by prompt text alone
+- `auditor`: `mode: subagent` and `permission.edit: deny`; because retained
+  `bash` can still mutate, the complete non-mutation posture is advisory rather
+  than host-enforced
 
 ## Agentic Loop Procedures in Role Prompts
 

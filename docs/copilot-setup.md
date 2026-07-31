@@ -99,8 +99,8 @@ The invocation split is intentional:
 - maintainer, engineer, and auditor stay hidden from the normal picker but remain
   callable as worker subagents for orchestrator routing
 - the auditor is generated with `tools: [execute, read, search]`; the `edit` tool
-  is deliberately withheld so its read-only audit posture is enforced by the tool
-  grant, not by prompt text alone
+  is deliberately withheld, but retained `execute` can still mutate, so its
+  complete read-only posture is advisory rather than host-enforced
 
 The agent body adds Copilot-aware methodology wiring:
 

@@ -525,7 +525,8 @@ describe('phase-s stale-reference check', () => {
     /sqlite/i,
     /lancedb/i,
     /vector.index/i,
-    /sidecar/i,
+    // Capability declaration sidecars are a current P35 integrity artifact,
+    // not the deferred Phase S runtime-state sidecar design.
     /postinstall/i,
   ];
 

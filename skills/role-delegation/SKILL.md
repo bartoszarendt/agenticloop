@@ -70,7 +70,18 @@ A gate failure names an owner; it does not transfer that owner's edit authority
 to Orchestrator. Orchestrator re-delegates to the diagnostic owner, escalates to
 the human when named authority is required, or stops at the hard checkpoint. It
 must not repair Engineer-owned PR bodies or commits, or Maintainer-owned task
-   records, while a legal delegation path exists.
+records, while a legal delegation path exists.
+
+Use immutable `roleId` for dispatch, return, attribution, filenames, config, and
+authority. Resolve display labels from the canonical workflow-role registry.
+Every dispatch binds the selected host's closed role-capability declaration.
+Do not call prose enforcement: a non-native restriction is `advisory` or
+`unavailable` and must name the next authoritative detection boundary,
+limitation, and recovery route. `enforced` requires all shipped write-capable
+routes to be constrained. OpenCode retained `bash`, Copilot retained `execute`,
+and Codex instructions are therefore advisory. Dispatch binds one version 3
+report per degraded action, emits `capability.enforcement.degraded`, and return
+import checks it against authenticated actor/evidence.
 
 ### Exact implementation dispatch
 
@@ -79,7 +90,8 @@ read-only `agenticloop.role-preparation` packet from the current task. It binds
 the parser-controlled activation identity, trusted task and contract digests,
 current mechanically reevaluated readiness/base/dependency evidence, committed
 Maintainer-attributed decomposition provenance, scope, checks, role and invocation
-IDs, canonical references, branch/worktree, attribution, liveness,
+IDs, canonical references, selected host and exact host-role capability
+declaration, branch/worktree, attribution, liveness,
 and cancellation boundary. Its activation capture is verified by a target-scoped
 Ed25519 public key from the fixed host-owned operator registry; repository-local
 or caller-selected external adapter/key data cannot authorize it. The packet references canonical role, skill, and
@@ -94,7 +106,18 @@ it does not rewrite, summarize, or reconstruct them. Authenticated host producer
 provenance bound to the target repository, adapter/key identity, invocation,
 packet, return, liveness, and exact repository evidence is mandatory at the
 handoff edge. The verifier selects the adapter/key from the verified packet, not
-the receipt; replayed, unsigned, or repository-self-attested receipts fail closed.
+the receipt; replayed, unsigned, or repository-self-attested receipts fail
+closed. The receipt's host-observed producer must equal both the assigned
+`roleId` and the raw return's producer. Cooperative commit or comment trailers
+cannot repair a mismatch.
+
+`task verify-return` / `role_return_receive` also gates blocked resume and
+recovery before state change. Normal resume uses the authenticated producer;
+owner transfer needs an exact version 2 redelegation signed by a pinned
+Orchestrator/human authority, and destructive/scope/host-state recovery needs an
+exact version 2 disposition signed by the pinned human authority. Digests,
+labels, trailers, caller-selected keys, and self-minted records cannot
+substitute; human work stays human-attributed.
 
 Work-unit certification is auditor-owned and is a fresh, separate invocation
 every time; see [[work-unit-audit]]. The auditor never implements, never accepts

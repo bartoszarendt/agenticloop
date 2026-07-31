@@ -21,6 +21,7 @@ import { canonicalJson } from './canonical-json.js';
 
 export const HOST_TRUST_KIND = 'agenticloop.host-trust';
 export const HOST_TRUST_SCHEMA_VERSION = 1;
+export const HOST_TRUST_AUTHORITY_SCHEMA_VERSION = 2;
 // This repository-local manifest is portable data only. It never grants trust.
 export const HOST_TRUST_FILE = '.agenticloop/host-trust.json';
 export const HOST_SIGNATURE_ALGORITHM = 'ed25519';
@@ -30,6 +31,7 @@ const ADAPTER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
 const KEY_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 const CAPABILITY_STATES = new Set(['supported', 'unsupported']);
+const AUTHORITY_KINDS = new Set(['blocked_result_redelegation', 'human_disposition']);
 
 function isObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -186,6 +188,62 @@ function validateEntry(entry, index, errors, repositoryIdentity) {
   });
 }
 
+function validateAuthorityEntry(entry, index, errors, repositoryIdentity) {
+  const label = `host trust authorities[${index}]`;
+  if (!isObject(entry)) {
+    errors.push(`${label} must be an object`);
+    return null;
+  }
+  const expected = [
+    'authorityId', 'authorityKind', 'keyId', 'algorithm', 'publicKey',
+    'issuer', 'revokedRecordIds',
+  ];
+  const unknown = Object.keys(entry).filter(key => !expected.includes(key));
+  const missing = expected.filter(key => !Object.hasOwn(entry, key));
+  if (missing.length) errors.push(`${label} is missing field(s): ${missing.join(', ')}`);
+  if (unknown.length) errors.push(`${label} contains unknown field(s): ${unknown.join(', ')}`);
+  if (typeof entry.authorityId !== 'string' || !KEY_ID_RE.test(entry.authorityId)) {
+    errors.push(`${label} authorityId is required`);
+  }
+  if (!AUTHORITY_KINDS.has(entry.authorityKind)) {
+    errors.push(`${label} authorityKind is invalid`);
+  }
+  if (typeof entry.keyId !== 'string' || !KEY_ID_RE.test(entry.keyId)) {
+    errors.push(`${label} keyId is required`);
+  }
+  if (entry.algorithm !== HOST_SIGNATURE_ALGORITHM) {
+    errors.push(`${label} algorithm must be '${HOST_SIGNATURE_ALGORITHM}'`);
+  }
+  try {
+    importPublicKey(entry.publicKey);
+  } catch (error) {
+    errors.push(`${label} publicKey is invalid: ${error.message}`);
+  }
+  if (!isObject(entry.issuer) ||
+      Object.keys(entry.issuer).sort().join(',') !== 'ownerId,ownerKind' ||
+      !['workflow_role', 'human_authority'].includes(entry.issuer?.ownerKind) ||
+      typeof entry.issuer?.ownerId !== 'string' ||
+      !entry.issuer.ownerId.trim()) {
+    errors.push(`${label} issuer must contain exactly ownerKind and ownerId`);
+  }
+  if (!Array.isArray(entry.revokedRecordIds) ||
+      entry.revokedRecordIds.some(value => typeof value !== 'string' || !value.trim()) ||
+      new Set(entry.revokedRecordIds).size !== entry.revokedRecordIds.length) {
+    errors.push(`${label} revokedRecordIds must be a unique array of non-empty strings`);
+  }
+  if (errors.length) return null;
+  return Object.freeze({
+    authorityId: entry.authorityId,
+    authorityKind: entry.authorityKind,
+    keyId: entry.keyId,
+    algorithm: entry.algorithm,
+    publicKey: entry.publicKey,
+    issuer: Object.freeze({ ...entry.issuer }),
+    revokedRecordIds: Object.freeze([...entry.revokedRecordIds]),
+    repositoryIdentity,
+  });
+}
+
 /**
  * Parse an externally held operator trust document. Its target identity makes a
  * copied store unusable for another checkout; repository-local manifests are
@@ -198,17 +256,26 @@ function validateEntry(entry, index, errors, repositoryIdentity) {
 export function parseHostTrustStore(text, options = {}) {
   /** @type {string[]} */
   const errors = [];
-  if (text === null || text === undefined) return { ok: true, adapters: Object.freeze({}), errors };
+  const emptyAuthorities = Object.freeze({});
+  if (text === null || text === undefined) {
+    return { ok: true, adapters: Object.freeze({}), authorities: emptyAuthorities, errors };
+  }
   let parsed;
   try {
     parsed = JSON.parse(String(text));
   } catch (error) {
-    return { ok: false, adapters: Object.freeze({}), errors: [`host trust store is not valid JSON: ${error.message}`] };
+    return { ok: false, adapters: Object.freeze({}), authorities: emptyAuthorities, errors: [`host trust store is not valid JSON: ${error.message}`] };
   }
-  if (!isObject(parsed)) return { ok: false, adapters: Object.freeze({}), errors: ['host trust store must be a JSON object'] };
+  if (!isObject(parsed)) return { ok: false, adapters: Object.freeze({}), authorities: emptyAuthorities, errors: ['host trust store must be a JSON object'] };
   if (parsed.kind !== HOST_TRUST_KIND) errors.push(`host trust store kind must be '${HOST_TRUST_KIND}'`);
-  if (parsed.schemaVersion !== HOST_TRUST_SCHEMA_VERSION) errors.push(`host trust store schemaVersion must be ${HOST_TRUST_SCHEMA_VERSION}`);
-  const unknown = Object.keys(parsed).filter(key => !['kind', 'schemaVersion', 'target', 'adapters'].includes(key));
+  const authoritySchema = parsed.schemaVersion === HOST_TRUST_AUTHORITY_SCHEMA_VERSION;
+  if (parsed.schemaVersion !== HOST_TRUST_SCHEMA_VERSION && !authoritySchema) {
+    errors.push(`host trust store schemaVersion must be ${HOST_TRUST_SCHEMA_VERSION} or ${HOST_TRUST_AUTHORITY_SCHEMA_VERSION}`);
+  }
+  const topLevelFields = authoritySchema
+    ? ['kind', 'schemaVersion', 'target', 'adapters', 'authorities']
+    : ['kind', 'schemaVersion', 'target', 'adapters'];
+  const unknown = Object.keys(parsed).filter(key => !topLevelFields.includes(key));
   if (unknown.length) errors.push(`host trust store contains unknown field(s): ${unknown.join(', ')}`);
   if (!isObject(parsed.target) || Object.keys(parsed.target).length !== 1 || typeof parsed.target.repositoryIdentity !== 'string') {
     errors.push('host trust store target must contain exactly repositoryIdentity');
@@ -219,7 +286,7 @@ export function parseHostTrustStore(text, options = {}) {
   }
   if (!Array.isArray(parsed.adapters)) {
     errors.push('host trust store adapters must be an array');
-    return { ok: false, adapters: Object.freeze({}), errors };
+    return { ok: false, adapters: Object.freeze({}), authorities: emptyAuthorities, errors };
   }
   /** @type {Record<string, object>} */
   const adapters = {};
@@ -234,7 +301,29 @@ export function parseHostTrustStore(text, options = {}) {
     }
     adapters[validated.adapterId] = validated;
   });
-  return { ok: errors.length === 0, adapters: Object.freeze(adapters), errors };
+  /** @type {Record<string, object>} */
+  const authorities = {};
+  if (authoritySchema && !Array.isArray(parsed.authorities)) {
+    errors.push('host trust store authorities must be an array in schemaVersion 2');
+  } else if (authoritySchema) {
+    parsed.authorities.forEach((entry, index) => {
+      const entryErrors = [];
+      const validated = validateAuthorityEntry(entry, index, entryErrors, parsed.target?.repositoryIdentity ?? null);
+      errors.push(...entryErrors);
+      if (!validated) return;
+      if (authorities[validated.authorityId]) {
+        errors.push(`host trust store registers authority '${validated.authorityId}' more than once`);
+        return;
+      }
+      authorities[validated.authorityId] = validated;
+    });
+  }
+  return {
+    ok: errors.length === 0,
+    adapters: Object.freeze(adapters),
+    authorities: Object.freeze(authorities),
+    errors,
+  };
 }
 
 /**
@@ -250,6 +339,7 @@ export function loadHostTrustStore(target, options = {}) {
     return {
       ok: false,
       adapters: Object.freeze({}),
+      authorities: Object.freeze({}),
       errors: ['host trust loading requires a structured host authority context'],
       path: null,
     };
@@ -257,12 +347,12 @@ export function loadHostTrustStore(target, options = {}) {
   const root = canonicalPath(String(target ?? '.'));
   const configuredRoot = options.operatorTrustRoot ?? defaultOperatorTrustRoot();
   if (typeof configuredRoot !== 'string' || !configuredRoot.trim() || !isAbsolute(configuredRoot)) {
-    return { ok: false, adapters: Object.freeze({}), errors: ['operator host trust root must be an absolute path'], path: null };
+    return { ok: false, adapters: Object.freeze({}), authorities: Object.freeze({}), errors: ['operator host trust root must be an absolute path'], path: null };
   }
   const operatorRoot = canonicalPath(configuredRoot);
   const rootFromTarget = relative(root, operatorRoot);
   if (!rootFromTarget || (!rootFromTarget.startsWith('..') && !isAbsolute(rootFromTarget))) {
-    return { ok: false, adapters: Object.freeze({}), errors: ['operator host trust root must be outside the target repository'], path: null };
+    return { ok: false, adapters: Object.freeze({}), authorities: Object.freeze({}), errors: ['operator host trust root must be outside the target repository'], path: null };
   }
   const path = operatorTrustStorePath(root, operatorRoot);
   if (options.assertedPath !== undefined) {
@@ -271,6 +361,7 @@ export function loadHostTrustStore(target, options = {}) {
       return {
         ok: false,
         adapters: Object.freeze({}),
+        authorities: Object.freeze({}),
         errors: ['--host-trust-store does not match the pre-registered operator trust path for this target'],
         path,
       };
@@ -280,24 +371,25 @@ export function loadHostTrustStore(target, options = {}) {
     return {
       ok: true,
       adapters: Object.freeze({}),
+      authorities: Object.freeze({}),
       errors: [],
       path,
       state: 'missing',
     };
   }
   if (lstatSync(path).isSymbolicLink()) {
-    return { ok: false, adapters: Object.freeze({}), errors: ['host trust store must not be a symbolic link'], path };
+    return { ok: false, adapters: Object.freeze({}), authorities: Object.freeze({}), errors: ['host trust store must not be a symbolic link'], path };
   }
   const realPath = canonicalPath(path);
   const realPathFromTarget = relative(root, realPath);
   if (!realPathFromTarget || (!realPathFromTarget.startsWith('..') && !isAbsolute(realPathFromTarget))) {
-    return { ok: false, adapters: Object.freeze({}), errors: ['host trust store resolves inside the target repository'], path: realPath };
+    return { ok: false, adapters: Object.freeze({}), authorities: Object.freeze({}), errors: ['host trust store resolves inside the target repository'], path: realPath };
   }
   let text;
   try {
     text = readFileSync(realPath, 'utf8');
   } catch (error) {
-    return { ok: false, adapters: Object.freeze({}), errors: [`host trust store is unreadable: ${error.message}`], path: realPath };
+    return { ok: false, adapters: Object.freeze({}), authorities: Object.freeze({}), errors: [`host trust store is unreadable: ${error.message}`], path: realPath };
   }
   const parsed = parseHostTrustStore(text, { target: root });
   if (!parsed.ok) return { ...parsed, path: realPath, state: 'malformed' };
@@ -306,9 +398,27 @@ export function loadHostTrustStore(target, options = {}) {
     adapter.capabilities.returnReceipt === 'supported'
   );
   if (supported.length > 0) {
+    let protectedBoundaryAuthorized = false;
+    if (typeof options.protectedBoundary === 'function') {
+      try {
+        protectedBoundaryAuthorized = options.protectedBoundary(Object.freeze({
+          kind: 'agenticloop.protected-host-trust-boundary',
+          schemaVersion: 1,
+          targetRepositoryIdentity: targetRepositoryIdentity(root),
+          trustStorePath: realPath,
+          supportedAdapterIds: Object.freeze(supported.map(adapter => adapter.adapterId).sort()),
+        })) === true;
+      } catch {
+        protectedBoundaryAuthorized = false;
+      }
+    }
+    if (protectedBoundaryAuthorized) {
+      return { ...parsed, path: realPath, state: 'protected_boundary' };
+    }
     return {
       ok: false,
       adapters: Object.freeze({}),
+      authorities: Object.freeze({}),
       errors: ['dynamic supported host adapters are unavailable through public or delegated in-process APIs; a future integration requires authenticated host-controlled IPC, OS isolation, or an equivalent protected boundary'],
       path: realPath,
       state: 'unsupported_boundary',

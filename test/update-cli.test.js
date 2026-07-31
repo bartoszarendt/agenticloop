@@ -437,11 +437,11 @@ describe('update preserves adapter artifact model settings', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Legacy three-role OpenCode installation: auditor migration during update
+// Legacy three-role OpenCode installation: auditor artifact migration
 // ---------------------------------------------------------------------------
 
 describe('legacy OpenCode auditor migration', () => {
-  it('adds the auditor slot and artifact in one update, preserving settings and workflows', () => {
+  it('adds the auditor artifact without manufacturing an empty settings slot', () => {
     const d = makeTarget('opencode');
 
     // Downgrade to a legacy three-role installation: no canonical auditor in
@@ -468,17 +468,16 @@ describe('legacy OpenCode auditor migration', () => {
     const userWorkflowBytes = 'name: user-ci\non: [push]\njobs: {}\n';
     writeFileSync(userWorkflowPath, userWorkflowBytes, 'utf-8');
 
-    const firstUpdate = runAgenticLoop(['update', '--target', d]);
-    assert.match(firstUpdate, /reconciled: adapters\.opencode\.roleSettings\.auditor/);
+    runAgenticLoop(['update', '--target', d]);
 
     // The canonical auditor definition is refreshed into the installed base.
     assert.ok(loadJsonFile(canonicalCfgPath).roles?.auditor,
       'update must refresh the canonical auditor role definition');
 
-    // The target-owned config gains an explicit auditor slot without
-    // duplicating the canonical role definition, and keeps every setting.
+    // Target-owned config does not gain an empty slot, does not duplicate the
+    // canonical role definition, and keeps every existing setting.
     const cfgAfter = loadJsonFile(cfgPath);
-    assert.deepEqual(cfgAfter.adapters.opencode.roleSettings.auditor, {});
+    assert.equal(cfgAfter.adapters.opencode.roleSettings.auditor, undefined);
     assert.equal(cfgAfter.roles, undefined,
       'target-owned agenticloop.json must not duplicate the canonical roles block');
     assert.equal(cfgAfter.adapters.opencode.roleSettings.orchestrator.model, 'custom/orchestrator');

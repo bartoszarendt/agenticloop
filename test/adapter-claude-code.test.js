@@ -128,7 +128,7 @@ describe('generateClaudeCodeArtifacts', () => {
     );
   });
 
-  it('renders default acceptEdits permissionMode for maintainer and engineer but not orchestrator', () => {
+  it('renders edit-capable roles with acceptEdits and non-implementing roles in plan mode', () => {
     const fx = makeFixture();
     const cfg = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
     const out = mkdtempSync(join(tmpDir, 'out-'));
@@ -137,10 +137,14 @@ describe('generateClaudeCodeArtifacts', () => {
     const maintainer = readClaudeAgent(out, 'maintainer');
     const engineer = readClaudeAgent(out, 'engineer');
     const orchestrator = readClaudeAgent(out, 'orchestrator');
+    const auditor = readClaudeAgent(out, 'auditor');
 
     assert.ok(maintainer.includes('permissionMode: "acceptEdits"'));
     assert.ok(engineer.includes('permissionMode: "acceptEdits"'));
-    assert.ok(!orchestrator.includes('permissionMode:'), orchestrator);
+    assert.ok(orchestrator.includes('permissionMode: "plan"'), orchestrator);
+    assert.ok(auditor.includes('permissionMode: "plan"'), auditor);
+    assert.match(orchestrator, /implementation_mutate: denied \(enforced\)/);
+    assert.match(auditor, /implementation_mutate: denied \(enforced\)/);
   });
 
   it('agent Markdown frontmatter uses adapter roleSettings model and omits effort', () => {

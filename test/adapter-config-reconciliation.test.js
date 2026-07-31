@@ -14,7 +14,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { reconcileAdapterRoleSettings } from '../src/adapter-role-defaults.js';
+import {
+  ensureAdapterRoleSettings,
+  getDefaultRoleSettings,
+  reconcileAdapterRoleSettings,
+} from '../src/adapter-role-defaults.js';
 import { ensureAdapterConfig, reconcileTargetAdapterConfig } from '../src/setup-generate.js';
 import { loadJsonFile } from '../src/json.js';
 import { seedTargetLayout } from './helpers/layout-fixture.js';
@@ -39,17 +43,14 @@ function makeTarget() {
 }
 
 describe('reconcileAdapterRoleSettings', () => {
-  it('adds missing adapter blocks, roleSettings, and role slots', () => {
+  it('adds missing adapter blocks and roleSettings without manufacturing empty role slots', () => {
     const config = {};
     const { added, preserved } = reconcileAdapterRoleSettings(config, ['opencode'], CANONICAL_ROLES);
 
     assert.ok(added.includes('adapters'));
     assert.ok(added.includes('adapters.opencode'));
     assert.ok(added.includes('adapters.opencode.roleSettings'));
-    for (const role of CANONICAL_ROLES) {
-      assert.ok(added.includes(`adapters.opencode.roleSettings.${role}`));
-      assert.deepEqual(config.adapters.opencode.roleSettings[role], {});
-    }
+    assert.deepEqual(config.adapters.opencode.roleSettings, {});
     assert.equal(preserved.length, 0);
   });
 
@@ -69,11 +70,7 @@ describe('reconcileAdapterRoleSettings', () => {
     };
     const { added, preserved } = reconcileAdapterRoleSettings(config, ['opencode'], CANONICAL_ROLES);
 
-    assert.deepEqual(added, [
-      'adapters.opencode.roleSettings.maintainer',
-      'adapters.opencode.roleSettings.engineer',
-      'adapters.opencode.roleSettings.auditor',
-    ]);
+    assert.deepEqual(added, []);
     assert.ok(preserved.includes('adapters'));
     assert.ok(preserved.includes('adapters.opencode'));
     assert.ok(preserved.includes('adapters.opencode.roleSettings'));
@@ -124,7 +121,7 @@ describe('reconcileAdapterRoleSettings', () => {
 });
 
 describe('reconcileTargetAdapterConfig', () => {
-  it('adds the auditor slot to a legacy three-role OpenCode config without duplicating roles', () => {
+  it('does not add empty role slots to a legacy three-role OpenCode config', () => {
     const d = makeTarget();
     const cfgPath = join(d, 'agenticloop.json');
     writeFileSync(cfgPath, JSON.stringify({
@@ -143,10 +140,10 @@ describe('reconcileTargetAdapterConfig', () => {
     const result = reconcileTargetAdapterConfig(d, ['opencode']);
 
     assert.equal(result.error, null);
-    assert.equal(result.wrote, true);
-    assert.deepEqual(result.added, ['adapters.opencode.roleSettings.auditor']);
+    assert.equal(result.wrote, false);
+    assert.deepEqual(result.added, []);
     const cfg = loadJsonFile(cfgPath);
-    assert.deepEqual(cfg.adapters.opencode.roleSettings.auditor, {});
+    assert.equal(cfg.adapters.opencode.roleSettings.auditor, undefined);
     assert.equal(cfg.roles, undefined);
     assert.equal(cfg.adapters.opencode.roleSettings.orchestrator.model, 'custom/orchestrator');
     assert.equal(cfg.adapters.opencode.roleSettings.orchestrator.reasoningEffort, 'xhigh');
@@ -175,7 +172,7 @@ describe('reconcileTargetAdapterConfig', () => {
 });
 
 describe('ensureAdapterConfig reconciliation', () => {
-  it('reconciles an existing OpenCode installation against the canonical roles', () => {
+  it('preserves an existing OpenCode installation without adding empty slots', () => {
     const d = makeTarget();
     const cfgPath = join(d, 'agenticloop.json');
     writeFileSync(cfgPath, JSON.stringify({
@@ -193,11 +190,8 @@ describe('ensureAdapterConfig reconciliation', () => {
 
     assert.equal(error, null);
     const cfg = loadJsonFile(cfgPath);
-    for (const role of CANONICAL_ROLES) {
-      assert.ok(cfg.adapters.opencode.roleSettings[role], `missing slot for ${role}`);
-    }
     assert.equal(cfg.adapters.opencode.roleSettings.orchestrator.model, 'custom/orchestrator');
-    assert.equal(cfg.adapters.opencode.roleSettings.auditor.model, undefined);
+    assert.equal(cfg.adapters.opencode.roleSettings.auditor, undefined);
 
     // Idempotent: a second pass leaves the file byte-for-byte unchanged.
     const bytes = readFileSync(cfgPath, 'utf-8');
@@ -215,5 +209,44 @@ describe('ensureAdapterConfig reconciliation', () => {
     const cfg = loadJsonFile(join(d, 'agenticloop.json'));
     assert.equal(cfg.extends, './agenticloop/config.json');
     assert.deepEqual(cfg.adapters.opencode.roleSettings, {});
+  });
+});
+
+describe('host-specific role defaults', () => {
+  it('returns meaningful defaults only and never shares mutable objects', () => {
+    for (const host of ['opencode', 'claude-code', 'copilot', 'cursor']) {
+      assert.deepEqual(getDefaultRoleSettings(host), {});
+    }
+    const first = getDefaultRoleSettings('codex');
+    const second = getDefaultRoleSettings('codex');
+    assert.deepEqual(Object.keys(first), CANONICAL_ROLES);
+    first.engineer.model = 'changed';
+    assert.notEqual(second.engineer.model, 'changed');
+  });
+
+  it('does not mutate config when a host has no setup defaults', () => {
+    for (const host of ['opencode', 'claude-code', 'copilot', 'cursor', 'unknown']) {
+      const config = { extends: './agenticloop/config.json' };
+      const before = structuredClone(config);
+      assert.deepEqual(ensureAdapterRoleSettings(config, host), { added: [], kept: [] });
+      assert.deepEqual(config, before);
+    }
+  });
+
+  it('preserves guarded Codex overrides while filling only absent defaults', () => {
+    const config = {
+      adapters: {
+        codex: {
+          roleSettings: {
+            engineer: { model: 'user/model' },
+          },
+        },
+      },
+    };
+    const result = ensureAdapterRoleSettings(config, 'codex');
+    assert.ok(result.kept.includes('adapters.codex.roleSettings.engineer.model'));
+    assert.equal(config.adapters.codex.roleSettings.engineer.model, 'user/model');
+    assert.equal(config.adapters.codex.roleSettings.engineer.reasoningEffort, 'high');
+    assert.equal(config.adapters.codex.roleSettings.auditor.model, 'gpt-5.6-sol');
   });
 });

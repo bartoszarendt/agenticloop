@@ -87,7 +87,8 @@ Each generated subagent includes:
 
 `readonly: true` is Cursor's strongest supported non-editing posture, so the
 auditor's read-only audit boundary is enforced by Cursor rather than by prompt
-text alone.
+text alone. Capability declarations use the effective final `readonly` value;
+an override to `false` cannot retain an enforced non-mutation claim.
 
 The agent body adds Cursor-aware methodology wiring:
 

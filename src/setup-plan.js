@@ -30,6 +30,7 @@ import {
   TARGET_CONFIG_TEMPLATE_RELATIVE_PATH,
   bundledToolkitPath,
 } from './layout.js';
+import { WORKFLOW_ROLE_IDS } from './workflow-roles.js';
 
 const IMPLEMENTED_ADAPTERS = ['opencode', 'codex', 'claude-code', 'copilot', 'cursor'];
 const TARGET_CFG_TEMPLATE = bundledToolkitPath(TARGET_CONFIG_TEMPLATE_RELATIVE_PATH);
@@ -99,7 +100,7 @@ function planAdapterConfigAction(target, selectedAdapter, modelMutationsByHost, 
   if (kind === 'update') {
     try {
       const effectiveConfig = resolvePlannedConfig(target, plan, originalText, configPath);
-      const canonicalRoles = Object.keys(effectiveConfig.roles ?? {});
+      const canonicalRoles = WORKFLOW_ROLE_IDS;
       const { added } = reconcileAdapterRoleSettings(rawConfig, hosts, canonicalRoles);
       changed.push(...added);
     } catch (error) {

@@ -27,6 +27,7 @@ import {
   resolveToolkitAssetPath,
 } from '../layout.js';
 import { loadProjectMap } from '../project-map.js';
+import { WORKFLOW_ROLE_IDS } from '../workflow-roles.js';
 
 export const AGENTIC_LOOP_OPERATION_DESCRIPTION =
   'Use only when the user explicitly asks to activate Agentic Loop: create or refine the durable task record, route maintainer, engineer, and auditor roles, verify evidence, certify the finished work unit, and close out according to the project backend.';
@@ -77,7 +78,6 @@ export function collectInstructionPaths(alConfig, repoRoot) {
   const agentsSrc = alConfig.agents?.sourceDirectory ?? AGENTS_SOURCE_DIRECTORY;
   const backendsSrc = alConfig.backends?.sourceDirectory ?? BACKENDS_SOURCE_DIRECTORY;
   const skillsSrc = alConfig.skills?.sourceDirectory ?? SKILLS_SOURCE_DIRECTORY;
-  const roles = alConfig.roles ?? {};
   const paths = [];
   const projectMap = loadProjectMap(repoRoot);
   const documentSelections = resolveDocumentSelections(
@@ -90,7 +90,7 @@ export function collectInstructionPaths(alConfig, repoRoot) {
     if (existsSync(resolveToolkitAssetPath(repoRoot, docPath, assetLayout))) paths.push(docPath);
   }
 
-  for (const roleName of Object.keys(roles)) {
+  for (const roleName of WORKFLOW_ROLE_IDS) {
     const roleFile = `${agentsSrc}/${roleName}.md`;
     if (existsSync(resolveToolkitAssetPath(repoRoot, roleFile, assetLayout))) paths.push(roleFile);
   }

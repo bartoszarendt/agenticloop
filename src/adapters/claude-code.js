@@ -54,6 +54,13 @@ import {
   readCanonicalSkillEntries,
 } from './shared.js';
 import { fillUnsupportedActivationSlots } from '../adapter-slots.js';
+import {
+  buildEffectiveHostRoleCapabilityInventory,
+  hostRoleCapabilitySidecarRelativePath,
+  renderHostRoleCapabilityNotice,
+  renderHostRoleCapabilitySidecar,
+} from '../host-role-capabilities.js';
+import { WORKFLOW_ROLE_IDS } from '../workflow-roles.js';
 
 const CLAUDE_CODE_START_COMMAND = bundledToolkitPath('agenticloop/commands/start.md');
 
@@ -96,6 +103,7 @@ const VALID_CLAUDE_CODE_PERMISSION_MODES = new Set([
 const VALID_CLAUDE_CODE_PERMISSION_SCOPES = new Set(['project', 'local']);
 
 const DEFAULT_CLAUDE_CODE_PERMISSION_MODE_BY_ROLE = {
+  orchestrator: 'plan',
   maintainer: 'acceptEdits',
   engineer: 'acceptEdits',
   // Auditor is read-only with respect to implementation. `plan` is Claude Code's
@@ -413,10 +421,18 @@ function formatClaudeRequiredSkillLines(requiredSkills, skillReferenceMap) {
   });
 }
 
-function roleToAgentMarkdown(roleName, roleRecord, modelSettings, permissionMode, skillReferenceMap) {
+function roleToAgentMarkdown(
+  agentName,
+  roleId,
+  roleRecord,
+  modelSettings,
+  permissionMode,
+  skillReferenceMap,
+  capabilityInventory
+) {
   const lines = [];
   lines.push('---');
-  lines.push(`name: ${quoteYamlScalar(roleName)}`);
+  lines.push(`name: ${quoteYamlScalar(agentName)}`);
   if (roleRecord.description) {
     lines.push(`description: ${quoteYamlScalar(roleRecord.description.replace(/\n+/g, ' '))}`);
   }
@@ -445,6 +461,19 @@ function roleToAgentMarkdown(roleName, roleRecord, modelSettings, permissionMode
     lines.push(rewriteClaudeSkillReferences(roleRecord.promptBody, referenceMap));
     lines.push('');
   }
+  const declaration = capabilityInventory['claude-code'][roleId];
+  const implementation = declaration.actionBindings.find(binding =>
+    binding.action === 'implementation_mutate'
+  );
+  if (implementation.policy === 'denied' &&
+      implementation.enforcement === 'enforced' &&
+      permissionMode !== 'plan') {
+    throw new Error(
+      `Claude Code ${roleId} capability declaration requires permissionMode plan, got ${String(permissionMode)}`
+    );
+  }
+  lines.push(renderHostRoleCapabilityNotice('claude-code', roleId, capabilityInventory));
+  lines.push('');
   lines.push(
     `<!-- adapter: model=${modelSettings.model || '(unset)'} -->`
   );
@@ -675,12 +704,14 @@ function splitFrontmatterForMarker(source) {
  */
 export function generateClaudeCodeArtifacts(alConfig, repoRoot, outputDir) {
   const ccAdapter = alConfig.adapters?.['claude-code'] ?? {};
-  const roles = alConfig.roles ?? {};
   const roleBindings = ccAdapter.roleBindings ?? {};
   const agentNames = Object.fromEntries(
-    Object.keys(roles).map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
+    WORKFLOW_ROLE_IDS.map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
   );
   const resolvedPermissions = resolveClaudeCodePermissions(ccAdapter);
+  const capabilityInventory = {
+    'claude-code': buildEffectiveHostRoleCapabilityInventory('claude-code', ccAdapter),
+  };
 
   const skillEntries = readCanonicalSkillEntries(repoRoot, alConfig);
   const relativeSkillReferenceMap = buildClaudeSkillReferenceMap(
@@ -700,17 +731,19 @@ export function generateClaudeCodeArtifacts(alConfig, repoRoot, outputDir) {
 
   const agentsDir = join(outputDir, '.claude', 'agents');
   mkdirSync(agentsDir, { recursive: true });
-  for (const [roleName] of Object.entries(roles)) {
+  for (const roleName of WORKFLOW_ROLE_IDS) {
     const agentName = roleBindings[roleName]?.agent ?? roleName;
     const { description, promptBody, requiredSkills } = buildRoleRecord(alConfig, repoRoot, roleName);
     const modelSettings = resolveRoleModel(alConfig, 'claude-code', roleName, ccAdapter);
     const permissionMode = resolveRolePermissionMode(ccAdapter, roleName);
     const md = roleToAgentMarkdown(
       agentName,
+      roleName,
       { description, promptBody, requiredSkills },
       modelSettings,
       permissionMode,
-      absoluteSkillReferenceMap
+      absoluteSkillReferenceMap,
+      capabilityInventory
     );
     const mdPath = join(agentsDir, `${agentName}.md`);
     writeFileSync(mdPath, md, 'utf-8');
@@ -719,6 +752,11 @@ export function generateClaudeCodeArtifacts(alConfig, repoRoot, outputDir) {
 
   files.push(...writeClaudePublicSkill(skillEntries, relativeSkillReferenceMap, agentNames, outputDir));
   files.push(...writeClaudeCodeSettings(outputDir, resolvedPermissions));
+  const sidecarRelPath = hostRoleCapabilitySidecarRelativePath('claude-code');
+  const sidecarPath = join(outputDir, sidecarRelPath);
+  mkdirSync(dirname(sidecarPath), { recursive: true });
+  writeFileSync(sidecarPath, renderHostRoleCapabilitySidecar('claude-code', ccAdapter), 'utf-8');
+  files.push(sidecarRelPath);
 
   return { files };
 }
@@ -828,12 +866,14 @@ function planClaudeReferenceTree(sourceDir, destRelPath, skillReferenceMap) {
  */
 export function planClaudeCodeArtifacts(alConfig, repoRoot, outputDir) {
   const ccAdapter = alConfig.adapters?.['claude-code'] ?? {};
-  const roles = alConfig.roles ?? {};
   const roleBindings = ccAdapter.roleBindings ?? {};
   const agentNames = Object.fromEntries(
-    Object.keys(roles).map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
+    WORKFLOW_ROLE_IDS.map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
   );
   const resolvedPermissions = resolveClaudeCodePermissions(ccAdapter);
+  const capabilityInventory = {
+    'claude-code': buildEffectiveHostRoleCapabilityInventory('claude-code', ccAdapter),
+  };
 
   const skillEntries = readCanonicalSkillEntries(repoRoot, alConfig);
   const relativeSkillReferenceMap = buildClaudeSkillReferenceMap(
@@ -863,17 +903,19 @@ export function planClaudeCodeArtifacts(alConfig, repoRoot, outputDir) {
   files.push('.claude/commands/agenticloop.md');
 
   // .claude/agents/<role>.md
-  for (const [roleName] of Object.entries(roles)) {
+  for (const roleName of WORKFLOW_ROLE_IDS) {
     const agentName = roleBindings[roleName]?.agent ?? roleName;
     const { description, promptBody, requiredSkills } = buildRoleRecord(alConfig, repoRoot, roleName);
     const modelSettings = resolveRoleModel(alConfig, 'claude-code', roleName, ccAdapter);
     const permissionMode = resolveRolePermissionMode(ccAdapter, roleName);
     const md = roleToAgentMarkdown(
       agentName,
+      roleName,
       { description, promptBody, requiredSkills },
       modelSettings,
       permissionMode,
-      absoluteSkillReferenceMap
+      absoluteSkillReferenceMap,
+      capabilityInventory
     );
     const relPath = `.claude/agents/${agentName}.md`;
     actions.push({
@@ -921,6 +963,14 @@ export function planClaudeCodeArtifacts(alConfig, repoRoot, outputDir) {
   const settingsActions = planClaudeCodeSettings(outputDir, resolvedPermissions);
   actions.push(...settingsActions);
   files.push(...settingsActions.map(a => a.relPath));
+  const sidecarRelPath = hostRoleCapabilitySidecarRelativePath('claude-code');
+  actions.push({
+    type: 'write-file',
+    adapter: 'claude-code',
+    relPath: sidecarRelPath,
+    content: renderHostRoleCapabilitySidecar('claude-code', ccAdapter),
+  });
+  files.push(sidecarRelPath);
 
   return { actions, files, adapter: 'claude-code' };
 }

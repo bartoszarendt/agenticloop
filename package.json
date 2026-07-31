@@ -51,6 +51,7 @@
     "src/",
     ".claude-plugin/",
     "scripts/measure-dispatch-context.mjs",
+    "scripts/sign-blocked-authority.mjs",
     "AGENTIC_LOOP.md",
     "agents/",
     "backends/",

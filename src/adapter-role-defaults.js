@@ -4,6 +4,8 @@
  * Keep concrete model choices out of canonical role Markdown and base config.
  */
 
+import { SHIPPED_ADAPTER_HOSTS } from './host-role-capabilities.js';
+
 const ADAPTER_ROLE_DEFAULTS = Object.freeze({
   codex: Object.freeze({
     orchestrator: Object.freeze({
@@ -35,6 +37,7 @@ const ADAPTER_ROLE_DEFAULTS = Object.freeze({
  * @returns {Record<string, Record<string, string>>}
  */
 export function getDefaultRoleSettings(host) {
+  if (!SHIPPED_ADAPTER_HOSTS.includes(host)) return {};
   const defaults = ADAPTER_ROLE_DEFAULTS[host] ?? {};
   return Object.fromEntries(
     Object.entries(defaults).map(([role, settings]) => [role, { ...settings }])
@@ -85,9 +88,8 @@ export function ensureAdapterRoleSettings(config, host) {
  *   - validates that the target config is a JSON object;
  *   - ensures each selected adapter block exists;
  *   - ensures adapters.<host>.roleSettings exists;
- *   - ensures an explicit target-owned role slot exists for every current
- *     canonical role (added as {} so no canonical role definition is
- *     duplicated into target-owned config);
+ *   - validates existing role-setting slots without manufacturing empty
+ *     placeholders for roles that have no host-specific defaults;
  *   - preserves every existing user setting and unknown target-owned field.
  *
  * @param {object} config  Parsed target-owned agenticloop.json (mutated).
@@ -102,6 +104,9 @@ export function reconcileAdapterRoleSettings(config, hosts, canonicalRoles) {
 
   const added = [];
   const preserved = [];
+  if (!Array.isArray(canonicalRoles)) {
+    throw new Error('canonicalRoles must be an array');
+  }
 
   if (config.adapters === undefined) {
     config.adapters = {};
@@ -135,16 +140,16 @@ export function reconcileAdapterRoleSettings(config, hosts, canonicalRoles) {
       preserved.push(`adapters.${host}.roleSettings`);
     }
 
-    for (const role of canonicalRoles) {
+    for (const role of Object.keys(config.adapters[host].roleSettings)) {
       const path = `adapters.${host}.roleSettings.${role}`;
-      if (config.adapters[host].roleSettings[role] === undefined) {
-        config.adapters[host].roleSettings[role] = {};
-        added.push(path);
-      } else if (typeof config.adapters[host].roleSettings[role] !== 'object' || config.adapters[host].roleSettings[role] === null || Array.isArray(config.adapters[host].roleSettings[role])) {
+      if (typeof config.adapters[host].roleSettings[role] !== 'object' ||
+          config.adapters[host].roleSettings[role] === null ||
+          Array.isArray(config.adapters[host].roleSettings[role])) {
         throw new Error(`agenticloop.json: ${path} must be an object`);
-      } else {
-        preserved.push(path);
       }
+      // Unknown target-owned roles are preserved here. Registry/config
+      // validation, not setup reconciliation, decides whether they are valid.
+      preserved.push(path);
     }
   }
 

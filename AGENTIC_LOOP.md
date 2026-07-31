@@ -239,16 +239,21 @@ operator input.
 ### Single-role dispatch and return
 
 One implementation handoff uses `agenticloop.role-preparation`, schema version
-`2`, defined in the bundled `src/dispatch-envelope.js` module. It is a read-only
+`4`, defined in the bundled `src/dispatch-envelope.js` module. It is a read-only
 handoff artifact, not a controller, lane-result store, task mutation, or shared
 durable-state import. Its canonical digest is
-`sha256:agenticloop.role-preparation.v2:<64-lowercase-hex>` and it binds the
+`sha256:agenticloop.role-preparation.v4:<64-lowercase-hex>` and it binds the
 current task/contract/activation identities, freshly reevaluated P35-03
 readiness and base/dependency sources, committed Maintainer-attributed
 decomposition evidence, scoped checks, immutable role and invocation IDs, canonical
-references, capabilities, branch/worktree, attribution, liveness, and
+references, the selected host, exact closed host-role capability declaration,
+and canonical degraded-enforcement report inventory, branch/worktree,
+attribution, liveness, and
 cancellation. Any bound input changing stales the packet. The receiver verifies
 its ID, digest, role, and current bindings before its first mutation.
+Schema version 3 predates the mandatory degraded-report inventory and is
+rejected as `dispatch.packet.stale`; regenerate the packet as version 4 rather
+than reinterpreting or repairing version 3 in place.
 
 The single-role execution result is `agenticloop.role-return`, schema version
 `2`, with digest `sha256:agenticloop.role-return.v2:<64-lowercase-hex>`. It
@@ -268,8 +273,11 @@ operator-pinned Ed25519 public key from the fixed host-owned registry outside th
 target repository. A malformed,
 stale, replayed, abbreviated, mismatched, repository-self-attested, or manually
 reconstructed return is a typed rejection routed only to its producer.
-Commit attribution is reconstructed from durable full identities and one final
-contiguous `Task: <resolved task id>` / `Agent: <immutable role id>` pair.
+The receipt records the producer role observed by the host boundary; it is not
+derived from the packet assignment or return claim. That observed role must
+match both. Commit attribution is reconstructed from durable full identities
+and one final contiguous `Task: <resolved task id>` / `Agent: <immutable role
+id>` pair, but those cooperative trailers cannot repair a producer mismatch.
 
 ### Lifecycle and source of truth
 
@@ -444,11 +452,51 @@ exists.
 ### Capabilities, liveness, and returns
 
 Canonical role capabilities remain in the role declarations and their owning
-skills/backends. A generated packet references required capabilities; it does
-not copy whole workflow procedures. A host reports each requested capability as
-`enforced`, `advisory`, or `unavailable`. Advisory or unavailable enforcement
-must name the next authoritative boundary that detects incompatible actor or
-evidence; it never silently becomes enforcement.
+skills/backends. The runtime vocabulary covers implementation mutation,
+task/workflow mutation, role dispatch, result production/import, blocked-result
+resumption/redelegation, human-authorized exceptional recovery, and terminal
+closeout. Role identity, role policy, and host enforcement are separate: none
+of those capabilities becomes a role identity.
+
+Every shipped host and every canonical role has one closed
+`agenticloop.host-role-capability` version 1 declaration. Its action bindings
+partition the complete action inventory into `allowed`, `denied`, and
+`requires_human_disposition`; missing, duplicate, unknown, contradictory, or
+incomplete declarations fail closed. Generated adapters render
+`defaultLabel` from the role registry but retain `roleId` in filenames,
+configuration, attribution, packet authority, and declaration digests.
+
+A generated packet binds the exact selected host-role declaration and the
+canonical set of its advisory/unavailable action reports; it does not copy whole
+workflow procedures. Generated role prompts carry only a readable summary,
+schema version, declaration digest, and deterministic sidecar path. The full
+canonical bytes live once in
+`.agenticloop/host-role-capabilities/<host>.json`; generation and validation
+recompute the declaration and sidecar digests so prompt or sidecar drift fails
+closed. A host reports each requested capability as `enforced`,
+`advisory`, or `unavailable`. `enforced` means every shipped host tool path
+capable of the action is mechanically constrained. OpenCode `permission.edit:
+deny` does not constrain retained `bash`, and Copilot withholding `edit` does
+not constrain retained `execute`, so their Orchestrator/Auditor implementation
+denials are advisory. Codex remains advisory because generated custom-agent
+TOML has no per-agent write restriction. Claude Code `permissionMode: plan` and
+Cursor `readonly: true` are the generated whole-agent mechanical restrictions
+for Orchestrator/Auditor. Maintainer implementation denial remains advisory on
+every host because legitimate workflow mutation must remain reachable.
+
+Advisory or unavailable enforcement emits a closed
+`agenticloop.degraded-enforcement-report` version 3 record with diagnostic code
+`capability.enforcement.degraded`, the declaration digest, next authoritative
+boundary, limitation, and deterministic recovery route. `task
+prepare-dispatch` binds the canonical reports into the packet and emits the
+repair-policy warnings. `task verify-return` / `role_return_receive` runs
+canonical packet validation, including report/declaration compatibility, at the
+receive edge before accepting the return. There is no second nominal report
+check counted as an independent enforcement layer; contradictory or fabricated
+reports fail at that canonical boundary. Native
+host restriction, authenticated Agentic Loop authority checks, and arbitrary
+external writes are separate boundaries. Agentic Loop does not claim it can
+prevent external or human writes outside host control.
 
 `lease` remains the accepted external term during migration and is interpreted
 as a `delegation_liveness_window`: an observable-step cadence, expiry, and stop
@@ -466,6 +514,56 @@ blocker category/evidence, resume owner/transition, and resume preconditions. An
 ID, producing role, transition ID, exact failed/unavailable check, evidence,
 proposed disposition, disposition authority, and next resumable transition.
 Neither packet authorizes another role to repair, accept, or reconstruct it.
+A normal resume remains owned by the authenticated return's producing `roleId`.
+The `task verify-return` / `role_return_receive` import edge runs this check
+before any transition, persistence, repair, or host-state change. Changing
+owner requires one closed `agenticloop.blocked-result-redelegation` version 2
+authority bound to the exact return ID/digest, consumed packet, producer,
+target role, issuer, issue/expiry times, and invalidators. Its semantic digest
+proves record integrity, not authorization. Authorization requires an Ed25519
+signature verified against the exact authority ID, kind, key, issuer, target
+repository, and current revocations in the fixed operator trust store's closed
+schemaVersion 2 `authorities` inventory. Comments, labels, trailers,
+caller-supplied producer strings, self-minted keys, or the identity of the next
+editor do not transfer ownership.
+
+The public CLI does not expose a switch that promotes a supported adapter or
+authority store. A supported host integration must inject the protected
+host-trust boundary into the in-process I/O context after authenticating its own
+capture/receipt channel; ordinary CLI calls remain fail closed. The canonical
+`scripts/sign-blocked-authority.mjs` helper constructs and signs redelegation
+and human-disposition records from JSON requests using the same serializers as
+verification. It reads a private key from an operator-controlled path, writes a
+new output file only, and never includes private key bytes in records or output.
+
+Destructive, scope-changing, or host-state recovery from a blocked result
+requires one closed, operator-pinned, Ed25519-signed
+`agenticloop.human-disposition` version 2 record at the same import edge. It
+binds the exact blocked return and requested recovery identity/class/scope/host
+state, human actor and durable authority reference, reason, issue/expiry times,
+resulting owner/transition, and invalidation conditions. Missing, unsigned,
+self-minted, malformed, stale, future-dated, revoked, cross-return, or
+wrong-recovery records remain blocked. A host without trusted provenance
+reports the operation unsupported/degraded and does not continue. Authorized
+human work remains attributed to `human_actor` under `human_authority`; it
+never fabricates a workflow-role attribution.
+
+Receipt authentication precedes receipt-controlled semantic classification.
+Verification performs only closed structural parsing and trusted adapter/key
+selection before verifying the signature over canonical bytes. Producer role,
+target, packet/return binding, liveness, and other semantic checks run only
+after that authentication. A forged producer role therefore produces the
+generic authentication failure, while an authentically signed wrong producer
+produces `role_return.producer_mismatch`.
+
+Dispatch packet schema version 4 is current. The shipped pre-P35-05 dispatch
+baseline was schema version 2; an authentic version 2 packet receives typed
+`dispatch.packet.stale` upgrade guidance and is never accepted as current.
+Authentic transitional version 3 packets receive the same fail-closed treatment.
+The shipped host-receipt baseline was schema version 1; an authentic version 1
+receipt receives typed `role_return.receipt_stale` reissue guidance. Malformed
+inputs do not become legacy packets or receipts merely by carrying an old
+version number.
 
 Request capture is independent from capability enforcement. Before task
 authoring, the selected adapter implementation derives

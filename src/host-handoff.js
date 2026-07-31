@@ -11,7 +11,7 @@
  * artifacts, packets, returns, prompts, and agent-visible environments.
  */
 
-import { canonicalJson, canonicalSha256 } from './canonical-json.js';
+import { canonicalSha256 } from './canonical-json.js';
 import { deepFreeze } from './immutable.js';
 import {
   HOST_SIGNATURE_ALGORITHM,
@@ -21,20 +21,45 @@ import {
 } from './host-trust.js';
 
 export const ROLE_RETURN_RECEIPT_KIND = 'agenticloop.role-return-producer';
-export const ROLE_RETURN_RECEIPT_SCHEMA_VERSION = 1;
+export const LEGACY_ROLE_RETURN_RECEIPT_SCHEMA_VERSION = 1;
+export const ROLE_RETURN_RECEIPT_SCHEMA_VERSION = 2;
 export const ACTIVATION_SIGNATURE_KIND = 'agenticloop.activation-capture-signature';
 export const ACTIVATION_SIGNATURE_SCHEMA_VERSION = 2;
 
 const SEMANTIC_DIGEST_RE = /^sha256:agenticloop\.[a-z-]+\.v[1-9]\d*:[a-f0-9]{64}$/;
 const ISO_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 
+export class HostProducerMismatchError extends TypeError {
+  constructor(message = 'host-observed producer role does not match the dispatched and returned role') {
+    super(message);
+    this.name = 'HostProducerMismatchError';
+    this.code = 'role_return.producer_mismatch';
+  }
+}
+
+export class HostReceiptStaleVersionError extends TypeError {
+  constructor(
+    observedVersion = LEGACY_ROLE_RETURN_RECEIPT_SCHEMA_VERSION,
+    requiredVersion = ROLE_RETURN_RECEIPT_SCHEMA_VERSION
+  ) {
+    super(
+      `host handoff receipt schemaVersion ${observedVersion} is stale; ` +
+      `reissue the receipt as schemaVersion ${requiredVersion}`
+    );
+    this.name = 'HostReceiptStaleVersionError';
+    this.code = 'role_return.receipt_stale';
+    this.observedVersion = observedVersion;
+    this.requiredVersion = requiredVersion;
+  }
+}
+
 function exactKeys(value, expected, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new TypeError(`${label} must be an object`);
   }
-  const actual = Object.keys(value).sort();
-  const canonical = [...expected].sort();
-  if (canonicalJson(actual) !== canonicalJson(canonical)) {
+  const wanted = expected instanceof Set ? expected : new Set(expected);
+  const actual = Object.keys(value);
+  if (actual.length !== wanted.size || actual.some(key => !wanted.has(key))) {
     throw new TypeError(`${label} fields must equal the closed schema`);
   }
 }
@@ -93,7 +118,7 @@ export function verifyActivationCaptureSignature(capture, trustedAdapter) {
   return verifyHostPayload(activationSignaturePayload(capture), signature.value, trustedAdapter.publicKey);
 }
 
-function receiptSignaturePayload(receipt) {
+export function hostHandoffReceiptSignaturePayload(receipt) {
   return {
     ...receipt,
     authentication: {
@@ -110,20 +135,23 @@ function receiptSignaturePayload(receipt) {
  * evidence at their own transport boundary.
  */
 export function createHostHandoffReceipt(input = {}, privateKey) {
-  const { adapterId, keyId, packet, roleReturn, repositoryEvidence } = input;
+  const { adapterId, keyId, packet, roleReturn, repositoryEvidence, observedProducerRole } = input;
   if (typeof adapterId !== 'string' || !adapterId.trim()) throw new TypeError('host adapterId is required');
   if (typeof keyId !== 'string' || !keyId.trim()) throw new TypeError('host handoff keyId is required');
   if (!packet?.assignment?.invocationId) throw new TypeError('dispatch packet invocationId is required');
   if (!packet?.assignment?.liveness?.expiry) throw new TypeError('dispatch packet liveness expiry is required');
   if (!packet?.packetId || !SEMANTIC_DIGEST_RE.test(packet?.digest ?? '')) throw new TypeError('dispatch packet identity is invalid');
   if (!roleReturn?.returnId || !SEMANTIC_DIGEST_RE.test(roleReturn?.digest ?? '')) throw new TypeError('role return identity is invalid');
+  if (typeof observedProducerRole !== 'string' || !observedProducerRole.trim()) {
+    throw new TypeError('host-observed producer role is required');
+  }
   if (typeof packet?.activation?.repositoryIdentity !== 'string' || !packet.activation.repositoryIdentity) {
     throw new TypeError('dispatch packet target repository identity is required');
   }
   const receipt = {
     kind: ROLE_RETURN_RECEIPT_KIND,
     schemaVersion: ROLE_RETURN_RECEIPT_SCHEMA_VERSION,
-    producerRole: packet.assignment.roleId,
+    producerRole: observedProducerRole,
     source: 'host_adapter',
     adapterId,
     invocationId: packet.assignment.invocationId,
@@ -139,7 +167,10 @@ export function createHostHandoffReceipt(input = {}, privateKey) {
       value: null,
     },
   };
-  receipt.authentication.value = signHostPayload(receiptSignaturePayload(receipt), privateKey);
+  receipt.authentication.value = signHostPayload(
+    hostHandoffReceiptSignaturePayload(receipt),
+    privateKey
+  );
   return deepFreeze(receipt);
 }
 
@@ -167,7 +198,9 @@ export function verifyHostHandoffReceipt(receipt, {
   exactKeys(receipt.roleReturn, ['returnId', 'digest'], 'host handoff return binding');
   exactKeys(receipt.packetLiveness, ['expiry'], 'host handoff liveness binding');
   exactKeys(receipt.authentication, ['algorithm', 'keyId', 'value'], 'host handoff authentication');
-  if (receipt.kind !== ROLE_RETURN_RECEIPT_KIND || receipt.schemaVersion !== ROLE_RETURN_RECEIPT_SCHEMA_VERSION ||
+  if (receipt.kind !== ROLE_RETURN_RECEIPT_KIND ||
+      ![LEGACY_ROLE_RETURN_RECEIPT_SCHEMA_VERSION, ROLE_RETURN_RECEIPT_SCHEMA_VERSION]
+        .includes(receipt.schemaVersion) ||
       receipt.source !== 'host_adapter') {
     throw new TypeError('host handoff receipt identity is invalid');
   }
@@ -184,6 +217,16 @@ export function verifyHostHandoffReceipt(receipt, {
       receipt.authentication.keyId !== trustedAdapter.keyId) {
     throw new TypeError('host handoff receipt key identity is not the pinned trusted key');
   }
+  if (!verifyHostPayload(
+    hostHandoffReceiptSignaturePayload(receipt),
+    receipt.authentication.value,
+    trustedAdapter.publicKey
+  )) {
+    throw new TypeError('host handoff receipt authentication failed');
+  }
+  if (receipt.schemaVersion === LEGACY_ROLE_RETURN_RECEIPT_SCHEMA_VERSION) {
+    throw new HostReceiptStaleVersionError();
+  }
   if (packet?.activation?.adapter !== trustedAdapter.adapterId ||
       packet?.activation?.signature?.keyId !== trustedAdapter.keyId ||
       packet?.activation?.repositoryIdentity !== trustedAdapter.repositoryIdentity ||
@@ -197,7 +240,10 @@ export function verifyHostHandoffReceipt(receipt, {
     throw new TypeError('host handoff receivedAt is invalid or future-dated');
   }
   if (receipt.producerRole !== packet?.assignment?.roleId ||
-      receipt.invocationId !== packet?.assignment?.invocationId ||
+      receipt.producerRole !== roleReturn?.producerRole) {
+    throw new HostProducerMismatchError();
+  }
+  if (receipt.invocationId !== packet?.assignment?.invocationId ||
       receipt.packet.packetId !== packet?.packetId ||
       receipt.packet.digest !== packet?.digest ||
       receipt.roleReturn.returnId !== roleReturn?.returnId ||
@@ -209,9 +255,6 @@ export function verifyHostHandoffReceipt(receipt, {
   const expiry = Date.parse(receipt.packetLiveness.expiry);
   if (!Number.isFinite(expiry) || Date.parse(receipt.receivedAt) > expiry) {
     throw new TypeError('host handoff receipt was produced after the dispatch liveness window closed');
-  }
-  if (!verifyHostPayload(receiptSignaturePayload(receipt), receipt.authentication.value, trustedAdapter.publicKey)) {
-    throw new TypeError('host handoff receipt authentication failed');
   }
   return receipt;
 }

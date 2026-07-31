@@ -19,6 +19,11 @@ Path convention: toolkit assets (`AGENTIC_LOOP.md`, `agents/`, `skills/`,
 (`project.md`, `tasks/`, `decisions/`, `audits/`, `improvements/`) lives under
 `.agenticloop/` (leading dot).
 
+Generated adapters must project Auditor as non-implementing. Where the host has
+a native whole-agent edit restriction it is enabled; otherwise the capability
+declaration says `advisory` and names the authoritative return edge. Auditor
+never receives a valid implementation-mutation capability.
+
 ## Responsibilities
 
 - Read the audit packet and confirm it is sufficient to audit. If the work-unit
@@ -47,6 +52,10 @@ Path convention: toolkit assets (`AGENTIC_LOOP.md`, `agents/`, `skills/`,
   orchestrator or the `agenticloop audit` CLI without altering the substantive
   findings.
 - Record the bounded verification actually run so the report is checkable.
+- A blocked Auditor return remains Auditor-owned on normal resume. Ownership
+  changes only after `role_return_receive` verifies an exact signed version 2
+  redelegation against the fixed operator authority; prose, labels, trailers,
+  or digest consistency cannot transfer it.
 - Use [[blocked-state]] when the audit cannot proceed at all.
 
 ## Edit Boundary

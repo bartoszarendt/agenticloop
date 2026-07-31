@@ -50,6 +50,9 @@ import {
 import { commandFailure, printGateResult } from './public-result.js';
 import { presentGateResultForTarget } from './diagnostic-presentation.js';
 import { canonicalJson } from './canonical-json.js';
+import { loadAgenticLoopConfig } from './json.js';
+import { buildHostRoleCapabilityInventory } from './host-role-capabilities.js';
+import { resolveWorkflowRoleRegistry } from './workflow-roles.js';
 import {
   createTaskReadinessEvidence,
   createTaskEvidenceContext,
@@ -238,6 +241,7 @@ function resolveActivationCapabilities(target, io, assertedPath) {
   const store = loadHostTrustStore(target, {
     operatorTrustRoot: io.operatorTrustRoot ?? undefined,
     assertedPath,
+    protectedBoundary: io.hostAuthority ?? undefined,
   });
   if (store.state === 'unsupported_boundary') {
     throw new VerificationContextUnsupportedBoundaryError(
@@ -250,11 +254,25 @@ function resolveActivationCapabilities(target, io, assertedPath) {
   return activationCapabilityInventory(store.adapters);
 }
 
+function resolveEffectiveHostRoleCapabilities(target) {
+  const config = loadAgenticLoopConfig(join(target, 'agenticloop.json'));
+  return buildHostRoleCapabilityInventory({
+    adapterConfigs: config.adapters ?? {},
+  });
+}
+
+function resolveEffectiveWorkflowRegistry(target) {
+  return resolveWorkflowRoleRegistry(
+    loadAgenticLoopConfig(join(target, 'agenticloop.json'))
+  );
+}
+
 /** Resolve one pinned host adapter for return-receipt verification. */
 function resolveTrustedHostAdapter(target, io, assertedPath, expectedAdapterId) {
   const store = loadHostTrustStore(target, {
     operatorTrustRoot: io.operatorTrustRoot ?? undefined,
     assertedPath,
+    protectedBoundary: io.hostAuthority ?? undefined,
   });
   if (store.state === 'unsupported_boundary') {
     throw new VerificationContextUnsupportedBoundaryError(
@@ -271,6 +289,30 @@ function resolveTrustedHostAdapter(target, io, assertedPath, expectedAdapterId) 
     );
   }
   return adapter;
+}
+
+/** Resolve one verification-only authority from the same fixed operator trust store. */
+function resolveTrustedBlockedAuthority(target, io, assertedPath, expectedAuthorityId, expectedKind) {
+  const store = loadHostTrustStore(target, {
+    operatorTrustRoot: io.operatorTrustRoot ?? undefined,
+    assertedPath,
+    protectedBoundary: io.hostAuthority ?? undefined,
+  });
+  if (store.state === 'unsupported_boundary') {
+    throw new VerificationContextUnsupportedBoundaryError(
+      `Host trust registry is well-formed but declares dynamic supported adapters: ${store.errors.join('; ')}`
+    );
+  }
+  if (!store.ok) {
+    throw new VerificationContextMalformedError(`Host trust store is invalid: ${store.errors.join('; ')}`);
+  }
+  const authority = store.authorities[String(expectedAuthorityId ?? '')];
+  if (!authority || authority.authorityKind !== expectedKind) {
+    throw new VerificationContextError(
+      `authority '${String(expectedAuthorityId ?? '')}' of kind '${String(expectedKind ?? '')}' is not pinned in the fixed operator trust registry`
+    );
+  }
+  return authority;
 }
 
 function readActivationCaptureInput(target, relPath, capabilities, intendedTaskId) {
@@ -989,10 +1031,12 @@ export async function cmdTask(args, io = createIo()) {
       };
       let input = null;
       let capabilities;
+      let hostRoleCapabilities;
       let priorGateReceipts = [];
       try {
         input = opts.input ? readJson(opts.input, 'dispatch input') : null;
         capabilities = resolveActivationCapabilities(target, io, opts.hostTrustStore);
+        hostRoleCapabilities = resolveEffectiveHostRoleCapabilities(target);
         if (opts.priorReceipts) {
           priorGateReceipts = readJson(opts.priorReceipts, 'prior-gate receipts');
         } else if (Array.isArray(input?.priorGateReceipts)) {
@@ -1071,7 +1115,7 @@ export async function cmdTask(args, io = createIo()) {
           refetchDecomposition,
           ...stateInputs,
           roleId: opts.role,
-        }, { capabilities });
+        }, { capabilities, hostRoleCapabilities });
       } else {
         prepared = prepareRoleDispatch({
           refetchTask,
@@ -1081,7 +1125,7 @@ export async function cmdTask(args, io = createIo()) {
           ...stateInputs,
           activation: input?.activation,
           assignment: input?.assignment,
-        }, { capabilities });
+        }, { capabilities, hostRoleCapabilities });
       }
       const presentedValidation = presentGateResultForTarget(prepared.validation, target);
       if (asJson) {
@@ -1112,19 +1156,66 @@ export async function cmdTask(args, io = createIo()) {
       let raw;
       let repositoryEvidence = null;
       let producerReceipt = null;
+      let redelegationAuthority = null;
+      let recovery = null;
+      let humanDisposition = null;
       let capabilities;
+      let hostRoleCapabilities;
+      let workflowRoleRegistry;
       try {
         packet = JSON.parse(readJsonText(opts.packet, 'dispatch packet'));
         raw = readJsonText(opts.return, 'role return');
         capabilities = resolveActivationCapabilities(target, io, opts.hostTrustStore);
+        hostRoleCapabilities = resolveEffectiveHostRoleCapabilities(target);
+        workflowRoleRegistry = resolveEffectiveWorkflowRegistry(target);
         repositoryEvidence = opts.repositoryEvidence
           ? JSON.parse(readJsonText(opts.repositoryEvidence, 'repository evidence'))
           : null;
         producerReceipt = opts.producerReceipt
           ? JSON.parse(readJsonText(opts.producerReceipt, 'producer receipt'))
           : null;
+        redelegationAuthority = opts.redelegationAuthority
+          ? JSON.parse(readJsonText(opts.redelegationAuthority, 'redelegation authority'))
+          : null;
+        recovery = opts.recoveryRequest
+          ? JSON.parse(readJsonText(opts.recoveryRequest, 'recovery request'))
+          : null;
+        humanDisposition = opts.humanDisposition
+          ? JSON.parse(readJsonText(opts.humanDisposition, 'human disposition'))
+          : null;
       } catch (error) {
         return printGateResult('task verify-return', commandFailure('task verify-return', error, 'operational_error', {}, target), asJson, io);
+      }
+      const hasHumanDispositionSelector =
+        opts.humanDispositionAuthority !== undefined ||
+        opts.humanDispositionKeyId !== undefined;
+      if (humanDisposition !== null) {
+        if (recovery === null ||
+            opts.humanDispositionAuthority === undefined ||
+            opts.humanDispositionKeyId === undefined) {
+          io.err(
+            'task verify-return requires --recovery-request, --human-disposition-authority, ' +
+            'and --human-disposition-key-id with --human-disposition'
+          );
+          return EXIT_USAGE;
+        }
+        if (humanDisposition?.authentication?.authorityId !== opts.humanDispositionAuthority ||
+            humanDisposition?.authentication?.keyId !== opts.humanDispositionKeyId) {
+          const error = new VerificationContextMalformedError(
+            'human-disposition authentication does not match the explicitly selected authorityId and keyId'
+          );
+          return printGateResult(
+            'task verify-return',
+            commandFailure('task verify-return', error, 'operational_error', {}, target),
+            asJson,
+            io
+          );
+        }
+      } else if (hasHumanDispositionSelector) {
+        io.err(
+          '--human-disposition-authority and --human-disposition-key-id require --human-disposition'
+        );
+        return EXIT_USAGE;
       }
       const filePath = taskPathForId(target, projectConfig, taskId);
       const carrier = relative(target, filePath).replace(/\\/g, '/');
@@ -1149,8 +1240,32 @@ export async function cmdTask(args, io = createIo()) {
         refetchRepositoryEvidence,
         producerReceipt,
         resolveTrustedAdapter: adapterId => resolveTrustedHostAdapter(target, io, opts.hostTrustStore, adapterId),
+        requestedOwner: opts.resumeOwner,
+        redelegationAuthority,
+        recovery,
+        humanDisposition,
+        resolveTrustedAuthority: (authorityId, authorityKind) => {
+          const selectedAuthorityId = authorityKind === 'human_disposition'
+            ? opts.humanDispositionAuthority
+            : authorityId;
+          const authority = resolveTrustedBlockedAuthority(
+            target,
+            io,
+            opts.hostTrustStore,
+            selectedAuthorityId,
+            authorityKind
+          );
+          if (authorityKind === 'human_disposition' &&
+              authority.keyId !== opts.humanDispositionKeyId) {
+            throw new VerificationContextError(
+              `authority '${String(selectedAuthorityId)}' does not use selected keyId '${String(opts.humanDispositionKeyId)}'`
+            );
+          }
+          return authority;
+        },
+        workflowRoleRegistry,
         runGit: targetGitRunner(target),
-      }, { capabilities });
+      }, { capabilities, hostRoleCapabilities });
       const presentedValidation = presentGateResultForTarget(received.validation, target);
       if (asJson) printGateResult('task verify-return', presentedValidation, true, io);
       else if (received.ok) io.out('Role return is current.');

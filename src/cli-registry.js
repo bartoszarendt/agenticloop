@@ -35,9 +35,11 @@ import { parseArgs as utilParseArgs } from 'node:util';
 import { readFileSync } from 'node:fs';
 import { CliUsageError } from './cli-io.js';
 import { DEFAULT_AUDIT_BUDGET } from './layout.js';
+import { WORKFLOW_ROLE_IDS } from './workflow-roles.js';
 
 const ADAPTER_HOSTS = ['opencode', 'codex', 'claude-code', 'copilot', 'cursor'];
 const ADAPTER_TARGETS = [...ADAPTER_HOSTS, 'all'];
+const WORKFLOW_ROLE_LIST = WORKFLOW_ROLE_IDS.join(', ');
 
 function opt(name, type, description, extra = {}) {
   return { name, type, description, ...extra };
@@ -421,8 +423,8 @@ export const COMMAND_REGISTRY = {
         options: [targetOption(), opt('input', 'string', 'Closed dispatch input carrying activation, canonical readiness, decomposition, and assignment facts.'), opt('packet', 'string', 'Existing dispatch packet to revalidate read-only before receiver mutation.'), opt('role', 'string', 'Immutable receiving role required with --packet.', { enum: ['engineer'] }), opt('prior-receipts', 'string', 'JSON array of prior-gate or setup task-mutation receipts that must be resolved and undrifted before dispatch.'), hostTrustStoreOption, jsonOption],
       },
       'verify-return': {
-        summary: 'Read-only role-return verifier using an authenticated host receipt and its exact repository evidence.',
-        usage: 'agenticloop task verify-return <id> --packet <packet.json> --return <role-return.json> [--repository-evidence <evidence.json>] [--producer-receipt <receipt.json>] [--host-trust-store <expected-path>] [--json] [--target <dir>]',
+        summary: 'Read-only role-return verifier, blocked-result resume authority gate, and exceptional-recovery authority gate.',
+        usage: 'agenticloop task verify-return <id> --packet <packet.json> --return <role-return.json> [--repository-evidence <evidence.json>] [--producer-receipt <receipt.json>] [--resume-owner <role-id> --redelegation-authority <authority.json> | --recovery-request <recovery.json> --human-disposition <disposition.json> --human-disposition-authority <authority-id> --human-disposition-key-id <key-id>] [--host-trust-store <expected-path>] [--json] [--target <dir>]',
         receiptRevalidation: 'read-only',
         positionals: [{ name: 'id', required: true }],
         options: [
@@ -431,6 +433,12 @@ export const COMMAND_REGISTRY = {
           opt('return', 'string', 'Raw role-return JSON wire artifact. Required.'),
           opt('repository-evidence', 'string', 'Repository evidence signed by the host receipt. Required for successful verification.'),
           opt('producer-receipt', 'string', 'Ed25519 host-adapter receipt verified against the packet-bound adapter/key from the fixed operator trust registry. Required for successful verification.'),
+          opt('resume-owner', 'string', `Requested owner for a blocked result. Defaults to the authenticated producer and requires exact redelegation authority when changed. Default registry: ${WORKFLOW_ROLE_LIST}; target workflowRoles extensions are accepted after config validation.`),
+          opt('redelegation-authority', 'string', 'Signed blocked-result redelegation JSON verified against a schemaVersion 2 operator trust authority.'),
+          opt('recovery-request', 'string', 'Exact destructive, scope-changing, or host-state recovery request JSON.'),
+          opt('human-disposition', 'string', 'Signed human-disposition JSON authorizing the exact recovery request.'),
+          opt('human-disposition-authority', 'string', 'Expected operator-pinned authorityId for --human-disposition. Required with that record.'),
+          opt('human-disposition-key-id', 'string', 'Expected operator-pinned keyId for --human-disposition. Required with that record.'),
           hostTrustStoreOption,
           jsonOption,
         ],
@@ -767,7 +775,7 @@ export const COMMAND_REGISTRY = {
       targetOption(),
       opt('output', 'string', 'Event log path override (default: <target>/.agenticloop/logs/<task-id>.jsonl; --task <id> is required unless --output <file> is supplied).'),
       opt('task', 'string', 'Task id associated with the event. Required for default output.'),
-      opt('role', 'string', 'Role: orchestrator, maintainer, engineer, auditor, human, unknown.'),
+      opt('role', 'string', `Role: ${WORKFLOW_ROLE_LIST}, human, unknown.`),
       opt('summary', 'string', 'Required short event summary.'),
       opt('outcome', 'string', 'Outcome: success, failure, blocked, needs_context, accepted, needs_revision, unknown.'),
       opt('backend', 'string', 'Backend: files, github, unknown.'),
@@ -789,7 +797,7 @@ export const COMMAND_REGISTRY = {
         options: [
           targetOption('Directory containing agenticloop.json (default: current).'),
           adapterOption('Host adapter to configure (opencode, codex, claude-code, copilot, cursor).', { enum: ADAPTER_HOSTS }),
-          opt('role', 'string', 'Logical role to configure (orchestrator, maintainer, engineer, auditor).'),
+          opt('role', 'string', `Logical role to configure (${WORKFLOW_ROLE_LIST}).`, { enum: WORKFLOW_ROLE_IDS }),
           opt('model', 'string', 'Host-specific model identifier or alias.'),
           opt('reasoning-effort', 'string', 'Reasoning effort for hosts that support it (opencode, codex).'),
           opt('profile', 'string', 'Fill missing fields from the Codex recommended profile without replacing explicit settings.', { enum: ['recommended'] }),

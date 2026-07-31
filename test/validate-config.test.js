@@ -3351,7 +3351,8 @@ describe('workflow role registry projection validation', () => {
     const before = validateConfig(target);
     assert.ok(before.errors.some(error => error.includes('Config roles contain unexpected role IDs: reviewer')));
     assert.ok(before.errors.some(error =>
-      error.includes("make agenticloop.json extend './agenticloop/config.json'") &&
+      error.includes('Workflow role registry migration required') &&
+      error.includes('workflowRoles extensions') &&
       error.includes("run 'npx agenticloop update'") &&
       error.includes("run 'npx agenticloop validate'")
     ));
@@ -3367,5 +3368,31 @@ describe('workflow role registry projection validation', () => {
     const after = validateConfig(target);
     assert.deepEqual(after.errors, []);
     assert.equal(existsSync(join(preservedCustomDir, 'reviewer.md')), true);
+  });
+
+  it('validates a configured custom hyphenated workflow role', () => {
+    const target = makeTarget('registry-custom-hyphenated-role');
+    const configPath = join(target, 'agenticloop.json');
+    const rawConfig = loadJsonFile(configPath);
+    rawConfig.workflowRoles = [{
+      roleId: 'security-observer',
+      defaultLabel: 'Security Observer',
+      escalationPrecedence: 50,
+    }];
+    rawConfig.roles = {
+      'security-observer': {
+        sourceFile: 'agenticloop/agents/security-observer.md',
+        requiredSkills: [],
+      },
+    };
+    writeFileSync(configPath, `${JSON.stringify(rawConfig, null, 2)}\n`, 'utf-8');
+    writeFileSync(
+      join(target, 'agenticloop', 'agents', 'security-observer.md'),
+      '---\nname: security-observer\ndescription: Security review extension role.\n---\n# Security Observer\n',
+      'utf-8'
+    );
+
+    const checked = validateConfig(target);
+    assert.deepEqual(checked.errors, []);
   });
 });

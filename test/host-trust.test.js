@@ -57,6 +57,50 @@ describe('Ed25519 host signing keys', () => {
 });
 
 describe('fixed operator trust registry', () => {
+  it('loads closed schemaVersion 2 verification authorities from the fixed operator root', () => {
+    const target = mkdtempSync(join(temp, 'authority-target-'));
+    const operatorRoot = mkdtempSync(join(temp, 'authority-operator-'));
+    const path = operatorTrustStorePath(target, operatorRoot);
+    const { publicKeyBase64 } = generateHostSigningKey();
+    const document = {
+      kind: 'agenticloop.host-trust',
+      schemaVersion: 2,
+      target: { repositoryIdentity: targetRepositoryIdentity(target) },
+      adapters: [],
+      authorities: [{
+        authorityId: 'redelegation-root',
+        authorityKind: 'blocked_result_redelegation',
+        keyId: 'redelegation-key-1',
+        algorithm: 'ed25519',
+        publicKey: publicKeyBase64,
+        issuer: { ownerKind: 'workflow_role', ownerId: 'orchestrator' },
+        revokedRecordIds: ['redelegation:00000000-0000-4000-8000-000000000001'],
+      }],
+    };
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(document), 'utf8');
+
+    const loaded = loadHostTrustStore(target, { operatorTrustRoot: operatorRoot });
+    assert.equal(loaded.ok, true, loaded.errors.join('\n'));
+    assert.equal(loaded.authorities['redelegation-root'].authorityKind, 'blocked_result_redelegation');
+    assert.equal(loaded.authorities['redelegation-root'].repositoryIdentity, targetRepositoryIdentity(target));
+    assert.deepEqual(loaded.authorities['redelegation-root'].revokedRecordIds, document.authorities[0].revokedRecordIds);
+
+    const callerFabricated = structuredClone(document);
+    callerFabricated.authorities[0].publicKey = generateHostSigningKey().publicKeyBase64;
+    const parsed = parseHostTrustStore(JSON.stringify(callerFabricated), { target });
+    assert.equal(parsed.ok, true);
+    assert.notEqual(
+      parsed.authorities['redelegation-root'].publicKey,
+      loaded.authorities['redelegation-root'].publicKey,
+      'a separate document can parse, but callers cannot select it because load uses the fixed operator path'
+    );
+
+    const malformed = structuredClone(document);
+    malformed.authorities[0].trusted = true;
+    assert.equal(parseHostTrustStore(JSON.stringify(malformed), { target }).ok, false);
+  });
+
   it('distinguishes missing, malformed, empty, and unsupported-boundary trust stores', () => {
     const target = mkdtempSync(join(temp, 'states-target-'));
     const operatorRoot = mkdtempSync(join(temp, 'states-operator-'));
@@ -118,6 +162,38 @@ describe('fixed operator trust registry', () => {
       assertedPath: localPath,
     }).ok, false);
     assert.equal(parseHostTrustStore(JSON.stringify(trust.document), { target: otherTarget }).ok, false);
+  });
+
+  it('admits supported adapters only through the protected boundary context', () => {
+    const target = mkdtempSync(join(temp, 'protected-target-'));
+    const operatorRoot = mkdtempSync(join(temp, 'protected-operator-'));
+    const trust = createTestHostTrust({ target });
+    const storePath = writeHostTrustStore(operatorRoot, trust);
+    const observed = [];
+    const loaded = loadHostTrustStore(target, {
+      operatorTrustRoot: operatorRoot,
+      assertedPath: storePath,
+      protectedBoundary: context => {
+        observed.push(context);
+        return context.kind === 'agenticloop.protected-host-trust-boundary' &&
+          context.schemaVersion === 1 &&
+          context.targetRepositoryIdentity === trust.repositoryIdentity &&
+          context.trustStorePath === storePath &&
+          context.supportedAdapterIds.includes(trust.adapterId);
+      },
+    });
+    assert.equal(loaded.ok, true, loaded.errors.join('\n'));
+    assert.equal(loaded.state, 'protected_boundary');
+    assert.equal(loaded.adapters[trust.adapterId].keyId, trust.keyId);
+    assert.equal(observed.length, 1);
+
+    const refused = loadHostTrustStore(target, {
+      operatorTrustRoot: operatorRoot,
+      assertedPath: storePath,
+      protectedBoundary: () => false,
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.state, 'unsupported_boundary');
   });
 
   it('does not let a CLI assertion select an attacker-created external trust root', () => {

@@ -47,6 +47,7 @@ import {
   isValidTaskId,
   taskIdRegexError,
 } from './task-id.js';
+import { WORKFLOW_ROLE_IDS } from './workflow-roles.js';
 
 const VALID_ADAPTER_HOSTS = ['opencode', 'codex', 'claude-code', 'copilot', 'cursor'];
 const DEVELOPMENT_STAGE_DESCRIPTIONS = {
@@ -903,7 +904,7 @@ export async function setup(options) {
           continue;
         }
         const rolesSource = loadGuidanceAlConfig(target).config ?? loadBundledCanonicalConfig();
-        const roles = Object.keys(rolesSource?.roles ?? {});
+        const roles = WORKFLOW_ROLE_IDS;
         const currentSettings = rolesSource?.adapters?.[host]?.roleSettings ?? {};
         write(`\nConfiguring models for ${host}:`);
         const { mutations, cancelled } = await promptModelSettingsInteractive(

@@ -43,6 +43,16 @@ import {
   planReferenceTree,
 } from './shared.js';
 import { fillUnsupportedActivationSlots } from '../adapter-slots.js';
+import {
+  buildEffectiveHostRoleCapabilityInventory,
+  hostRoleCapabilitySidecarRelativePath,
+  renderHostRoleCapabilityNotice,
+  renderHostRoleCapabilitySidecar,
+} from '../host-role-capabilities.js';
+import {
+  getWorkflowRoleLabel,
+  WORKFLOW_ROLE_IDS,
+} from '../workflow-roles.js';
 
 const CURSOR_START_COMMAND = bundledToolkitPath('agenticloop/commands/start.md');
 export const CURSOR_ACTIVATION_ADAPTER_ID = 'cursor.command.input.v1';
@@ -65,10 +75,6 @@ export const CURSOR_REQUIRED_PUBLIC_REFERENCES = [
 
 function quoteYamlScalar(value) {
   return JSON.stringify(String(value));
-}
-
-function capitalize(value) {
-  return value ? value[0].toUpperCase() + value.slice(1) : '';
 }
 
 function replaceAll(value, search, replacement) {
@@ -343,7 +349,8 @@ function buildCursorAgentBody(
   agentNames,
   backendEntries,
   backendPathBuilder,
-  skillPathBuilder
+  skillPathBuilder,
+  capabilityInventory
 ) {
   const maintainerAgent = agentNames.maintainer ?? 'maintainer';
   const engineerAgent = agentNames.engineer ?? 'engineer';
@@ -354,7 +361,7 @@ function buildCursorAgentBody(
     skillPathBuilder
   );
   const lines = [];
-  lines.push(`You are the Agentic Loop ${capitalize(roleName)} subagent for the target project in Cursor.`);
+  lines.push(`You are the Agentic Loop ${getWorkflowRoleLabel(roleName)} subagent for the target project in Cursor.`);
   lines.push(`Canonical role source: \`${roleSourceFile}\`.`);
   lines.push('Read `.agenticloop/project.md` before acting for setup status, task backend, document selections, naming, grouping, and event logging.');
   lines.push(`Follow \`${PROCESS_DOC_RELATIVE_PATH}\` as the workflow methodology.`);
@@ -397,6 +404,8 @@ function buildCursorAgentBody(
   }
 
   lines.push('');
+  lines.push(renderHostRoleCapabilityNotice('cursor', roleName, capabilityInventory));
+  lines.push('');
   lines.push('Canonical role contract follows:');
   lines.push('');
   const renderedRoleBody = renderCursorGeneratedText(roleBody, skillReferenceMap);
@@ -415,7 +424,8 @@ function renderCursorAgentMarkdown(
   agentNames,
   backendEntries,
   backendPathBuilder,
-  skillPathBuilder
+  skillPathBuilder,
+  capabilityInventory
 ) {
   const lines = [];
   const model = modelSettings.model?.trim() ? modelSettings.model.trim() : 'inherit';
@@ -441,7 +451,8 @@ function renderCursorAgentMarkdown(
     agentNames,
     backendEntries,
     backendPathBuilder,
-    skillPathBuilder
+    skillPathBuilder,
+    capabilityInventory
   ));
   lines.push('');
   return lines.join('\n');
@@ -519,12 +530,13 @@ function writeCursorAgents(
   skillReferenceMap,
   backendEntries,
   backendPathBuilder,
-  skillPathBuilder
+  skillPathBuilder,
+  capabilityInventory
 ) {
   mkdirSync(agentsDir, { recursive: true });
   const files = [];
 
-  for (const roleName of Object.keys(alConfig.roles ?? {})) {
+  for (const roleName of WORKFLOW_ROLE_IDS) {
     const agentName = agentNames[roleName] ?? roleName;
     const roleRecord = buildRoleRecord(alConfig, repoRoot, roleName);
     const modelSettings = resolveRoleModel(alConfig, 'cursor', roleName, cursorAdapter);
@@ -537,7 +549,8 @@ function writeCursorAgents(
       agentNames,
       backendEntries,
       backendPathBuilder,
-      skillPathBuilder
+      skillPathBuilder,
+      capabilityInventory
     );
     const mdPath = join(agentsDir, `${agentName}.md`);
     mkdirSync(dirname(mdPath), { recursive: true });
@@ -614,7 +627,8 @@ function writeOptionalCursorPluginDistribution(
   pluginAbsoluteSkillReferenceMap,
   agentNames,
   backendEntries,
-  version
+  version,
+  capabilityInventory
 ) {
   assertSharedAgenticLoopPluginCompatibility(alConfig);
 
@@ -649,7 +663,8 @@ function writeOptionalCursorPluginDistribution(
     pluginAbsoluteSkillReferenceMap,
     backendEntries,
     cursorPluginBackendReferenceAbsolutePath,
-    cursorPluginSkillReferenceAbsolutePath
+    cursorPluginSkillReferenceAbsolutePath,
+    capabilityInventory
   ));
 
   files.push(...writeCursorPublicSkillSurface(
@@ -669,9 +684,12 @@ export function generateCursorArtifacts(alConfig, repoRoot, outputDir) {
   assertSharedAgenticLoopPluginCompatibility(alConfig);
 
   const cursorAdapter = alConfig.adapters?.cursor ?? {};
+  const capabilityInventory = {
+    cursor: buildEffectiveHostRoleCapabilityInventory('cursor', cursorAdapter),
+  };
   const roleBindings = cursorAdapter.roleBindings ?? {};
   const agentNames = Object.fromEntries(
-    Object.keys(alConfig.roles ?? {}).map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
+    WORKFLOW_ROLE_IDS.map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
   );
   const skillEntries = readCanonicalSkillEntries(repoRoot, alConfig);
   const backendEntries = readCanonicalBackendEntries(repoRoot, alConfig);
@@ -709,7 +727,8 @@ export function generateCursorArtifacts(alConfig, repoRoot, outputDir) {
     absoluteSkillReferenceMap,
     backendEntries,
     cursorBackendReferenceAbsolutePath,
-    cursorSkillReferenceAbsolutePath
+    cursorSkillReferenceAbsolutePath,
+    capabilityInventory
   ));
 
   files.push(...writeCursorPublicSkillSurface(
@@ -733,9 +752,16 @@ export function generateCursorArtifacts(alConfig, repoRoot, outputDir) {
       pluginAbsoluteSkillReferenceMap,
       agentNames,
       backendEntries,
-      loadPackageVersion()
+      loadPackageVersion(),
+      capabilityInventory
     ));
   }
+
+  const sidecarRelPath = hostRoleCapabilitySidecarRelativePath('cursor');
+  const sidecarPath = join(outputDir, sidecarRelPath);
+  mkdirSync(dirname(sidecarPath), { recursive: true });
+  writeFileSync(sidecarPath, renderHostRoleCapabilitySidecar('cursor', cursorAdapter), 'utf-8');
+  files.push(sidecarRelPath);
 
   return { files };
 }
@@ -750,9 +776,12 @@ export function generateCursorArtifacts(alConfig, repoRoot, outputDir) {
  */
 export function planCursorArtifacts(alConfig, repoRoot, outputDir) {
   const cursorAdapter = alConfig.adapters?.cursor ?? {};
+  const capabilityInventory = {
+    cursor: buildEffectiveHostRoleCapabilityInventory('cursor', cursorAdapter),
+  };
   const roleBindings = cursorAdapter.roleBindings ?? {};
   const agentNames = Object.fromEntries(
-    Object.keys(alConfig.roles ?? {}).map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
+    WORKFLOW_ROLE_IDS.map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
   );
   const skillEntries = readCanonicalSkillEntries(repoRoot, alConfig);
   const backendEntries = readCanonicalBackendEntries(repoRoot, alConfig);
@@ -778,13 +807,14 @@ export function planCursorArtifacts(alConfig, repoRoot, outputDir) {
   actions.push({ type: 'clear-owned-directory', adapter: 'cursor', relPath: 'plugins/agenticloop' });
 
   // .cursor/agents/<name>.md
-  for (const roleName of Object.keys(alConfig.roles ?? {})) {
+  for (const roleName of WORKFLOW_ROLE_IDS) {
     const agentName = agentNames[roleName] ?? roleName;
     const roleRecord = buildRoleRecord(alConfig, repoRoot, roleName);
     const modelSettings = resolveRoleModel(alConfig, 'cursor', roleName, cursorAdapter);
     const md = renderCursorAgentMarkdown(
       agentName, roleName, roleRecord, modelSettings, absoluteSkillReferenceMap, agentNames,
-      backendEntries, cursorBackendReferenceAbsolutePath, cursorSkillReferenceAbsolutePath
+      backendEntries, cursorBackendReferenceAbsolutePath, cursorSkillReferenceAbsolutePath,
+      capabilityInventory
     );
     const relPath = `.cursor/agents/${agentName}.md`;
     actions.push({
@@ -848,13 +878,14 @@ export function planCursorArtifacts(alConfig, repoRoot, outputDir) {
     files.push(`${pluginRoot}/.cursor-plugin/plugin.json`);
 
     // Plugin agents.
-    for (const roleName of Object.keys(alConfig.roles ?? {})) {
+    for (const roleName of WORKFLOW_ROLE_IDS) {
       const agentName = agentNames[roleName] ?? roleName;
       const roleRecord = buildRoleRecord(alConfig, repoRoot, roleName);
       const modelSettings = resolveRoleModel(alConfig, 'cursor', roleName, cursorAdapter);
       const md = renderCursorAgentMarkdown(
         agentName, roleName, roleRecord, modelSettings, pluginAbsoluteSkillReferenceMap, agentNames,
-        backendEntries, cursorPluginBackendReferenceAbsolutePath, cursorPluginSkillReferenceAbsolutePath
+        backendEntries, cursorPluginBackendReferenceAbsolutePath, cursorPluginSkillReferenceAbsolutePath,
+        capabilityInventory
       );
       const relPath = `${pluginRoot}/agents/${agentName}.md`;
       actions.push({ type: 'write-file', adapter: 'cursor', relPath, content: md, marker: CURSOR_GENERATED_MARKER });
@@ -895,6 +926,15 @@ export function planCursorArtifacts(alConfig, repoRoot, outputDir) {
       files.push(relPath);
     }
   }
+
+  const sidecarRelPath = hostRoleCapabilitySidecarRelativePath('cursor');
+  actions.push({
+    type: 'write-file',
+    adapter: 'cursor',
+    relPath: sidecarRelPath,
+    content: renderHostRoleCapabilitySidecar('cursor', cursorAdapter),
+  });
+  files.push(sidecarRelPath);
 
   return { actions, files, adapter: 'cursor' };
 }

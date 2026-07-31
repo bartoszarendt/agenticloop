@@ -70,6 +70,10 @@ before(() => {
   packedRoot = join(prefix, 'node_modules', 'agenticloop');
   packedBin = join(packedRoot, 'bin', 'agenticloop.js');
   assert.ok(existsSync(packedBin), `packed binary missing at ${packedBin}`);
+  assert.ok(
+    existsSync(join(packedRoot, 'scripts', 'sign-blocked-authority.mjs')),
+    'packed canonical blocked-authority signer is missing'
+  );
 }, { timeout: 300000 });
 
 after(() => {
@@ -233,6 +237,28 @@ describe('packed package smoke tests', () => {
     });
     assert.equal(rejected.ok, false);
     assert.match(rejected.errors.join('\n'), /does not match the pre-registered operator trust path/);
+
+    document.schemaVersion = 2;
+    document.adapters = [];
+    document.authorities = [{
+      authorityId: 'packed-redelegation-root',
+      authorityKind: 'blocked_result_redelegation',
+      keyId: 'packed-redelegation-key-1',
+      algorithm: 'ed25519',
+      publicKey: publicKeyBase64,
+      issuer: { ownerKind: 'workflow_role', ownerId: 'orchestrator' },
+      revokedRecordIds: [],
+    }];
+    writeFileSync(operatorPath, `${JSON.stringify(document)}\n`, 'utf8');
+    const authorityStore = trustModule.loadHostTrustStore(target, {
+      operatorTrustRoot: operatorRoot,
+      assertedPath: operatorPath,
+    });
+    assert.equal(authorityStore.ok, true, authorityStore.errors.join('\n'));
+    assert.equal(
+      authorityStore.authorities['packed-redelegation-root'].authorityKind,
+      'blocked_result_redelegation'
+    );
   });
 
   it('keeps installed public dispatch fail-closed for a caller-supplied supported registry', async () => {
@@ -267,6 +293,18 @@ describe('packed package smoke tests', () => {
     const fixture = await createDispatchFixture(tmpBase, 'packed-corrective-contracts');
     const prepared = dispatch.prepareRoleDispatch(fixture, fixture.options);
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    assert.ok(prepared.packet.assignment.degradedEnforcementReports.length > 0);
+    assert.ok(prepared.packet.assignment.degradedEnforcementReports.every(report =>
+      report.diagnosticCode === 'capability.enforcement.degraded' &&
+      report.declarationDigest === prepared.packet.assignment.hostRoleCapability.digest
+    ));
+    assert.ok(prepared.validation.warningDiagnostics.some(diagnostic =>
+      diagnostic.code === 'capability.enforcement.degraded'
+    ));
+    const fabricatedReportPacket = structuredClone(prepared.packet);
+    fabricatedReportPacket.assignment.degradedEnforcementReports[0].enforcement = 'enforced';
+    fabricatedReportPacket.digest = dispatch.dispatchPreparationDigest(fabricatedReportPacket);
+    assert.equal(dispatch.validateDispatchPreparation(fabricatedReportPacket, fixture.options).ok, false);
 
     const digest = text => `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`;
     const provider = (packet, roleReturn, evidence) => {
@@ -275,6 +313,7 @@ describe('packed package smoke tests', () => {
         keyId: fixture.trust.keyId,
         packet,
         roleReturn,
+        observedProducerRole: packet.assignment.roleId,
         repositoryEvidence: evidence,
       }, fixture.trust.privateKey);
       return { producerReceipt, resolveTrustedAdapter: () => fixture.trust.adapter };
@@ -419,6 +458,15 @@ describe('packed package smoke tests', () => {
     assert.equal(commandHelp.status, 0);
     assert.match(commandHelp.stdout, /--non-interactive/);
     assert.match(commandHelp.stdout, /--dry-run/);
+    const returnHelp = runPacked(['task', 'verify-return', '--help']);
+    assert.equal(returnHelp.status, 0, returnHelp.stderr);
+    for (const option of [
+      '--resume-owner',
+      '--redelegation-authority',
+      '--recovery-request',
+      '--human-disposition',
+      '--host-trust-store',
+    ]) assert.match(returnHelp.stdout, new RegExp(option));
   });
 
   it('renders --help for every review-preparation command from the installed tarball', () => {
@@ -1057,7 +1105,7 @@ describe('packed audit, closeout, and improvement flows', () => {
     assert.ok(existsSync(scriptPath), 'packed package must ship scripts/measure-dispatch-context.mjs');
     const work = mkdtempSync(join(tmpBase, 'measure-'));
     const packetPath = join(work, 'packet.json');
-    writeFileSync(packetPath, JSON.stringify({ kind: 'agenticloop.role-preparation', schemaVersion: 2 }), 'utf8');
+    writeFileSync(packetPath, JSON.stringify({ kind: 'agenticloop.role-preparation', schemaVersion: 4 }), 'utf8');
     const measured = spawnSync(process.execPath, [
       scriptPath,
       '--packet', packetPath,

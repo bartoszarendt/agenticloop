@@ -201,6 +201,10 @@ The generated `auditor` subagent uses `permissionMode: "plan"` by default.
 posture is enforced mechanically rather than by prompt text alone. The auditor
 still reads the repository, task records, decisions, and evidence, and returns a
 structured report the orchestrator persists with `npx agenticloop audit report`.
+Capability declarations are derived from the effective final
+`permissionMode`, including target overrides. Changing a non-implementing role
+to `acceptEdits` therefore removes the enforced mutation-denial claim and
+renders that restriction advisory.
 
 The orchestrator or main session is not granted `acceptEdits` by default. Keep
 that main session as the coordinator and delegate writes or Bash-heavy work to

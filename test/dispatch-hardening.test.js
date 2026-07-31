@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 
 import {
   activationCaptureDisposition,
+  createRoleReturn,
   prepareRoleDispatch,
   receiveRoleReturn,
   validateActivationCapture,
@@ -24,8 +25,24 @@ import {
   validateRoleReturn,
   verifyDispatchBeforeMutation,
 } from '../src/dispatch-envelope.js';
-import { createHostHandoffReceipt, verifyHostHandoffReceipt } from '../src/host-handoff.js';
-import { HOST_TRUST_FILE, parseHostTrustStore } from '../src/host-trust.js';
+import {
+  blockedAuthoritySignaturePayload,
+  blockedResultRedelegationDigest,
+  createBlockedResultRedelegation,
+  createHumanDisposition,
+} from '../src/blocked-result-authority.js';
+import {
+  createHostHandoffReceipt,
+  hostHandoffReceiptSignaturePayload,
+  HostReceiptStaleVersionError,
+  verifyHostHandoffReceipt,
+} from '../src/host-handoff.js';
+import {
+  generateHostSigningKey,
+  HOST_TRUST_FILE,
+  parseHostTrustStore,
+  signHostPayload,
+} from '../src/host-trust.js';
 import { deriveCommitRange } from '../src/commit-range.js';
 import {
   CLEAN_DISPATCH_STATE_IDENTITY,
@@ -38,6 +55,9 @@ import {
   VerificationContextUnsupportedBoundaryError,
 } from '../src/public-error.js';
 import { repairPolicyFor } from '../src/repair-policy.js';
+import { loadAgenticLoopConfig } from '../src/json.js';
+import { buildHostRoleCapabilityInventory } from '../src/host-role-capabilities.js';
+import { resolveWorkflowRoleRegistry } from '../src/workflow-roles.js';
 import {
   activation,
   createDispatchFixture,
@@ -436,7 +456,7 @@ describe('initial repository state binds the dispatch', () => {
     assert.equal(evaluatePriorGateReceipts({ receipts: 'not-an-array' }).ok, false);
   });
 
-  it('keeps the public CLI fail-closed even when a caller injects its own trust root and callback', async () => {
+  it('keeps the public CLI fail-closed when no protected host boundary is supplied', async () => {
     const fixture = await createDispatchFixture(temp, 'prior-gate-cli');
     const created = await runCliInProcess([
       'task', 'new', 'prior gate carrier', '--id', 'T-002', '--scaffold', '--json', '--target', fixture.root,
@@ -457,7 +477,7 @@ describe('initial repository state binds the dispatch', () => {
       'task', 'prepare-dispatch', 'T-001', '--input', 'dispatch-input.json',
       '--prior-receipts', receiptPath, '--host-trust-store', fixture.trustStorePath,
       '--json', '--target', fixture.root,
-    ], { operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: () => true });
+    ], { operatorTrustRoot: fixture.operatorTrustRoot });
 
     const result = await command();
     assert.equal(result.status, 1);
@@ -625,6 +645,7 @@ describe('host receipt trust boundary', () => {
       keyId: fixture.trust.keyId,
       packet: prepared.packet,
       roleReturn,
+      observedProducerRole: prepared.packet.assignment.roleId,
       repositoryEvidence: evidence,
     }, fixture.trust.privateKey);
     return { fixture, packet: prepared.packet, evidence, roleReturn, receipt };
@@ -643,6 +664,106 @@ describe('host receipt trust boundary', () => {
     );
     // The receipt carries no private key material anywhere in its bytes.
     assert.doesNotMatch(JSON.stringify(receipt), /PRIVATE KEY/);
+  });
+
+  it('rejects an Orchestrator-observed artifact presented as an Engineer return even with correct trailers', async () => {
+    const { fixture, packet, evidence, roleReturn } = await signed('receipt-producer-mismatch');
+    assert.equal(roleReturn.producerRole, 'engineer');
+    assert.equal(roleReturn.attribution.commits.length > 0, true);
+    const mismatched = createHostHandoffReceipt({
+      adapterId: fixture.trust.adapterId,
+      keyId: fixture.trust.keyId,
+      packet,
+      roleReturn,
+      observedProducerRole: 'orchestrator',
+      repositoryEvidence: evidence,
+    }, fixture.trust.privateKey);
+    assert.throws(
+      () => verify(mismatched, {
+        trustedAdapter: fixture.trust.adapter,
+        packet,
+        roleReturn,
+        repositoryEvidence: evidence,
+      }),
+      /host-observed producer role/
+    );
+    const received = receiveRoleReturn({
+      raw: JSON.stringify(roleReturn),
+      packet,
+      refetchTask: fixture.refetchTask,
+      refetchRepositoryEvidence: () => evidence,
+      producerReceipt: mismatched,
+      resolveTrustedAdapter: () => fixture.trust.adapter,
+      runGit: fixture.runGit,
+    }, fixture.options);
+    assert.equal(received.ok, false);
+    assert.equal(received.validation.diagnostics[0].code, 'role_return.producer_mismatch');
+  });
+
+  it('authenticates a producer-role claim before assigning semantic mismatch authority', async () => {
+    const { fixture, packet, evidence, roleReturn, receipt } = await signed('receipt-forged-producer');
+    const forged = structuredClone(receipt);
+    forged.producerRole = 'orchestrator';
+    const received = receiveRoleReturn({
+      raw: JSON.stringify(roleReturn),
+      packet,
+      refetchTask: fixture.refetchTask,
+      refetchRepositoryEvidence: () => evidence,
+      producerReceipt: forged,
+      resolveTrustedAdapter: () => fixture.trust.adapter,
+      runGit: fixture.runGit,
+    }, fixture.options);
+    assert.equal(received.ok, false);
+    assert.equal(received.validation.diagnostics[0].code, 'role_return.invalid');
+    assert.match(received.validation.diagnostics[0].message, /authentication failed/);
+    assert.doesNotMatch(received.validation.diagnostics[0].message, /producer role/i);
+  });
+
+  it('classifies only an authentic baseline schemaVersion 1 receipt as typed stale', async () => {
+    const { fixture, packet, evidence, roleReturn, receipt } = await signed('receipt-v1-baseline');
+    const legacy = structuredClone(receipt);
+    legacy.schemaVersion = 1;
+    legacy.authentication.value = signHostPayload(
+      hostHandoffReceiptSignaturePayload(legacy),
+      fixture.trust.privateKey
+    );
+    const context = {
+      trustedAdapter: fixture.trust.adapter,
+      packet,
+      roleReturn,
+      repositoryEvidence: evidence,
+    };
+    assert.throws(
+      () => verify(legacy, context),
+      error => error instanceof HostReceiptStaleVersionError &&
+        error.code === 'role_return.receipt_stale' &&
+        error.observedVersion === 1 &&
+        error.requiredVersion === 2
+    );
+
+    const received = receiveRoleReturn({
+      raw: JSON.stringify(roleReturn),
+      packet,
+      refetchTask: fixture.refetchTask,
+      refetchRepositoryEvidence: () => evidence,
+      producerReceipt: legacy,
+      resolveTrustedAdapter: () => fixture.trust.adapter,
+      runGit: fixture.runGit,
+    }, fixture.options);
+    assert.equal(received.ok, false);
+    assert.equal(
+      received.validation.diagnostics[0].code,
+      'role_return.receipt_stale',
+      received.validation.diagnostics[0].message
+    );
+    assert.match(received.validation.diagnostics[0].message, /schemaVersion 1.*schemaVersion 2/);
+
+    const malformed = structuredClone(legacy);
+    malformed.unexpected = true;
+    assert.throws(() => verify(malformed, context), error =>
+      !(error instanceof HostReceiptStaleVersionError) &&
+      /fields must equal the closed schema/.test(error.message)
+    );
   });
 
   it('rejects wrong keys, wrong adapters, and untrusted capabilities', async () => {
@@ -690,6 +811,7 @@ describe('host receipt trust boundary', () => {
 
     const future = createHostHandoffReceipt({
       adapterId: fixture.trust.adapterId, keyId: fixture.trust.keyId, packet, roleReturn,
+      observedProducerRole: packet.assignment.roleId,
       repositoryEvidence: evidence, receivedAt: new Date(Date.now() + 600_000).toISOString(),
     }, fixture.trust.privateKey);
     assert.throws(() => verify(future, base), /future-dated/);
@@ -700,6 +822,7 @@ describe('host receipt trust boundary', () => {
     expiredPacket.assignment.liveness.expiry = new Date(Date.now() - 60_000).toISOString();
     const expiredReceipt = createHostHandoffReceipt({
       adapterId: fixture.trust.adapterId, keyId: fixture.trust.keyId, packet: expiredPacket, roleReturn,
+      observedProducerRole: expiredPacket.assignment.roleId,
       repositoryEvidence: evidence,
     }, fixture.trust.privateKey);
     assert.throws(
@@ -757,6 +880,7 @@ describe('host receipt trust boundary', () => {
       keyId: forged.keyId,
       packet: prepared.packet,
       roleReturn,
+      observedProducerRole: prepared.packet.assignment.roleId,
       repositoryEvidence: evidence,
     }, forged.privateKey);
     assert.throws(() => verifyHostHandoffReceipt(forgedReceipt, {
@@ -897,6 +1021,7 @@ describe('role-return core boundary authenticates evidence itself', () => {
       keyId: fixture.trust.keyId,
       packet: prepared.packet,
       roleReturn,
+      observedProducerRole: prepared.packet.assignment.roleId,
       repositoryEvidence: evidence,
     }, fixture.trust.privateKey);
     const receive = (patch = {}) => receiveRoleReturn({
@@ -910,6 +1035,123 @@ describe('role-return core boundary authenticates evidence itself', () => {
       ...patch,
     }, fixture.options);
     return { fixture, prepared, evidence, roleReturn, receipt, receive };
+  }
+
+  function blockedRoleReturn(packet, evidence) {
+    return createRoleReturn({
+      producerRole: 'engineer',
+      packet: { packetId: packet.packetId, digest: packet.digest },
+      task: { backend: packet.backend, id: packet.task.id, digest: packet.task.digest },
+      worktree: evidence.worktree,
+      branch: evidence.branch,
+      head: evidence.head,
+      baseHead: evidence.baseHead,
+      changedPaths: evidence.changedPaths,
+      checks: evidence.checks,
+      attribution: evidence.attribution,
+      pr: evidence.pr,
+      outcome: {
+        kind: 'implementation_blocked',
+        completion: false,
+        authority: 'non_authoritative_role_outcome',
+      },
+      disposition: 'blocked',
+      blocker: {
+        category: 'host_state',
+        evidence: { kind: 'command_failure', detail: 'task worktree mount is read-only' },
+        resumeOwner: 'engineer',
+        resumeTransition: 'implementation_resume',
+        resumePreconditions: {
+          items: ['Restore the exact task worktree write mount.'],
+          justification: null,
+        },
+      },
+      freshness: {
+        invalidatedBy: [
+          'task_or_contract_changes',
+          'packet_or_assignment_changes',
+          'branch_or_head_changes',
+          'check_or_transport_evidence_changes',
+          'initial_repository_state_changes',
+        ],
+      },
+    });
+  }
+
+  function authorityFixture(authorityId, authorityKind, keyId) {
+    const key = generateHostSigningKey();
+    return {
+      trusted: {
+        authorityId,
+        authorityKind,
+        keyId,
+        algorithm: 'ed25519',
+        publicKey: key.publicKeyBase64,
+        issuer: authorityKind === 'blocked_result_redelegation'
+          ? { ownerKind: 'workflow_role', ownerId: 'orchestrator' }
+          : { ownerKind: 'human_authority', ownerId: 'human_authority' },
+        revokedRecordIds: [],
+      },
+      signing: { authorityId, keyId, privateKey: key.privateKey },
+    };
+  }
+
+  function installAuthorityTrust(fixture, authorities) {
+    const document = {
+      ...fixture.trust.document,
+      schemaVersion: 2,
+      authorities: authorities.map(authority => authority.trusted),
+    };
+    writeFileSync(fixture.trustStorePath, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
+    mkdirSync(join(fixture.root, 'agenticloop'), { recursive: true });
+    writeFileSync(
+      join(fixture.root, 'agenticloop', 'config.json'),
+      readFileSync(new URL('../config.json', import.meta.url)),
+    );
+    writeFileSync(
+      join(fixture.root, 'agenticloop.json'),
+      '{"extends":"./agenticloop/config.json"}\n',
+      'utf8'
+    );
+  }
+
+  function publicReturnFiles(fixture, prepared, evidence, roleReturn) {
+    const write = (name, value) => {
+      const path = join(fixture.root, name);
+      writeFileSync(path, JSON.stringify(value, null, 2), 'utf8');
+      return name;
+    };
+    const receipt = createHostHandoffReceipt({
+      adapterId: fixture.trust.adapterId,
+      keyId: fixture.trust.keyId,
+      packet: prepared.packet,
+      roleReturn,
+      observedProducerRole: prepared.packet.assignment.roleId,
+      repositoryEvidence: evidence,
+    }, fixture.trust.privateKey);
+    return {
+      write,
+      baseArgs: [
+        'task', 'verify-return', 'T-001',
+        '--packet', write('packet.json', prepared.packet),
+        '--return', write('return.json', roleReturn),
+        '--repository-evidence', write('evidence.json', evidence),
+        '--producer-receipt', write('receipt.json', receipt),
+        '--host-trust-store', fixture.trustStorePath,
+        '--json',
+        '--target', fixture.root,
+      ],
+    };
+  }
+
+  function protectedHostBoundary(fixture, calls) {
+    return context => {
+      calls.push(context);
+      return context.kind === 'agenticloop.protected-host-trust-boundary' &&
+        context.schemaVersion === 1 &&
+        context.trustStorePath === fixture.trustStorePath &&
+        context.supportedAdapterIds.includes(fixture.trust.adapterId);
+    };
   }
 
   it('accepts the valid signed fixture through the explicitly trusted test seam', async () => {
@@ -941,6 +1183,7 @@ describe('role-return core boundary authenticates evidence itself', () => {
       keyId: attacker.keyId,
       packet: prepared.packet,
       roleReturn,
+      observedProducerRole: prepared.packet.assignment.roleId,
       repositoryEvidence: evidence,
     }, attacker.privateKey);
     const received = receive({ producerReceipt: receipt });
@@ -980,6 +1223,7 @@ describe('role-return core boundary authenticates evidence itself', () => {
       keyId: fixture.trust.keyId,
       packet: prepared.packet,
       roleReturn: ghostReturn,
+      observedProducerRole: prepared.packet.assignment.roleId,
       repositoryEvidence: ghostEvidence,
     }, fixture.trust.privateKey);
     const received = receiveRoleReturn({
@@ -1005,6 +1249,7 @@ describe('role-return core boundary authenticates evidence itself', () => {
       keyId: fixture.trust.keyId,
       packet: prepared.packet,
       roleReturn: authoredReturn,
+      observedProducerRole: prepared.packet.assignment.roleId,
       repositoryEvidence: authoredEvidence,
     }, fixture.trust.privateKey);
     const received = receiveRoleReturn({
@@ -1176,6 +1421,7 @@ describe('role-return core boundary authenticates evidence itself', () => {
         keyId: fixture.trust.keyId,
         packet: prepared.packet,
         roleReturn,
+        observedProducerRole: prepared.packet.assignment.roleId,
         repositoryEvidence: evidence,
       }, fixture.trust.privateKey)),
       '--host-trust-store', fixture.trustStorePath,
@@ -1189,5 +1435,296 @@ describe('role-return core boundary authenticates evidence itself', () => {
     assert.equal(presented.disposition, 'blocked');
     assert.equal(presented.diagnostics[0].code, 'host.boundary.unsupported');
     assert.equal(presented.diagnostics[0].evidence.committedStateEvaluated, false);
+  });
+
+  it('authorizes a signed blocked-result owner transfer through the protected public CLI path', async () => {
+    const { fixture, prepared, evidence } = await committed('public-redelegation-authority');
+    const roleReturn = blockedRoleReturn(prepared.packet, evidence);
+    const authority = authorityFixture(
+      'agenticloop.test.orchestrator',
+      'blocked_result_redelegation',
+      'orchestrator-authority-1'
+    );
+    installAuthorityTrust(fixture, [authority]);
+    buildHostRoleCapabilityInventory({
+      adapterConfigs: loadAgenticLoopConfig(join(fixture.root, 'agenticloop.json')).adapters ?? {},
+    });
+    const issuedAt = new Date().toISOString();
+    const redelegation = createBlockedResultRedelegation({
+      blockedReturn: roleReturn,
+      toRole: 'maintainer',
+      authority: {
+        ownerKind: 'workflow_role',
+        ownerId: 'orchestrator',
+        reference: 'dispatch:redelegate:T-001',
+      },
+      reason: 'Maintainer must repair the task contract before implementation resumes.',
+      issuedAt,
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    }, authority.signing);
+    const carriers = publicReturnFiles(fixture, prepared, evidence, roleReturn);
+    const calls = [];
+    const result = await runCliInProcess([
+      ...carriers.baseArgs,
+      '--resume-owner', 'maintainer',
+      '--redelegation-authority', carriers.write('redelegation.json', redelegation),
+    ], {
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      hostAuthority: protectedHostBoundary(fixture, calls),
+    });
+    assert.equal(
+      result.status,
+      0,
+      `${result.stderr || result.stdout}\nprotected calls: ${JSON.stringify(calls)}`
+    );
+    assert.equal(JSON.parse(result.stdout).ok, true);
+    assert.ok(calls.length >= 2, 'adapter and blocked authority trust must both cross the protected seam');
+
+    const forged = structuredClone(redelegation);
+    forged.authentication.value = `${forged.authentication.value.slice(0, -2)}AA`;
+    const denied = await runCliInProcess([
+      ...carriers.baseArgs,
+      '--resume-owner', 'maintainer',
+      '--redelegation-authority', carriers.write('redelegation-forged.json', forged),
+    ], {
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      hostAuthority: protectedHostBoundary(fixture, []),
+    });
+    assert.equal(denied.status, 1);
+    assert.equal(
+      JSON.parse(denied.stdout).diagnostics[0].code,
+      'blocked_result.redelegation_untrusted'
+    );
+  });
+
+  it('behaviorally validates blocked authority flag combinations, owners, expiry, and human selectors', async () => {
+    const { fixture, prepared, evidence } = await committed('public-authority-flags');
+    const roleReturn = blockedRoleReturn(prepared.packet, evidence);
+    const redelegationAuthority = authorityFixture(
+      'agenticloop.test.orchestrator',
+      'blocked_result_redelegation',
+      'orchestrator-authority-1'
+    );
+    const humanAuthority = authorityFixture(
+      'agenticloop.test.human',
+      'human_disposition',
+      'human-authority-1'
+    );
+    installAuthorityTrust(fixture, [redelegationAuthority, humanAuthority]);
+    const carriers = publicReturnFiles(fixture, prepared, evidence, roleReturn);
+    const protectedOptions = {
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      hostAuthority: protectedHostBoundary(fixture, []),
+    };
+    const currentRedelegation = createBlockedResultRedelegation({
+      blockedReturn: roleReturn,
+      toRole: 'maintainer',
+      authority: {
+        ownerKind: 'workflow_role',
+        ownerId: 'orchestrator',
+        reference: 'dispatch:expired:T-001',
+      },
+      reason: 'Captured record that will be aged for the stale-path fixture.',
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    }, redelegationAuthority.signing);
+    const expired = structuredClone(currentRedelegation);
+    expired.issuedAt = '2020-01-01T00:00:00.000Z';
+    expired.expiresAt = '2020-01-01T01:00:00.000Z';
+    expired.digest = blockedResultRedelegationDigest(expired);
+    expired.authentication.value = signHostPayload(
+      blockedAuthoritySignaturePayload(expired),
+      redelegationAuthority.signing.privateKey
+    );
+
+    const missingAuthority = await runCliInProcess([
+      ...carriers.baseArgs,
+      '--resume-owner', 'maintainer',
+    ], protectedOptions);
+    assert.equal(missingAuthority.status, 1);
+    assert.equal(
+      JSON.parse(missingAuthority.stdout).diagnostics[0].code,
+      'blocked_result.redelegation_required'
+    );
+
+    const invalidOwner = await runCliInProcess([
+      ...carriers.baseArgs,
+      '--resume-owner', 'not_a_role',
+    ], protectedOptions);
+    assert.equal(invalidOwner.status, 1);
+    assert.equal(
+      JSON.parse(invalidOwner.stdout).diagnostics[0].code,
+      'blocked_result.owner_mismatch'
+    );
+
+    const stale = await runCliInProcess([
+      ...carriers.baseArgs,
+      '--resume-owner', 'maintainer',
+      '--redelegation-authority', carriers.write('redelegation-expired.json', expired),
+    ], protectedOptions);
+    assert.equal(stale.status, 1);
+    assert.equal(
+      JSON.parse(stale.stdout).diagnostics[0].code,
+      'blocked_result.redelegation_stale'
+    );
+
+    const replayReturn = blockedRoleReturn(prepared.packet, evidence);
+    const replayCarriers = publicReturnFiles(fixture, prepared, evidence, replayReturn);
+    const replayed = await runCliInProcess([
+      ...replayCarriers.baseArgs,
+      '--resume-owner', 'maintainer',
+      '--redelegation-authority',
+      replayCarriers.write('redelegation-replayed.json', currentRedelegation),
+    ], protectedOptions);
+    assert.equal(replayed.status, 1);
+    assert.equal(
+      JSON.parse(replayed.stdout).diagnostics[0].code,
+      'blocked_result.redelegation_invalid'
+    );
+
+    const humanCarriers = publicReturnFiles(fixture, prepared, evidence, roleReturn);
+    const recovery = {
+      identity: 'repair:task-worktree-mount',
+      class: 'host_state_repair',
+      scope: [],
+      hostState: [`worktree:${fixture.root}:write-mount`],
+    };
+    const disposition = createHumanDisposition({
+      blockedReturn: roleReturn,
+      recovery,
+      human: {
+        actor: 'Repository Owner',
+        authorityReference: 'approval:P35-public-fixture',
+      },
+      reason: 'Restore the exact task worktree mount and make no source changes.',
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      result: { ownerRole: 'engineer', nextTransition: 'implementation_resume' },
+    }, humanAuthority.signing);
+    const recoveryPath = humanCarriers.write('recovery.json', recovery);
+    const dispositionPath = humanCarriers.write('human-disposition.json', disposition);
+    const missingSelectors = await runCliInProcess([
+      ...humanCarriers.baseArgs,
+      '--recovery-request', recoveryPath,
+      '--human-disposition', dispositionPath,
+    ], protectedOptions);
+    assert.equal(missingSelectors.status, 2);
+    assert.match(missingSelectors.stderr, /human-disposition-authority/);
+
+    const wrongKey = await runCliInProcess([
+      ...humanCarriers.baseArgs,
+      '--recovery-request', recoveryPath,
+      '--human-disposition', dispositionPath,
+      '--human-disposition-authority', humanAuthority.trusted.authorityId,
+      '--human-disposition-key-id', 'wrong-key',
+    ], protectedOptions);
+    assert.equal(wrongKey.status, 1);
+    assert.match(JSON.parse(wrongKey.stdout).diagnostics[0].message, /does not match/);
+
+    const authorized = await runCliInProcess([
+      ...humanCarriers.baseArgs,
+      '--recovery-request', recoveryPath,
+      '--human-disposition', dispositionPath,
+      '--human-disposition-authority', humanAuthority.trusted.authorityId,
+      '--human-disposition-key-id', humanAuthority.trusted.keyId,
+    ], protectedOptions);
+    assert.equal(authorized.status, 0, authorized.stderr || authorized.stdout);
+    assert.equal(JSON.parse(authorized.stdout).ok, true);
+
+    installAuthorityTrust(fixture, [
+      redelegationAuthority,
+      {
+        ...humanAuthority,
+        trusted: {
+          ...humanAuthority.trusted,
+          revokedRecordIds: [disposition.dispositionId],
+        },
+      },
+    ]);
+    const unauthorized = await runCliInProcess([
+      ...humanCarriers.baseArgs,
+      '--recovery-request', recoveryPath,
+      '--human-disposition', dispositionPath,
+      '--human-disposition-authority', humanAuthority.trusted.authorityId,
+      '--human-disposition-key-id', humanAuthority.trusted.keyId,
+    ], protectedOptions);
+    assert.equal(unauthorized.status, 1);
+    assert.equal(
+      JSON.parse(unauthorized.stdout).diagnostics[0].code,
+      'human_disposition.untrusted'
+    );
+  });
+
+  it('accepts a configured hyphenated registry role through --resume-owner', async () => {
+    const { fixture, prepared, evidence } = await committed('public-custom-resume-owner');
+    const roleReturn = blockedRoleReturn(prepared.packet, evidence);
+    const authority = authorityFixture(
+      'agenticloop.test.orchestrator',
+      'blocked_result_redelegation',
+      'orchestrator-authority-1'
+    );
+    installAuthorityTrust(fixture, [authority]);
+    const targetConfig = {
+      extends: './agenticloop/config.json',
+      workflowRoles: [{
+        roleId: 'security-observer',
+        defaultLabel: 'Security Observer',
+        escalationPrecedence: 50,
+      }],
+    };
+    writeFileSync(
+      join(fixture.root, 'agenticloop.json'),
+      `${JSON.stringify(targetConfig, null, 2)}\n`,
+      'utf8'
+    );
+    const registry = resolveWorkflowRoleRegistry(
+      loadAgenticLoopConfig(join(fixture.root, 'agenticloop.json'))
+    );
+    assert.ok(registry.some(role => role.roleId === 'security-observer'));
+    assert.throws(
+      () => resolveWorkflowRoleRegistry({
+        workflowRoles: [{
+          roleId: 'security_observer',
+          defaultLabel: 'Invalid',
+          escalationPrecedence: 50,
+        }],
+      }),
+      /invalid roleId/
+    );
+    const redelegation = createBlockedResultRedelegation({
+      blockedReturn: roleReturn,
+      toRole: 'security-observer',
+      authority: {
+        ownerKind: 'workflow_role',
+        ownerId: 'orchestrator',
+        reference: 'dispatch:security-observer:T-001',
+      },
+      reason: 'Security observer must assess the blocked host-state boundary.',
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      registry,
+    }, authority.signing);
+    const carriers = publicReturnFiles(fixture, prepared, evidence, roleReturn);
+    const options = {
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      hostAuthority: protectedHostBoundary(fixture, []),
+    };
+    const accepted = await runCliInProcess([
+      ...carriers.baseArgs,
+      '--resume-owner', 'security-observer',
+      '--redelegation-authority', carriers.write('custom-role-redelegation.json', redelegation),
+    ], options);
+    assert.equal(accepted.status, 0, accepted.stderr || accepted.stdout);
+    assert.equal(JSON.parse(accepted.stdout).ok, true);
+
+    const rejected = await runCliInProcess([
+      ...carriers.baseArgs,
+      '--resume-owner', 'unknown-role',
+    ], options);
+    assert.equal(rejected.status, 1);
+    assert.match(
+      JSON.parse(rejected.stdout).diagnostics[0].message,
+      /Available role IDs: .*security-observer/
+    );
   });
 });

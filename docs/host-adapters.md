@@ -213,12 +213,13 @@ their normal authorization rules are satisfied.
 ## Role-return handoff receipts
 
 A host that supports exact role-return transport creates an
-`agenticloop.role-return-producer` receipt only after receiving the raw role wire
+`agenticloop.role-return-producer` schema-version-2 receipt only after receiving the raw role wire
 and collecting its repository/transport evidence. Use the packaged
 `createHostHandoffReceipt` helper with a host-held Ed25519 private key. The
 receipt authenticates the adapter/key identity and binds the target repository,
 invocation ID, packet ID/digest, return ID/digest, packet-liveness expiry, and
-canonical repository-evidence digest.
+canonical repository-evidence digest. The host must supply the producer role it
+observed at that boundary; the helper does not derive it from the assignment.
 
 The receiving CLI verifies that receipt with an operator-pinned public key from
 the fixed host-owned registry. It never receives a signing secret. The core
@@ -244,12 +245,14 @@ context, but an agent-callable CLI argument cannot choose that root.
 pre-registered path the CLI already derived. A different external path is
 rejected, even when it contains a valid target and key controlled by the caller.
 The store's `target.repositoryIdentity` uses `file:<canonical-real-path>` form,
-and each adapter has one Ed25519 SPKI-DER public key encoded as base64:
+and each adapter or blocked-result authority has one Ed25519 SPKI-DER public
+key encoded as base64. Schema version 1 remains valid for adapter-only stores.
+Schema version 2 adds the closed verification-only `authorities` inventory:
 
 ```json
 {
   "kind": "agenticloop.host-trust",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "target": { "repositoryIdentity": "file:/absolute/target" },
   "adapters": [{
     "adapterId": "operator.parser.v1",
@@ -257,20 +260,47 @@ and each adapter has one Ed25519 SPKI-DER public key encoded as base64:
     "algorithm": "ed25519",
     "publicKey": "<base64-spki-der>",
     "capabilities": { "activationCapture": "supported", "returnReceipt": "supported" }
+  }],
+  "authorities": [{
+    "authorityId": "orchestrator-redelegation-2026",
+    "authorityKind": "blocked_result_redelegation",
+    "keyId": "rotation-2026-07",
+    "algorithm": "ed25519",
+    "publicKey": "<base64-spki-der>",
+    "issuer": { "ownerKind": "workflow_role", "ownerId": "orchestrator" },
+    "revokedRecordIds": []
+  }, {
+    "authorityId": "repository-human-authority",
+    "authorityKind": "human_disposition",
+    "keyId": "rotation-2026-07",
+    "algorithm": "ed25519",
+    "publicKey": "<base64-spki-der>",
+    "issuer": { "ownerKind": "human_authority", "ownerId": "human_authority" },
+    "revokedRecordIds": []
   }]
 }
 ```
 
-The store is target-scoped registry metadata, not sufficient operator/host
-authority. The current public loader rejects every entry that declares a
-supported capability, even when the path is outside the target and its key is
-well formed. A repository actor can commit an adapter, public key, or private
-key they retain, but the CLI neither discovers nor trusts repository-local
-data. In particular,
+Adapter metadata alone is not sufficient host authority. An ordinary public CLI
+call rejects every adapter entry that declares a supported capture or receipt
+capability, even when the path is outside the target and its key is well formed.
+A supported host integration may use the protected `hostAuthority` I/O seam,
+but only after its host-controlled boundary authenticates the capture/receipt
+channel and approves the exact target identity, trust-store path, and supported
+adapter IDs supplied by the loader. This seam is not a CLI flag and cannot
+select another trust root. Authority entries are verification-only roots for
+signed redelegation or human-disposition records. Signing happens only at the
+external trusted Orchestrator or human/operator boundary; private keys never
+enter generated adapters, packets, returns, dispositions, or archives.
+Semantic record digests prove integrity but never issuer identity.
+
+A repository actor can commit an adapter, public key, private key, or
+self-consistent authority record they retain, but the CLI neither discovers nor
+trusts repository-local data. In particular,
 `.agenticloop/host-trust.json` may be carried as a portable manifest but grants
-no authority. A future external integration may consume separately protected
-registry material only through an authenticated out-of-process boundary. The
-current CLI never uses the repository-local file as a fallback.
+no authority. The current protected integration seam consumes separately
+protected registry material only after the host boundary approves the exact
+loader context. The CLI never uses the repository-local file as a fallback.
 
 The loader resolves the target and registry through their real filesystem paths,
 rejects a registry that resolves inside the target, and rejects a symbolic-link
@@ -291,6 +321,55 @@ remain intentionally unverifiable once their key is no longer pinned. Never put 
 private key in source, fixtures, archives, prompts, packets, returns, receipts,
 environment variables, or generated adapter output.
 
+### Constructing signed blocked-authority records
+
+Use the packaged canonical helper instead of recreating JSON canonicalization or
+signature input:
+
+```text
+node scripts/sign-blocked-authority.mjs --request redelegation-request.json --private-key C:\operator-keys\redelegation.pem --output redelegation.json --config agenticloop.json
+```
+
+The request is a JSON object with exactly these top-level inputs:
+
+```json
+{
+  "type": "blocked_result_redelegation",
+  "signing": {
+    "authorityId": "orchestrator-redelegation-2026",
+    "keyId": "rotation-2026-07"
+  },
+  "record": {
+    "blockedReturn": "<the complete validated blocked role-return object>",
+    "toRole": "maintainer",
+    "authority": {
+      "ownerKind": "workflow_role",
+      "ownerId": "orchestrator",
+      "reference": "dispatch:redelegate:T-001"
+    },
+    "reason": "Maintainer must repair the task contract.",
+    "issuedAt": "2026-07-30T12:00:00.000Z",
+    "expiresAt": "2026-07-30T13:00:00.000Z"
+  }
+}
+```
+
+For exceptional recovery, set `type` to `human_disposition`. Its `record`
+contains `blockedReturn`, the exact `recovery` object, `human.actor`,
+`human.authorityReference`, `reason`, `issuedAt`, `expiresAt`, and
+`result.ownerRole`/`result.nextTransition`. The helper calls the production
+`createBlockedResultRedelegation` or `createHumanDisposition` implementation,
+which derives the closed record shape, semantic digest, canonical Ed25519
+signing input, packet/return binding, and invalidation inventory. `--config`
+loads target `workflowRoles` so a valid custom role ID can be selected.
+
+The private-key file must be operator-controlled and correspond to the
+authority ID/key ID pinned in the target's schemaVersion 2 external trust
+store. The helper writes a new output file with create-only semantics and
+restricted mode where the platform supports it; it prints only the output path.
+It never prints or embeds private key bytes. Verify the resulting record through
+`task verify-return`; do not treat a recomputed digest as issuer authentication.
+
 ## Adapter Status
 
 The `adapters.<host>.status` field in `agenticloop/config.json` records adapter
@@ -303,6 +382,62 @@ availability.
 All five implemented adapters – OpenCode, Codex, Claude Code, Copilot, and
 Cursor – are supported. Tests, validation commands, and packaging checks remain
 development and release quality checks.
+
+## Role capability enforcement
+
+Generated canonical roles and their display labels come from the workflow-role
+registry. Durable filenames, config keys, model bindings, attribution, dispatch,
+and authority continue to use immutable `roleId`. A target may extend
+`workflowRoles` with a closed entry and a matching `roles.<role-id>` source
+configuration; hyphenated IDs are valid. Config validation and blocked-result
+ownership/authority use that effective registry, and CLI diagnostics enumerate
+its effective IDs. The four canonical roles retain their contract-defined
+acting capability policies. A target extension does not silently inherit one
+of those acting policies merely because it has an agent file.
+
+The current implementation-mutation matrix is:
+
+| Host | Engineer path | Orchestrator and Auditor denial | State and limitation |
+| --- | --- | --- | --- |
+| OpenCode | Native edit and retained `bash` | `permission.edit: deny`, with `bash` retained | `advisory`; edit/write/apply-patch are denied, but shell commands can still mutate. |
+| Claude Code | `permissionMode: acceptEdits` | `permissionMode: plan` | `enforced` for whole-agent editing; writable roles are not path-typed. |
+| Codex | Custom-agent instructions permit Engineer edits | Generated role instructions | `advisory`; generated custom-agent TOML has no per-agent write restriction. |
+| Copilot | Custom-agent tool list includes `edit` and `execute` | `edit` is withheld, but `execute` is retained | `advisory`; retained shell execution can still mutate. |
+| Cursor | `readonly: false` | `readonly: true` | `enforced` for whole-agent editing; it cannot distinguish workflow-record edits from implementation edits. |
+
+Maintainer retains task/workflow mutation, review, and closeout responsibility;
+its implementation denial is therefore advisory on every host because host
+tools do not distinguish legitimate workflow edits from implementation edits.
+That does not grant general implementation mutation. Orchestrator retains
+dispatch and authenticated return-import responsibilities, not implementation.
+Auditor remains read-only. All hosts currently report role-result production as
+`unavailable` at the production trust boundary because no shipped adapter
+contains the external private-key receipt signer. Correctly authenticated
+test/integration seams remain available for contract verification.
+
+Every non-enforced action produces a closed version 3 degraded-enforcement
+report with stable code `capability.enforcement.degraded`, exact limitation,
+`role_return_receive` detection boundary, declaration digest, and recovery
+route. Generated agents carry a short human-readable summary plus the schema,
+digest, and deterministic
+`.agenticloop/host-role-capabilities/<host>.json` path. That sidecar holds the
+full canonical declaration exactly once per host; validation recomputes its
+canonical bytes and digest, so modification or prompt/sidecar drift fails
+closed. Dispatch binds the derived report set and emits its repair-policy
+warnings. Return import performs canonical packet validation, including
+report/declaration compatibility, at the receive edge; it does not count a
+necessarily duplicate report branch as another enforcement layer. Malformed,
+contradictory, or caller-fabricated reports fail closed. An
+authenticated host receipt records the host-observed producer. A mismatched
+producer is rejected even when commit messages contain correct `Task:` and
+`Agent:` trailers. Native host restriction, authenticated Agentic Loop checks,
+and arbitrary external writes are distinct; none claims control over external
+or legitimate human work.
+
+`role_result_import` is advisory in generated host declarations. The receipt
+authenticates the producer, but the import boundary has no independently
+authenticated importing-role identity. Producer authentication therefore does
+not prove that a particular role performed the import.
 
 ## Loop-Guard Capabilities
 
@@ -455,9 +590,9 @@ Claude Code has two distinct install paths:
 
 Mode B defaults maintainer and engineer subagents to
 `permissionMode: acceptEdits` so edit auto-accept is scoped to Agentic Loop
-worker subagents rather than the whole repository. The auditor subagent defaults
-to `permissionMode: plan`, Claude Code's supported non-editing mode, so its
-read-only audit posture is enforced mechanically. It also writes the built-in
+worker subagents rather than the whole repository. Orchestrator and Auditor
+subagents default to `permissionMode: plan`, Claude Code's supported non-editing
+mode, so their non-implementation posture is enforced mechanically. It also writes the built-in
 `agenticloop` permissions profile to `.claude/settings.local.json` by default.
 That profile is intentionally broad enough for normal Agentic Loop work,
 including common `git`, `gh`, `npm`, `npx`, `pytest`, `ruff`, and `alembic`

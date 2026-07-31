@@ -20,6 +20,7 @@ import {
   prepareRoleDispatch,
 } from '../../src/dispatch-envelope.js';
 import { createHostHandoffReceipt } from '../../src/host-handoff.js';
+import { getHostRoleCapability } from '../../src/host-role-capabilities.js';
 import { canonicalJson } from '../../src/canonical-json.js';
 import { createValidationResult, validationResultDigest } from '../../src/result-envelope.js';
 import { createTaskReadinessEvidence, parseDependencySnapshot } from '../../src/task-evidence-contract.js';
@@ -195,7 +196,9 @@ export async function createDispatchFixture(temp, name, options = {}) {
   const head = git(root, ['rev-parse', 'HEAD']);
   const repository = () => ({ worktree: resolve(root), branch: 'task/T-001', head, baseHead: head, baseTree: tree });
   const assignment = {
-    roleId: 'engineer', worktree: resolve(root), branch: 'task/T-001',
+    roleId: 'engineer', host: 'opencode',
+    hostRoleCapability: getHostRoleCapability('opencode', 'engineer'),
+    worktree: resolve(root), branch: 'task/T-001',
     invocationId: `invocation:${randomUUID()}`,
     requiredCapabilities: ['implementation_mutation'],
     canonicalReferences: ['agents/engineer.md', 'skills/role-delegation/SKILL.md', 'backends/files.md'],
@@ -253,6 +256,7 @@ export function producerBinding(trust, packet, roleReturn, evidence, receiptPatc
       keyId: trust.keyId,
       packet,
       roleReturn,
+      observedProducerRole: packet.assignment.roleId,
       repositoryEvidence: evidence,
     }, trust.privateKey),
     ...receiptPatch,

@@ -42,6 +42,16 @@ import {
   planReferenceTree,
 } from './shared.js';
 import { emptyAdapterSlot, fillUnsupportedActivationSlots } from '../adapter-slots.js';
+import {
+  buildEffectiveHostRoleCapabilityInventory,
+  hostRoleCapabilitySidecarRelativePath,
+  renderHostRoleCapabilityNotice,
+  renderHostRoleCapabilitySidecar,
+} from '../host-role-capabilities.js';
+import {
+  getWorkflowRoleLabel,
+  WORKFLOW_ROLE_IDS,
+} from '../workflow-roles.js';
 
 const COPILOT_START_COMMAND = bundledToolkitPath('agenticloop/commands/start.md');
 export const COPILOT_ACTIVATION_ADAPTER_ID = 'copilot.prompt.input.v1';
@@ -76,10 +86,6 @@ export const COPILOT_REQUIRED_PUBLIC_REFERENCES = [
 
 function quoteYamlScalar(value) {
   return JSON.stringify(String(value));
-}
-
-function capitalize(value) {
-  return value ? value[0].toUpperCase() + value.slice(1) : '';
 }
 
 function replaceAll(value, search, replacement) {
@@ -340,7 +346,8 @@ function buildCopilotAgentBody(
   requiredSkills,
   roleBody,
   skillReferenceMap,
-  agentNames
+  agentNames,
+  capabilityInventory
 ) {
   const maintainerAgent = agentNames.maintainer ?? 'maintainer';
   const engineerAgent = agentNames.engineer ?? 'engineer';
@@ -351,7 +358,7 @@ function buildCopilotAgentBody(
     copilotSkillReferenceAbsolutePath
   );
   const lines = [];
-  lines.push(`You are the Agentic Loop ${capitalize(roleName)} custom agent for the target project in GitHub Copilot.`);
+  lines.push(`You are the Agentic Loop ${getWorkflowRoleLabel(roleName)} custom agent for the target project in GitHub Copilot.`);
   lines.push(`Canonical role source: \`${roleSourceFile}\`.`);
   lines.push('Read `.agenticloop/project.md` before acting for setup status, task backend, document selections, naming, grouping, and event logging.');
   lines.push(`Follow \`${PROCESS_DOC_RELATIVE_PATH}\` as the workflow methodology.`);
@@ -386,6 +393,8 @@ function buildCopilotAgentBody(
     lines.push('Return one consolidated report to the orchestrator. Persistence into the audit record is mechanical and belongs to the orchestrator or the `agenticloop audit` CLI.');
   }
 
+  lines.push('');
+  lines.push(renderHostRoleCapabilityNotice('copilot', roleName, capabilityInventory));
   lines.push('');
   lines.push('Canonical role contract follows:');
   lines.push('');
@@ -446,7 +455,15 @@ function renderStringListFrontmatter(lines, fieldName, values) {
   }
 }
 
-function renderCopilotAgentMarkdown(agentName, roleName, roleRecord, modelSettings, skillReferenceMap, agentNames) {
+function renderCopilotAgentMarkdown(
+  agentName,
+  roleName,
+  roleRecord,
+  modelSettings,
+  skillReferenceMap,
+  agentNames,
+  capabilityInventory
+) {
   const lines = [];
   const tools = agentToolsForRole(roleName);
   const agents = subagentAllowListForRole(roleName, agentNames);
@@ -472,7 +489,8 @@ function renderCopilotAgentMarkdown(agentName, roleName, roleRecord, modelSettin
     roleRecord.requiredSkills,
     roleRecord.promptBody,
     skillReferenceMap,
-    agentNames
+    agentNames,
+    capabilityInventory
   ));
   lines.push('');
   return lines.join('\n');
@@ -620,10 +638,12 @@ function writeCopilotPublicSkill(outputDir, skillEntries, skillReferenceMap, age
 
 export function generateCopilotArtifacts(alConfig, repoRoot, outputDir) {
   const copilotAdapter = alConfig.adapters?.copilot ?? {};
-  const roles = alConfig.roles ?? {};
+  const capabilityInventory = {
+    copilot: buildEffectiveHostRoleCapabilityInventory('copilot', copilotAdapter),
+  };
   const roleBindings = copilotAdapter.roleBindings ?? {};
   const agentNames = Object.fromEntries(
-    Object.keys(roles).map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
+    WORKFLOW_ROLE_IDS.map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
   );
   const skillEntries = readCanonicalSkillEntries(repoRoot, alConfig);
   const backendEntries = readCanonicalBackendEntries(repoRoot, alConfig);
@@ -645,7 +665,7 @@ export function generateCopilotArtifacts(alConfig, repoRoot, outputDir) {
   const agentsDir = join(outputDir, '.github', 'agents');
   mkdirSync(agentsDir, { recursive: true });
 
-  for (const roleName of Object.keys(roles)) {
+  for (const roleName of WORKFLOW_ROLE_IDS) {
     const agentName = agentNames[roleName] ?? roleName;
     const roleRecord = buildRoleRecord(alConfig, repoRoot, roleName);
     const modelSettings = resolveRoleModel(alConfig, 'copilot', roleName, copilotAdapter);
@@ -655,7 +675,8 @@ export function generateCopilotArtifacts(alConfig, repoRoot, outputDir) {
       roleRecord,
       modelSettings,
       absoluteSkillReferenceMap,
-      agentNames
+      agentNames,
+      capabilityInventory
     );
     const mdPath = resolveCopilotAgentPath(outputDir, agentName);
     mkdirSync(dirname(mdPath), { recursive: true });
@@ -679,6 +700,11 @@ export function generateCopilotArtifacts(alConfig, repoRoot, outputDir) {
     'utf-8'
   );
   files.push(relative(outputDir, promptPath).replace(/\\/g, '/'));
+  const sidecarRelPath = hostRoleCapabilitySidecarRelativePath('copilot');
+  const sidecarPath = join(outputDir, sidecarRelPath);
+  mkdirSync(dirname(sidecarPath), { recursive: true });
+  writeFileSync(sidecarPath, renderHostRoleCapabilitySidecar('copilot', copilotAdapter), 'utf-8');
+  files.push(sidecarRelPath);
 
   return { files };
 }
@@ -693,10 +719,12 @@ export function generateCopilotArtifacts(alConfig, repoRoot, outputDir) {
  */
 export function planCopilotArtifacts(alConfig, repoRoot, outputDir) {
   const copilotAdapter = alConfig.adapters?.copilot ?? {};
-  const roles = alConfig.roles ?? {};
+  const capabilityInventory = {
+    copilot: buildEffectiveHostRoleCapabilityInventory('copilot', copilotAdapter),
+  };
   const roleBindings = copilotAdapter.roleBindings ?? {};
   const agentNames = Object.fromEntries(
-    Object.keys(roles).map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
+    WORKFLOW_ROLE_IDS.map(roleName => [roleName, roleBindings[roleName]?.agent ?? roleName])
   );
   const skillEntries = readCanonicalSkillEntries(repoRoot, alConfig);
   const backendEntries = readCanonicalBackendEntries(repoRoot, alConfig);
@@ -716,12 +744,13 @@ export function planCopilotArtifacts(alConfig, repoRoot, outputDir) {
   actions.push({ type: 'clear-owned-directory', adapter: 'copilot', relPath: '.github/prompts' });
 
   // .github/agents/<name>.agent.md
-  for (const roleName of Object.keys(roles)) {
+  for (const roleName of WORKFLOW_ROLE_IDS) {
     const agentName = agentNames[roleName] ?? roleName;
     const roleRecord = buildRoleRecord(alConfig, repoRoot, roleName);
     const modelSettings = resolveRoleModel(alConfig, 'copilot', roleName, copilotAdapter);
     const md = renderCopilotAgentMarkdown(
-      agentName, roleName, roleRecord, modelSettings, absoluteSkillReferenceMap, agentNames
+      agentName, roleName, roleRecord, modelSettings, absoluteSkillReferenceMap, agentNames,
+      capabilityInventory
     );
     const relPath = `.github/agents/${agentName}.agent.md`;
     actions.push({
@@ -784,6 +813,14 @@ export function planCopilotArtifacts(alConfig, repoRoot, outputDir) {
     marker: COPILOT_GENERATED_MARKER,
   });
   files.push(COPILOT_PROMPT_RELATIVE_PATH);
+  const sidecarRelPath = hostRoleCapabilitySidecarRelativePath('copilot');
+  actions.push({
+    type: 'write-file',
+    adapter: 'copilot',
+    relPath: sidecarRelPath,
+    content: renderHostRoleCapabilitySidecar('copilot', copilotAdapter),
+  });
+  files.push(sidecarRelPath);
 
   return { actions, files, adapter: 'copilot' };
 }

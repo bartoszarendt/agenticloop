@@ -16,11 +16,11 @@ import {
   normalizeCodexModel,
 } from './codex-models.js';
 import {
-  OPENCODE_ROLE_NAMES,
   resolveOpencodeAgentPath,
 } from './adapters/opencode.js';
 import { resolveCopilotAgentPath } from './adapters/copilot.js';
 import { resolveCursorAgentPath } from './adapters/cursor.js';
+import { WORKFLOW_ROLE_IDS } from './workflow-roles.js';
 
 const IMPLEMENTED_ADAPTERS = ['opencode', 'codex', 'claude-code', 'copilot', 'cursor'];
 
@@ -74,7 +74,7 @@ function extractOpenCodeSettings(target, alConfig) {
   const settings = {};
   const warnings = [];
 
-  for (const roleName of OPENCODE_ROLE_NAMES) {
+  for (const roleName of WORKFLOW_ROLE_IDS) {
     const agentPath = resolveOpencodeAgentPath(target, roleName);
     if (!existsSync(agentPath)) continue;
 
@@ -100,7 +100,7 @@ function extractCodexSettings(target, alConfig) {
   const settings = {};
   const warnings = [];
 
-  for (const roleName of Object.keys(alConfig.roles ?? {})) {
+  for (const roleName of WORKFLOW_ROLE_IDS) {
     const agentName = agentNameForRole(adapterCfg, roleName);
     const tomlPath = join(target, '.codex', 'agents', `${agentName}.toml`);
     if (!existsSync(tomlPath)) continue;
@@ -134,7 +134,7 @@ function extractClaudeCodeSettings(target, alConfig) {
   const settings = {};
   const warnings = [];
 
-  for (const roleName of Object.keys(alConfig.roles ?? {})) {
+  for (const roleName of WORKFLOW_ROLE_IDS) {
     const agentName = agentNameForRole(adapterCfg, roleName);
     const mdPath = join(target, '.claude', 'agents', `${agentName}.md`);
     if (!existsSync(mdPath)) continue;
@@ -164,7 +164,7 @@ function extractCopilotSettings(target, alConfig) {
   const settings = {};
   const warnings = [];
 
-  for (const roleName of Object.keys(alConfig.roles ?? {})) {
+  for (const roleName of WORKFLOW_ROLE_IDS) {
     const agentName = agentNameForRole(adapterCfg, roleName);
     const mdPath = resolveCopilotAgentPath(target, agentName);
     if (!existsSync(mdPath)) continue;
@@ -192,7 +192,7 @@ function extractCursorSettings(target, alConfig) {
   const settings = {};
   const warnings = [];
 
-  for (const roleName of Object.keys(alConfig.roles ?? {})) {
+  for (const roleName of WORKFLOW_ROLE_IDS) {
     const agentName = agentNameForRole(adapterCfg, roleName);
     const mdPath = resolveCursorAgentPath(target, agentName);
     if (!existsSync(mdPath)) continue;

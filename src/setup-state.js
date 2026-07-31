@@ -33,6 +33,7 @@ import {
 } from './adapters/opencode.js';
 import { generatedCopilotArtifactsPresent } from './adapters/copilot.js';
 import { generatedCursorArtifactsPresent } from './adapters/cursor.js';
+import { WORKFLOW_ROLE_IDS } from './workflow-roles.js';
 
 const IMPLEMENTED_ADAPTERS = ['opencode', 'codex', 'claude-code', 'copilot', 'cursor'];
 
@@ -145,7 +146,7 @@ export function detectSetupState(target, options = {}) {
   if (agenticloopJsonExists) {
     try {
       alConfig = loadAgenticLoopConfig(agenticloopJsonPath);
-      roles = Object.keys(alConfig.roles ?? {});
+      roles = WORKFLOW_ROLE_IDS;
     } catch (e) {
       alConfigError = e.message;
     }
