@@ -1159,6 +1159,8 @@ export async function cmdTask(args, io = createIo()) {
       let redelegationAuthority = null;
       let recovery = null;
       let humanDisposition = null;
+      let exceptionalVerification = null;
+      let exceptionalReceipt = null;
       let capabilities;
       let hostRoleCapabilities;
       let workflowRoleRegistry;
@@ -1182,6 +1184,12 @@ export async function cmdTask(args, io = createIo()) {
           : null;
         humanDisposition = opts.humanDisposition
           ? JSON.parse(readJsonText(opts.humanDisposition, 'human disposition'))
+          : null;
+        exceptionalVerification = opts.exceptionalVerification
+          ? JSON.parse(readJsonText(opts.exceptionalVerification, 'exceptional verification'))
+          : null;
+        exceptionalReceipt = opts.exceptionalReceipt
+          ? JSON.parse(readJsonText(opts.exceptionalReceipt, 'exceptional verification receipt'))
           : null;
       } catch (error) {
         return printGateResult('task verify-return', commandFailure('task verify-return', error, 'operational_error', {}, target), asJson, io);
@@ -1244,6 +1252,8 @@ export async function cmdTask(args, io = createIo()) {
         redelegationAuthority,
         recovery,
         humanDisposition,
+        exceptionalVerification,
+        exceptionalReceipt,
         resolveTrustedAuthority: (authorityId, authorityKind) => {
           const selectedAuthorityId = authorityKind === 'human_disposition'
             ? opts.humanDispositionAuthority
@@ -1268,7 +1278,14 @@ export async function cmdTask(args, io = createIo()) {
       }, { capabilities, hostRoleCapabilities });
       const presentedValidation = presentGateResultForTarget(received.validation, target);
       if (asJson) printGateResult('task verify-return', presentedValidation, true, io);
-      else if (received.ok) io.out('Role return is current.');
+      else if (received.ok && received.exceptional?.state === 'exception_requested') {
+        // A valid exception request is routed, not granted. Do not print a
+        // "current"/proceed message that implies the next transition.
+        io.out(
+          `Exceptional verification recorded as exception_requested; routed to ${received.exceptional.route.ownerRole} ` +
+          `for disposition. No exception has been accepted or rejected and no further authority is granted.`
+        );
+      } else if (received.ok) io.out('Role return is current.');
       else for (const error of received.validation.errors) io.err(error);
       return received.ok ? 0 : 1;
     }

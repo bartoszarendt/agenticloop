@@ -23,6 +23,8 @@ import {
 export const ROLE_RETURN_RECEIPT_KIND = 'agenticloop.role-return-producer';
 export const LEGACY_ROLE_RETURN_RECEIPT_SCHEMA_VERSION = 1;
 export const ROLE_RETURN_RECEIPT_SCHEMA_VERSION = 2;
+export const EXCEPTIONAL_VERIFICATION_RECEIPT_KIND = 'agenticloop.exceptional-verification-producer';
+export const EXCEPTIONAL_VERIFICATION_RECEIPT_SCHEMA_VERSION = 1;
 export const ACTIVATION_SIGNATURE_KIND = 'agenticloop.activation-capture-signature';
 export const ACTIVATION_SIGNATURE_SCHEMA_VERSION = 2;
 
@@ -256,5 +258,51 @@ export function verifyHostHandoffReceipt(receipt, {
   if (!Number.isFinite(expiry) || Date.parse(receipt.receivedAt) > expiry) {
     throw new TypeError('host handoff receipt was produced after the dispatch liveness window closed');
   }
+  return receipt;
+}
+
+/** Create a pinned-host receipt for an exceptional-verification wire value. */
+export function createHostExceptionalVerificationReceipt(input = {}, privateKey) {
+  const { adapterId, keyId, packet, exceptionalVerification, repositoryEvidence, observedProducerRole } = input;
+  if (typeof adapterId !== 'string' || !adapterId.trim() || typeof keyId !== 'string' || !keyId.trim()) throw new TypeError('host exceptional receipt adapterId and keyId are required');
+  if (!packet?.assignment?.invocationId || !packet?.assignment?.liveness?.expiry || !packet?.packetId || !SEMANTIC_DIGEST_RE.test(packet?.digest ?? '')) throw new TypeError('dispatch packet identity and liveness are required');
+  if (!exceptionalVerification?.requestId || !SEMANTIC_DIGEST_RE.test(exceptionalVerification?.digest ?? '')) throw new TypeError('exceptional-verification identity is invalid');
+  if (typeof observedProducerRole !== 'string' || !observedProducerRole.trim() || !packet?.activation?.repositoryIdentity) throw new TypeError('host-observed producer role and target repository are required');
+  const receipt = {
+    kind: EXCEPTIONAL_VERIFICATION_RECEIPT_KIND, schemaVersion: EXCEPTIONAL_VERIFICATION_RECEIPT_SCHEMA_VERSION,
+    producerRole: observedProducerRole, source: 'host_adapter', adapterId,
+    invocationId: packet.assignment.invocationId,
+    packet: { packetId: packet.packetId, digest: packet.digest },
+    exceptionalVerification: { requestId: exceptionalVerification.requestId, digest: exceptionalVerification.digest },
+    targetRepository: packet.activation.repositoryIdentity,
+    repositoryEvidenceDigest: repositoryEvidenceDigest(repositoryEvidence),
+    packetLiveness: { expiry: packet.assignment.liveness.expiry },
+    receivedAt: input.receivedAt ?? new Date().toISOString(),
+    authentication: { algorithm: HOST_SIGNATURE_ALGORITHM, keyId, value: null },
+  };
+  receipt.authentication.value = signHostPayload(hostHandoffReceiptSignaturePayload(receipt), privateKey);
+  return deepFreeze(receipt);
+}
+
+/** Verify the exceptional request bytes at the same pinned host boundary. */
+export function verifyHostExceptionalVerificationReceipt(receipt, {
+  trustedAdapter, packet, exceptionalVerification, repositoryEvidence, now = Date.now(),
+} = {}) {
+  exactKeys(receipt, [
+    'kind', 'schemaVersion', 'producerRole', 'source', 'adapterId', 'invocationId', 'packet',
+    'exceptionalVerification', 'targetRepository', 'repositoryEvidenceDigest', 'packetLiveness', 'receivedAt', 'authentication',
+  ], 'host exceptional-verification receipt');
+  exactKeys(receipt.packet, ['packetId', 'digest'], 'host exceptional receipt packet binding');
+  exactKeys(receipt.exceptionalVerification, ['requestId', 'digest'], 'host exceptional receipt request binding');
+  exactKeys(receipt.packetLiveness, ['expiry'], 'host exceptional receipt liveness binding');
+  exactKeys(receipt.authentication, ['algorithm', 'keyId', 'value'], 'host exceptional receipt authentication');
+  if (receipt.kind !== EXCEPTIONAL_VERIFICATION_RECEIPT_KIND || receipt.schemaVersion !== EXCEPTIONAL_VERIFICATION_RECEIPT_SCHEMA_VERSION || receipt.source !== 'host_adapter') throw new TypeError('host exceptional-verification receipt identity is invalid');
+  if (!trustedAdapter || trustedAdapter.capabilities?.returnReceipt !== 'supported' || receipt.adapterId !== trustedAdapter.adapterId || receipt.authentication.algorithm !== HOST_SIGNATURE_ALGORITHM || receipt.authentication.keyId !== trustedAdapter.keyId) throw new TypeError('host exceptional-verification receipt adapter or key is not trusted');
+  if (!verifyHostPayload(hostHandoffReceiptSignaturePayload(receipt), receipt.authentication.value, trustedAdapter.publicKey)) throw new TypeError('host exceptional-verification receipt authentication failed');
+  if (packet?.activation?.adapter !== trustedAdapter.adapterId || packet?.activation?.signature?.keyId !== trustedAdapter.keyId || packet?.activation?.repositoryIdentity !== trustedAdapter.repositoryIdentity || receipt.targetRepository !== trustedAdapter.repositoryIdentity || targetRepositoryIdentity(repositoryEvidence?.worktree) !== trustedAdapter.repositoryIdentity) throw new TypeError('host exceptional-verification receipt target is not packet-bound');
+  if (!ISO_INSTANT_RE.test(receipt.receivedAt ?? '') || !Number.isFinite(Date.parse(receipt.receivedAt)) || Date.parse(receipt.receivedAt) > now + 1000) throw new TypeError('host exceptional-verification receipt receivedAt is invalid or future-dated');
+  if (receipt.producerRole !== packet?.assignment?.roleId || receipt.producerRole !== exceptionalVerification?.producer?.roleId || receipt.invocationId !== packet?.assignment?.invocationId || receipt.packet.packetId !== packet?.packetId || receipt.packet.digest !== packet?.digest || receipt.exceptionalVerification.requestId !== exceptionalVerification?.requestId || receipt.exceptionalVerification.digest !== exceptionalVerification?.digest || receipt.repositoryEvidenceDigest !== repositoryEvidenceDigest(repositoryEvidence) || receipt.packetLiveness.expiry !== packet?.assignment?.liveness?.expiry) throw new TypeError('host exceptional-verification receipt does not bind the exact invocation artifacts');
+  const expiry = Date.parse(receipt.packetLiveness.expiry);
+  if (!Number.isFinite(expiry) || Date.parse(receipt.receivedAt) > expiry) throw new TypeError('host exceptional-verification receipt was produced after the dispatch liveness window closed');
   return receipt;
 }

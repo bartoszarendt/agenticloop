@@ -50,6 +50,7 @@ import {
 import { atomicWriteFile, executeMutationBatch } from './fs-mutation-kernel.js';
 import { SCRATCH_DIRECTORY_RELATIVE_PATH } from './layout.js';
 import { canonicalJson } from './canonical-json.js';
+import { deriveLifecycleClaims } from './lifecycle-claims.js';
 import { loadProjectMap, PROJECT_MAP_DEFAULTS } from './project-map.js';
 import { parseFrontmatter } from './frontmatter.js';
 import { createLocalVerificationContext } from './verification-context.js';
@@ -922,12 +923,16 @@ function recordFilesMarker(target, config, packet, markerBody, live, mode, io) {
   // transition. Generic closure is refused for every established scope, so this
   // is the only route by which a covered task set reaches `closed`.
   const terminal = applyFilesCloseoutTerminalTransition(target, config, packet, io);
-  reportTerminalTransition(terminal, io);
+  reportTerminalTransition(terminal, io, packet, {
+    gateDigest: packet.digest,
+    artifact: packet.candidate_artifact,
+    workUnit: packet.work_unit,
+  });
   return terminal.ok ? 0 : 1;
 }
 
 /** Print the closeout-owned terminal transition outcome and its receipt. */
-function reportTerminalTransition(terminal, io) {
+function reportTerminalTransition(terminal, io, packet = null, marker = null) {
   const { receipt } = terminal;
   if (terminal.ok) {
     io.out(receipt.mutationDisposition === 'already_current'
@@ -935,6 +940,12 @@ function reportTerminalTransition(terminal, io) {
       : `  closeout_owned_accepted_to_closed: closed ${receipt.changedPaths.length} covered task carrier(s) for ${receipt.workUnit}.`);
     io.out(`  atomicity: ${receipt.atomicity}`);
     io.out(`  revalidate: ${receipt.revalidateCommand}`);
+    const claims = deriveLifecycleClaims({
+      closeoutPacket: packet,
+      closeoutTerminalReceipt: receipt,
+      currentCloseoutMarker: marker,
+    });
+    for (const claim of claims) io.out(`  lifecycle: ${claim.claim}`);
     return;
   }
   for (const error of terminal.errors) io.err(`closeout record: ${error}`);
@@ -985,7 +996,11 @@ async function recordGitHubMarker(target, config, packet, markerBody, liveParams
       return 0;
     }
     const resumed = applyGitHubCloseoutTerminalTransition(target, config, packet, liveParams, io);
-    reportTerminalTransition(resumed, io);
+    reportTerminalTransition(resumed, io, packet, {
+      gateDigest: packet.digest,
+      artifact: packet.candidate_artifact,
+      workUnit: packet.work_unit,
+    });
     return resumed.ok ? 0 : 1;
   }
 
@@ -1041,6 +1056,10 @@ async function recordGitHubMarker(target, config, packet, markerBody, liveParams
     return 0;
   }
   const terminal = applyGitHubCloseoutTerminalTransition(target, config, packet, liveParams, io);
-  reportTerminalTransition(terminal, io);
+  reportTerminalTransition(terminal, io, packet, {
+    gateDigest: packet.digest,
+    artifact: packet.candidate_artifact,
+    workUnit: packet.work_unit,
+  });
   return terminal.ok ? 0 : 1;
 }

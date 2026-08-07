@@ -969,9 +969,10 @@ describe('packed audit, closeout, and improvement flows', () => {
   function wireReport(artifact, coveredTasks, reference) {
     return {
       report_schema: 'auditor_report_v1',
+      producer: { roleId: 'auditor' },
       artifact,
       covered_tasks: coveredTasks,
-      invocation: { mode: 'host_subagent', reference, provenance: 'asserted' },
+      invocation: { mode: 'host_subagent', reference, provenance: 'verified', receipt: `auditor-receipt-${reference}` },
       perspectives: Object.fromEntries(
         ['outcome', 'completeness', 'integration_coherence', 'engineering_quality', 'verification', 'risk']
           .map(key => [key, `${key} body.`])
@@ -983,7 +984,7 @@ describe('packed audit, closeout, and improvement flows', () => {
     };
   }
 
-  it('persists Auditor reports from --file and --stdin through the packed binary', () => {
+  it('fails closed for Auditor reports without a protected host receipt verifier', () => {
     const target = makeFlowTarget('report-flow');
     const artifact = `commit:${git(target, 'rev-parse HEAD')}`;
     const created = runPacked([
@@ -999,21 +1000,21 @@ describe('packed audit, closeout, and improvement flows', () => {
       verdict: 'needs_remediation',
     }), 'utf-8');
     const fromFile = runPacked(['audit', 'report', 'AUD-001', '--file', reportFile, '--target', target]);
-    assert.equal(fromFile.status, 0, `${fromFile.stdout}${fromFile.stderr}`);
-    assert.match(fromFile.stdout, /Recorded run 1/);
+    assert.equal(fromFile.status, 1);
+    assert.match(fromFile.stderr, /requires a host receipt verifier/);
+    assert.match(fromFile.stderr, /Auditor resume packet:/);
 
     const fromStdin = spawnSync(process.execPath, [
       packedBin, 'audit', 'report', 'AUD-001', '--stdin', '--target', target,
     ], { encoding: 'utf-8', input: JSON.stringify(wireReport(artifact, ['T-001'], 'packed-ref-2')) });
-    assert.equal(fromStdin.status, 0, `${fromStdin.stdout}${fromStdin.stderr}`);
-    assert.match(fromStdin.stdout, /Recorded run 2/);
+    assert.equal(fromStdin.status, 1);
+    assert.match(fromStdin.stderr, /requires a host receipt verifier/);
 
     const status = runPacked(['audit', 'status', 'AUD-001', '--json', '--target', target]);
-    assert.equal(status.status, 0, `${status.stdout}${status.stderr}`);
-    assert.equal(JSON.parse(status.stdout).completed_audits, 2);
+    assert.equal(JSON.parse(status.stdout).completed_audits, 0);
   });
 
-  it('runs closeout prepare, record, and status through the packed binary', () => {
+  it('refuses packed closeout when no verified Auditor report exists', () => {
     const target = makeFlowTarget('closeout-flow');
     const artifact = `commit:${git(target, 'rev-parse HEAD')}`;
     assert.equal(runPacked([
@@ -1025,19 +1026,17 @@ describe('packed audit, closeout, and improvement flows', () => {
     git(target, 'commit -qm record-audit');
     const reportFile = join(target, '.agenticloop', 'tmp', 'run.json');
     writeFileSync(reportFile, JSON.stringify(wireReport(artifact, ['T-001'], 'packed-closeout-ref')), 'utf-8');
-    assert.equal(runPacked(['audit', 'report', 'AUD-001', '--file', reportFile, '--target', target]).status, 0);
+    const report = runPacked(['audit', 'report', 'AUD-001', '--file', reportFile, '--target', target]);
+    assert.equal(report.status, 1);
+    assert.match(report.stderr, /requires a host receipt verifier/);
 
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     const prepared = runPacked([
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact,
       '--output', packetPath, '--target', target,
     ]);
-    assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
-    const recorded = runPacked(['closeout', 'record', '--packet', packetPath, '--yes', '--target', target]);
-    assert.equal(recorded.status, 0, `${recorded.stdout}${recorded.stderr}`);
-    const status = runPacked(['closeout', 'status', '--work-unit', 'milestone:M00', '--target', target]);
-    assert.equal(status.status, 0, `${status.stdout}${status.stderr}`);
-    assert.match(status.stdout, /complete \(current\)/);
+    assert.equal(prepared.status, 1);
+    assert.match(`${prepared.stdout}${prepared.stderr}`, /audit/i);
   });
 
   it('runs improvement new, lint, and status through the packed binary', () => {

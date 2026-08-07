@@ -46,14 +46,14 @@ const FIELD_LABEL_TO_KEY = new Map(
 const FIELD_KEY_TO_LABEL = new Map(FIXUP_FIELDS.map(field => [field.key, field.label]));
 
 /**
- * Normalize an artifact reference for comparison. Backend-neutral: trims and
- * lowercases only, so `commit:AAA` and `commit:aaa` compare equal without
- * assuming a specific artifact grammar.
+ * Normalize surrounding whitespace only. Repository-bound callers validate
+ * lowercase object identities before comparison; case folding here would let
+ * malformed uppercase evidence acquire canonical authority.
  *
  * @param {string} value
  */
 export function normalizeArtifactToken(value) {
-  return String(value ?? '').trim().toLowerCase();
+  return String(value ?? '').trim();
 }
 
 /** Prefixes accepted as artifact spellings around a bare reference. */
@@ -231,7 +231,7 @@ export function validateFixupEpisode(episode, { subject, validateArtifact } = { 
  * @returns {boolean}
  */
 function evidenceReferencesArtifact(evidenceBody, artifact) {
-  const body = String(evidenceBody ?? '').toLowerCase();
+  const body = String(evidenceBody ?? '');
   const normalized = normalizeArtifactToken(artifact);
   if (!body || !normalized) return false;
   const candidates = new Set([normalized]);
@@ -239,7 +239,7 @@ function evidenceReferencesArtifact(evidenceBody, artifact) {
   if (bare) candidates.add(bare);
   for (const token of candidates) {
     const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (new RegExp(`(^|[^0-9a-z_])${escaped}([^0-9a-z_]|$)`, 'i').test(body)) return true;
+    if (new RegExp(`(^|[^0-9a-z_])${escaped}([^0-9a-z_]|$)`).test(body)) return true;
   }
   return false;
 }

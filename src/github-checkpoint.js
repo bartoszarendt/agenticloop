@@ -2,6 +2,7 @@
 
 import { loadPreflightInput } from './github-preflight.js';
 import { applyCheckpointRepairs, deriveCheckpointState, formatCheckpoint, formatCheckpointRepair, parseReviewCheckpoint, validateCheckpointSchema } from './review-checkpoint.js';
+import { REVIEW_ROLE_CARRIER_SCHEMA_VERSION } from './review-role-carrier.js';
 
 import { PublicCommandError } from './public-error.js';
 
@@ -37,6 +38,9 @@ export function renderGitHubCheckpoint({ pr, direction, cause, target, reference
     target: target ?? null,
     reference: reference ?? null,
     orchestratorAttribution: expectedAccount.login,
+    roleId: 'orchestrator',
+    roleCarrierSchemaVersion: REVIEW_ROLE_CARRIER_SCHEMA_VERSION,
+    carrier: 'github',
   };
   // Validate the final checkpoint schema before printing a carrier.
   const schema = validateCheckpointSchema(checkpoint);
@@ -95,8 +99,13 @@ export function planGitHubCheckpointRepair({ pr, source, ...options } = {}) {
   if (!latestBefore || !partial.direction || !partial.cause || (partial.direction === 'targeted_revision' && !partial.target) || ((partial.direction === 'needs_context' || partial.direction === 'blocked') && !partial.reference)) {
     throw new GitHubCheckpointError('source has ambiguous direction, cause, target, or reference; this authority-bearing defect is not repairable');
   }
+  // Newly emitted repairs declare the canonical versioned field names. The
+  // actor account is only ever restored from the authenticated GitHub author of
+  // the source; the role ID is fixed by this carrier type's immutable contract.
   const correctedFields = [];
-  if (String(partial.orchestratorAttribution ?? '').toLowerCase() !== sourceAuthor) correctedFields.push('orchestrator');
+  if (String(partial.orchestratorAttribution ?? '').toLowerCase() !== sourceAuthor) correctedFields.push('actor_account');
+  if (partial.roleId !== 'orchestrator') correctedFields.push('role_id');
+  if (partial.roleCarrierSchemaVersion !== REVIEW_ROLE_CARRIER_SCHEMA_VERSION) correctedFields.push('review_role_carrier');
   if (!Number.isInteger(partial.reviewCount)) correctedFields.push('review_count');
   if (!partial.artifact) correctedFields.push('artifact');
   if (correctedFields.length === 0) throw new GitHubCheckpointError('source defect is not a bounded syntax or attribution repair');
@@ -105,6 +114,9 @@ export function planGitHubCheckpointRepair({ pr, source, ...options } = {}) {
     reviewCount: Number.isInteger(partial.reviewCount) ? partial.reviewCount : outcomesBefore.length,
     artifact: partial.artifact || latestBefore.artifact,
     orchestratorAttribution: expectedAccount.login,
+    roleId: 'orchestrator',
+    roleCarrierSchemaVersion: REVIEW_ROLE_CARRIER_SCHEMA_VERSION,
+    carrier: 'github',
   };
   const candidate = {
     type: 'checkpoint_candidate',

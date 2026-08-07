@@ -10,6 +10,12 @@ import { markdownLines, markdownSection } from './markdown.js';
 import { DEFAULT_ATTEMPT_BUDGET, DEFAULT_REVIEW_BUDGET } from './layout.js';
 import { parseFrontmatter } from './frontmatter.js';
 import { resolveProjectAttemptBudget } from './project-map.js';
+import {
+  normalizeReviewRoleCarrier,
+  renderReviewRoleCarrier,
+  REVIEW_ROLE_CARRIER_SCHEMA_VERSION,
+} from './review-role-carrier.js';
+import { isGitObjectId } from './git-oid.js';
 
 // Compatibility re-export: layout.js is the single canonical owner.
 export { DEFAULT_ATTEMPT_BUDGET, DEFAULT_REVIEW_BUDGET } from './layout.js';
@@ -23,7 +29,36 @@ export const VALID_CHECKPOINT_CAUSES = new Set([
   'external_blocker',
 ]);
 export const VALID_NO_PROGRESS_DISPOSITIONS = new Set(['targeted_revision', 'split_task', 'contract_decision', 'blocked']);
-const REPAIRABLE_CHECKPOINT_FIELDS = new Set(['orchestrator', 'review_count', 'artifact']);
+/**
+ * Mechanically repairable checkpoint fields.
+ *
+ * A field is repairable only when its correct value is derivable from
+ * authenticated ordered history or fixed by an immutable contract:
+ *   - `review_count` and `artifact` derive from the ordered durable history;
+ *   - `actor_account` derives from the authenticated GitHub author of the
+ *     repaired source, and is *not* derivable for files-backed history, which
+ *     has no authenticated source - those carriers must be reissued;
+ *   - `role_id` is fixed by the carrier type's immutable role contract;
+ *   - `review_role_carrier` is fixed by the one supported carrier version.
+ * Everything else - direction, cause, target, reference - carries authority and
+ * requires reissuance rather than repair.
+ *
+ * `orchestrator` is the legacy spelling of `actor_account` and stays parseable
+ * for existing history; newly emitted repairs use the canonical versioned name.
+ */
+export const CANONICAL_REPAIRABLE_CHECKPOINT_FIELDS = Object.freeze([
+  'review_count', 'artifact', 'actor_account', 'role_id', 'review_role_carrier',
+]);
+const LEGACY_REPAIRABLE_FIELD_ALIASES = Object.freeze({ orchestrator: 'actor_account' });
+const REPAIRABLE_CHECKPOINT_FIELDS = new Set([
+  ...CANONICAL_REPAIRABLE_CHECKPOINT_FIELDS,
+  ...Object.keys(LEGACY_REPAIRABLE_FIELD_ALIASES),
+]);
+
+/** Normalize a declared corrected-field name onto its canonical spelling. */
+function canonicalRepairFieldName(field) {
+  return LEGACY_REPAIRABLE_FIELD_ALIASES[field] ?? field;
+}
 
 /** Parse a positive safe-integer task budget shared by both task backends. */
 export function parseTaskBudgetValue(value, field, fallback) {
@@ -92,9 +127,9 @@ function fieldsFromLiveLines(body) {
 
 /** @param {string} artifact */
 function githubArtifactError(artifact) {
-  return /^[0-9a-f]{40}$/i.test(artifact)
+  return isGitObjectId(artifact)
     ? null
-    : `checkpoint artifact '${artifact}' is not a full 40-character SHA`;
+    : `checkpoint artifact '${artifact}' is not a complete Git object identity`;
 }
 
 /** @param {string} artifact */
@@ -141,7 +176,14 @@ export function parseReviewCheckpoint(text, options = {}) {
   const artifact = fields.artifact ?? fields.latest_reviewed_artifact ?? null;
   const target = fields.target ?? fields.exact_target ?? null;
   const reference = fields.reference ?? fields.maintainer_reference ?? null;
-  const orchestratorAttribution = fields.orchestrator ?? fields.orchestrator_attribution ?? null;
+  const role = normalizeReviewRoleCarrier(fields, {
+    expectedRoleId: 'orchestrator', legacyField: 'orchestrator',
+    legacyActorAccount: options.authenticatedActorAccount,
+    allowUntrustedLegacyParse: carrier === 'github' && !options.authenticatedActorAccount,
+    label: 'checkpoint',
+  });
+  errors.push(...role.errors);
+  const orchestratorAttribution = role.actorAccount;
 
   let reviewCount = null;
   if (!direction) errors.push('checkpoint is missing required field "direction"');
@@ -176,9 +218,7 @@ export function parseReviewCheckpoint(text, options = {}) {
   if ((direction === 'needs_context' || direction === 'blocked') && !reference) {
     errors.push(`checkpoint with direction "${direction}" requires a "reference" field`);
   }
-  if (!orchestratorAttribution) {
-    errors.push('checkpoint is missing required field "orchestrator"');
-  }
+  if (!orchestratorAttribution) errors.push('checkpoint is missing required actor account');
 
   return {
     found: true,
@@ -187,10 +227,12 @@ export function parseReviewCheckpoint(text, options = {}) {
       direction,
       cause,
       reviewCount,
-      artifact: artifact?.toLowerCase() ?? null,
+      artifact: carrier === 'github' ? artifact ?? null : artifact ?? null,
       target: target || null,
       reference: reference || null,
       orchestratorAttribution: orchestratorAttribution || null,
+      roleId: role.roleId,
+      roleCarrierSchemaVersion: role.schemaVersion,
       carrier,
       raw,
     },
@@ -213,20 +255,31 @@ export function parseCheckpointRepair(text, options = {}) {
   const source = fields.source ?? '';
   const originalAuthor = fields.original_author ?? '';
   const reason = fields.reason ?? '';
-  const correctedFields = String(fields.corrected_fields ?? '').split(',').map(value => value.trim().toLowerCase().replace(/\s+/g, '_')).filter(Boolean);
-  const orchestrator = fields.orchestrator ?? '';
+  const declaredFields = String(fields.corrected_fields ?? '').split(',').map(value => value.trim().toLowerCase().replace(/\s+/g, '_')).filter(Boolean);
+  const correctedFields = declaredFields.map(canonicalRepairFieldName);
+  const role = normalizeReviewRoleCarrier(fields, {
+    expectedRoleId: 'orchestrator', legacyField: 'orchestrator',
+    legacyActorAccount: options.authenticatedActorAccount,
+    allowUntrustedLegacyParse: carrier === 'github' && !options.authenticatedActorAccount,
+    label: 'checkpoint repair',
+  });
+  errors.push(...role.errors);
+  const orchestrator = role.actorAccount ?? '';
   if (!source) errors.push('checkpoint repair is missing required field "source"');
   if (!originalAuthor) errors.push('checkpoint repair is missing required field "original_author"');
   if (!reason) errors.push('checkpoint repair is missing required field "reason"');
-  if (correctedFields.length === 0) errors.push('checkpoint repair is missing required field "corrected_fields"');
-  for (const field of correctedFields) {
+  if (declaredFields.length === 0) errors.push('checkpoint repair is missing required field "corrected_fields"');
+  if (new Set(correctedFields).size !== correctedFields.length) {
+    errors.push('checkpoint repair corrected_fields must not contain duplicate or aliased duplicate fields');
+  }
+  for (const field of declaredFields) {
     if (!REPAIRABLE_CHECKPOINT_FIELDS.has(field)) errors.push(`checkpoint repair field '${field}' is not mechanically repairable`);
   }
-  if (!orchestrator) errors.push('checkpoint repair is missing required field "orchestrator"');
+  if (!orchestrator) errors.push('checkpoint repair is missing required actor account');
   const checkpointText = [
     ...(carrier === 'github' ? ['<!-- AGENTIC_LOOP_REVIEW_ROUND_CHECKPOINT -->', ''] : []),
     '## Review Round Checkpoint', '',
-    ...['direction', 'cause', 'review_count', 'artifact', 'target', 'reference', 'orchestrator']
+    ...['direction', 'cause', 'review_count', 'artifact', 'target', 'reference', 'review_role_carrier', 'role_id', 'actor_account', 'orchestrator']
       .filter(key => fields[key])
       .map(key => `- ${key.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase())}: ${fields[key]}`),
   ].join('\n');
@@ -238,7 +291,7 @@ export function parseCheckpointRepair(text, options = {}) {
     found: true,
     repair: {
       type: 'checkpoint_repair', source, originalAuthor, reason, correctedFields,
-      checkpoint: checkpoint.checkpoint, orchestratorAttribution: orchestrator, carrier, raw,
+      checkpoint: checkpoint.checkpoint, orchestratorAttribution: orchestrator, roleId: role.roleId, carrier, raw,
     },
     errors,
   };
@@ -263,7 +316,10 @@ export function formatCheckpointRepair(repair, options = {}) {
   ];
   if (checkpoint.target) lines.push(`- Target: ${checkpoint.target}`);
   if (checkpoint.reference) lines.push(`- Reference: ${checkpoint.reference}`);
-  lines.push(`- Orchestrator: ${checkpoint.orchestratorAttribution ?? repair.orchestratorAttribution}`);
+  lines.push(...renderReviewRoleCarrier({
+    roleId: 'orchestrator',
+    actorAccount: checkpoint.orchestratorAttribution ?? repair.orchestratorAttribution,
+  }));
   if (carrier === 'github') lines.push('', '[[agent: orchestrator]]');
   lines.push('');
   return lines.join('\n');
@@ -327,6 +383,65 @@ export function validateCheckpointRepairEvent({ event, source, ordered, alreadyR
   if (!partial.artifact && replacement.artifact !== latest.artifact) errors.push(`${label} artifact is not the latest reviewed artifact`);
   if (Number.isInteger(partial.reviewCount) && partial.reviewCount !== replacement.reviewCount) errors.push(`${label} changes review_count`);
   if (!Number.isInteger(partial.reviewCount) && replacement.reviewCount !== prior.length) errors.push(`${label} review_count is not mechanically derivable from ordered history`);
+  // Versioned role-carrier repair. Actor identity may only be restored from the
+  // authenticated GitHub author of the repaired source; files-backed history has
+  // no authenticated source, so an underivable actor requires reissuance. The
+  // immutable role ID and the supported carrier version are contract-fixed.
+  const declaredList = (event.correctedFields ?? []).map(canonicalRepairFieldName);
+  const declaredRepairs = new Set(declaredList);
+  if (declaredRepairs.size !== declaredList.length) {
+    errors.push(`${label} correctedFields must not contain duplicate or aliased duplicate fields`);
+  }
+  for (const field of declaredRepairs) {
+    if (!CANONICAL_REPAIRABLE_CHECKPOINT_FIELDS.includes(field)) {
+      errors.push(`${label} declares non-repairable field '${field}'`);
+    }
+  }
+  const actualRepairs = new Set();
+  if (!Number.isInteger(partial.reviewCount) && Number.isInteger(replacement.reviewCount)) actualRepairs.add('review_count');
+  if (!partial.artifact && replacement.artifact) actualRepairs.add('artifact');
+  if (String(partial.orchestratorAttribution ?? '').toLowerCase() !== String(replacement.orchestratorAttribution ?? '').toLowerCase()) actualRepairs.add('actor_account');
+  if (partial.roleId !== replacement.roleId) actualRepairs.add('role_id');
+  if (partial.roleCarrierSchemaVersion !== replacement.roleCarrierSchemaVersion) actualRepairs.add('review_role_carrier');
+  const missingDeclarations = [...actualRepairs].filter(field => !declaredRepairs.has(field));
+  const spuriousDeclarations = [...declaredRepairs].filter(field => !actualRepairs.has(field));
+  if (missingDeclarations.length > 0) {
+    errors.push(`${label} correctedFields omits repaired field(s): ${missingDeclarations.join(', ')}`);
+  }
+  if (spuriousDeclarations.length > 0) {
+    errors.push(`${label} correctedFields declares unchanged field(s): ${spuriousDeclarations.join(', ')}`);
+  }
+  const replacementActor = String(replacement.orchestratorAttribution ?? '');
+  if (replacementActor && replacementActor.toLowerCase() !== sourceAuthor) {
+    errors.push(`${label} actor account '${replacementActor}' is not the authenticated author of its source`);
+  }
+  if (declaredRepairs.has('actor_account')) {
+    // A legacy files carrier's `Orchestrator:` value is the fixed trusted-role
+    // spelling, not an account, so restoring it is contract-fixed rather than
+    // an identity derivation. A real account is only derivable from an
+    // authenticated GitHub author.
+    const authenticatedSource = String(source.author?.login ?? '');
+    const legacyRoleToken = replacement.roleCarrierSchemaVersion === 0 &&
+      replacementActor.toLowerCase() === 'orchestrator';
+    if (!replacementActor) {
+      errors.push(`${label} declares an actor_account repair without a derivable actor account`);
+    } else if (!authenticatedSource && !legacyRoleToken) {
+      errors.push(`${label} cannot derive actor identity without an authenticated source; reissue the checkpoint`);
+    }
+  }
+  if (declaredRepairs.has('role_id') && replacement.roleId !== 'orchestrator') {
+    errors.push(`${label} role_id repair must restore the immutable 'orchestrator' role`);
+  }
+  if (declaredRepairs.has('review_role_carrier') &&
+      replacement.roleCarrierSchemaVersion !== REVIEW_ROLE_CARRIER_SCHEMA_VERSION) {
+    errors.push(`${label} review_role_carrier repair must restore the supported carrier version`);
+  }
+  if (replacement.roleId !== 'orchestrator') {
+    errors.push(`${label} replacement role ID must be immutable 'orchestrator'`);
+  }
+  if (![0, REVIEW_ROLE_CARRIER_SCHEMA_VERSION].includes(replacement.roleCarrierSchemaVersion)) {
+    errors.push(`${label} replacement review role carrier version is invalid`);
+  }
   if (errors.length > 0) {
     return { valid: false, errors, repairedEvent: null };
   }
@@ -435,6 +550,14 @@ export function validateCheckpointSchema(checkpoint, options = {}) {
     errors.push(`checkpoint with direction "${direction}" requires a reference`);
   }
   if (!checkpoint.orchestratorAttribution) errors.push('checkpoint is missing required field: orchestrator');
+  // Role-ID and carrier-version immutability checks apply unconditionally. A
+  // hand-built checkpoint without a carrier discriminator must not bypass
+  // them; a declared version that did not resolve (null) is never coerced
+  // into the legacy schema version 0.
+  if (checkpoint.roleId !== 'orchestrator') errors.push("checkpoint role ID must be immutable 'orchestrator'");
+  if (![0, REVIEW_ROLE_CARRIER_SCHEMA_VERSION].includes(checkpoint.roleCarrierSchemaVersion)) {
+    errors.push('checkpoint review role carrier version is invalid');
+  }
   return { valid: errors.length === 0, errors };
 }
 
@@ -693,7 +816,10 @@ export function formatCheckpoint(checkpoint, options = {}) {
   ];
   if (checkpoint.target) lines.push(`- Target: ${checkpoint.target}`);
   if (checkpoint.reference) lines.push(`- Reference: ${checkpoint.reference}`);
-  if (checkpoint.orchestratorAttribution) lines.push(`- Orchestrator: ${checkpoint.orchestratorAttribution}`);
+  lines.push(...renderReviewRoleCarrier({
+    roleId: 'orchestrator',
+    actorAccount: checkpoint.orchestratorAttribution,
+  }));
   if (carrier === 'github') lines.push('', '[[agent: orchestrator]]');
   lines.push('');
   return lines.join('\n');

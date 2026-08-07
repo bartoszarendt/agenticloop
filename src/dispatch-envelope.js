@@ -19,12 +19,16 @@ import { deriveCommitRange } from './commit-range.js';
 import { gitTreeObjectId, isGitObjectId, sameGitObjectFormat } from './git-oid.js';
 import { deepFreeze, frozenClone } from './immutable.js';
 import { createDiagnostic } from './repair-policy.js';
+import { receiveExceptionalVerification } from './exceptional-verification.js';
 import {
   authorizeBlockedResultRecovery,
   authorizeBlockedResultResume,
 } from './blocked-result-authority.js';
 import {
   createValidationResult,
+  dispositionForEvidenceState,
+  evidenceStateRank,
+  normalizeEvidenceState,
   validateValidationResult,
   validationResultDigest,
 } from './result-envelope.js';
@@ -34,6 +38,7 @@ import {
   HostProducerMismatchError,
   signActivationCapture,
   verifyActivationCaptureSignature,
+  verifyHostExceptionalVerificationReceipt,
   verifyHostHandoffReceipt,
 } from './host-handoff.js';
 import { HOST_SIGNATURE_ALGORITHM, targetRepositoryIdentity } from './host-trust.js';
@@ -55,11 +60,13 @@ import {
 } from './required-checks.js';
 import { validateTaskRecord } from './validate-config.js';
 import { WORKFLOW_ROLE_SET } from './workflow-vocabulary.js';
+import { WORKFLOW_ROLE_REGISTRY } from './transition-contract.js';
 import {
   HOST_ROLE_CAPABILITIES,
   createDegradedEnforcementReports,
   validateDegradedEnforcementReport,
   validateHostRoleCapabilityDeclaration,
+  validateHostRoleCapabilityInventory,
 } from './host-role-capabilities.js';
 
 export const ACTIVATION_CAPTURE_KIND = 'agenticloop.activation-capture';
@@ -176,9 +183,6 @@ function resolveInventory(options) {
   return { ok: true, inventory: injected };
 }
 
-const EVIDENCE_RANK = Object.freeze({
-  missing: 0, malformed: 1, negative: 2, changed: 3, stale: 4, current: 5,
-});
 export const ACTIVATION_CLOCK_SKEW_MS = 1000;
 
 const DEFAULT_DISPOSITION = Object.freeze({
@@ -203,10 +207,13 @@ class FindingSet {
   }
 
   add(evidenceState, message, options = {}) {
+    const normalizedEvidenceState = normalizeEvidenceState(evidenceState);
     const item = {
       code: options.code ?? this.defaultCode,
-      evidenceState,
-      disposition: options.disposition ?? DEFAULT_DISPOSITION[evidenceState] ?? 'blocked',
+      evidenceState: normalizedEvidenceState,
+      disposition: normalizedEvidenceState === evidenceState
+        ? options.disposition ?? DEFAULT_DISPOSITION[normalizedEvidenceState] ?? 'blocked'
+        : dispositionForEvidenceState(normalizedEvidenceState),
       message: String(message),
       ...(options.domain ?? {}),
     };
@@ -244,8 +251,8 @@ class FindingSet {
   get primary() {
     return this.items.reduce((best, item) => {
       if (best === null) return item;
-      const left = EVIDENCE_RANK[item.evidenceState] ?? EVIDENCE_RANK.negative;
-      const right = EVIDENCE_RANK[best.evidenceState] ?? EVIDENCE_RANK.negative;
+      const left = evidenceStateRank(item.evidenceState);
+      const right = evidenceStateRank(best.evidenceState);
       return left < right ? item : best;
     }, /** @type {any} */ (null));
   }
@@ -721,14 +728,14 @@ export function validateActivationCapture(capture, options = {}) {
  *
  * Capability and evidence state stay orthogonal: an unsupported host is
  * `negative`/`blocked`; a capable host missing the operator digest is
- * `missing`/`needs_context`; a digest disagreement is `changed`/`rejected`.
+ * `missing`/`needs_context`; a digest disagreement is `changed`/`superseded`.
  */
 export function activationCaptureDisposition(capture, options = {}) {
   const checked = validateActivationCapture(capture, options);
   if (!checked.ok) {
     const primary = checked.findings.reduce((best, item) => {
       if (!best) return item;
-      return (EVIDENCE_RANK[item.evidenceState] ?? 2) < (EVIDENCE_RANK[best.evidenceState] ?? 2) ? item : best;
+      return evidenceStateRank(item.evidenceState) < evidenceStateRank(best.evidenceState) ? item : best;
     }, null);
     return {
       ok: false,
@@ -1783,6 +1790,8 @@ export function receiveRoleReturn(input = {}, options = {}) {
       redelegationAuthority = null,
       recovery = null,
       humanDisposition = null,
+       exceptionalVerification = null,
+       exceptionalReceipt = null,
       resolveTrustedAuthority,
       workflowRoleRegistry,
       now = Date.now(),
@@ -1808,6 +1817,26 @@ export function receiveRoleReturn(input = {}, options = {}) {
       const findings = findingSet(command);
       findings.extend(packetValidation.findings);
       return failure(command, findings, producerDomain);
+    }
+    // Exception requests and blocked-result recovery are separate authority
+    // edges. Reject every contradictory combination before either edge can
+    // return an early result.
+    if (exceptionalVerification !== null && (
+      requestedOwner !== undefined || redelegationAuthority !== null ||
+      recovery !== null || humanDisposition !== null
+    )) {
+      return singleFailure(
+        command, 'malformed', 'rejected',
+        'exceptional verification cannot be combined with recovery, redelegation, human disposition, or a requested owner',
+        producerDomain, 'role_return.invalid'
+      );
+    }
+    if (exceptionalVerification === null && exceptionalReceipt !== null) {
+      return singleFailure(
+        command, 'malformed', 'rejected',
+        'an exceptional-verification producer receipt requires one exceptional-verification request',
+        producerDomain, 'role_return.invalid'
+      );
     }
     for (const [value, label] of [
       [refetchTask, 'current task refetch function is required'],
@@ -1896,6 +1925,71 @@ export function receiveRoleReturn(input = {}, options = {}) {
       );
     }
     if (findings.length) return failure(command, findings, { producerRole: wire.producerRole });
+    if (exceptionalVerification !== null) {
+      // Required-check exceptions change no task or implementation authority.
+      // The task-workflow capability derives the only eligible disposition
+      // owner; an arbitrary claimed role cannot select itself here.
+      //
+      // The inventory comes from trusted options - the effective host-role
+      // capability inventory the CLI builds from the selected host, effective
+      // target configuration, effective workflow-role registry, and canonical
+      // role policies - never from the untrusted role-return input. It is
+      // revalidated against the effective registry before an owner is derived,
+      // so neither a caller-supplied nor a tampered inventory can select one.
+      const host = packet.assignment.hostRoleCapability.host;
+      const registry = workflowRoleRegistry ?? WORKFLOW_ROLE_REGISTRY;
+      const inventory = (options.hostRoleCapabilities ?? HOST_ROLE_CAPABILITIES)?.[host];
+      const inventoryCheck = inventory
+        ? validateHostRoleCapabilityInventory({ [host]: inventory }, { registry, hosts: [host] })
+        : { ok: false, errors: [`no capability declarations for host '${String(host)}'`] };
+      if (!inventoryCheck.ok) {
+        return singleFailure(
+          command, 'malformed', 'blocked',
+          `exceptional verification requires a trusted effective host-role capability inventory: ${inventoryCheck.errors[0]}`,
+          { producerRole: wire.producerRole }, 'capability.action.denied'
+        );
+      }
+      const owners = Object.entries(inventory)
+        .filter(([, declaration]) => declaration?.actionBindings?.some(binding =>
+          binding.action === 'task_workflow_mutate' && binding.policy === 'allowed'
+        ))
+        .map(([roleId]) => roleId);
+      if (owners.length !== 1) {
+        return singleFailure(
+          command, 'malformed', 'blocked',
+          'exceptional verification cannot resolve exactly one task-workflow disposition owner from the selected capability inventory',
+          { producerRole: wire.producerRole }, 'capability.action.denied'
+        );
+      }
+      const [allowedDispositionOwner] = owners;
+      if (!exceptionalReceipt || typeof exceptionalReceipt !== 'object' || Array.isArray(exceptionalReceipt)) {
+        return singleFailure(command, 'missing', 'needs_context', 'host exceptional-verification producer receipt is required', { producerRole: wire.producerRole }, 'role_return.invalid');
+      }
+      try {
+        verifyHostExceptionalVerificationReceipt(exceptionalReceipt, {
+          trustedAdapter, packet, exceptionalVerification, repositoryEvidence, now,
+        });
+      } catch (error) {
+        return singleFailure(command, 'negative', 'rejected', `host exceptional-verification authentication failed: ${error.message}`, { producerRole: wire.producerRole }, 'role_return.invalid');
+      }
+      const exceptional = receiveExceptionalVerification({
+        request: exceptionalVerification,
+        packet,
+        authenticatedProducerRole: wire.producerRole,
+        allowedDispositionOwner,
+        workflowRoleRegistry: registry,
+      });
+      if (!exceptional.ok) {
+        return { ok: false, packet: null, validation: exceptional.validation, exceptional };
+      }
+      return {
+        ok: true,
+        roleReturn: deepFreeze(wire),
+        exceptional,
+        blockedAuthority: null,
+        validation: exceptional.validation,
+      };
+    }
     let blockedAuthority = null;
     if (wire.disposition === 'blocked') {
       if (recovery !== null) {

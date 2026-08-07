@@ -8,6 +8,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   legacyInlineToAuditRun,
+  auditorReportDigest,
   parseAuditorWireReport,
   wireReportToAuditRun,
 } from '../src/audit-report-schema.js';
@@ -16,18 +17,21 @@ import {
   createAuditRecordContent,
   parseAuditRecord,
 } from '../src/audit-record.js';
+import { normalizeAuditorInvocationProvenance } from '../src/audit-provenance.js';
 
 const FULL_A = 'a'.repeat(40);
 
 function wireReport(overrides = {}) {
   return {
     report_schema: 'auditor_report_v1',
+    producer: { roleId: 'auditor' },
     artifact: `commit:${FULL_A}`,
     covered_tasks: ['T-001', 'T-002'],
     invocation: {
       mode: 'host_subagent',
       reference: 'invoke-0001',
-      provenance: 'asserted',
+      provenance: 'verified',
+      receipt: 'auditor-receipt-0001',
     },
     perspectives: {
       outcome: 'Outcome body: the integrated result achieves the goal.',
@@ -124,6 +128,37 @@ describe('auditor wire report schema', () => {
     });
     assert.equal(parseAuditorWireReport(huge).ok, true);
   });
+
+  it('requires the immutable Auditor producer and authenticates the complete canonical payload', async () => {
+    const missingProducer = wireReport();
+    delete missingProducer.producer;
+    assert.equal(parseAuditorWireReport(missingProducer).ok, false);
+    assert.equal(parseAuditorWireReport(wireReport({ producer: { roleId: 'engineer' } })).ok, false);
+
+    const parsed = parseAuditorWireReport(wireReport());
+    assert.equal(parsed.ok, true, parsed.errors.join('\n'));
+    const run = wireReportToAuditRun(parsed.report);
+    const context = {
+      workUnit: 'phase:4', candidateArtifact: parsed.report.artifact,
+      coveredTasks: parsed.report.covered_tasks,
+      verifier: input => ({ verified: input.reportDigest === auditorReportDigest(parsed.report), reportDigest: input.reportDigest }),
+    };
+    assert.equal((await normalizeAuditorInvocationProvenance(run, context)).errors.length, 0);
+    for (const mutate of [
+      report => { report.findings = [{ id: 'A-01' }]; },
+      report => { report.perspectives.risk = 'Changed risk.'; },
+      report => { report.verdict = 'needs_remediation'; },
+      report => { report.artifact = `commit:${'b'.repeat(40)}`; },
+      report => { report.covered_tasks = ['T-999']; },
+      report => { report.producer = { roleId: 'engineer' }; },
+    ]) {
+      const changed = structuredClone(parsed.report);
+      mutate(changed);
+      const changedRun = { ...run, wirePayload: changed, auditorReportDigest: auditorReportDigest(changed) };
+      const checked = await normalizeAuditorInvocationProvenance(changedRun, context);
+      assert.ok(checked.errors.length > 0, 'mutated authenticated payload must fail');
+    }
+  });
 });
 
 describe('lossless durable history', () => {
@@ -171,7 +206,7 @@ describe('lossless durable history', () => {
     assert.equal(payload.assessment, wire.report.assessment);
     assert.equal(payload.evidence_checked, wire.report.evidence_checked);
     assert.deepEqual(payload.findings, wire.report.findings);
-    assert.equal(payload.invocation.provenance, 'asserted');
+    assert.equal(payload.invocation.provenance, 'verified');
   });
 
   it('keeps legacy inline runs explicitly versioned without fabricated perspectives', () => {

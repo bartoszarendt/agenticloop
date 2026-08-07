@@ -30,6 +30,7 @@ import { parseFrontmatter } from './frontmatter.js';
 import { markdownLines, markdownSection, parseAtxHeading, topLevelListItems } from './markdown.js';
 import { decisionReferenceId } from './verification-learning.js';
 import { isValidTaskId } from './task-id.js';
+import { canonicalSha256 } from './canonical-json.js';
 import {
   AUDIT_DISPOSITION_TYPES,
   AUDIT_PERSPECTIVES,
@@ -96,6 +97,7 @@ export const AUDIT_RUN_LABELS = Object.freeze([
   'Findings',
   'Evidence checked',
   'Report format',
+  'Auditor report digest',
   'Consumption cause',
   'Consumption authority',
   'Consumption reason',
@@ -108,7 +110,7 @@ export const AUDIT_RUN_LABELS = Object.freeze([
  * only for `human_authorized_retry` and `other_plan_required`.
  */
 export const AUDIT_REQUIRED_RUN_LABELS = Object.freeze(
-  AUDIT_RUN_LABELS.filter(label => !['Consumption authority', 'Consumption reason', 'Consumption plan'].includes(label))
+  AUDIT_RUN_LABELS.filter(label => !['Consumption authority', 'Consumption reason', 'Consumption plan', 'Auditor report digest'].includes(label))
 );
 const AUDIT_RUN_LABEL_KEYS = new Set(AUDIT_RUN_LABELS.map(label => label.toLowerCase()));
 
@@ -502,6 +504,7 @@ export function parseAuditRecord(content) {
         invocationReference: fields.get('invocation reference') ?? '',
         invocationMode: fields.get('invocation mode') ?? '',
         invocationProvenance: fields.get('invocation provenance') ?? '',
+        auditorReportDigest: fields.get('auditor report digest') ?? '',
         auditedArtifact: fields.get('audited artifact') ?? '',
         coveredTasks: (fields.get('covered tasks') ?? '')
           .split(',')
@@ -915,6 +918,23 @@ function validateAuditHistoryEntries(record, label, errors) {
             `${entryLabel} declares report format '${AUDIT_REPORT_SCHEMA_VERSION}' but has no parseable JSON report payload; six-perspective reports are persisted losslessly`
           );
         } else {
+          const expectedDigest = `sha256:agenticloop.auditor-report.v1:${canonicalSha256(payload)}`;
+          if (!entry.auditorReportDigest || entry.auditorReportDigest !== expectedDigest) {
+            errors.push(`${entryLabel} Auditor report digest does not bind the embedded normalized payload`);
+          }
+          if (payload.report_schema !== AUDIT_REPORT_SCHEMA_VERSION ||
+              payload.producer?.roleId !== 'auditor' ||
+              Object.keys(payload.producer ?? {}).length !== 1) {
+            errors.push(`${entryLabel} current Auditor report payload lacks the closed Auditor producer identity`);
+          }
+          if (payload.invocation?.provenance !== entry.invocationProvenance) {
+            errors.push(`${entryLabel} visible invocation provenance does not match the embedded Auditor payload`);
+          }
+          if (payload.artifact !== entry.auditedArtifact ||
+              !coveredTaskSetsEqual(payload.covered_tasks, entry.coveredTasks) ||
+              payload.verdict !== entry.verdict) {
+            errors.push(`${entryLabel} visible report bindings do not match the embedded Auditor payload`);
+          }
           for (const key of AUDIT_PERSPECTIVES) {
             if (typeof payload?.perspectives?.[key] !== 'string' || !payload.perspectives[key].trim()) {
               errors.push(`${entryLabel} report payload is missing perspective body '${key}'`);
@@ -1996,6 +2016,7 @@ function renderHistoryBlock(entry, runNumber) {
     `- Findings: ${(entry.findings ?? []).length > 0 ? entry.findings.join(', ') : 'none'}`,
     `- Evidence checked: ${entry.evidenceChecked}`,
     `- Report format: ${reportFormat}`,
+    ...(entry.auditorReportDigest ? [`- Auditor report digest: ${entry.auditorReportDigest}`] : []),
     `- Consumption cause: ${entry.consumptionCause}`,
   ];
   if (entry.consumptionAuthority) lines.push(`- Consumption authority: ${entry.consumptionAuthority}`);
@@ -2013,9 +2034,15 @@ function renderHistoryBlock(entry, runNumber) {
  * persist exactly the fields that interface supplied.
  */
 function buildRunReportPayload(entry, reportFormat) {
+  if (reportFormat === AUDIT_REPORT_SCHEMA_VERSION && entry.wirePayload) {
+    // The authenticated, schema-normalized Auditor payload is append-only
+    // evidence. Never reconstruct its perspectives or findings in this path.
+    return structuredClone(entry.wirePayload);
+  }
   if (reportFormat === AUDIT_REPORT_SCHEMA_VERSION) {
     return {
       report_schema: AUDIT_REPORT_SCHEMA_VERSION,
+      producer: { roleId: 'auditor' },
       artifact: entry.auditedArtifact,
       covered_tasks: normalizeCoveredTasks(entry.coveredTasks),
       invocation: {
@@ -2147,6 +2174,9 @@ export function appendAuditReport(content, report, validationOptions = {}) {
   if (invocationProvenance === 'verified' && !invocationReceipt) {
     errors.push("invocation provenance 'verified' requires a host receipt");
   }
+  if (report?.authoritativeAuditorReturn === true && invocationProvenance !== 'verified') {
+    errors.push('a fresh authoritative Auditor return requires verified invocation provenance');
+  }
   const consumptionCause = String(report?.consumptionCause ?? 'substantive_audit').trim();
   const consumptionAuthority = String(report?.consumptionAuthority ?? '').trim();
   const consumptionReason = String(report?.consumptionReason ?? '').trim();
@@ -2224,6 +2254,7 @@ export function appendAuditReport(content, report, validationOptions = {}) {
     findings: findings.map(f => f.id),
     reportFindings: findings,
     reportFormat,
+    auditorReportDigest: report?.auditorReportDigest ?? '',
     consumptionCause,
     consumptionAuthority,
     consumptionReason,

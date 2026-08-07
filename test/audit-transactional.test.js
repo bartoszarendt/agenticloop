@@ -47,8 +47,8 @@ function makeTarget(name) {
   return target;
 }
 
-function run(args, target) {
-  return runCliInProcess(['audit', ...args, '--target', target]);
+function run(args, target, options = {}) {
+  return runCliInProcess(['audit', ...args, '--target', target], options);
 }
 
 function newArgs() {
@@ -66,9 +66,10 @@ function newArgs() {
 function wireReport(overrides = {}) {
   return {
     report_schema: 'auditor_report_v1',
+    producer: { roleId: 'auditor' },
     artifact: `commit:${FULL_A}`,
     covered_tasks: ['T-001', 'T-002'],
-    invocation: { mode: 'host_subagent', reference: 'r-1', provenance: 'asserted' },
+    invocation: { mode: 'host_subagent', reference: 'r-1', provenance: 'verified', receipt: 'auditor-receipt-0001' },
     perspectives: Object.fromEntries(
       ['outcome', 'completeness', 'integration_coherence', 'engineering_quality', 'verification', 'risk']
         .map(key => [key, `${key} body.`])
@@ -412,7 +413,7 @@ describe('report ingestion modes', () => {
     assert.equal(record.history[0].reportPayload.perspectives, undefined);
   });
 
-  it('normalizes an unverifiable receipt claim to asserted provenance', async () => {
+  it('refuses an unauthenticated authoritative receipt without consuming audit budget', async () => {
     const target = makeTarget('receipt-asserted');
     await seed(target);
     const reportPath = join(target, 'report.json');
@@ -420,10 +421,10 @@ describe('report ingestion modes', () => {
       covered_tasks: ['T-041', 'T-042'],
       invocation: { mode: 'host_subagent', reference: 'receipt-claim', provenance: 'verified', receipt: 'claimed-receipt' },
     })), 'utf-8');
-    const result = await run(['report', 'AUD-001', '--file', reportPath], target);
-    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const result = await run(['report', 'AUD-001', '--file', reportPath], target, { auditProvenanceVerifier: null });
+    assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
     const record = parseAuditRecord(readFileSync(join(target, '.agenticloop', 'audits', 'AUD-001.md'), 'utf-8'));
-    assert.equal(record.history[0].invocationProvenance, 'asserted');
+    assert.equal(record.history.length, 0);
     assert.equal((await run(['lint'], target)).status, 0);
   });
 
@@ -439,7 +440,7 @@ describe('report ingestion modes', () => {
     const secondPath = join(target, 'second.json');
     const first = wireReport({
       covered_tasks: ['T-041', 'T-042'],
-      invocation: { mode: 'host_subagent', reference: 'shared-reference', provenance: 'asserted', receipt: 'shared-receipt' },
+      invocation: { mode: 'host_subagent', reference: 'shared-reference', provenance: 'verified', receipt: 'shared-receipt' },
     });
     writeFileSync(firstPath, JSON.stringify(first), 'utf-8');
     writeFileSync(secondPath, JSON.stringify({ ...first, covered_tasks: ['T-055'] }), 'utf-8');
@@ -450,5 +451,56 @@ describe('report ingestion modes', () => {
     assert.equal((await run(['lint'], target)).status, 0);
     const secondRecord = parseAuditRecord(readFileSync(join(target, '.agenticloop', 'audits', 'AUD-002.md'), 'utf-8'));
     assert.equal(secondRecord.history.length, 0);
+  });
+
+  function assertAuditorResumePacket(stderr) {
+    const line = stderr.split('\n').find(entry => entry.includes('Auditor resume packet:'));
+    assert.ok(line, `expected an Auditor resume packet in stderr:\n${stderr}`);
+    const packet = JSON.parse(line.slice(line.indexOf('{')));
+    assert.equal(packet.kind, 'agenticloop.auditor-report-resume');
+    assert.equal(packet.schemaVersion, 1);
+    assert.equal(packet.ownerRole, 'auditor');
+    assert.equal(packet.nextResumableTransition, 'resubmit_auditor_report');
+    assert.equal(packet.evidence.state, 'malformed');
+    assert.ok(packet.digest.startsWith('sha256:agenticloop.auditor-report-resume.v1:'));
+    return packet;
+  }
+
+  it('returns malformed --file JSON to the Auditor without a durable write or budget consumption', async () => {
+    const target = makeTarget('malformed-file');
+    await seed(target);
+    const recordPath = join(target, '.agenticloop', 'audits', 'AUD-001.md');
+    const before = readFileSync(recordPath, 'utf-8');
+    const reportPath = join(target, 'broken.json');
+    writeFileSync(reportPath, '{ this is not valid json', 'utf-8');
+    const result = await run(['report', 'AUD-001', '--file', reportPath], target);
+    assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /not valid JSON/);
+    assertAuditorResumePacket(result.stderr);
+    assert.equal(readFileSync(recordPath, 'utf-8'), before, 'malformed JSON performs no durable write and consumes no audit budget');
+  });
+
+  it('returns malformed --stdin JSON to the Auditor without a durable write or budget consumption', async () => {
+    const target = makeTarget('malformed-stdin');
+    await seed(target);
+    const recordPath = join(target, '.agenticloop', 'audits', 'AUD-001.md');
+    const before = readFileSync(recordPath, 'utf-8');
+    const result = await runCliInProcess(
+      ['audit', 'report', 'AUD-001', '--stdin', '--target', target],
+      { stdin: scriptedStdin(['{ this is not valid json']) }
+    );
+    assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /not valid JSON/);
+    assertAuditorResumePacket(result.stderr);
+    assert.equal(readFileSync(recordPath, 'utf-8'), before, 'malformed JSON performs no durable write and consumes no audit budget');
+  });
+
+  it('keeps a missing report file distinct from a malformed Auditor payload', async () => {
+    const target = makeTarget('missing-report-file');
+    await seed(target);
+    const result = await run(['report', 'AUD-001', '--file', join(target, 'does-not-exist.json')], target);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /report file not found/);
+    assert.doesNotMatch(result.stderr, /Auditor resume packet/);
   });
 });

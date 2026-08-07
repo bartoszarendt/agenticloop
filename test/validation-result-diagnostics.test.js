@@ -5,6 +5,7 @@ import { createDiagnostic, REPAIR_POLICY } from '../src/repair-policy.js';
 import {
   createValidationResult,
   consolidateDiagnostics,
+  deriveEvidenceState,
   serializeValidationResult,
   suppressDependentDiagnostics,
   validateRequiredFieldInventory,
@@ -17,6 +18,7 @@ import { evaluateTaskRecordRoot } from '../src/task-record-root.js';
 import { evaluatePreflight } from '../src/github-preflight.js';
 import { evaluateTaskReadiness } from '../src/task-readiness.js';
 import { validationResultForGate } from '../src/public-result.js';
+import { publicErrorFromFindings } from '../src/public-error.js';
 import { presentDiagnostic } from '../src/diagnostic-presentation.js';
 import { getProjectRoleCapabilities } from '../src/role-capabilities.js';
 import { validateTaskRecord, validateTaskRecordDiagnostics } from '../src/validate-config.js';
@@ -96,6 +98,41 @@ function result(diagnostics) {
 }
 
 describe('canonical validation-result envelopes', () => {
+  it('normalizes unknown diagnostic evidence states to malformed and rejects raw forged envelopes', () => {
+    const invented = createDiagnostic({
+      code: 'verification.context.malformed',
+      message: 'invented state probe',
+      evidence: { state: 'invented' },
+    });
+    assert.equal(deriveEvidenceState([invented]), 'malformed');
+
+    const gate = validationResultForGate('verify', { diagnostics: [invented] });
+    assert.equal(gate.evidenceState, 'malformed');
+    assert.equal(gate.disposition, 'rejected');
+    assert.equal(gate.diagnostics[0].evidence.state, 'malformed');
+    assert.equal(validateValidationResult(gate).ok, true);
+
+    const forged = structuredClone(gate);
+    forged.diagnostics[0].evidence.state = 'invented';
+    const checked = validateValidationResult(forged);
+    assert.equal(checked.ok, false);
+    assert.match(checked.errors.join('\n'), /diagnostic evidence\.state must be one of/);
+
+    const conflicting = createDiagnostic({
+      code: 'verification.context.malformed',
+      message: 'conflicting state probe',
+      evidence: { state: 'missing', evidenceState: 'changed' },
+    });
+    const conflictGate = validationResultForGate('verify', { diagnostics: [conflicting] });
+    assert.equal(conflictGate.evidenceState, 'malformed');
+    assert.equal(conflictGate.diagnostics[0].evidence.state, 'malformed');
+    assert.equal(conflictGate.diagnostics[0].evidence.evidenceState, 'malformed');
+
+    const publicError = publicErrorFromFindings([{ code: 'probe', evidenceState: 'invented', disposition: 'blocked', message: 'probe' }]);
+    assert.equal(publicError.evidenceState, 'malformed');
+    assert.equal(publicError.disposition, 'rejected');
+  });
+
   it('serializes and digests equivalent permutations identically', () => {
     const first = result([
       createDiagnostic({ code: 'evidence.malformed', evidence: { b: 2, a: 1 } }),
@@ -566,5 +603,59 @@ describe('public CLI failure boundaries', () => {
       const parsed = JSON.parse(json.stdout);
       assert.match(parsed.firstSafeRepair, /agenticloop help/);
     }
+  });
+});
+
+describe('mixed diagnostics resolve under one precedence at public boundaries', () => {
+  const finding = (state, code = 'verification.context.malformed') =>
+    createDiagnostic({ code, message: `evidence is ${state}`, evidence: { state } });
+  const flatFinding = (state, code = 'verification.context.malformed') => ({
+    level: 'error', code, message: `evidence is ${state}`, evidenceState: state,
+  });
+
+  it('the public gate selects stale before negative and changed', () => {
+    const gate = validationResultForGate('github-preflight', {
+      ok: false,
+      errors: ['mixed'],
+      diagnostics: [finding('changed'), finding('negative'), finding('stale', 'verification.context.stale')],
+    });
+    assert.equal(gate.evidenceState, 'stale');
+    assert.equal(gate.disposition, 'superseded');
+  });
+
+  it('the public gate selects missing before malformed', () => {
+    const gate = validationResultForGate('github-preflight', {
+      ok: false,
+      errors: ['mixed'],
+      diagnostics: [finding('malformed'), finding('missing', 'verification.context.missing')],
+    });
+    assert.equal(gate.evidenceState, 'missing');
+    assert.equal(gate.disposition, 'needs_context');
+  });
+
+  it('publicErrorFromFindings selects the same primary under the same precedence', () => {
+    const error = publicErrorFromFindings([
+      flatFinding('changed'), flatFinding('negative'), flatFinding('stale', 'verification.context.stale'),
+    ]);
+    assert.equal(error.evidenceState, 'stale');
+    assert.equal(error.code, 'verification.context.stale');
+    const missing = publicErrorFromFindings([
+      flatFinding('malformed'), flatFinding('missing', 'verification.context.missing'),
+    ]);
+    assert.equal(missing.evidenceState, 'missing');
+  });
+
+  it('a current finding never outranks a failed state', () => {
+    const error = publicErrorFromFindings([
+      flatFinding('current'), flatFinding('changed'),
+    ]);
+    assert.equal(error.evidenceState, 'changed');
+    const gate = validationResultForGate('github-preflight', {
+      ok: false,
+      errors: ['mixed'],
+      diagnostics: [finding('current'), finding('negative')],
+    });
+    assert.equal(gate.evidenceState, 'negative');
+    assert.equal(gate.disposition, 'blocked');
   });
 });

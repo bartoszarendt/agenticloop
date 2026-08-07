@@ -8,20 +8,17 @@
  */
 
 import { CliUsageError } from './cli-io.js';
-import { createValidationResult, emitValidationResult } from './result-envelope.js';
+import {
+  createValidationResult,
+  deriveEvidenceState,
+  dispositionForEvidenceState,
+  emitValidationResult,
+  normalizeEvidenceState,
+} from './result-envelope.js';
 import { OPERATIONAL_FAILURE_MESSAGE } from './public-error.js';
 import { createDiagnostic, repairPolicyFor } from './repair-policy.js';
 import { presentDiagnostic } from './diagnostic-presentation.js';
 import { getProjectRoleCapabilities } from './role-capabilities.js';
-
-const EVIDENCE_STATES = ['missing', 'malformed', 'stale', 'negative', 'changed'];
-
-function dispositionForEvidence(evidenceState) {
-  if (evidenceState === 'missing') return 'needs_context';
-  if (evidenceState === 'malformed') return 'rejected';
-  if (evidenceState === 'stale' || evidenceState === 'changed') return 'superseded';
-  return 'blocked';
-}
 
 /**
  * Print one gate result, canonically serialized in JSON mode.
@@ -45,6 +42,12 @@ export function printGateResult(command, result, asJson, io, exitCode = null) {
   if (result.issue) io.out(`  issue: #${result.issue}`);
   if (result.headRefOid) io.out(`  current head: ${result.headRefOid}`);
   io.out(`  status: ${result.ok ? 'passed' : 'FAILED'}`);
+  // A successful non-terminal route (for example a pending exception request)
+  // is authenticated and validly routed but grants no further authority, so the
+  // disposition is printed rather than implied by "passed".
+  if (result.ok && result.disposition && result.disposition !== 'proceed') {
+    io.out(`  disposition: ${result.disposition}`);
+  }
   for (const warning of result.warnings ?? []) io.warn(`  WARN: ${warning}`);
   for (const error of result.errors ?? []) io.err(`  ERROR: ${error}`);
   const firstSafeRepair = result.firstSafeRepair ?? result.diagnostics?.[0]?.repairHint ?? null;
@@ -73,14 +76,14 @@ export function validationResultForGate(command, result) {
     ...domainFields
   } = result ?? {};
   const diagnostics = Array.isArray(result?.diagnostics) ? result.diagnostics : [];
-  // Read the legacy evidenceState spelling for compatibility, while every
-  // current producer emits the canonical evidence.state key.
-  const diagnosticStates = new Set(diagnostics
-    .map(item => item?.evidence?.state ?? item?.evidence?.evidenceState)
-    .filter(state => EVIDENCE_STATES.includes(state)));
-  const derivedState = EVIDENCE_STATES.find(state => diagnosticStates.has(state));
-  const evidenceState = result?.evidenceState ?? derivedState ?? 'negative';
-  const disposition = result?.disposition ?? dispositionForEvidence(evidenceState);
+  const hasDeclaredEvidenceState = Object.hasOwn(result ?? {}, 'evidenceState');
+  const declaredEvidenceState = result?.evidenceState;
+  const evidenceState = hasDeclaredEvidenceState
+    ? normalizeEvidenceState(declaredEvidenceState)
+    : deriveEvidenceState(diagnostics) ?? 'negative';
+  const disposition = hasDeclaredEvidenceState && evidenceState !== declaredEvidenceState
+    ? dispositionForEvidenceState(evidenceState)
+    : result?.disposition ?? dispositionForEvidenceState(evidenceState);
   return createValidationResult({
     command,
     evidenceState,
@@ -109,7 +112,7 @@ export function commandFailure(command, error, category = 'operational_error', d
       ? error instanceof Error ? error.message : String(error)
       : OPERATIONAL_FAILURE_MESSAGE;
   const evidenceState = error?.evidenceState ?? (usage ? 'negative' : 'missing');
-  const disposition = error?.disposition ?? dispositionForEvidence(evidenceState);
+  const disposition = error?.disposition ?? dispositionForEvidenceState(evidenceState);
   const diagnostic = presentDiagnostic(createDiagnostic({
     code,
     message,

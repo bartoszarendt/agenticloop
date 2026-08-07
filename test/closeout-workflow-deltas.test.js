@@ -89,9 +89,10 @@ function commitAll(target, message) {
 function wireReport(artifact, coveredTasks, overrides = {}) {
   return {
     report_schema: 'auditor_report_v1',
+    producer: { roleId: 'auditor' },
     artifact,
     covered_tasks: coveredTasks,
-    invocation: { mode: 'host_subagent', reference: `ref-${Math.random().toString(36).slice(2)}`, provenance: 'asserted' },
+    invocation: { mode: 'host_subagent', reference: `ref-${Math.random().toString(36).slice(2)}`, provenance: 'verified', receipt: `auditor-receipt-${Math.random().toString(36).slice(2)}` },
     perspectives: Object.fromEntries(
       ['outcome', 'completeness', 'integration_coherence', 'engineering_quality', 'verification', 'risk']
         .map(key => [key, `${key} body.`])

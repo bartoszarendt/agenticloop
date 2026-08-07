@@ -296,6 +296,15 @@ describe('extractHeadMarker', () => {
     assert.equal(extractHeadMarker('Current PR head: `abc1234`'), 'abc1234');
   });
 
+  it('preserves uppercase input so the strict identity matcher can reject it', () => {
+    assert.equal(extractHeadMarker(`Current PR head: ${HEAD.toUpperCase()}`), HEAD.toUpperCase());
+    assert.equal(headMatches(extractHeadMarker(`Current PR head: ${HEAD.toUpperCase()}`), HEAD), false);
+  });
+
+  it('does not truncate an overlong identity into a valid 64-character marker', () => {
+    assert.equal(extractHeadMarker(`Current PR head: ${'a'.repeat(65)}`), null);
+  });
+
   it('returns null when absent', () => {
     assert.equal(extractHeadMarker('no marker here'), null);
   });
@@ -430,8 +439,24 @@ describe('headMatches', () => {
   it('matches identical shas', () => {
     assert.equal(headMatches(HEAD, HEAD), true);
   });
+  it('matches identical 64-character SHA-256 identities', () => {
+    const sha256 = 'c'.repeat(64);
+    assert.equal(headMatches(sha256, sha256), true);
+  });
+  it('rejects uppercase identities even when they match after case folding', () => {
+    assert.equal(headMatches(HEAD.toUpperCase(), HEAD), false);
+    assert.equal(headMatches(HEAD, HEAD.toUpperCase()), false);
+  });
+  it('rejects mixed-format claims across one repository-bound comparison', () => {
+    const sha256 = HEAD + 'f'.repeat(24);
+    assert.equal(headMatches(HEAD, sha256), false);
+    assert.equal(headMatches(sha256, HEAD), false);
+  });
   it('rejects a short prefix sha', () => {
     assert.equal(headMatches('a1b2c3d', HEAD), false);
+  });
+  it('rejects a 41-character non-identity', () => {
+    assert.equal(headMatches(HEAD + 'f', HEAD + 'f'), false);
   });
   it('rejects a different sha', () => {
     assert.equal(headMatches('deadbeef', HEAD), false);
@@ -2446,7 +2471,9 @@ describe('Defect: checkpoint replay passes', () => {
       `- Artifact: ${HEAD}`,
       '- Target: fix failing test evidence',
       '- Reference: maintainer finding F-1',
-      '- Orchestrator: loop-bot',
+      '- Review role carrier: agenticloop.review-role-carrier/v1',
+      '- Role ID: orchestrator',
+      '- Actor account: loop-bot',
       '',
       '[[agent: orchestrator]]',
     ].join('\n');
@@ -2482,7 +2509,9 @@ describe('Defect: checkpoint replay passes', () => {
       `- Artifact: ${HEAD}`,
       '- Target: fix failing test evidence',
       '- Reference: maintainer finding F-1',
-      '- Orchestrator: loop-bot',
+      '- Review role carrier: agenticloop.review-role-carrier/v1',
+      '- Role ID: orchestrator',
+      '- Actor account: loop-bot',
       '',
       '[[agent: orchestrator]]',
     ].join('\n');

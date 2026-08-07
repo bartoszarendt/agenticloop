@@ -13,6 +13,23 @@ import {
   diagnosticRoutingCapabilities,
 } from './diagnostic-routing-context.js';
 
+/**
+ * Dispositions a *successful* validation result may use instead of `proceed`.
+ *
+ * `ok: true` states only that the request was authenticated and validly routed.
+ * It does not by itself grant the next transition. The canonical transition
+ * contract names `exception_requested` as the refusal disposition of the
+ * `exceptional_verification` authority rule: a valid request has been recorded
+ * and routed to its named disposition owner, and no exception has yet been
+ * accepted or rejected. Such a result grants no implementation, task-mutation,
+ * acceptance, or closeout authority and never claims completion.
+ *
+ * This inventory is deliberately bounded: it is extended only when the
+ * transition contract names another successful non-terminal route, never to
+ * make an ordinary gate's failure look like a success.
+ */
+export const SUCCESSFUL_NON_TERMINAL_DISPOSITIONS = Object.freeze(['exception_requested']);
+
 export const VALIDATION_RESULT_KIND = 'agenticloop.validation-result';
 export const VALIDATION_RESULT_SCHEMA_VERSION = 1;
 export const VALIDATION_RESULT_REQUIRED_FIELDS = Object.freeze([
@@ -25,6 +42,80 @@ export const VALIDATION_RESULT_REQUIRED_FIELDS = Object.freeze([
 export const VALIDATION_RESULT_SET_LIKE_FIELDS = Object.freeze([
   'errors', 'warnings', 'diagnostics', 'warningDiagnostics', 'failureCategories',
 ]);
+
+/**
+ * The canonical failed-evidence vocabulary, in diagnostic precedence order.
+ * A collection of diagnostics reports the first state present in this order, so
+ * one root cause is named rather than an incidental first entry.
+ */
+export const FAILED_EVIDENCE_STATES = Object.freeze([
+  'missing', 'malformed', 'stale', 'negative', 'changed',
+]);
+
+/** Normalize an evidence-state token without allowing unknown vocabulary through. */
+export function normalizeEvidenceState(state) {
+  return TRANSITION_EVIDENCE_STATES.includes(state) ? state : 'malformed';
+}
+
+/**
+ * One shared rank for every mixed-evidence boundary. Failed states use their
+ * canonical precedence order; `current` ranks strictly after every failed
+ * state; unknown or undefined values fail safely as `malformed` and are never
+ * treated as `current`.
+ */
+export function evidenceStateRank(state) {
+  const normalized = normalizeEvidenceState(state);
+  if (normalized === 'current') return FAILED_EVIDENCE_STATES.length;
+  return FAILED_EVIDENCE_STATES.indexOf(normalized);
+}
+
+/**
+ * The one evidence-state to disposition mapping.
+ *
+ * Every producer of a public failure - gate presentation, review-entry resume
+ * packets, and command-failure normalization - derives its disposition here so
+ * a packet can never report `evidence.state: missing` beside a `blocked`
+ * disposition that means something else.
+ *
+ * @param {string} evidenceState
+ * @returns {'needs_context'|'rejected'|'superseded'|'blocked'}
+ */
+export function dispositionForEvidenceState(evidenceState) {
+  const normalized = normalizeEvidenceState(evidenceState);
+  if (normalized === 'missing') return 'needs_context';
+  if (normalized === 'malformed') return 'rejected';
+  if (normalized === 'stale' || normalized === 'changed') return 'superseded';
+  return 'blocked';
+}
+
+/**
+ * Derive one evidence state from a diagnostic collection under the canonical
+ * precedence. Returns null when no diagnostic declares a canonical state.
+ *
+ * @param {Array<any>} diagnostics
+ * @returns {string|null}
+ */
+export function deriveEvidenceState(diagnostics) {
+  const declared = new Set();
+  for (const item of Array.isArray(diagnostics) ? diagnostics : []) {
+    const evidence = item?.evidence;
+    if (!isPlainObject(evidence)) continue;
+    const hasState = Object.hasOwn(evidence, 'state');
+    const hasLegacyState = Object.hasOwn(evidence, 'evidenceState');
+    if (!hasState && !hasLegacyState) continue;
+    const state = hasState ? evidence.state : evidence.evidenceState;
+    if (hasState && hasLegacyState && evidence.state !== evidence.evidenceState) {
+      declared.add('malformed');
+    } else if (FAILED_EVIDENCE_STATES.includes(state)) {
+      declared.add(state);
+    } else if (state !== 'current') {
+      // A supplied but unknown state is malformed evidence, not an absent
+      // declaration that a caller may reclassify as negative.
+      declared.add('malformed');
+    }
+  }
+  return FAILED_EVIDENCE_STATES.find(state => declared.has(state)) ?? null;
+}
 
 export const DIAGNOSTIC_ROOT_PRECEDENCE = Object.freeze([
   Object.freeze({ code: 'task.body.utf8', prerequisite: 'canonical_task_record' }),
@@ -63,10 +154,33 @@ function canonicalValue(value, path = 'value') {
   throw new TypeError(`${path} must be canonical JSON data`);
 }
 
+export function normalizeDiagnosticEvidenceStates(diagnostics = []) {
+  if (!Array.isArray(diagnostics)) throw new TypeError('diagnostics must be an array');
+  return diagnostics.map(diagnostic => {
+    if (!isPlainObject(diagnostic)) throw new TypeError('diagnostics must contain objects');
+    const result = canonicalValue(diagnostic, 'diagnostic');
+    if (isPlainObject(result.evidence)) {
+      const hasState = Object.hasOwn(result.evidence, 'state');
+      const hasLegacyState = Object.hasOwn(result.evidence, 'evidenceState');
+      if (hasState && hasLegacyState && result.evidence.state !== result.evidence.evidenceState) {
+        result.evidence.state = 'malformed';
+        result.evidence.evidenceState = 'malformed';
+      } else {
+        for (const field of ['state', 'evidenceState']) {
+          if (Object.hasOwn(result.evidence, field)) {
+            result.evidence[field] = normalizeEvidenceState(result.evidence[field]);
+          }
+        }
+      }
+    }
+    return result;
+  });
+}
+
 function normalizedDiagnostic(diagnostic, { capabilities: explicitCapabilities = null } = {}) {
   if (!isPlainObject(diagnostic)) throw new TypeError('validation result diagnostics must contain objects');
   const capabilities = diagnosticRoutingCapabilities(diagnostic, explicitCapabilities);
-  const result = canonicalValue(diagnostic, 'diagnostic');
+  const result = normalizeDiagnosticEvidenceStates([diagnostic])[0];
   if (typeof result.code !== 'string' || !result.code) throw new TypeError('validation result diagnostic code must be a non-empty string');
   if (typeof result.message !== 'string') throw new TypeError('validation result diagnostic message must be a string');
   if (typeof result.level !== 'string') throw new TypeError('validation result diagnostic level must be a string');
@@ -149,6 +263,18 @@ function validateDiagnosticArray(value, field, errors, options = {}) {
     return;
   }
   for (const item of value) {
+    const evidence = item?.evidence;
+    if (isPlainObject(evidence)) {
+      for (const stateField of ['state', 'evidenceState']) {
+        if (Object.hasOwn(evidence, stateField) && !TRANSITION_EVIDENCE_STATES.includes(evidence[stateField])) {
+          errors.push(`validation result field '${field}' diagnostic evidence.${stateField} must be one of: ${TRANSITION_EVIDENCE_STATES.join(', ')}`);
+        }
+      }
+      if (Object.hasOwn(evidence, 'state') && Object.hasOwn(evidence, 'evidenceState') &&
+          evidence.state !== evidence.evidenceState) {
+        errors.push(`validation result field '${field}' diagnostic evidence state declarations disagree`);
+      }
+    }
     try { normalizedDiagnostic(item, options); } catch (error) { errors.push(`validation result field '${field}' ${error.message}`); }
   }
 }
@@ -237,8 +363,16 @@ export function validateValidationResult(result, options = {}) {
   validateEnvelopeRoutingContext(result, errors, options);
   if (result.firstSafeRepair !== null && typeof result.firstSafeRepair !== 'string') errors.push('validation result firstSafeRepair must be a string or null');
   if (result.debugReference !== null && typeof result.debugReference !== 'string') errors.push('validation result debugReference must be a string or null');
-  if (result.ok === true && result.disposition !== 'proceed') errors.push("successful validation result requires disposition 'proceed'");
+  if (result.ok === true && result.disposition !== 'proceed' &&
+      !SUCCESSFUL_NON_TERMINAL_DISPOSITIONS.includes(result.disposition)) {
+    errors.push(
+      `successful validation result requires disposition 'proceed' or one of the successful non-terminal dispositions: ${SUCCESSFUL_NON_TERMINAL_DISPOSITIONS.join(', ')}`
+    );
+  }
   if (result.ok === false && result.disposition === 'proceed') errors.push("failed validation result cannot use disposition 'proceed'");
+  if (result.ok === false && SUCCESSFUL_NON_TERMINAL_DISPOSITIONS.includes(result.disposition)) {
+    errors.push(`failed validation result cannot use successful non-terminal disposition '${result.disposition}'`);
+  }
   if (result.rollbackAuthorized !== false) errors.push('public validation results cannot authorize rollback');
   try {
     for (const [key, value] of Object.entries(result)) canonicalValue(value, `validation result.${key}`);

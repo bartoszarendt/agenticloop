@@ -334,8 +334,10 @@ timed-out attempt and blocker triage prevent readiness.
 
 The preflight gate also validates:
 
-- **Exact head**: `Current PR head` must be a full 40-character SHA equal to
-  `headRefOid`. Short prefixes, stale full hashes, and missing markers fail.
+- **Exact head**: `Current PR head` must be a complete lowercase Git object
+  identity (40-character SHA-1 or 64-character SHA-256, matching the
+  repository's object format) equal to `headRefOid`. Short prefixes, stale
+  full hashes, uppercase identities, and missing markers fail.
 - **Scope/deviations**: When the linked task has structured `allowed_paths` (or
   `expected_files`), every PR file is matched against the patterns. Each
   non-matching file must appear as an exact repo-relative path in `## Deviations`
@@ -468,6 +470,9 @@ body, and record the review provenance alongside it:
 AGENT_REVIEW_STATUS: accepted
 AGENT_REVIEW_MODE: host_subagent
 AGENT_REVIEW_ARTIFACT: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
+AGENT_REVIEW_ROLE_CARRIER: agenticloop.review-role-carrier/v1
+AGENT_REVIEW_ROLE_ID: maintainer
+AGENT_REVIEW_ACTOR_ACCOUNT: loop-bot
 
 [[agent: maintainer]]
 ```
@@ -478,11 +483,44 @@ AGENT_REVIEW_STATUS: needs_revision
 AGENT_REVIEW_MODE: host_subagent
 AGENT_REVIEW_ARTIFACT: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
 AGENT_REVIEW_FINDINGS: F-1, F-2
+AGENT_REVIEW_ROLE_CARRIER: agenticloop.review-role-carrier/v1
+AGENT_REVIEW_ROLE_ID: maintainer
+AGENT_REVIEW_ACTOR_ACCOUNT: loop-bot
 
 [[agent: maintainer]]
 ```
 
-`AGENT_REVIEW_ARTIFACT` is the full current PR head SHA. A review may declare
+#### Versioned actor attribution is an authenticated identity
+
+`AGENT_REVIEW_ACTOR_ACCOUNT` is the **authenticated GitHub account that
+published the carrier**, not a self-asserted label. One shared authority
+validator, used by both the durable review-history collector and
+`github-review-audit`, requires a versioned marker to declare
+`AGENT_REVIEW_ROLE_ID: maintainer`, a nonempty actor account, and an actor
+account equal to the authenticated source login. Comparison folds case, because
+GitHub logins are case-insensitive as identities; the declared spelling is
+preserved verbatim and is never rewritten, prefixed, substituted, or invented.
+A real login whose spelling happens to equal a role name round-trips unchanged.
+A marker authenticated as one account that names another actor account cannot
+enter review history, authorize acceptance, or be embedded in a review-entry
+receipt.
+
+A legacy marker without the versioned fields keeps its historical parsing and
+binds authority to the authenticated source author and the required trailer.
+Nothing manufactures an actor account it does not carry.
+
+#### The Maintainer trailer must be the final live trailer
+
+`[[agent: maintainer]]` must be the **final live nonblank line** of the carrier.
+An earlier Maintainer trailer followed by another role trailer, by prose, or by
+any other live nonblank line fails closed in the one shared parser, so both
+GitHub review paths inherit the rule. Any disclosed
+`## Maintainer Review Fixup` subsection therefore precedes the trailer.
+
+`AGENT_REVIEW_ARTIFACT` is the complete current PR head Git object identity in
+the repository's object format (40-character SHA-1 or 64-character SHA-256).
+Abbreviated and uppercase identities are rejected, and one repository-bound
+claim never mixes the two formats. A review may declare
 `AGENT_REVIEW_CLASSIFICATION: implementation_changing` or `record_only`;
 absence defaults to `implementation_changing`. Only consecutive valid
 implementation-changing `needs_revision` outcomes sustaining the same active
@@ -512,16 +550,18 @@ blockquotes, or indented code are ignored during marker parsing.
 Run `npx agenticloop github-review-audit --pr <number> [--repo <owner/name>]`
 before final acceptance or merge. The default audit expects an accepted outcome
 on the current head; use `--expect-status needs_revision` to audit a revision
-request. Use `--expect-artifact <full-40-character-sha>` to verify that the
-current PR head matches the originally dispatched artifact; this prevents a
+request. Use `--expect-artifact <complete-git-object-identity>` to verify that
+the current PR head matches the originally dispatched artifact; this prevents a
 review dispatched at artifact A from being accepted when the PR head has moved
 to artifact B. When a local review workspace is supplied, add
 `--workspace <path>` with `--expect-artifact`; the audit fails unless that
-workspace's `git rev-parse HEAD` is the same exact SHA. The audit verifies:
+workspace's `git rev-parse HEAD` is the same exact identity in the same object
+format. The audit verifies:
 
 - loop markers are discovered from both PR issue comments and PR review bodies;
 - marker authorship matches the authenticated loop GitHub account;
-- the maintainer attribution trailer is present on the same filtered live body as the markers;
+- a versioned marker's actor account equals its authenticated GitHub author;
+- the maintainer attribution trailer is the final live nonblank line of the same filtered live body as the markers;
 - the issue is one of the PR's closing references;
 - independent-human evidence is resolved separately from marker discovery through the REST reviews endpoint;
 - independent-human reviews are current-head reviews by a different explicit `User`;
@@ -619,7 +659,9 @@ attribution:
 - Review count: 5
 - Artifact: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
 - Target: F-2: refresh the current-head verification evidence
-- Orchestrator: orchestrator-bot
+- Review role carrier: agenticloop.review-role-carrier/v1
+- Role ID: orchestrator
+- Actor account: orchestrator-bot
 
 [[agent: orchestrator]]
 ```
@@ -630,7 +672,40 @@ The checkpoint schema requires:
   `task_contract_ambiguity`, `scope_pollution`, `reviewer_engineer_disagreement`,
   or `external_blocker`
 - `review_count`: the current number of durable `needs_revision` outcomes
-- `artifact`: a full 40-character commit SHA matching the latest reviewed artifact
+- `artifact`: one complete lowercase Git object identity (40-character SHA-1 or
+  64-character SHA-256) matching the latest reviewed artifact and repository
+  object format
+
+Review preparation emits an authoritative schema-v3 packet only with its required
+review-entry receipt. Two distinct checks apply, and only one of them proves
+current repository state:
+
+- **Structural validation** (`validateReviewPacket`) proves the packet is a
+  complete closed-schema packet, that its embedded review-entry receipt is an
+  complete digest-consistent v3 receipt with a valid v3 digest, that the whole-packet digest
+  and immutable read-only lease are exact, that no duplicated outer
+  field (PR, task, exact head, task-contract digest and baseline, review mode,
+  `independentReviewRequired`, required-check count, evidence-match count,
+  current finding IDs, workspace head) contradicts that receipt, and that the
+  stamped head equals a head the caller already holds. It performs no refetch
+  and therefore proves nothing about current repository state.
+- **Current-state verification** (`verifyReviewPacket`) is the authoritative
+  consumer. It refetches the complete PR and task state, re-evaluates preflight,
+  revalidates the complete receipt against that state, compares the evaluated
+  head with the current head, reruns Git identity verification at any recorded
+  workspace path, and rejects every outer/inner contradiction.
+
+No dispatch caller may authorize review from shape and head validation alone. A
+legacy packet can be diagnosed but cannot authorize review dispatch.
+
+The review-entry receipt is schema v3 and is digested in the
+`agenticloop.review-entry-receipt.v3` domain. The digest domain is derived from
+the schema version so the two cannot drift. A receipt carrying an older digest
+domain is recognized as stale legacy evidence for diagnostics only: it never
+authorizes the v3 review-entry or dispatch boundary, and an older digest is
+never silently reinterpreted as v3. Its nested check, evidence, history,
+attribution, and validation projections are closed semantic snapshots; a
+recomputed outer digest cannot admit arbitrary nested payloads.
 - `target`: required when direction is `targeted_revision`
 - `reference`: required when direction is `needs_context` or `blocked`
 - `orchestrator`: required and must match the authenticated comment author

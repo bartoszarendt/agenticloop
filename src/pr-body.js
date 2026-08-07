@@ -44,7 +44,7 @@ export function renderPrBodyScaffold(input) {
   const prior = [...events].reverse().find(event => event.type === 'outcome' && event.status === 'needs_revision');
   const lifecycle = input.reviewHistory?.findingLifecycle ?? {};
   const changed = (pr.files ?? []).map(file => typeof file === 'string' ? file : file?.path).filter(Boolean);
-  const head = String(pr.headRefOid ?? '').toLowerCase();
+  const head = String(pr.headRefOid ?? '');
   const taskId = resolveGitHubTaskIdentity(issue)?.taskId ?? null;
   const scope = parseScopePatterns(issue.body);
   const generated = parseTaskReadinessDeclaration(issue.body).declaration?.generated ?? new Map();

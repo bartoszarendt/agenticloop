@@ -14,6 +14,22 @@
  */
 
 import { listEventLogFiles, loadEvents } from './event-logging.js';
+import { canonicalSha256 } from './canonical-json.js';
+
+/** Typed fail-closed return for an invalid fresh Auditor payload. */
+export function createAuditorReportResumePacket({ errors = [], reportDigest = null, evidenceState = 'malformed' } = {}) {
+  const packet = {
+    kind: 'agenticloop.auditor-report-resume',
+    schemaVersion: 1,
+    ownerRole: 'auditor',
+    nextResumableTransition: 'resubmit_auditor_report',
+    evidence: { state: evidenceState, errors: [...errors].map(String) },
+    reportDigest,
+    digest: null,
+  };
+  packet.digest = `sha256:agenticloop.auditor-report-resume.v1:${canonicalSha256({ ...packet, digest: null })}`;
+  return Object.freeze(packet);
+}
 
 /**
  * Normalize a caller's wire claim at the one host-capability boundary.
@@ -27,10 +43,17 @@ import { listEventLogFiles, loadEvents } from './event-logging.js';
  */
 export async function normalizeAuditorInvocationProvenance(run, context) {
   const normalized = { ...run };
+  const authoritative = normalized.authoritativeAuditorReturn === true;
+  if (authoritative && normalized.invocationProvenance !== 'verified') {
+    return { run: normalized, errors: ['a fresh authoritative Auditor return requires verified invocation provenance'] };
+  }
   if (normalized.invocationProvenance !== 'verified') {
     return { run: normalized, errors: [] };
   }
   if (typeof context?.verifier !== 'function') {
+    if (normalized.authoritativeAuditorReturn === true) {
+      return { run: normalized, errors: ['a verified Auditor invocation requires a host receipt verifier; asserted provenance cannot satisfy a fresh authoritative Auditor return'] };
+    }
     normalized.invocationProvenance = 'asserted';
     return { run: normalized, errors: [] };
   }
@@ -44,11 +67,12 @@ export async function normalizeAuditorInvocationProvenance(run, context) {
       workUnit: context.workUnit,
       candidateArtifact: context.candidateArtifact,
       coveredTasks: context.coveredTasks,
+      reportDigest: normalized.auditorReportDigest,
     });
   } catch (error) {
     return { run: normalized, errors: [`host invocation receipt verification failed: ${error.message}`] };
   }
-  if (result?.verified !== true) {
+  if (result?.verified !== true || (authoritative && result.reportDigest !== normalized.auditorReportDigest)) {
     return { run: normalized, errors: ['host invocation receipt did not verify the Auditor role, work unit, candidate, tasks, and invocation reference'] };
   }
   return { run: normalized, errors: [] };

@@ -9,70 +9,66 @@
  */
 
 import { markdownLines, markdownSection, topLevelListItems } from './markdown.js';
+import { isGitObjectId, sameGitObjectFormat } from './git-oid.js';
 
 export const VALID_DISPOSITIONS = new Set(['resolved', 'disputed', 'blocked']);
 export const FINDING_ID_RE = /^F-[1-9]\d*$/;
 export const RESOLUTION_ENTRY_SHAPE =
   '"- [F-1] resolved|disputed|blocked: <evidence> [ref: <reference>]"';
 
-const FULL_SHA = /^[0-9a-f]{40}$/i;
+// One object-identity shape shared with src/git-oid.js: a full 40-character
+// SHA-1 or 64-character SHA-256 identity. Input is canonical only when it is
+// complete lowercase hexadecimal; uppercase input is malformed.
+const FULL_OID_PATTERN = '[0-9a-f]{40}(?:[0-9a-f]{24})?';
 
 /** Normalize only the artifact forms accepted by the selected backend. */
 export function normalizeResolutionArtifact(reference, backend = 'github') {
   const raw = String(reference ?? '').trim();
   if (!raw) return null;
   if (backend === 'github') {
-    const match = raw.match(/^(?:commit:|sha:)?([0-9a-f]{40})$/i);
-    return match ? `commit:${match[1].toLowerCase()}` : null;
+    const match = raw.match(new RegExp(`^(?:commit:|sha:)?(${FULL_OID_PATTERN})$`));
+    return match ? `commit:${match[1]}` : null;
   }
   // Files keeps its existing durable artifact vocabulary. Hex identities are
-  // case-insensitive and canonicalized; named refs and paths are case-sensitive.
-  const commit = raw.match(/^commit:([0-9a-f]{40})$/i);
-  if (commit) return `commit:${commit[1].toLowerCase()}`;
-  const range = raw.match(/^range:([0-9a-f]{40})\.\.([0-9a-f]{40})$/i);
-  if (range) return `range:${range[1].toLowerCase()}..${range[2].toLowerCase()}`;
+  // lowercase-only; named refs and paths are case-sensitive.
+  const commit = raw.match(new RegExp(`^commit:(${FULL_OID_PATTERN})$`));
+  if (commit) return `commit:${commit[1]}`;
+  const range = raw.match(new RegExp(`^range:(${FULL_OID_PATTERN})\\.\\.(${FULL_OID_PATTERN})$`));
+  if (range) {
+    // One repository has exactly one object format; a range cannot mix them.
+    if (!sameGitObjectFormat([range[1], range[2]])) return null;
+    return `range:${range[1]}..${range[2]}`;
+  }
   if (/^(?:branch:[^\s]+|patch:[^\s]+|local-diff:[^\s]+)$/.test(raw)) return raw;
   return null;
 }
 
 /**
  * Render an artifact reference for durable Markdown. GitHub canonical rendering
- * is `commit:<lowercase-full-40-sha>`; files preserves its original casing for
- * branch, patch, and local-diff references (case-sensitive in git) while still
- * canonicalizing hex SHAs to lowercase.
+ * is `commit:<lowercase-full-git-object-id>`; files preserves its original
+ * casing for branch, patch, and local-diff references (case-sensitive in git)
+ * while requiring Git object identities to be lowercase already.
  */
 export function renderResolutionArtifact(reference, backend = 'github') {
-  const raw = String(reference ?? '').trim();
-  if (!raw) return null;
-  if (backend === 'github') {
-    return normalizeResolutionArtifact(raw, 'github');
-  }
-  if (/^(?:commit:[0-9a-f]{40}|range:[0-9a-f]{40}\.\.[0-9a-f]{40})$/i.test(raw)) {
-    return raw.toLowerCase();
-  }
-  if (/^(?:branch:[^\s]+|patch:[^\s]+|local-diff:[^\s]+)$/.test(raw)) {
-    return raw;
-  }
-  return null;
+  return normalizeResolutionArtifact(reference, backend);
 }
 
 function legacyArtifactInEvidence(evidence, currentArtifact, backend = 'github') {
   const artifact = String(currentArtifact ?? '').trim();
   if (!artifact) return false;
   if (backend === 'github') {
-    const full = artifact.toLowerCase().replace(/^(?:commit:|sha:)/, '');
-    if (!FULL_SHA.test(full)) return false;
-    return new RegExp(`(^|[^0-9a-f])${full}([^0-9a-f]|$)`, 'i').test(String(evidence ?? ''));
+    const full = artifact.replace(/^(?:commit:|sha:)/, '');
+    if (!isGitObjectId(full)) return false;
+    return new RegExp(`(^|[^0-9a-f])${full}([^0-9a-f]|$)`).test(String(evidence ?? ''));
   }
   // Files: the exact current artifact vocabulary (branch:, range:, patch:,
   // commit:, local-diff:) must appear as a complete reference token in the
   // substantive prose, never as a substring: `branch:feat` must not match
-  // `branch:feature`. Hex artifacts compare case-insensitively; named refs and
-  // paths compare exactly. A trailing sentence period is allowed, but a dotted
+  // `branch:feature`. Hex artifacts and named refs compare exactly. A trailing
+  // sentence period is allowed, but a dotted
   // continuation of the token is not.
   const escaped = artifact.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const flags = /^(?:commit:|range:)/i.test(artifact) ? 'i' : '';
-  return new RegExp(`(?<![\\w:/.-])${escaped}(?!\\.[\\w:/-])(?![\\w:/-])`, flags).test(String(evidence ?? ''));
+  return new RegExp(`(?<![\\w:/.-])${escaped}(?!\\.[\\w:/-])(?![\\w:/-])`).test(String(evidence ?? ''));
 }
 
 function resolutionShapeError() {
@@ -262,15 +258,15 @@ export function validateResolutionMatrix({
       if (entry.reference) {
         if (!actual) {
           const expectedForm = backend === 'github'
-            ? '[ref: commit:<full-40-character-sha>]'
-            : '[ref: commit:<full-40-sha>|range:<base>..<head>|branch:<name>|patch:<path>|local-diff:<ref>]';
+            ? '[ref: commit:<full-git-object-id>]'
+            : '[ref: commit:<full-git-object-id>|range:<base>..<head>|branch:<name>|patch:<path>|local-diff:<ref>]';
           errors.push(`finding '${id}' has malformed resolved artifact reference '${entry.reference}'; expected ${expectedForm}`);
         } else if (!expected || actual !== expected) {
           errors.push(`finding '${id}' resolved artifact reference '${entry.reference}' does not match current artifact '${currentArtifact}'`);
         }
       } else if (legacyArtifactInEvidence(evidence, currentArtifact, backend)) {
         const rewrite = backend === 'github'
-          ? `commit:${String(currentArtifact).toLowerCase().replace(/^(?:commit:|sha:)/, '')}`
+          ? `commit:${String(currentArtifact).replace(/^(?:commit:|sha:)/, '')}`
           : currentArtifact;
         warnings.push(`finding '${id}' uses a legacy prose artifact citation; migration: rewrite it as [ref: ${rewrite}]`);
       } else {

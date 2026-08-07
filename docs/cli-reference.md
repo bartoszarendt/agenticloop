@@ -157,11 +157,24 @@ rerun-repairable** — not globally atomic:
 Use `agenticloop github-review-audit --pr <number>` to validate the current
 artifact-bound review outcome for a pull request. Add
 `--expect-status needs_revision` when validating a revision request instead of
-acceptance. For a dispatched review, add `--expect-artifact <full-sha>` to
-require that both the PR head and review marker still match the dispatched
-artifact. If a local review checkout is supplied, add `--workspace <path>` as
-well; it requires `--expect-artifact` and rejects a workspace whose Git HEAD
-does not match that exact SHA.
+acceptance. For a dispatched review, add
+`--expect-artifact <complete-git-object-identity>` to require that both the PR
+head and review marker still match the dispatched artifact. If a local review
+checkout is supplied, add `--workspace <path>` as well; it requires
+`--expect-artifact` and rejects a workspace whose Git HEAD does not match that
+exact identity.
+
+Every identity on this path uses the one canonical complete Git object identity
+rule: a lowercase 40-character SHA-1 or 64-character SHA-256 object id.
+Abbreviated and uppercase identities are rejected, and a single
+repository-bound claim - PR head, workspace head, expected artifact, review
+marker artifact, commit inventory, and Maintainer fixup base/result artifacts -
+must use one object format throughout.
+
+The audit also binds versioned marker attribution to its authenticated source:
+`AGENT_REVIEW_ACTOR_ACCOUNT` must equal the authenticated GitHub login that
+published the carrier (compared case-insensitively, preserved verbatim), and
+`[[agent: maintainer]]` must be the final live nonblank line of the carrier.
 
 ## Review preparation lifecycle
 
@@ -243,22 +256,47 @@ incomplete. Use `lintReady` and `publicationReady` for readiness.
 
 `github-preflight` remains the low-level live evidence gate. Run
 `github-review-prepare --pr <n>` only after it passes. Preparation emits a
-Maintainer packet only when `result.ok === true` for the exact current full head;
-a matching head never overrides a failed result. Failed preparation routes every
-deterministic diagnostic to Engineer, Orchestrator, Maintainer, or human
-authority and does not invoke a reviewer. Any push invalidates the packet.
+schema-v3 Maintainer packet only when `result.ok === true` for one final complete
+snapshot. The packet requires a closed, digest-bound review-entry receipt for
+that task, contract, checks, review history, attribution, workspace, and exact
+head, plus an exact immutable read-only lease and whole-packet digest; a
+matching head never overrides a failed result. Failed preparation emits
+a typed resume packet routed to the capability-derived diagnostic owner and does
+not invoke a reviewer. Any bound input change invalidates the packet.
 
 `github-review-audit` is post-review provenance validation. `github-ready` is
 the post-acceptance, pre-merge composite and reuses the same preflight evaluator.
-Before dispatch, a previously emitted packet can be re-verified with
-`github-review-prepare --pr <n> --packet <path>`: the command refetches the
-current head read-only and rejects stale, missing, malformed, or mismatched
-packets. Before that refetch it validates the packet type/version, requested PR,
-task identity, review mode, independent-review consistency, preflight success
-digest, workspace shape, and exact internal head bindings. Malformed JSON or an
-invalid packet schema fails locally without contacting GitHub. Preparation
-itself also refetches the head immediately before emitting a packet, so a head
-that moves during preparation yields only a stale-head diagnostic. None of
+
+Packet checking has two distinct levels, and only one of them proves current
+repository state:
+
+- **Structural and digest validation** proves the packet is a complete
+  closed-schema packet whose embedded review-entry receipt is a complete
+  digest-consistent
+  schema-v3 receipt with a valid `agenticloop.review-entry-receipt.v3` digest,
+  and that no duplicated outer field contradicts that receipt: PR, task, exact
+  head, task-contract digest and baseline, review mode,
+  `independentReviewRequired`, required-check count, evidence-match count,
+  current finding IDs derived from the receipt's durable review history, and the
+  workspace head when a workspace is present. It performs no refetch, so it does
+  **not** prove the packet is current. A fabricated receipt that only echoes a
+  matching head and task is rejected here.
+- **Current-state verification** with
+  `github-review-prepare --pr <n> --packet <path>` is the authoritative
+  pre-dispatch consumer. It applies the structural check, refetches the complete
+  current PR/task state, re-evaluates preflight, revalidates the complete
+  receipt against that state, compares the evaluated head with the current head,
+  and rejects stale, missing, malformed, fabricated, and self-contradictory
+  packets. When the packet records a workspace, this level also reruns Git
+  identity verification at that exact path and rejects path or HEAD
+  substitution. Only this level may claim current dispatch readiness.
+
+Malformed JSON or an invalid packet schema fails locally without contacting
+GitHub. Preparation
+itself also evaluates workspace and independent-review policy from the final
+snapshot then compares its evaluated head with the immediately refetched head,
+so a head that moves during preparation yields only a stale-head diagnostic that
+names both compared identities. None of
 these commands posts, edits, requests review, accepts, merges, amends, pushes,
 or force-pushes.
 
@@ -750,11 +788,17 @@ Get-Content -Raw '.agenticloop/tmp/AUD-001-run-1.json' |
 ```
 
 `--file`, `--stdin`, and legacy inline fields are mutually exclusive. The wire
-format requires all six perspectives and every finding field (`id`, `severity`,
+format requires the closed producer `{ "roleId": "auditor" }`, all six
+perspectives, and every finding field (`id`, `severity`,
 `blocking`, `claim`, `evidenceRefs`, `consequence`, `requiredOutcome`, and
 `verificationRequired`). Unknown fields fail rather than being dropped. A host
-receipt is `verified` only when an available host verifier validates it; otherwise
-the durable provenance is `asserted`.
+receipt is `verified` only when an available host verifier validates the exact
+canonical digest of the complete normalized report, including producer,
+invocation, artifact, covered tasks, verdict, findings, perspectives, evidence,
+and assessment. A fresh authoritative Auditor return without that verification is
+rejected and returned to Auditor without consuming budget. Legacy inline reports
+remain explicitly `legacy_inline_v1`; they cannot certify a fresh Auditor return.
+Visible and embedded report provenance must agree.
 
 Each accepted audit report records a budget-consumption cause. Use
 `--cause substantive_audit` (the default), `human_authorized_retry`, or

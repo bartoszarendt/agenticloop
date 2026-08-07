@@ -271,7 +271,7 @@ Repository:          <owner/name>
 PR:                  <number>
 Linked task issue:   <number>
 Task contract digest: <sha256:v1:...>
-Expected artifact:   <full 40-char SHA>
+Expected artifact:   <full Git object id: 40-char SHA-1 or 64-char SHA-256>
 Expected review outcome protocol: accepted | needs_revision
 Independent review:  required | not required
 Review workspace:    <verified local path> | unavailable
@@ -286,7 +286,7 @@ The packet is stale when the exact head, task-contract digest, or readiness
 result changes. Orchestrator rejects it and re-dispatches; it does not edit the
 task record or PR to make the packet pass.
 
-After Maintainer returns, Orchestrator must:
+After Maintainer returns:
 
 1. Refetch the current PR head.
 2. Validate the returned marker/status/provenance using the existing review
@@ -295,26 +295,27 @@ After Maintainer returns, Orchestrator must:
    artifact.
 4. Reject and freshly re-delegate when the head or artifact changed.
 
-For files-backed review, the same invariant applies:
+For files-backed review, the invariant applies:
 `reviewed_artifact` must equal the exact `implementation_artifact` captured at
 dispatch, and current validation must pass before the verdict is routed.
 
 ### Review lease
 
-During an active review, Engineer must not mutate or push the dispatched
-artifact. The lease ends when the review returns or the lease is cancelled by
-Orchestrator.
+During review, Engineer must not mutate or push the dispatched artifact. The
+lease ends when review returns or Orchestrator cancels it. The packet's
+immutable read-only lease rejects caller-authored
+text, even after redigesting.
 
 ## Review Round Checkpoint
 
-The orchestrator counts `needs_revision` rounds per task from durable valid
-outcomes. Before the revision that would exceed the task record's
+Count durable `needs_revision` outcomes per task. Before the revision that
+would exceed the task record's
 `review_budget` (default 5, so after five counted outcomes and before routing the
 next revision), run the Review Round Checkpoint in
 `agenticloop/AGENTIC_LOOP.md`.
 
-At the budget boundary, Orchestrator records a durable checkpoint bound to the
-current review count and latest reviewed artifact:
+At the boundary, record a checkpoint bound to current count and latest
+artifact:
 
 <!-- agenticloop:canonical-checkpoint github -->
 ```text
@@ -327,25 +328,29 @@ current review count and latest reviewed artifact:
 - Review count: 5
 - Artifact: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
 - Target: F-2: refresh the current-head verification evidence
-- Orchestrator: orchestrator-bot
+- Review role carrier: agenticloop.review-role-carrier/v1
+- Role ID: orchestrator
+- Actor account: orchestrator-bot
 
 [[agent: orchestrator]]
 ```
 
-Choose one direction and one cause. `targeted_revision` requires `Target`;
-`needs_context` and `blocked` require `Reference` instead.
+Choose one direction and cause. `targeted_revision` requires `Target`; the
+others require `Reference`.
 
-A `targeted_revision` checkpoint binds reviewed artifact A and authorizes exactly
-one next Engineer revision B. If B receives another review outcome, require a new
-checkpoint before a further revision. Never
-reset or erase review history. Reject missing, stale, malformed, or replayed
+A `targeted_revision` checkpoint binds artifact A and authorizes one
+Engineer revision B. After B's review, require a new checkpoint before another
+revision. Never erase review history. Reject missing, stale, malformed, or replayed
 checkpoint authorization.
 
-Do not delete or silently supersede a trusted malformed checkpoint. The
-dedicated same-author `checkpoint_repair` carrier names the exact source and
-fills only mechanically derivable syntax or attribution fields; it cannot change
-artifact, count, direction, cause, target, outcome, or authority, and is never
-selected or counted. `github-checkpoint repair-plan` renders but never posts it.
+Do not delete or supersede a trusted malformed checkpoint. The
+same-author `checkpoint_repair` carrier names its source, fills only
+derivable versioned `Corrected fields`, cannot change artifact,
+count, direction, cause, target, outcome, or authority, is never selected or
+counted, and needs reissuance for underivable actor identity. Declared fields
+must match source/replacement differences, including a restored
+`review_role_carrier`.
+`github-checkpoint repair-plan` renders but never posts it.
 
 For GitHub, append the checkpoint to the PR conversation with the marker, full
 SHA, authenticated Orchestrator field, and final role trailer. For files-backed,
@@ -357,6 +362,8 @@ work returns to review. The files task validation/status provides the equivalent
 backstop. Orchestrator's delegation contract still requires the checkpoint before
 implementation begins; the later preflight is not permission to start an
 unauthorized revision.
+
+Review/audit returns need authenticated receipts; role IDs and accounts differ.
 
 ## Delegation Prompt Shape
 

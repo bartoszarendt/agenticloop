@@ -50,11 +50,12 @@ import {
 } from './audit-record.js';
 import {
   legacyInlineToAuditRun,
+  auditorReportDigest,
   parseAuditorWireReport,
   wireReportToAuditRun,
 } from './audit-report-schema.js';
 import { resolveCandidateArtifact } from './candidate.js';
-import { findAuditorInvocationEvent, normalizeAuditorInvocationProvenance } from './audit-provenance.js';
+import { createAuditorReportResumePacket, findAuditorInvocationEvent, normalizeAuditorInvocationProvenance } from './audit-provenance.js';
 import { executeMutationBatch } from './fs-mutation-kernel.js';
 import { AUDITS_DIRECTORY_RELATIVE_PATH } from './layout.js';
 import {
@@ -224,6 +225,16 @@ function auditInvocationReuseErrors(target, incoming) {
 function printMutationErrors(errors, repair, io) {
   for (const error of errors) io.err(error);
   if (repair) io.err(`repair: ${repair}`);
+}
+
+function printAuditorResume(errors, run, io) {
+  const packet = createAuditorReportResumePacket({
+    errors,
+    reportDigest: run?.auditorReportDigest ?? null,
+    evidenceState: run?.authoritativeAuditorReturn === true ? 'negative' : 'malformed',
+  });
+  io.err(`Auditor resume packet: ${JSON.stringify(packet)}`);
+  return packet;
 }
 
 /**
@@ -715,12 +726,20 @@ export async function cmdAudit(args, io = createIo()) {
         try {
           parsed = JSON.parse(body);
         } catch (error) {
-          io.err(`audit report: report is not valid JSON: ${error.message}`);
+          // A malformed Auditor payload returns to the Auditor through the
+          // same typed resume packet family as a schema-invalid payload. The
+          // evidence is truthfully malformed; nothing is reconstructed,
+          // normalized, or invented, and no durable write or budget
+          // consumption has happened at this boundary.
+          const message = `audit report: report is not valid JSON: ${error.message}`;
+          io.err(message);
+          printAuditorResume([message], null, io);
           return 1;
         }
         const wire = parseAuditorWireReport(parsed);
         if (!wire.ok) {
           for (const error of wire.errors) io.err(`Cannot record audit report: ${error}`);
+          printAuditorResume(wire.errors, null, io);
           return 1;
         }
         run = wireReportToAuditRun(wire.report);
@@ -754,9 +773,18 @@ export async function cmdAudit(args, io = createIo()) {
       });
       if (normalizedProvenance.errors.length > 0) {
         for (const error of normalizedProvenance.errors) io.err(`Cannot record audit report: ${error}`);
+        printAuditorResume(normalizedProvenance.errors, run, io);
         return 1;
       }
       run = normalizedProvenance.run;
+      if (run.wirePayload) {
+        // Provenance normalization is the only persistence-owned adjustment to
+        // an Auditor payload. Keep the visible run field and embedded payload
+        // identical rather than recording contradictory provenance claims.
+        run.wirePayload = structuredClone(run.wirePayload);
+        run.wirePayload.invocation.provenance = run.invocationProvenance;
+        run.auditorReportDigest = auditorReportDigest(run.wirePayload);
+      }
 
       // Event cross-check: when event logging is enabled, the invocation
       // reference must match the corresponding Auditor role.invoked event.
@@ -766,6 +794,7 @@ export async function cmdAudit(args, io = createIo()) {
         const match = findAuditorInvocationEvent(target, run.invocationReference);
         if (match.error) {
           io.err(`Cannot record audit report: event-log cross-check failed: ${match.error}`);
+          printAuditorResume([match.error], run, io);
           return 1;
         }
         if (!match.matched) {
@@ -773,6 +802,7 @@ export async function cmdAudit(args, io = createIo()) {
             `Cannot record audit report: event logging is enabled but no Auditor role.invoked event ` +
             `carries invocation_reference '${run.invocationReference}'; record the delegation event or classify provenance truthfully`
           );
+          printAuditorResume(['event-log cross-check did not find the fresh Auditor invocation'], run, io);
           return 1;
         }
       }
@@ -780,12 +810,32 @@ export async function cmdAudit(args, io = createIo()) {
       const reused = auditInvocationReuseErrors(target, run);
       if (reused.length > 0) {
         for (const error of reused) io.err(`Cannot record audit report: ${error}`);
+        printAuditorResume(reused, run, io);
+        return 1;
+      }
+
+      // Re-read the frozen candidate immediately before persistence. A report
+      // that raced a candidate or covered-task change is returned untouched and
+      // cannot consume audit budget.
+      const currentEntry = findAuditRecord(target, selector);
+      if (!currentEntry || currentEntry.content !== entry.content ||
+          currentEntry.record.candidateArtifact !== entry.record.candidateArtifact ||
+          JSON.stringify(normalizeCoveredTasks(currentEntry.record.coveredTasks)) !== JSON.stringify(normalizeCoveredTasks(entry.record.coveredTasks))) {
+        io.err('Cannot record audit report: audit candidate or covered-task boundary changed before persistence; return the raw report to auditor for a fresh invocation');
+        printAuditorResume(['audit candidate or covered-task boundary changed before persistence'], run, io);
+        return 1;
+      }
+      const artifact = resolveCandidateArtifact(target, run.auditedArtifact);
+      if (!artifact.ok || artifact.canonical !== entry.record.candidateArtifact) {
+        io.err(`Cannot record audit report: audited artifact does not match the frozen candidate and must use the current full candidate identity (${artifact.error ?? 'candidate changed'}); return the raw report to auditor`);
+        printAuditorResume([artifact.error ?? 'audited artifact does not match the frozen candidate'], run, io);
         return 1;
       }
 
       const result = appendAuditReport(entry.content, run, commandValidation());
       if (!result.ok) {
         for (const error of result.errors) io.err(`Cannot record audit report: ${error}`);
+        printAuditorResume(result.errors, run, io);
         return 1;
       }
       const committed = commitAuditMutation(target, entry.relPath, result.content);
@@ -795,7 +845,10 @@ export async function cmdAudit(args, io = createIo()) {
       }
       const finalContent = committed.content;
       const record = parseAuditRecord(finalContent);
-      const receipt = auditMutationReceipt({ entry, before: entry.content, after: finalContent, disposition: 'committed', cause: run.consumptionCause });
+      const receipt = {
+        ...auditMutationReceipt({ entry, before: entry.content, after: finalContent, disposition: 'committed', cause: run.consumptionCause }),
+        ...(run.wirePayload ? { auditorReturnDigest: run.auditorReportDigest } : {}),
+      };
       if (opts.json) {
         io.out(JSON.stringify({
           run: result.runNumber,

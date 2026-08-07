@@ -203,7 +203,7 @@ describe('validateFixupEpisode', () => {
     assert.ok(errors.some(e => /duplicate field 'Correction' \(line \d+\)/.test(e)), errors.join('\n'));
   });
 
-  it('rejects identical base and resulting artifacts, including across supported spellings', () => {
+  it('rejects exact identical artifacts without case-folding distinct references', () => {
     const same = validateFixupEpisode(
       firstEpisode(fixupSubsection({ base: 'commit:same', resulting: 'commit:same' })),
       { subject }
@@ -214,7 +214,7 @@ describe('validateFixupEpisode', () => {
       firstEpisode(fixupSubsection({ base: 'commit:abc999', resulting: 'ABC999' })),
       { subject }
     );
-    assert.ok(prefixed.some(e => /identical/.test(e)), prefixed.join('\n'));
+    assert.equal(prefixed.some(e => /identical/.test(e)), false, prefixed.join('\n'));
   });
 
   it('applies the backend artifact callback to base and resulting artifacts', () => {
@@ -624,11 +624,13 @@ function reviewMarker({ mode = 'single_agent_fallback', status = 'accepted', art
     `AGENT_REVIEW_STATUS: ${status}`,
     `AGENT_REVIEW_MODE: ${mode}`,
     `AGENT_REVIEW_ARTIFACT: ${artifact}`,
-    '[[agent: maintainer]]',
   ];
   if (fixup) {
     lines.push('', fixup);
   }
+  // The Maintainer attribution trailer must be the final live nonblank line of
+  // the carrier, after any disclosed fixup subsection.
+  lines.push('', '[[agent: maintainer]]');
   return { body: lines.join('\n'), author: LOOP_ACCOUNT };
 }
 
@@ -650,10 +652,25 @@ function auditData({ comments, commits = [baseCommit(), fixupCommit()], issueBod
 }
 
 describe('GitHub review audit: Maintainer Review Fixup', () => {
-  it('normalizes supported artifact spellings to a bare lowercase SHA', () => {
-    assert.equal(normalizeGitHubFixupArtifact(`commit:${HEAD.toUpperCase()}`), HEAD);
+  it('strips supported prefixes without case-folding the object identity', () => {
+    assert.equal(normalizeGitHubFixupArtifact(`commit:${HEAD.toUpperCase()}`), HEAD.toUpperCase());
     assert.equal(normalizeGitHubFixupArtifact(` sha:${HEAD} `), HEAD);
     assert.equal(normalizeGitHubFixupArtifact(HEAD), HEAD);
+  });
+
+  it('rejects uppercase fixup and commit-inventory identities', () => {
+    const uppercaseFixup = evaluateGitHubReviewAudit(auditData({
+      comments: [reviewMarker({ fixup: ghFixup({ base: BASE.toUpperCase(), resulting: HEAD.toUpperCase() }) })],
+    }));
+    assert.equal(uppercaseFixup.ok, false);
+    assert.match(uppercaseFixup.errors.join('\n'), /complete Git object identity/);
+
+    const uppercaseCommit = evaluateGitHubReviewAudit(auditData({
+      comments: [reviewMarker({ fixup: ghFixup() })],
+      commits: [baseCommit(), fixupCommit({ oid: HEAD.toUpperCase() })],
+    }));
+    assert.equal(uppercaseCommit.ok, false);
+    assert.match(uppercaseCommit.errors.join('\n'), /commit data is malformed/);
   });
 
   it('accepts a current-head fixup with single_agent_fallback and maintainer-attributed commit (case 8, 12)', () => {
@@ -715,11 +732,47 @@ describe('GitHub review audit: Maintainer Review Fixup', () => {
     assert.match(result.errors.join('\n'), /identical/);
   });
 
-  it('rejects artifacts that do not normalize to a full 40-character SHA', () => {
+  it('rejects artifacts that do not normalize to a complete Git object identity', () => {
     const result = evaluateGitHubReviewAudit(auditData({
       comments: [reviewMarker({ fixup: ghFixup({ base: 'commit:aaa111' }) })],
     }));
-    assert.match(result.errors.join('\n'), /'Base artifact' must be a full 40-character commit SHA/);
+    assert.match(result.errors.join('\n'), /'Base artifact' must be a complete Git object identity/);
+  });
+
+  it('accepts a complete SHA-256 fixup identity and rejects a mixed-format inventory', () => {
+    const head256 = 'e'.repeat(64);
+    const base256 = 'f'.repeat(64);
+    const sha256Data = {
+      prData: {
+        number: 42, headRefOid: head256, closingIssuesReferences: [{ number: 7 }], reviews: [],
+        comments: [reviewMarker({ artifact: head256, fixup: fixupSubsection({ base: base256, resulting: head256 }) })],
+        commits: [
+          { oid: base256, messageHeadline: 'Engineer implementation', messageBody: '' },
+          { oid: head256, messageHeadline: 'Fix duplicated guard', messageBody: 'Task: T-001\nAgent: maintainer' },
+        ],
+      },
+      issueData: { number: 7, body: '---\ntask_id: T-001\n---' },
+      taskPrData: [],
+      expectedAccount: LOOP_ACCOUNT,
+    };
+    const accepted = evaluateGitHubReviewAudit(sha256Data);
+    assert.equal(accepted.maintainerFixupCurrent, true);
+    assert.equal(accepted.ok, true, accepted.errors.join('\n'));
+
+    const mixedEpisode = structuredClone(sha256Data);
+    mixedEpisode.prData.comments = [reviewMarker({
+      artifact: head256,
+      fixup: fixupSubsection({ base: BASE, resulting: head256 }),
+    })];
+    const mixedEpisodeResult = evaluateGitHubReviewAudit(mixedEpisode);
+    assert.equal(mixedEpisodeResult.ok, false);
+    assert.match(mixedEpisodeResult.errors.join('\n'), /must use one Git object format/);
+
+    const mixed = structuredClone(sha256Data);
+    mixed.prData.commits[0].oid = BASE;
+    const rejected = evaluateGitHubReviewAudit(mixed);
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.errors.join('\n'), /mixes Git object formats/);
   });
 
   it('a historical fixup does not force the current review mode (case 5a)', () => {

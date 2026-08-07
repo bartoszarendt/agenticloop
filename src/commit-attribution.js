@@ -3,10 +3,10 @@
 import { markdownLines } from './markdown.js';
 import { createDiagnostic } from './repair-policy.js';
 import { WORKFLOW_ROLE_SET } from './workflow-vocabulary.js';
+import { isGitObjectId } from './git-oid.js';
 
 const TRAILER_LINE_RE = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\s*:\s*(.+?)\s*$/;
 const NAMED_TRAILER_RE = /^(Task|Agent)\s*:\s*(.+?)\s*$/i;
-const SHA_RE = /^[0-9a-f]{40}$/i;
 
 export const ATTRIBUTION_REPAIR_RECORD_KIND = 'agenticloop.attribution-repair';
 
@@ -16,7 +16,7 @@ export function validateAttributionRepairRecord(record) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) return { ok: false, errors: ['attribution repair record must be an object'] };
   if (record.kind !== ATTRIBUTION_REPAIR_RECORD_KIND) errors.push(`attribution repair record requires kind '${ATTRIBUTION_REPAIR_RECORD_KIND}'`);
   for (const field of ['originalSha', 'resultingSha']) {
-    if (!SHA_RE.test(String(record[field] ?? ''))) errors.push(`attribution repair record requires ${field} as a full 40-character SHA`);
+    if (!isGitObjectId(record[field])) errors.push(`attribution repair record requires ${field} as a full Git object identity (40- or 64-character lowercase hex)`);
   }
   if (record.originalSha && record.resultingSha && String(record.originalSha).toLowerCase() === String(record.resultingSha).toLowerCase()) {
     errors.push('attribution repair record originalSha and resultingSha must differ');

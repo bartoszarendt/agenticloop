@@ -25,6 +25,7 @@
  */
 
 import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
+import { isGitObjectId, sameGitObjectFormat } from './git-oid.js';
 import { markdownSection, topLevelListItems, markdownLines } from './markdown.js';
 import { validateGitHubVerificationAttempts } from './verification-learning.js';
 import { createLocalVerificationContext } from './verification-context.js';
@@ -368,9 +369,9 @@ export function validateRequiredCheckContracts(requiredChecks) {
 export function extractHeadMarker(text) {
   const liveText = markdownLines(String(text ?? '')).filter(line => line.live).map(line => line.raw).join('\n');
   const match = liveText.match(
-    /(?:current pr head|pr head|head commit|head ref oid|headrefoid)\s*[:=]\s*`?([0-9a-f]{7,40})`?/i
+    /(?:current pr head|pr head|head commit|head ref oid|headrefoid)\s*[:=]\s*`?([0-9a-f]{7,64})`?(?![0-9a-f])/i
   );
-  return match ? match[1].toLowerCase() : null;
+  return match ? match[1] : null;
 }
 
 /**
@@ -484,7 +485,7 @@ export function parsePrEvidence(prBody) {
           }
           const observationArtifact = line.match(artifactRe);
           if (observationArtifact) {
-            currentObservation.artifact = observationArtifact[1].trim().toLowerCase();
+            currentObservation.artifact = observationArtifact[1].trim();
             continue;
           }
           // Unrecognized content ends the record so malformed fields cannot
@@ -521,7 +522,7 @@ export function parsePrEvidence(prBody) {
         }
         const artifactMatch = line.match(artifactRe);
         if (artifactMatch) {
-          current.artifact = artifactMatch[1].trim().toLowerCase();
+          current.artifact = artifactMatch[1].trim();
           currentField = null;
           continuationEligible = false;
           continue;
@@ -587,14 +588,14 @@ function matchStatusChecks(requiredCheck, statusChecks) {
 }
 
 /**
- * Compare PR head SHA marker against the actual head. Review preparation requires exact
- * full 40-character SHA equality; short prefixes are rejected.
+ * Compare PR head SHA marker against the actual head. Review preparation
+ * requires exact full Git object-identity equality in one object format
+ * (40-character SHA-1 or 64-character SHA-256); abbreviations, uppercase
+ * identities, and mixed-format claims are rejected.
  */
 export function headMatches(claimed, actual) {
-  if (!claimed || !actual) return false;
-  const a = String(claimed).toLowerCase();
-  const b = String(actual).toLowerCase();
-  return a.length === 40 && b.length === 40 && a === b;
+  if (!isGitObjectId(claimed) || !isGitObjectId(actual)) return false;
+  return claimed === actual && sameGitObjectFormat([claimed, actual]);
 }
 
 /**
@@ -884,20 +885,20 @@ function isPlaceholderSection(body) {
  * current/head/implementation artifact, not incidental hex tokens.
  *
  * @param {string} text
- * @returns {{ sha: string, isShort: boolean }|null}
+ * @returns {{ sha: string, isShort: boolean, isCanonical: boolean }|null}
  */
 function extractCurrentArtifactClaim(text) {
   const patterns = [
-    /(?:current\s+(?:pr\s+)?(?:head|artifact|implementation)|implementation\s+artifact)\s*[:=]\s*`?([0-9a-f]{7,40})`?/i,
-    /\b(?:at|commit|sha)\s+`?([0-9a-f]{7,40})`?\s*[.!)]?\s*$/im,
-    /\bPR\s+at\s+`?([0-9a-f]{7,40})`?\s*[.!)]?/i,
-    /\b(?:pr|pull\s+request)\s+(?:#?\d+\s+)?(?:at|commit)\s+`?([0-9a-f]{7,40})`?/i,
+    /(?:current\s+(?:pr\s+)?(?:head|artifact|implementation)|implementation\s+artifact)\s*[:=]\s*`?([0-9a-f]{7,64})`?(?![0-9a-f])/i,
+    /\b(?:at|commit|sha)\s+`?([0-9a-f]{7,64})`?\s*[.!)]?\s*$/im,
+    /\bPR\s+at\s+`?([0-9a-f]{7,64})`?(?![0-9a-f])\s*[.!)]?/i,
+    /\b(?:pr|pull\s+request)\s+(?:#?\d+\s+)?(?:at|commit)\s+`?([0-9a-f]{7,64})`?(?![0-9a-f])/i,
   ];
   for (const pattern of patterns) {
     const match = (text ?? '').match(pattern);
     if (match) {
-      const sha = match[1].toLowerCase();
-      return { sha, isShort: sha.length < 40 };
+      const sha = match[1];
+      return { sha, isShort: ![40, 64].includes(sha.length), isCanonical: isGitObjectId(sha) };
     }
   }
   return null;
@@ -949,35 +950,43 @@ export function validateCompletionSummary(prBody, headRefOid) {
     for (const sectionBody of [artifactsBody, evidenceBody]) {
       const claim = extractCurrentArtifactClaim(sectionBody);
       if (claim) {
-        const headLower = headRefOid.toLowerCase();
-        if (claim.isShort) {
+        if (!claim.isCanonical) {
           errors.push({
-            message: `explicit current-artifact claim uses a short SHA '${claim.sha}'; full 40-character SHA required`,
+            message: claim.isShort
+              ? `explicit current-artifact claim uses a short SHA '${claim.sha}'; full Git object identity (40- or 64-character) required`
+              : `explicit current-artifact claim '${claim.sha}' is not a lowercase full Git object identity`,
             category: 'summary_shape',
           });
-        } else if (claim.sha !== headLower) {
+        } else if (!headMatches(claim.sha, headRefOid)) {
           errors.push({
-            message: `explicit current-artifact claim '${claim.sha.slice(0, 8)}...' contradicts current PR head '${headLower.slice(0, 8)}...'`,
+            message: `explicit current-artifact claim '${claim.sha.slice(0, 8)}...' contradicts current PR head '${headRefOid.slice(0, 8)}...'`,
             category: 'summary_shape',
           });
         }
       }
     }
 
-    // Scan for unlabeled bare 40-char SHAs that are not the head and not in
-    // labeled/range contexts. This is a narrower check than before: only bare
-    // SHAs in artifact-like positions are flagged, not filenames, checksums,
-    // issue identifiers, or incidental hex text.
+    // Scan for unlabeled bare full SHAs (40- or 64-character) that are not the
+    // head and not in labeled/range contexts. This is a narrower check than
+    // before: only bare SHAs in artifact-like positions are flagged, not
+    // filenames, checksums, issue identifiers, or incidental hex text.
     const combined = artifactsBody + '\n' + evidenceBody;
-    const bareShaRe = /\b([0-9a-f]{40})\b/gi;
+    const bareShaRe = /\b([0-9a-f]{40}(?:[0-9a-f]{24})?)\b/gi;
     let match;
     while ((match = bareShaRe.exec(combined)) !== null) {
-      const cited = match[1].toLowerCase();
-      if (cited === headRefOid.toLowerCase()) continue;
+      const cited = match[1];
+      if (!isGitObjectId(cited)) {
+        errors.push({
+          message: `full Git object identity '${cited.slice(0, 8)}...' must use lowercase hexadecimal`,
+          category: 'summary_shape',
+        });
+        continue;
+      }
+      if (headMatches(cited, headRefOid)) continue;
 
       // Check surrounding context for labels that make this a legitimate reference
       const before = combined.slice(Math.max(0, match.index - 40), match.index);
-      const after = combined.slice(match.index + 40, match.index + 80);
+      const after = combined.slice(match.index + match[1].length, match.index + match[1].length + 40);
       const context = before + after;
 
       // Allow labeled references: base, head, range, parent, merge-base, from, to, prior, previous, commit
@@ -996,7 +1005,7 @@ export function validateCompletionSummary(prBody, headRefOid) {
       // Only flag if it looks like it's claiming to be the current artifact
       // Don't flag if it's clearly in a different context (like a diff range, issue number, etc.)
       errors.push({
-        message: `unlabeled 40-character SHA '${cited.slice(0, 8)}...' in summary; label it as base, range, or other reference, or remove it`,
+        message: `unlabeled full SHA '${cited.slice(0, 8)}...' in summary; label it as base, range, or other reference, or remove it`,
         category: 'summary_shape',
       });
     }
@@ -1254,7 +1263,7 @@ export function evaluatePreflight({
   if (!taskRoot.ok) return preflightForMalformedTaskRoot({ prData, issueData, taskRoot });
   const errors = [];
   const warnings = [];
-  const headRefOid = String(prData?.headRefOid ?? '').toLowerCase();
+  const headRefOid = String(prData?.headRefOid ?? '');
   const prNumber = prData?.number ?? null;
   const issueNumber = issueData?.number ?? null;
   const attemptBudget = parseAttemptBudget(issueData?.body, projectMapConfig);
@@ -1291,8 +1300,8 @@ export function evaluatePreflight({
 
   if (!headRefOid) {
     errors.push('PR head commit (headRefOid) is unavailable; cannot verify evidence freshness');
-  } else if (!/^[0-9a-f]{40}$/.test(headRefOid)) {
-    errors.push(`PR head commit '${headRefOid}' is not a full 40-character hexadecimal SHA`);
+  } else if (!isGitObjectId(headRefOid)) {
+    errors.push(`PR head commit '${headRefOid}' is not a full Git object identity (40- or 64-character lowercase hex)`);
   }
 
   const requiredChecks = parseRequiredChecks(issueData?.body);
@@ -1435,9 +1444,9 @@ export function evaluatePreflight({
   const integratedBy = typeof taskFrontmatter?.integrated_by === 'string'
     ? taskFrontmatter.integrated_by.trim()
     : '';
-  if (integratedBy && !/^pr:\d+@[0-9a-f]{40}$/i.test(integratedBy)) {
+  if (integratedBy && !/^pr:\d+@(?:[a-f0-9]{40}(?:[a-f0-9]{24})?)$/.test(integratedBy)) {
     errors.push({
-      message: "GitHub task integrated_by must be an exact 'pr:<number>@<40-sha>' artifact",
+      message: "GitHub task integrated_by must be an exact 'pr:<number>@<full-git-object-id>' artifact",
       category: 'scope_deviations',
     });
   }
@@ -1482,7 +1491,7 @@ export function evaluatePreflight({
   // Attribution validation (when mechanically establishable)
   // Extract head commit message from PR commits data
   const prCommits = Array.isArray(prData?.commits) ? prData.commits : [];
-  const headCommit = prCommits.find(c => String(c?.oid ?? '').toLowerCase() === headRefOid);
+  const headCommit = prCommits.find(c => String(c?.oid ?? '') === headRefOid);
   const headCommitMessage = headCommit
     ? (typeof headCommit.message === 'string' && headCommit.message.trim()
       ? headCommit.message
@@ -1653,16 +1662,16 @@ export function evaluatePreflight({
 function preflightForMalformedTaskRoot({ prData, issueData, taskRoot }) {
   const errors = [...taskRoot.diagnostics];
   const warnings = [];
-  const headRefOid = String(prData?.headRefOid ?? '').toLowerCase();
+  const headRefOid = String(prData?.headRefOid ?? '');
   if (!headRefOid) {
     errors.push(createDiagnostic({
       code: 'preflight.head_identity',
       message: 'PR head commit (headRefOid) is unavailable; cannot verify evidence freshness',
     }));
-  } else if (!/^[0-9a-f]{40}$/.test(headRefOid)) {
+  } else if (!isGitObjectId(headRefOid)) {
     errors.push(createDiagnostic({
       code: 'preflight.head_identity',
-      message: `PR head commit '${headRefOid}' is not a full 40-character hexadecimal SHA`,
+      message: `PR head commit '${headRefOid}' is not a full Git object identity (40- or 64-character lowercase hex)`,
     }));
   }
   const summaryValidation = validateCompletionSummary(prData?.body, headRefOid);
@@ -1759,8 +1768,8 @@ function fetchAllPrReviews(commandRunner, ownerName, prNumber) {
 }
 
 function fetchBaseTreePaths(commandRunner, ownerName, baseRefOid) {
-  if (!/^[0-9a-f]{40}$/i.test(String(baseRefOid ?? ''))) {
-    throw new PreflightError('PR baseRefOid is unavailable or not a full SHA; cannot build the required base-tree path inventory');
+  if (!isGitObjectId(String(baseRefOid ?? ''))) {
+    throw new PreflightError('PR baseRefOid is unavailable or not a full Git object identity; cannot build the required base-tree path inventory');
   }
   const data = runGhPreflightJson(commandRunner, [
     'api',
@@ -1795,14 +1804,14 @@ function hydrateSharedMutationContents(prData, issueData, commandRunner, ownerNa
   const declaration = parseOwnershipDeclaration(issueData?.body);
   if (!declaration.present || declaration.errors.length > 0 || !(declaration.sharedMutations?.length > 0)) return;
   const changed = new Set(collectGitHubArtifactChangedPaths(prData?.files).paths);
-  const baseRefOid = String(prData?.baseRefOid ?? '').toLowerCase();
-  const headRefOid = String(prData?.headRefOid ?? '').toLowerCase();
+  const baseRefOid = String(prData?.baseRefOid ?? '');
+  const headRefOid = String(prData?.headRefOid ?? '');
   prData.sharedMutationContents = {};
   for (const mutation of declaration.sharedMutations) {
     if (!changed.has(mutation.path)) continue;
-    if (!/^[0-9a-f]{40}$/.test(baseRefOid) || !/^[0-9a-f]{40}$/.test(headRefOid)) {
+    if (!isGitObjectId(baseRefOid) || !isGitObjectId(headRefOid) || !sameGitObjectFormat([baseRefOid, headRefOid])) {
       prData.sharedMutationContents[mutation.path] = {
-        error: 'PR lacks exact base/head SHA identities for shared-operation validation',
+        error: 'PR lacks exact base/head Git object identities in one object format for shared-operation validation',
       };
       continue;
     }

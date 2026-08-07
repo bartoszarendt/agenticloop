@@ -8,6 +8,7 @@ __pycache__/
 .benchmarks/
 .codegraph/
 .serena/
+.tokensave/
 node_modules/
 .opencode/
 .claude/

@@ -524,7 +524,9 @@ append-only `## Review History` section. The checkpoint entry itself is:
 - Review count: 5
 - Artifact: commit:abc123
 - Target: F-2: refresh the local verification evidence
-- Orchestrator: orchestrator
+- Review role carrier: agenticloop.review-role-carrier/v1
+- Role ID: orchestrator
+- Actor account: orchestrator
 ```
 
 The checkpoint schema requires:
@@ -537,7 +539,13 @@ The checkpoint schema requires:
 - `target`: required when direction is `targeted_revision`
 - `reference`: required when direction is `needs_context` or `blocked`
 - `orchestrator`: required; files checkpoints, repairs, and no-progress
-  carriers must declare exactly `Orchestrator: orchestrator`
+  legacy carriers declare `Orchestrator: orchestrator`; new carriers declare
+  `Review role carrier: agenticloop.review-role-carrier/v1`, immutable
+  `Role ID: orchestrator`, and a distinct field namespace for `Actor account`.
+  The raw account may legitimately be `orchestrator`; writers require supplied
+  attribution and never invent a local account. Legacy role tokens remain
+  readable only in their historical role spelling and do not grant authority to
+  arbitrary values.
 
 A `targeted_revision` checkpoint authorizes exactly one next revision. If that
 revision receives another `needs_revision`, a new current checkpoint is required.
@@ -595,7 +603,27 @@ Append `### Review Round Checkpoint Repair` only for one bounded trusted-role
 equivalent repair of a named malformed checkpoint. It records the source,
 original role, reason, and mechanically derivable corrected fields; it cannot
 change authority-bearing direction/cause/target, artifact, count, or outcomes,
-and it never becomes a checkpoint itself. Append `### No Progress Disposition`
+and it never becomes a checkpoint itself.
+
+`Corrected fields` names only mechanically repairable fields. The canonical
+versioned names are:
+
+- `review_count` and `artifact`, derived from authenticated ordered history;
+- `actor_account`, derivable **only** from the authenticated GitHub author of
+  the repaired source. Files-backed history has no authenticated source, so a
+  real files actor identity is not derivable and the checkpoint must be
+  reissued rather than repaired. The legacy files `Orchestrator: orchestrator`
+  value is the fixed trusted-role spelling rather than an account, so restoring
+  it stays a contract-fixed repair;
+- `role_id`, fixed by the carrier type's immutable role contract
+  (`orchestrator` for checkpoints);
+- `review_role_carrier`, fixed by the one supported carrier version.
+
+The legacy `orchestrator` spelling remains parseable for existing history and
+normalizes to `actor_account`; newly emitted repairs write the canonical
+versioned names. Repairs stay append-only, are restricted to the original
+authenticated author, may happen at most once per source, and are refused once a
+later review outcome has consumed the source. Append `### No Progress Disposition`
 for repeated stable findings using `targeted_revision`, `split_task`,
 `contract_decision`, or `blocked`, bound to the exact sustained finding IDs plus
 the required target/reference; it stays distinct from checkpoint direction and

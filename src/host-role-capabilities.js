@@ -44,7 +44,12 @@ const HUMAN_DISPOSITION_ACTIONS = Object.freeze([
   'host_state_repair',
 ]);
 
-const ROLE_ALLOWED_ACTIONS = deepFreeze({
+/**
+ * Canonical per-role capability policy. Exported so a target that appends an
+ * extension workflow role can build its effective inventory from the canonical
+ * policy rather than restating it, keeping one source for the shipped roles.
+ */
+export const ROLE_ALLOWED_ACTIONS = deepFreeze({
   orchestrator: [
     'role_dispatch',
     'role_result_import',

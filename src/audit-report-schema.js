@@ -21,6 +21,7 @@ import {
   AUDIT_VERDICTS,
   LEGACY_INLINE_REPORT_VERSION,
 } from './layout.js';
+import { canonicalSha256 } from './canonical-json.js';
 
 export { AUDIT_REPORT_SCHEMA_VERSION, LEGACY_INLINE_REPORT_VERSION, AUDIT_PERSPECTIVES };
 
@@ -32,7 +33,7 @@ export const AUDIT_INVOCATION_PROVENANCE_CLASSES = Object.freeze([
 const FINDING_ID_PATTERN = /^A-\d{2,}$/;
 const TOP_LEVEL_FIELDS = new Set([
   'report_schema', 'artifact', 'covered_tasks', 'invocation', 'perspectives',
-  'assessment', 'evidence_checked', 'verdict', 'findings',
+  'assessment', 'evidence_checked', 'verdict', 'findings', 'producer',
 ]);
 const INVOCATION_FIELDS = new Set(['mode', 'reference', 'provenance', 'receipt']);
 const FINDING_FIELDS = new Set([
@@ -48,6 +49,11 @@ export const ADVISORY_MAX_FINDINGS = 200;
 
 function stringField(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+/** Canonical identity covered by the host's Auditor-invocation receipt. */
+export function auditorReportDigest(report) {
+  return `sha256:agenticloop.auditor-report.v1:${canonicalSha256(report)}`;
 }
 
 /**
@@ -158,6 +164,13 @@ export function parseAuditorWireReport(raw) {
   if (invocation.provenance === 'verified' && !invocation.receipt) {
     errors.push("invocation.provenance 'verified' requires invocation.receipt");
   }
+  let producer = null;
+  if (!raw.producer || typeof raw.producer !== 'object' || Array.isArray(raw.producer) ||
+      Object.keys(raw.producer).length !== 1 || raw.producer.roleId !== 'auditor') {
+    errors.push("producer must be the closed immutable role object { roleId: 'auditor' }");
+  } else {
+    producer = { roleId: 'auditor' };
+  }
 
   const perspectivesRaw = raw.perspectives && typeof raw.perspectives === 'object'
     ? raw.perspectives
@@ -211,6 +224,7 @@ export function parseAuditorWireReport(raw) {
     errors: [],
     report: {
       report_schema: AUDIT_REPORT_SCHEMA_VERSION,
+      producer,
       artifact,
       covered_tasks: coveredTasks,
       invocation,
@@ -244,6 +258,9 @@ export function wireReportToAuditRun(report) {
     findings: report.findings,
     perspectives: report.perspectives,
     reportFormat: AUDIT_REPORT_SCHEMA_VERSION,
+    wirePayload: structuredClone(report),
+    auditorReportDigest: auditorReportDigest(report),
+    authoritativeAuditorReturn: true,
   };
 }
 

@@ -3,12 +3,19 @@ import assert from 'node:assert/strict';
 import { evaluatePreflight, parseRequiredChecks } from '../src/github-preflight.js';
 import { createPreparationInput, evaluatePreparationInput, normalizePreparationInput } from '../src/preparation-input.js';
 import { validateResolutionMatrix, normalizeResolutionArtifact, renderResolutionArtifact } from '../src/resolution-matrix.js';
+import { createPrBodySnapshot, normalizePrBodySnapshot } from '../src/pr-body-context.js';
 import { evaluateTaskReadiness } from '../src/task-readiness.js';
 import { evaluateCommitAttribution } from '../src/commit-attribution.js';
 import { renderPrBodyScaffold, lintPrBody } from '../src/pr-body.js';
 import { validateFindingIdLifecycle, parseNoProgressDisposition, formatNoProgressDisposition } from '../src/review-history.js';
 import { evaluateNoProgress, applyCheckpointRepairs, parseCheckpointRepair, formatCheckpointRepair, deriveCheckpointState } from '../src/review-checkpoint.js';
-import { validateReviewPacket } from '../src/github-review-prepare.js';
+import {
+  REVIEW_PACKET_LEASE,
+  reviewPacketDigest,
+  validateReviewPacket,
+} from '../src/github-review-prepare.js';
+import { taskContractDigest } from '../src/task-contract-baseline.js';
+import { createReviewEntryReceipt, reviewEntryReceiptCurrentFindingIds } from '../src/review-entry-receipt.js';
 import { presentDiagnostic } from '../src/diagnostic-presentation.js';
 import { getProjectRoleCapabilities } from '../src/role-capabilities.js';
 
@@ -74,24 +81,61 @@ function baseInput({ issueCheck = '[RC-1] `npm test`', prBody = baseBody(), comm
   });
 }
 
+/**
+ * Build a genuine v3 review-entry receipt. Packet validation now proves the
+ * embedded receipt's own closed schema and digest, so a fixture cannot fake one
+ * with matching projections alone.
+ */
+function reviewEntryReceipt({ head = HEAD, pr = 42, task = 7, reviewHistory = { events: [], errors: [] } } = {}) {
+  const body = canonicalTask();
+  const contract = taskContractDigest(body);
+  const loaded = {
+    input: {
+      prData: {
+        number: pr, headRefOid: head,
+        commits: [{ oid: head, message: 'impl\n\nTask: T-007\nAgent: engineer' }],
+      },
+      issueData: { number: task, body },
+      reviewHistory,
+    },
+  };
+  const result = {
+    ok: true, errors: [], warnings: [],
+    requiredChecks: [{ id: 'RC-1', text: '[RC-1] `npm test`', matchKey: 'npm test' }],
+    evidenceMatches: [{ id: 'RC-1', check: '[RC-1] `npm test`', verdict: 'passed', evidence: 'tests passed' }],
+    contractBaseline: { digest: contract.digest, baseline: null },
+  };
+  return createReviewEntryReceipt(loaded, result, { observedAt: '2026-08-07T00:00:00.000Z' });
+}
+
 function reviewPacket(overrides = {}) {
-  return {
+  const receipt = overrides.reviewEntryReceipt ?? reviewEntryReceipt();
+  const packet = {
     type: 'agenticloop.github_review_preparation',
-    schemaVersion: 1,
+    schemaVersion: 3,
     pr: 42,
     task: 7,
     headRefOid: HEAD,
     reviewMode: 'host_subagent',
     independentReviewRequired: false,
     workspace: null,
-    currentFindingIds: [],
+    currentFindingIds: reviewEntryReceiptCurrentFindingIds(receipt),
     preflight: {
       ok: true,
-      digest: { requiredChecks: 1, evidenceMatches: 1, headRefOid: HEAD },
+      digest: {
+        requiredChecks: receipt.checks?.required?.length ?? 1,
+        evidenceMatches: receipt.checks?.evidence?.length ?? 1,
+        headRefOid: HEAD,
+      },
     },
-    lease: 'Review this exact head read-only.',
+    taskContract: { digest: receipt.task?.contractDigest ?? null, baseline: receipt.task?.contractBaseline ?? null },
+    reviewEntryReceipt: receipt,
+    lease: REVIEW_PACKET_LEASE,
+    digest: null,
     ...overrides,
   };
+  packet.digest = reviewPacketDigest(packet);
+  return packet;
 }
 
 // ---------------------------------------------------------------------------
@@ -457,9 +501,33 @@ describe('review preparation contract - files-backend resolution', () => {
     assert.match(mismatch.errors.join('\n'), /does not match current artifact/);
   });
 
-  it('keeps GitHub canonical rendering as commit:<lowercase-full-40-sha>', () => {
-    assert.equal(renderResolutionArtifact('commit:' + HEAD.toUpperCase(), 'github'), `commit:${HEAD}`);
+  it('renders only already-canonical lowercase GitHub object identities', () => {
+    assert.equal(renderResolutionArtifact('commit:' + HEAD.toUpperCase(), 'github'), null);
     assert.equal(renderResolutionArtifact(HEAD, 'github'), `commit:${HEAD}`);
+    assert.equal(normalizeResolutionArtifact('range:' + BASE.toUpperCase() + '..' + HEAD, 'files'), null);
+  });
+
+  it('rejects uppercase and mixed-format identities at PR snapshot boundaries', () => {
+    const input = {
+      mode: 'review',
+      prData: { number: 42, headRefOid: HEAD, baseRefOid: BASE },
+      issueData: { number: 7 },
+    };
+    assert.throws(
+      () => createPrBodySnapshot({ input: { ...input, prData: { ...input.prData, headRefOid: HEAD.toUpperCase() } }, repository: 'owner/repo' }),
+      /lowercase full base\/head Git object identities/
+    );
+    assert.throws(
+      () => createPrBodySnapshot({ input: { ...input, prData: { ...input.prData, baseRefOid: 'c'.repeat(64) } }, repository: 'owner/repo' }),
+      /one object format/
+    );
+
+    const snapshot = createPrBodySnapshot({ input, repository: 'owner/repo', capturedAt: '2026-08-07T10:00:00Z' });
+    const uppercaseNested = structuredClone(snapshot);
+    uppercaseNested.input.prData.headRefOid = HEAD.toUpperCase();
+    const checked = normalizePrBodySnapshot(uppercaseNested);
+    assert.equal(checked.ok, false);
+    assert.match(checked.errors.map(item => item.message).join('\n'), /nested input prData\.headRefOid must be a full lowercase/);
   });
 
   it('accepts the files artifact vocabulary', () => {
@@ -1062,13 +1130,21 @@ describe('review preparation contract - checkpoint repair matrix', () => {
     return {
       type: 'checkpoint_candidate', sourceOrder: 1, sourceReference: source, sourceKind: 'comment', author: { login: author },
       errors: ['checkpoint is missing required field "orchestrator"'],
-      checkpoint: { direction: 'targeted_revision', cause: 'implementation_defect', reviewCount: 1, artifact, target: 'repair F-1', orchestratorAttribution: null, carrier: 'github' },
+      checkpoint: {
+        direction: 'targeted_revision', cause: 'implementation_defect', reviewCount: 1,
+        artifact, target: 'repair F-1', orchestratorAttribution: null,
+        roleId: 'orchestrator', roleCarrierSchemaVersion: 1, carrier: 'github',
+      },
     };
   }
   function repair({ author = 'loop-bot', source = '101', originalAuthor = 'loop-bot', ref = '100', checkpoint } = {}) {
     return {
-      type: 'checkpoint_repair', sourceOrder: 2, sourceReference: source, source: ref, originalAuthor, correctedFields: ['orchestrator'], author: { login: author },
-      checkpoint: checkpoint ?? { direction: 'targeted_revision', cause: 'implementation_defect', reviewCount: 1, artifact: HEAD_LOCAL, target: 'repair F-1', orchestratorAttribution: 'loop-bot', carrier: 'github' },
+      type: 'checkpoint_repair', sourceOrder: 2, sourceReference: source, source: ref, originalAuthor, correctedFields: ['actor_account'], author: { login: author },
+      checkpoint: checkpoint ?? {
+        direction: 'targeted_revision', cause: 'implementation_defect', reviewCount: 1,
+        artifact: HEAD_LOCAL, target: 'repair F-1', orchestratorAttribution: 'loop-bot',
+        roleId: 'orchestrator', roleCarrierSchemaVersion: 1, carrier: 'github',
+      },
     };
   }
   const prior = { type: 'outcome', status: 'needs_revision', artifact: HEAD_LOCAL, sourceOrder: 0 };
@@ -1145,7 +1221,7 @@ describe('review preparation contract - checkpoint repair matrix', () => {
     ].join('\n');
     const repairBody = formatCheckpointRepair({
       source: '100', originalAuthor: 'loop-bot', reason: 'correct the attribution to the authenticated author',
-      correctedFields: ['orchestrator'],
+      correctedFields: ['actor_account', 'review_role_carrier'],
       checkpoint: { direction: 'targeted_revision', cause: 'implementation_defect', reviewCount: 1, artifact: HEAD_LOCAL, target: 'repair F-1', orchestratorAttribution: 'loop-bot', carrier: 'github' },
     });
     const mk = (id, body, time) => ({ id, html_url: `https://example.invalid/c/${id}`, created_at: time, body, user: { login: 'loop-bot', type: 'User' } });
@@ -1162,7 +1238,7 @@ describe('review preparation contract - checkpoint repair matrix', () => {
     assert.ok(unrepaired.errors.some(error => /does not match its authenticated author/i.test(error)), unrepaired.errors.join('\n'));
   });
 
-  it('requires exact Orchestrator: orchestrator for files checkpoints and allows a bounded trusted-role repair', async () => {
+  it('rejects a legacy files role token mismatch and allows a bounded trusted-role repair', async () => {
     const { parseFilesReviewHistory } = await import('../src/review-history.js');
     const history = (checkpointLines, extra = []) => [
       '## Review History', '',
@@ -1177,14 +1253,14 @@ describe('review preparation contract - checkpoint repair matrix', () => {
       '- Artifact: branch:feat/x', '- Target: repair F-1', '- Orchestrator: wrong-role',
     ]);
     const unrepaired = parseFilesReviewHistory(wrongRole);
-    assert.ok(unrepaired.errors.some(error => /Orchestrator: orchestrator/i.test(error)), unrepaired.errors.join('\n'));
+    assert.ok(unrepaired.errors.some(error => /legacy orchestrator value/i.test(error)), unrepaired.errors.join('\n'));
     const repairedHistory = history([
       '- Direction: targeted_revision', '- Cause: implementation_defect', '- Review count: 1',
       '- Artifact: branch:feat/x', '- Target: repair F-1', '- Orchestrator: wrong-role',
     ], [
       '### Review Round Checkpoint Repair', '',
       '- Source: review-history:2', '- Original author: orchestrator', '- Reason: correct the trusted-role attribution',
-      '- Corrected fields: orchestrator',
+      '- Corrected fields: actor_account, role_id',
       '- Direction: targeted_revision', '- Cause: implementation_defect', '- Review count: 1',
       '- Artifact: branch:feat/x', '- Target: repair F-1', '- Orchestrator: orchestrator',
     ]);
@@ -1396,6 +1472,14 @@ describe('review preparation contract - review preparation and packet freshness'
     assert.ok((result.ownerRouting.orchestrator ?? []).length > 0, JSON.stringify(result.ownerRouting));
   });
 
+  it('emits no packet when the refetched head is uppercase', async () => {
+    const { runGitHubReviewPrepare } = await import('../src/github-review-prepare.js');
+    const result = runGitHubReviewPrepare({ pr: 42, commandRunner: prepareRunner({ refetchHead: HEAD.toUpperCase() }), verificationContext: verifyContext });
+    assert.equal(result.ok, false);
+    assert.equal(result.packet, null);
+    assert.match(result.errors.join('\n'), /missing or malformed/);
+  });
+
   it('marks independent-review mode in the packet', async () => {
     const { runGitHubReviewPrepare } = await import('../src/github-review-prepare.js');
     const independentIssue = PREP_ISSUE.replace('task_id: T-007', 'task_id: T-007\nindependent_review_required: true');
@@ -1418,13 +1502,17 @@ describe('review preparation contract - review preparation and packet freshness'
       return { status: 0, stdout: JSON.stringify({ headRefOid: head }), stderr: '' };
     };
 
-    const fresh = verifyReviewPacket({ pr: 42, packet: write('fresh.json', JSON.stringify(reviewPacket())), commandRunner: headRunner(HEAD) });
+    const { runGitHubReviewPrepare } = await import('../src/github-review-prepare.js');
+    const prepared = runGitHubReviewPrepare({ pr: 42, commandRunner: prepareRunner(), verificationContext: verifyContext });
+    const fresh = verifyReviewPacket({ pr: 42, packet: write('fresh.json', JSON.stringify(prepared.packet)), commandRunner: prepareRunner() });
     assert.equal(fresh.ok, true, fresh.errors.join('\n'));
     assert.equal(fresh.packet.headRefOid, HEAD);
 
+    const staleReceipt = reviewEntryReceipt({ head: BASE });
     const stalePacket = reviewPacket({
       headRefOid: BASE,
       preflight: { ok: true, digest: { requiredChecks: 1, evidenceMatches: 1, headRefOid: BASE } },
+      reviewEntryReceipt: staleReceipt,
     });
     const stale = verifyReviewPacket({ pr: 42, packet: write('stale.json', JSON.stringify(stalePacket)), commandRunner: headRunner(HEAD) });
     assert.equal(stale.ok, false);
@@ -1440,12 +1528,25 @@ describe('review preparation contract - review preparation and packet freshness'
     const callsBeforeHeadless = calls.length;
     const headless = verifyReviewPacket({ pr: 42, packet: write('headless.json', JSON.stringify(reviewPacket({ headRefOid: '' }))), commandRunner: headRunner(HEAD) });
     assert.equal(headless.ok, false);
-    assert.match(headless.errors.join('\n'), /headRefOid must be a full 40-character SHA/);
+    assert.match(headless.errors.join('\n'), /headRefOid must be a complete Git object identity/);
     assert.equal(calls.length, callsBeforeHeadless, 'schema-invalid packets must fail before network access');
 
     const wrongPr = verifyReviewPacket({ pr: 42, packet: write('wrong-pr.json', JSON.stringify(reviewPacket({ pr: 99 }))), commandRunner: headRunner(HEAD) });
     assert.equal(wrongPr.ok, false);
     assert.match(wrongPr.errors.join('\n'), /does not match requested PR/);
+
+    const substitutedWorkspace = structuredClone(prepared.packet);
+    substitutedWorkspace.workspace = { path: dir, head: HEAD, verified: true };
+    substitutedWorkspace.digest = reviewPacketDigest(substitutedWorkspace);
+    const substituted = verifyReviewPacket({
+      pr: 42,
+      packet: write('substituted-workspace.json', JSON.stringify(substitutedWorkspace)),
+      commandRunner: prepareRunner(),
+      workspaceCommandRunner: () => ({ status: 0, stdout: `${OTHER}\n`, stderr: '' }),
+    });
+    assert.equal(substituted.ok, false);
+    assert.match(substituted.errors.join('\n'), /workspace verification failed/);
+    assert.equal(substituted.packet, null);
   });
 });
 
@@ -1528,7 +1629,7 @@ describe('review preparation contract - GitHub checkpoint render and repair plan
     ];
     const result = planGitHubCheckpointRepair({ pr: 42, commandRunner: checkpointRunner(comments), verificationContext: context, source: '100' });
     assert.equal(result.ok, true);
-    assert.deepEqual(result.repair.correctedFields, ['orchestrator']);
+    assert.deepEqual(result.repair.correctedFields, ['actor_account', 'role_id', 'review_role_carrier']);
     assert.equal(result.repair.checkpoint.orchestratorAttribution, 'loop-bot');
     const parsed = parseCheckpointRepair(result.carrier, { carrier: 'github' });
     assert.equal(parsed.found, true);
@@ -1543,7 +1644,7 @@ describe('review preparation contract - GitHub checkpoint render and repair plan
     ];
     const result = planGitHubCheckpointRepair({ pr: 42, commandRunner: checkpointRunner(comments), verificationContext: context, source: '100' });
     assert.equal(result.ok, true);
-    assert.deepEqual(result.repair.correctedFields, ['orchestrator']);
+    assert.deepEqual(result.repair.correctedFields, ['actor_account', 'role_id', 'review_role_carrier']);
   });
 
   it('never emits a carrier that application would reject', async () => {
@@ -1567,5 +1668,110 @@ describe('review preparation contract - GitHub checkpoint render and repair plan
       () => planGitHubCheckpointRepair({ pr: 42, commandRunner: checkpointRunner(valid), verificationContext: context, source: '100' }),
       GitHubCheckpointError,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P35-06: one SHA-256 fixture through the complete review-preparation path
+// ---------------------------------------------------------------------------
+
+describe('review preparation contract - SHA-256 object format end to end', () => {
+  const HEAD256 = 'c'.repeat(64);
+  const BASE256 = 'd'.repeat(64);
+
+  function sha256Input() {
+    return createPreparationInput({
+      prData: {
+        number: 42, body: baseBody({ head: HEAD256 }), headRefOid: HEAD256, baseRefOid: BASE256,
+        files: [], statusCheckRollup: [],
+        commits: [{ oid: HEAD256, message: 'impl\n\nTask: T-007\nAgent: engineer' }],
+        comments: [], reviews: [],
+      },
+      issueData: { number: 7, body: canonicalTask(), comments: [] },
+      expectedAccount: { login: 'loop-bot', type: 'User' }, reviewHistory: { events: [], errors: [] },
+      basePaths: ['src/App.js'], mode: 'review', projectFacts: [], reviewBudget: 5,
+    });
+  }
+
+  it('preflight -> review-entry receipt -> preparation packet -> authoritative packet verification', () => {
+    const input = sha256Input();
+    const result = evaluatePreparationInput(input, evaluatePreflight);
+    assert.equal(result.ok, true, (result.errors ?? []).join('\n'));
+
+    const receipt = createReviewEntryReceipt({ input }, result, { observedAt: '2026-08-07T00:00:00.000Z' });
+    assert.equal(receipt.artifact.head, HEAD256);
+
+    const packet = {
+      type: 'agenticloop.github_review_preparation',
+      schemaVersion: 3,
+      pr: 42, task: 7, headRefOid: HEAD256,
+      reviewMode: 'host_subagent', independentReviewRequired: false,
+      workspace: null,
+      currentFindingIds: reviewEntryReceiptCurrentFindingIds(receipt),
+      preflight: {
+        ok: true,
+        digest: {
+          requiredChecks: result.requiredChecks.length,
+          evidenceMatches: result.evidenceMatches.length,
+          headRefOid: HEAD256,
+        },
+      },
+      taskContract: { digest: result.contractBaseline?.digest ?? null, baseline: result.contractBaseline?.baseline ?? null },
+      reviewEntryReceipt: receipt,
+      lease: REVIEW_PACKET_LEASE,
+      digest: null,
+    };
+    packet.digest = reviewPacketDigest(packet);
+
+    const verified = validateReviewPacket(packet, HEAD256, { expectedPr: 42 });
+    assert.equal(verified.valid, true, (verified.errors ?? []).join?.('\n') ?? String(verified.reason ?? ''));
+  });
+
+  it('a SHA-1 current head cannot verify a SHA-256 packet', () => {
+    const input = sha256Input();
+    const result = evaluatePreparationInput(input, evaluatePreflight);
+    assert.equal(result.ok, true, (result.errors ?? []).join('\n'));
+    const receipt = createReviewEntryReceipt({ input }, result, { observedAt: '2026-08-07T00:00:00.000Z' });
+    const packet = {
+      type: 'agenticloop.github_review_preparation',
+      schemaVersion: 3,
+      pr: 42, task: 7, headRefOid: HEAD256,
+      reviewMode: 'host_subagent', independentReviewRequired: false,
+      workspace: null,
+      currentFindingIds: reviewEntryReceiptCurrentFindingIds(receipt),
+      preflight: {
+        ok: true,
+        digest: {
+          requiredChecks: result.requiredChecks.length,
+          evidenceMatches: result.evidenceMatches.length,
+          headRefOid: HEAD256,
+        },
+      },
+      taskContract: { digest: result.contractBaseline?.digest ?? null, baseline: result.contractBaseline?.baseline ?? null },
+      reviewEntryReceipt: receipt,
+      lease: REVIEW_PACKET_LEASE,
+      digest: null,
+    };
+    packet.digest = reviewPacketDigest(packet);
+    const mixed = validateReviewPacket(packet, HEAD, { expectedPr: 42 });
+    assert.equal(mixed.valid, false);
+  });
+
+  it('preflight rejects an abbreviated 64-character head identity', () => {
+    const abbreviated = evaluatePreparationInput(
+      (() => { const input = sha256Input(); input.prData.headRefOid = HEAD256.slice(0, 12); return input; })(),
+      evaluatePreflight,
+    );
+    assert.equal(abbreviated.ok, false);
+    assert.match(abbreviated.errors.join('\n'), /not a full Git object identity/);
+  });
+
+  it('preflight rejects an uppercase 64-character head identity', () => {
+    const uppercase = evaluatePreparationInput(
+      (() => { const input = sha256Input(); input.prData.headRefOid = HEAD256.toUpperCase(); return input; })(),
+      evaluatePreflight,
+    );
+    assert.equal(uppercase.ok, false);
+    assert.match(uppercase.errors.join('\n'), /not a full Git object identity/);
   });
 });

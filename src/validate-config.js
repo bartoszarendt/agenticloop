@@ -868,8 +868,8 @@ export function validateFilesReviewControls(content, filename, {
     )
     : false;
   const revisedArtifact = priorOutcome &&
-    String(implementationArtifact ?? '').trim().toLowerCase() !==
-    String(priorOutcome.artifact ?? '').trim().toLowerCase();
+    String(implementationArtifact ?? '').trim() !==
+    String(priorOutcome.artifact ?? '').trim();
   // A resolution matrix proves a completed revision at re-review. Do not
   // require one merely to authorize the Engineer to begin that revision.
   if (findingIds.length > 0 && !authorizingRevision && (revisedArtifact || laterReviewOutcome)) {

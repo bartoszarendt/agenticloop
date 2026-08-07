@@ -36,7 +36,7 @@ function checkpointText({
   artifact = HEAD,
   target = 'fix failing test evidence',
   reference = null,
-  orchestrator = 'orchestrator-bot',
+   orchestrator = 'orchestrator',
 } = {}) {
   const lines = [
     '<!-- AGENTIC_LOOP_REVIEW_ROUND_CHECKPOINT -->',
@@ -160,7 +160,7 @@ describe('parseReviewCheckpoint', () => {
   it('rejects checkpoint with short artifact SHA', () => {
     const text = checkpointText({ artifact: 'a1b2c3d' });
     const result = parseReviewCheckpoint(text);
-    assert.ok(result.errors.some(e => /not a full 40-character/i.test(e)));
+    assert.ok(result.errors.some(e => /complete Git object identity/i.test(e)));
   });
 
   it('rejects targeted_revision without target', () => {
@@ -240,6 +240,7 @@ describe('evaluateReviewCheckpoint', () => {
       artifact: HEAD,
       reference: 'decision D-1',
       orchestratorAttribution: 'orchestrator-bot',
+      roleId: 'orchestrator', roleCarrierSchemaVersion: 1,
     };
     const result = evaluateReviewCheckpoint({
       reviewOutcomes: [
@@ -262,6 +263,7 @@ describe('evaluateReviewCheckpoint', () => {
       artifact: HEAD,
       target: 'fix tests',
       orchestratorAttribution: 'orchestrator-bot',
+      roleId: 'orchestrator', roleCarrierSchemaVersion: 1,
     };
     const result = evaluateReviewCheckpoint({
       reviewOutcomes: [
@@ -285,6 +287,7 @@ describe('evaluateReviewCheckpoint', () => {
       artifact: HEAD,
       target: 'fix tests',
       orchestratorAttribution: 'orchestrator-bot',
+      roleId: 'orchestrator', roleCarrierSchemaVersion: 1,
     };
     const result = evaluateReviewCheckpoint({
       reviewOutcomes: [
@@ -308,6 +311,7 @@ describe('evaluateReviewCheckpoint', () => {
       artifact: wrongArtifact,
       target: 'fix tests',
       orchestratorAttribution: 'orchestrator-bot',
+      roleId: 'orchestrator', roleCarrierSchemaVersion: 1,
     };
     const result = evaluateReviewCheckpoint({
       reviewOutcomes: [
@@ -330,6 +334,7 @@ describe('evaluateReviewCheckpoint', () => {
       artifact: HEAD,
       target: 'fix tests',
       orchestratorAttribution: 'orchestrator-bot',
+      roleId: 'orchestrator', roleCarrierSchemaVersion: 1,
     };
     const result = evaluateReviewCheckpoint({
       reviewOutcomes: [
@@ -353,6 +358,7 @@ describe('evaluateReviewCheckpoint', () => {
       artifact: HEAD,
       target: 'fix tests',
       orchestratorAttribution: 'orchestrator-bot',
+      roleId: 'orchestrator', roleCarrierSchemaVersion: 1,
     };
     const result = evaluateReviewCheckpoint({
       reviewOutcomes: [
@@ -383,6 +389,7 @@ describe('evaluateReviewCheckpoint', () => {
       type: 'checkpoint', sourceOrder: 1,
       direction: 'targeted_revision', cause: 'implementation_defect', reviewCount: 1,
       artifact: HEAD, target: 'repair F-1', orchestratorAttribution: 'orchestrator-bot',
+      roleId: 'orchestrator', roleCarrierSchemaVersion: 1,
     };
     const result = evaluateReviewCheckpoint({
       reviewHistory: [
@@ -407,6 +414,7 @@ describe('evaluateReviewCheckpoint', () => {
           type: 'checkpoint', sourceOrder: 2,
           direction: 'targeted_revision', cause: 'implementation_defect', reviewCount: 2,
           artifact: legacyArtifact, target: 'repair the reviewed artifact', orchestratorAttribution: 'orchestrator-bot',
+          roleId: 'orchestrator', roleCarrierSchemaVersion: 1,
         },
       ],
       budget: 2,
@@ -425,6 +433,7 @@ describe('validateCheckpointSchema', () => {
       artifact: HEAD,
       target: 'fix tests',
       orchestratorAttribution: 'orchestrator-bot',
+      roleId: 'orchestrator', roleCarrierSchemaVersion: 1,
     });
     assert.equal(result.valid, true);
     assert.deepEqual(result.errors, []);
@@ -433,6 +442,46 @@ describe('validateCheckpointSchema', () => {
   it('rejects null checkpoint', () => {
     const result = validateCheckpointSchema(null);
     assert.equal(result.valid, false);
+  });
+
+  it('applies role-ID and carrier-version checks to hand-built checkpoints without a carrier discriminator', () => {
+    const result = validateCheckpointSchema({
+      direction: 'targeted_revision',
+      cause: 'implementation_defect',
+      reviewCount: 3,
+      artifact: HEAD,
+      target: 'fix tests',
+      orchestratorAttribution: 'orchestrator-bot',
+      roleId: 'maintainer',
+      roleCarrierSchemaVersion: 9,
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => /role ID must be immutable 'orchestrator'/.test(e)));
+    assert.ok(result.errors.some(e => /review role carrier version is invalid/.test(e)));
+  });
+
+  it('never coerces a declared-but-unresolved carrier version into legacy schema version 0', () => {
+    const text = [
+      '<!-- AGENTIC_LOOP_REVIEW_ROUND_CHECKPOINT -->',
+      '',
+      '## Review Round Checkpoint',
+      '',
+      '- Direction: targeted_revision',
+      '- Cause: implementation_defect',
+      '- Review count: 1',
+      `- Artifact: ${HEAD}`,
+      '- Target: fix tests',
+      '- Review role carrier: agenticloop.review-role-carrier/v9',
+      '- Role ID: orchestrator',
+      '- Actor account: orchestrator-bot',
+      '',
+    ].join('\n');
+    const parsed = parseReviewCheckpoint(text);
+    assert.equal(parsed.found, true);
+    assert.equal(parsed.checkpoint.roleCarrierSchemaVersion, null);
+    const schema = validateCheckpointSchema(parsed.checkpoint);
+    assert.equal(schema.valid, false);
+    assert.ok(schema.errors.some(e => /review role carrier version is invalid/.test(e)));
   });
 
   it('rejects missing direction', () => {
@@ -450,7 +499,7 @@ describe('validateCheckpointSchema', () => {
       target: 'test',
     });
     assert.equal(result.valid, false);
-    assert.ok(result.errors.some(e => /40-character/i.test(e)));
+    assert.ok(result.errors.some(e => /complete Git object identity/i.test(e)));
   });
 
   it('lists canonical direction and cause values at both validation entry points', () => {
@@ -476,6 +525,7 @@ describe('formatCheckpoint', () => {
       artifact: HEAD,
       target: 'fix tests',
       orchestratorAttribution: 'orchestrator-bot',
+      roleId: 'orchestrator', roleCarrierSchemaVersion: 1,
     });
     assert.ok(formatted.includes('AGENTIC_LOOP_REVIEW_ROUND_CHECKPOINT'));
     assert.ok(formatted.includes('Direction: targeted_revision'));
@@ -499,8 +549,10 @@ describe('formatCheckpoint', () => {
       artifact: HEAD,
       target: 'test',
       orchestratorAttribution: 'orchestrator-bot',
+      roleId: 'orchestrator', roleCarrierSchemaVersion: 1,
     });
-    assert.ok(formatted.includes('Orchestrator: orchestrator-bot'));
+    assert.ok(formatted.includes('Role ID: orchestrator'));
+    assert.ok(formatted.includes('Actor account: orchestrator-bot'));
   });
 });
 
@@ -532,8 +584,8 @@ describe('published checkpoint contracts', () => {
       ...checkpoint,
       artifact: 'commit:abc123',
       target: 'F-2: refresh the local verification evidence',
-      // Files checkpoints, repairs, and no-progress carriers require the exact
-      // trusted-role attribution `Orchestrator: orchestrator`.
+      // New files carriers keep the durable role ID distinct from local actor
+      // attribution; legacy `Orchestrator:` entries remain parseable.
       orchestratorAttribution: 'orchestrator',
     };
     assert.equal(documented, formatCheckpoint(filesCheckpoint, { carrier: 'files' }).trim());

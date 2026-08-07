@@ -15,13 +15,13 @@ import { existsSync, readdirSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { loadProjectMap, PROJECT_MAP_DEFAULTS } from './project-map.js';
 import { createDiagnostic } from './repair-policy.js';
+import { isGitObjectId, sameGitObjectFormat } from './git-oid.js';
 
 export const PR_BODY_SNAPSHOT_KIND = 'agenticloop.pr-body-context';
 export const PR_BODY_SNAPSHOT_SCHEMA_VERSION = 1;
 
 const INVENTORY_LIMIT = 1000;
 const INVENTORY_SCAN_LIMIT = 10000;
-const SHA_RE = /^[0-9a-f]{40}$/i;
 const ISO_UTC_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 const REPOSITORY_RE = /^[^/\s]+\/[^/\s]+$/;
 
@@ -149,6 +149,11 @@ export function createPrBodySnapshot({ input, repository = null, capturedAt } = 
   if (input.mode !== 'review') {
     throw new Error("createPrBodySnapshot input mode must be 'review'");
   }
+  const head = input.prData?.headRefOid;
+  const base = input.prData?.baseRefOid;
+  if (!isGitObjectId(head) || !isGitObjectId(base) || !sameGitObjectFormat([head, base])) {
+    throw new Error('createPrBodySnapshot requires lowercase full base/head Git object identities in one object format');
+  }
   return {
     kind: PR_BODY_SNAPSHOT_KIND,
     snapshotSchemaVersion: PR_BODY_SNAPSHOT_SCHEMA_VERSION,
@@ -156,8 +161,8 @@ export function createPrBodySnapshot({ input, repository = null, capturedAt } = 
     repository: repository.trim(),
     pr: input.prData?.number ?? null,
     issue: input.issueData?.number ?? null,
-    head: String(input.prData?.headRefOid ?? '').toLowerCase() || null,
-    base: String(input.prData?.baseRefOid ?? '').toLowerCase() || null,
+    head,
+    base,
     mode: 'review',
     input,
   };
@@ -195,11 +200,14 @@ export function normalizePrBodySnapshot(raw, options = {}) {
   if (!Number.isInteger(raw.issue) || raw.issue <= 0) {
     errors.push(diagnostic('snapshot issue must be a positive integer'));
   }
-  if (!SHA_RE.test(String(raw.head ?? ''))) {
-    errors.push(diagnostic('snapshot head must be a full 40-character commit SHA'));
+  if (!isGitObjectId(raw.head)) {
+    errors.push(diagnostic('snapshot head must be a full Git object identity (40- or 64-character lowercase hex)'));
   }
-  if (!SHA_RE.test(String(raw.base ?? ''))) {
-    errors.push(diagnostic('snapshot base must be a full 40-character commit SHA'));
+  if (!isGitObjectId(raw.base)) {
+    errors.push(diagnostic('snapshot base must be a full Git object identity (40- or 64-character lowercase hex)'));
+  }
+  if (isGitObjectId(raw.head) && isGitObjectId(raw.base) && !sameGitObjectFormat([raw.head, raw.base])) {
+    errors.push(diagnostic('snapshot head and base must use one Git object format'));
   }
   if (raw.mode !== 'review') {
     errors.push(diagnostic("snapshot mode must be 'review'; PR-body lint never evaluates authoring-mode snapshots"));
@@ -219,11 +227,20 @@ export function normalizePrBodySnapshot(raw, options = {}) {
     if (Number.isInteger(raw.issue) && input.issueData?.number !== raw.issue) {
       errors.push(diagnostic(`snapshot issue #${raw.issue} disagrees with nested input issueData.number ${input.issueData?.number ?? 'missing'}`));
     }
-    if (SHA_RE.test(String(raw.head ?? '')) && String(input.prData?.headRefOid ?? '').toLowerCase() !== String(raw.head).toLowerCase()) {
+    const nestedHead = input.prData?.headRefOid;
+    const nestedBase = input.prData?.baseRefOid;
+    if (!isGitObjectId(nestedHead)) {
+      errors.push(diagnostic('snapshot nested input prData.headRefOid must be a full lowercase Git object identity'));
+    } else if (isGitObjectId(raw.head) && nestedHead !== raw.head) {
       errors.push(diagnostic('snapshot head disagrees with nested input prData.headRefOid'));
     }
-    if (SHA_RE.test(String(raw.base ?? '')) && String(input.prData?.baseRefOid ?? '').toLowerCase() !== String(raw.base).toLowerCase()) {
+    if (!isGitObjectId(nestedBase)) {
+      errors.push(diagnostic('snapshot nested input prData.baseRefOid must be a full lowercase Git object identity'));
+    } else if (isGitObjectId(raw.base) && nestedBase !== raw.base) {
       errors.push(diagnostic('snapshot base disagrees with nested input prData.baseRefOid'));
+    }
+    if (isGitObjectId(nestedHead) && isGitObjectId(nestedBase) && !sameGitObjectFormat([nestedHead, nestedBase])) {
+      errors.push(diagnostic('snapshot nested input base/head identities must use one Git object format'));
     }
   }
 
@@ -248,8 +265,8 @@ export function normalizePrBodySnapshot(raw, options = {}) {
         repository: raw.repository.trim(),
         pr: raw.pr,
         issue: raw.issue,
-        head: String(raw.head).toLowerCase(),
-        base: String(raw.base).toLowerCase(),
+        head: raw.head,
+        base: raw.base,
         mode: 'review',
         capturedAt: raw.capturedAt,
       },

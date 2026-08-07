@@ -212,10 +212,44 @@ not mean negative. A verifier that lacks required context reports
 verified write or authorize rollback or a compensating mutation. Public results
 state `rollbackAuthorized: false`.
 
+One canonical function maps a failed evidence state to its disposition, and
+every public failure producer - gate presentation, review-entry resume packets,
+and command-failure normalization - derives its disposition from it. A packet
+therefore cannot report one evidence state beside a disposition that means
+something else:
+
+| Evidence state | Disposition |
+| --- | --- |
+| `missing` | `needs_context` |
+| `malformed` | `rejected` |
+| `stale` | `superseded` |
+| `changed` | `superseded` |
+| `negative` | `blocked` |
+
+When several diagnostics declare states, one state is selected under the fixed
+precedence `missing`, `malformed`, `stale`, `negative`, `changed`, so a root
+cause is named rather than an incidental first entry. The selected state is the
+single state carried by the packet's `evidence.state`, its embedded validation
+`evidenceState`, that validation's `disposition`, the retained diagnostic
+evidence state, and the accompanying first safe repair and resumable transition.
+
+`ok: true` states that a request was authenticated and validly routed; it does
+not by itself grant the next transition. A successful result normally uses
+`proceed`. The one bounded exception is the successful non-terminal disposition
+inventory `exception_requested`: the transition contract names it the refusal
+disposition of the `exceptional_verification` authority rule, so a valid
+exceptional request is reported as `ok: true` with disposition
+`exception_requested`. No exception has been accepted or rejected, completion
+stays false, and no implementation, task-mutation, acceptance, or closeout
+authority is granted. `exception_accepted` and `exception_rejected` remain
+distinct future authority edges owned by the named disposition owner. A failed
+result may use neither `proceed` nor a successful non-terminal disposition.
+
 Machine vocabulary inventories are closed:
 
 - Evidence states: `current`, `missing`, `malformed`, `stale`, `negative`, `changed`.
 - Dispositions: `proceed`, `blocked`, `needs_context`, `rejected`, `superseded`, `exception_requested`, `exception_accepted`, `exception_rejected`.
+- Successful non-terminal dispositions: `exception_requested`.
 - Return kinds: `agenticloop.role-return`, `agenticloop.exceptional-verification`.
 - Liveness entries: `delegationLiveness`, `lease`, `cancellation`, `managedJoin`, `reviewNoMutation`, `rollback`.
 
@@ -289,10 +323,10 @@ claims are authoritative only under this exact evidence mapping:
 | Claim | Authoritative evidence | Producer / evidence authority / work owner | Exact binding and invalidation | Without current valid evidence |
 | --- | --- | --- | --- | --- |
 | `implementation_blocked` | `structured_blocked_return` | Producing workflow role / same role or explicitly redelegated owner | Consumed transition ID/digest plus current blocker; invalidated by transition, evidence, or precondition change | `needs_context` |
-| `implementation_ready_for_review` | `exact_head_review_entry_receipt` | Review-preparation gate / review-preparation gate / Engineer | Exact implementation artifact or full PR head; invalidated by artifact, checks, or task-contract change | `blocked` |
+| `implementation_ready_for_review` | `exact_head_review_entry_receipt` | Review-preparation gate / review-preparation gate / Engineer | Mandatory closed receipt for one final complete task/PR snapshot: full artifact identity, task and contract digests, checks/evidence, attribution, history, policy, and workspace; invalidated by any bound input change | `blocked` |
 | `review_changes_requested` | `durable_review_changes_result` | Maintainer / Maintainer | Exact reviewed artifact and finding set; invalidated by artifact or carrier change | `rejected` |
 | `review_accepted` | `durable_review_acceptance_result` | Maintainer / Maintainer | Exact current reviewed artifact; invalidated by artifact or acceptance-evidence change | `blocked` |
-| `closeout_complete` | `current_closeout_marker_and_gate_receipt` | Canonical closeout path / Maintainer | Exact candidate, covered tasks, predecessor, gate, and required audit; invalidated by any bound input change | `blocked` |
+| `closeout_complete` | `current_closeout_marker_and_gate_receipt` | Canonical closeout path / Maintainer | Exact candidate, covered tasks, current packet-bound marker, and successful `closeout_owned_accepted_to_closed` receipt; invalidated by any bound input change | `blocked` |
 
 An authoritative source owns only the fact in its row; task status, runtime
 blocking, labels, comments, audit state, and closeout are not synonyms.
@@ -316,6 +350,38 @@ Each projection identifies itself with `projectionBackend`, retains
 `carrierApplicability`. Files and GitHub preserve every other shared semantic
 section.
 
+`review_readiness` is carried by the review-entry receipt at schema version `3`,
+digested in the `agenticloop.review-entry-receipt.v3` domain. The digest domain
+is derived from the schema version so the two cannot drift. Older digest domains
+are recognized as stale legacy evidence for diagnostics only; they never
+authorize the v3 review-entry or dispatch boundary and are never silently
+reinterpreted as v3. The receipt is deeply closed: required checks, evidence,
+and review history are semantic digest snapshots, attribution trailers are
+exact, and the complete canonical validation result is embedded and
+digest-bound.
+
+The schema-v3 preparation packet has its own whole-packet digest and one exact
+immutable read-only lease. Structural and digest validation proves only that
+the packet and receipt are complete, internally consistent, and
+digest-consistent; it
+proves nothing about current repository state. Only the current-state verifier,
+which refetches the complete PR/task state, re-evaluates preflight, revalidates
+the whole receipt, and reruns workspace identity verification at the recorded
+path, may claim authoritative dispatch readiness.
+
+A durable review carrier's versioned actor account is the authenticated source
+identity that published it, not a self-asserted label; it is compared under the
+backend's documented login normalization and preserved verbatim. The Maintainer
+attribution trailer must be the final live nonblank line of its carrier.
+
+Every repository-bound identity in the review path - review packet, review-entry
+receipt, PR head, workspace head, expected artifact, review marker, commit
+inventory, and Maintainer fixup base/result artifacts - uses one canonical
+complete Git object identity rule that supports both repository object formats
+(40-character SHA-1 and 64-character SHA-256). Abbreviated and uppercase
+identities are rejected, and a single repository-bound claim never mixes the two
+formats.
+
 ### Authority boundaries
 
 #### Authority actions
@@ -324,9 +390,23 @@ section.
 | --- | --- | --- | --- |
 | `request_and_activation_identity` | Operator plus parser-controlled adapter | Expected digest and normalized-input receipt | Report unsupported or mismatch; do not trust a model restatement. |
 | `blocked_result_resumption` | Producing role or explicitly redelegated owner | Current blocked result, resume transition, and preconditions | Block remains non-transferable. |
-| `exceptional_verification` | Named disposition owner | Failed/unavailable check, evidence, proposed disposition, and next transition | `exception_requested`; no implicit substitute. |
+| `exceptional_verification` | Capability-derived disposition owner | Authenticated producer request bound to the consumed dispatch packet, failed/unavailable check, evidence, proposed disposition, and next transition | `exception_requested`; no implicit substitute or completion. |
 | `destructive_or_scope_changing_recovery` | Human authority | Typed human disposition bound to exact blocked result and recovery | Human authority required. |
 | `terminal_closeout` | Maintainer using `task_terminal_closeout` / `closeout_owned_accepted_to_closed` | Current closeout packet and passed closeout gate | Closeout gate required. |
+
+The exceptional-verification disposition owner is **derived**, never claimed.
+The boundary builds a trusted effective host-role capability inventory from the
+selected host, the effective target configuration, the effective workflow-role
+registry, and the canonical role policies, then revalidates that inventory
+against the effective registry before selecting an owner. Exactly one role with
+an allowed `task_workflow_mutate` binding is eligible; zero or multiple eligible
+owners fail closed, as does a registry the inventory does not cover. The
+request's `dispositionAuthority.roleId` must equal that derived owner, so a
+role - canonical or a validly configured extension role - cannot select itself.
+Capability inventories arriving through untrusted request or wire data are
+ignored; only trusted invocation options carry an inventory, and that inventory
+is validated before use. The derived disposition owner stays distinct from the
+authenticated producer.
 
 ### Terminal and Markdown rules
 
@@ -427,10 +507,16 @@ Mutable Markdown records follow one canonical rendering rule:
 
 ### Audit budget and state provenance
 
-A fresh schema-valid substantive Auditor report consumes one audit run and
-records its cause. An unavailable invocation, rejected or malformed report, or
-report-validation failure consumes neither audit budget nor recovery allowance;
-the ordinary attempt budget still bounds equivalent failures.
+A fresh schema-valid substantive Auditor report carries the closed producer
+identity `{ roleId: "auditor" }` and a host-authenticated canonical digest of its
+complete normalized payload. The audit CLI persists that payload losslessly; its
+visible invocation provenance and embedded JSON provenance must agree. A fresh
+schema-valid report consumes one audit run and records its cause. An unavailable
+invocation, rejected or malformed report, or report-validation failure returns a
+typed Auditor-owned resume/redelegation result and consumes neither audit budget
+nor recovery allowance; the ordinary attempt budget still bounds equivalent
+failures. Explicit `legacy_inline_v1` reports remain historical compatibility
+data and cannot satisfy the fresh authoritative-Auditor boundary.
 
 One bounded `product_invalidation_recovery` allowance is declared per audit
 record, with required `typed_cause`, `invalidation_reference`,
@@ -512,8 +598,11 @@ Its fields include return ID, producing role, consumed transition ID/digest,
 blocker category/evidence, resume owner/transition, and resume preconditions. An exceptional-verification return has kind
 `agenticloop.exceptional-verification`, schema version `1`, and includes request
 ID, producing role, transition ID, exact failed/unavailable check, evidence,
-proposed disposition, disposition authority, and next resumable transition.
-Neither packet authorizes another role to repair, accept, or reconstruct it.
+proposed disposition, disposition authority, and next resumable transition. The
+host receipt authenticates the exact request digest. The authenticated producer
+and capability-derived disposition owner remain separate; requesting an
+exception is non-terminal and cannot accept or complete work. Neither packet
+authorizes another role to repair, accept, or reconstruct it.
 A normal resume remains owned by the authenticated return's producing `roleId`.
 The `task verify-return` / `role_return_receive` import edge runs this check
 before any transition, persistence, repair, or host-state change. Changing
@@ -1446,7 +1535,9 @@ For GitHub, append the checkpoint to the PR conversation:
 - Review count: 5
 - Artifact: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0
 - Target: F-2: refresh the current-head verification evidence
-- Orchestrator: orchestrator-bot
+- Review role carrier: agenticloop.review-role-carrier/v1
+- Role ID: orchestrator
+- Actor account: orchestrator-bot
 
 [[agent: orchestrator]]
 ```

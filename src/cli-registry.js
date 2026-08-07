@@ -167,7 +167,7 @@ export const COMMAND_REGISTRY = {
       opt('issue', 'string', 'Linked task issue number (default: inferred from PR closing references).'),
       opt('repo', 'string', 'Target repository (default: gh-resolved current repo).'),
       opt('expect-status', 'string', 'Expected review status (default: accepted).', { enum: ['accepted', 'needs_revision'] }),
-      opt('expect-artifact', 'string', 'Expected dispatched artifact: a full 40-character commit SHA. When provided, the current PR head must equal this SHA.'),
+      opt('expect-artifact', 'string', 'Expected dispatched artifact: a complete Git object identity in the repository object format. When provided, the current PR head must equal this identity.'),
       opt('workspace', 'string', 'Optional local review workspace. Requires --expect-artifact and must resolve to that exact Git HEAD.'),
       jsonOption,
     ],
@@ -345,9 +345,9 @@ export const COMMAND_REGISTRY = {
     },
   },
   'github-review-prepare': {
-    summary: 'Fail-closed exact-head, read-only Maintainer delegation preparation.',
+    summary: 'Fail-closed read-only preparation with a mandatory, exact-head review-entry receipt.',
     usage: 'agenticloop github-review-prepare --pr <number> [--issue <number>] [--repo <owner/name>] [--workspace <path>] [--packet <path>] [--json]',
-    options: [opt('pr', 'string', 'Pull request number. Required.'), opt('issue', 'string', 'Linked task issue number override.'), opt('repo', 'string', 'Target repository.'), opt('workspace', 'string', 'Optional workspace that must resolve to the exact dispatched head.'), opt('packet', 'string', 'Verify a previously emitted preparation packet file against the current head before dispatch (read-only).'), jsonOption],
+    options: [opt('pr', 'string', 'Pull request number. Required.'), opt('issue', 'string', 'Linked task issue number override.'), opt('repo', 'string', 'Target repository.'), opt('workspace', 'string', 'Optional workspace that must resolve to the final dispatched head.'), opt('packet', 'string', 'Revalidate a previously emitted packet and its mandatory receipt against complete current PR/task state before dispatch (read-only).'), jsonOption],
   },
   doctor: {
     summary: 'Read-only diagnosis: setup checklist, adapter state, and next commands.',
@@ -423,8 +423,8 @@ export const COMMAND_REGISTRY = {
         options: [targetOption(), opt('input', 'string', 'Closed dispatch input carrying activation, canonical readiness, decomposition, and assignment facts.'), opt('packet', 'string', 'Existing dispatch packet to revalidate read-only before receiver mutation.'), opt('role', 'string', 'Immutable receiving role required with --packet.', { enum: ['engineer'] }), opt('prior-receipts', 'string', 'JSON array of prior-gate or setup task-mutation receipts that must be resolved and undrifted before dispatch.'), hostTrustStoreOption, jsonOption],
       },
       'verify-return': {
-        summary: 'Read-only role-return verifier, blocked-result resume authority gate, and exceptional-recovery authority gate.',
-        usage: 'agenticloop task verify-return <id> --packet <packet.json> --return <role-return.json> [--repository-evidence <evidence.json>] [--producer-receipt <receipt.json>] [--resume-owner <role-id> --redelegation-authority <authority.json> | --recovery-request <recovery.json> --human-disposition <disposition.json> --human-disposition-authority <authority-id> --human-disposition-key-id <key-id>] [--host-trust-store <expected-path>] [--json] [--target <dir>]',
+        summary: 'Read-only role-return verifier, blocked-result resume authority gate, and exceptional-verification router.',
+        usage: 'agenticloop task verify-return <id> --packet <packet.json> --return <role-return.json> [--repository-evidence <evidence.json>] [--producer-receipt <receipt.json>] [--exceptional-verification <request.json> --exceptional-receipt <receipt.json> | --resume-owner <role-id> --redelegation-authority <authority.json> | --recovery-request <recovery.json> --human-disposition <disposition.json> --human-disposition-authority <authority-id> --human-disposition-key-id <key-id>] [--host-trust-store <expected-path>] [--json] [--target <dir>]',
         receiptRevalidation: 'read-only',
         positionals: [{ name: 'id', required: true }],
         options: [
@@ -432,7 +432,9 @@ export const COMMAND_REGISTRY = {
           opt('packet', 'string', 'Dispatch packet consumed by the raw role return. Required.'),
           opt('return', 'string', 'Raw role-return JSON wire artifact. Required.'),
           opt('repository-evidence', 'string', 'Repository evidence signed by the host receipt. Required for successful verification.'),
-          opt('producer-receipt', 'string', 'Ed25519 host-adapter receipt verified against the packet-bound adapter/key from the fixed operator trust registry. Required for successful verification.'),
+           opt('producer-receipt', 'string', 'Ed25519 host-adapter receipt verified against the packet-bound adapter/key from the fixed operator trust registry. Required for successful verification.'),
+           opt('exceptional-verification', 'string', 'Closed exceptional-verification request bound to this exact authenticated role return and dispatch packet.'),
+           opt('exceptional-receipt', 'string', 'Pinned host receipt authenticating the exact exceptional-verification payload. Required with --exceptional-verification.'),
           opt('resume-owner', 'string', `Requested owner for a blocked result. Defaults to the authenticated producer and requires exact redelegation authority when changed. Default registry: ${WORKFLOW_ROLE_LIST}; target workflowRoles extensions are accepted after config validation.`),
           opt('redelegation-authority', 'string', 'Signed blocked-result redelegation JSON verified against a schemaVersion 2 operator trust authority.'),
           opt('recovery-request', 'string', 'Exact destructive, scope-changing, or host-state recovery request JSON.'),

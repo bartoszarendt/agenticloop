@@ -87,9 +87,10 @@ function run(args, target) {
 function wireReport(artifact, coveredTasks, overrides = {}) {
   return {
     report_schema: 'auditor_report_v1',
+    producer: { roleId: 'auditor' },
     artifact,
     covered_tasks: coveredTasks,
-    invocation: { mode: 'host_subagent', reference: `ref-${Math.random().toString(36).slice(2)}`, provenance: 'asserted' },
+    invocation: { mode: 'host_subagent', reference: `ref-${Math.random().toString(36).slice(2)}`, provenance: 'verified', receipt: `auditor-receipt-${Math.random().toString(36).slice(2)}` },
     perspectives: Object.fromEntries(
       ['outcome', 'completeness', 'integration_coherence', 'engineering_quality', 'verification', 'risk']
         .map(key => [key, `${key} body with substantive content.`])
@@ -249,7 +250,7 @@ describe('invocation provenance registry', () => {
     assert.equal(lint.status, 0, `${lint.stdout}${lint.stderr}`);
   });
 
-  it('labels unverifiable provenance as asserted, never verified', async () => {
+  it('rejects an unverifiable fresh Auditor report without consuming audit budget', async () => {
     const target = makeTarget('asserted');
     writeTask(target, 'T-001', 'accepted', 'milestone:M00');
     const artifact = commitAll(target, 'integrate');
@@ -261,9 +262,9 @@ describe('invocation provenance registry', () => {
     writeFileSync(reportPath, JSON.stringify(wireReport(artifact, ['T-001'], {
       invocation: { mode: 'host_subagent', reference: 'ref-asserted', provenance: 'asserted' },
     })), 'utf-8');
-    assert.equal((await run(['audit', 'report', 'AUD-001', '--file', reportPath], target)).status, 0);
+    assert.equal((await run(['audit', 'report', 'AUD-001', '--file', reportPath], target)).status, 1);
     const status = await run(['audit', 'status', 'AUD-001', '--json'], target);
-    assert.equal(JSON.parse(status.stdout).certification_current, true);
+    assert.equal(JSON.parse(status.stdout).completed_audits, 0);
     // A verified claim without a receipt is rejected.
     writeFileSync(join(target, 'app.js'), 'export const v = 2;\n', 'utf-8');
     const artifact2 = commitAll(target, 'remediation');
@@ -328,7 +329,7 @@ describe('event-logged invocation cross-check', () => {
     const reference = 'invoke-no-event';
     const reportPath = join(target, '.agenticloop', 'tmp', 'r.json');
     writeFileSync(reportPath, JSON.stringify(wireReport(artifact, ['T-001'], {
-      invocation: { mode: 'host_subagent', reference, provenance: 'asserted' },
+      invocation: { mode: 'host_subagent', reference, provenance: 'verified', receipt: 'event-log-receipt' },
     })), 'utf-8');
     const missing = await run(['audit', 'report', 'AUD-001', '--file', reportPath], target);
     assert.equal(missing.status, 1);

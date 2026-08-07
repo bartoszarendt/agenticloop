@@ -152,7 +152,9 @@ accepted outcome; use `--expect-status needs_revision` for revision audits. If i
 cannot run, report that limitation and follow the backend's blocked or exception
 path; do not claim mechanical validation.
 
-For an artifact-bound review delegation, add `--expect-artifact <full-40-character-sha>`
+For an artifact-bound review delegation, add `--expect-artifact <full-git-object-id>`
+(a complete lowercase 40-character SHA-1 or 64-character SHA-256 identity matching
+the repository's object format)
 to prove the PR still has the dispatched head. When the maintainer is given a
 local review workspace, also pass `--workspace <path>`; it must resolve to the
 same exact Git HEAD before that workspace is used for review.
@@ -732,8 +734,8 @@ review body or files-backed task record:
 All eight fields are mandatory and must be non-empty; `Planned verification` and
 `Verification result` are both required, and a duplicated field label is
 rejected rather than silently merged. Base artifact and resulting artifact must
-differ, and for GitHub each must normalize (bare SHA or a `commit:`/`sha:`
-prefix) to a full 40-character commit SHA. At most one such subsection may exist
+differ; GitHub values must be complete lowercase 40-character SHA-1 or
+64-character SHA-256 identities, optionally `commit:`/`sha:`-prefixed. At most one such subsection may exist
 per task, counting both current and superseded episodes.
 
 For GitHub, the one-episode count is task-wide across replacement pull requests:
@@ -805,7 +807,7 @@ requirement.
 Do not hand back for review until all hold:
 
 - The exact implementation artifact is current and verifiable:
-  - GitHub: the full 40-character `headRefOid` equals the commit the
+  - GitHub: the complete lowercase 40/64-character `headRefOid` equals the commit the
     implementation summary cites.
   - Files: `implementation_artifact` in task-file frontmatter is set and matches
     the current local final state.

@@ -7,11 +7,14 @@ import { resolveIssueNumber } from './github-preflight.js';
 import { parseFrontmatterStrict } from './frontmatter.js';
 import { githubAttributionShape, resolveGitHubTaskIdentity } from './github-task-identity.js';
 import { filterLiveLines } from './markdown.js';
+import { isGitObjectId, sameGitObjectFormat } from './git-oid.js';
 import {
   extractReviewAuthor,
   isLegacyMissingFindingsMarker,
   isTrustedReviewMarker,
+  normalizeGitHubLogin,
   parseReviewMarker as parseSharedReviewMarker,
+  validateReviewMarkerAuthority,
 } from './review-history.js';
 import {
   REVIEW_MODES,
@@ -99,20 +102,16 @@ function commitMessageText(commit) {
 }
 
 /**
- * Normalize a GitHub fixup artifact spelling to a bare lowercase commit SHA.
- * Supported spellings are the bare SHA and a `commit:`/`sha:` prefixed SHA.
- * The result is only meaningful when it passes {@link isFullCommitSha}.
+ * Normalize a GitHub fixup artifact spelling to a bare lowercase commit
+ * identity. Supported spellings are the bare object id and a `commit:`/`sha:`
+ * prefixed object id. The result is only meaningful when it passes the shared
+ * {@link isGitObjectId} rule.
  *
  * @param {string} value
  * @returns {string}
  */
 export function normalizeGitHubFixupArtifact(value) {
   return bareArtifactToken(value);
-}
-
-/** @param {string} value */
-function isFullCommitSha(value) {
-  return /^[0-9a-f]{40}$/.test(value);
 }
 
 /** @param {string} workspace */
@@ -133,13 +132,13 @@ export function validateReviewWorkspace({ workspace, expectedArtifact, commandRu
     return { provided: false, workspace: null, head: null, error: null };
   }
 
-  const expected = String(expectedArtifact ?? '').trim().toLowerCase();
-  if (!isFullCommitSha(expected)) {
+  const expected = String(expectedArtifact ?? '').trim();
+  if (!isGitObjectId(expected)) {
     return {
       provided: true,
       workspace: resolvedWorkspace,
       head: null,
-      error: '--workspace requires --expect-artifact with a full 40-character commit SHA',
+      error: '--workspace requires --expect-artifact with a complete Git object identity',
     };
   }
 
@@ -164,13 +163,22 @@ export function validateReviewWorkspace({ workspace, expectedArtifact, commandRu
     };
   }
 
-  const head = String(result?.stdout ?? '').trim().toLowerCase();
-  if (!isFullCommitSha(head)) {
+  const head = String(result?.stdout ?? '').trim();
+  if (!isGitObjectId(head)) {
     return {
       provided: true,
       workspace: resolvedWorkspace,
       head: head || null,
-      error: `workspace HEAD is not a full 40-character commit SHA: '${head || 'missing'}'`,
+      error: `workspace HEAD is not a complete Git object identity: '${head || 'missing'}'`,
+    };
+  }
+  // One repository-bound claim carries exactly one object format.
+  if (!sameGitObjectFormat([head, expected])) {
+    return {
+      provided: true,
+      workspace: resolvedWorkspace,
+      head,
+      error: `workspace HEAD '${head}' and expected artifact '${expected}' use different Git object formats`,
     };
   }
   if (head !== expected) {
@@ -187,15 +195,29 @@ export function validateReviewWorkspace({ workspace, expectedArtifact, commandRu
 
 /**
  * Backend artifact check handed to the shared fixup-episode validator: GitHub
- * fixup artifacts must normalize to a full 40-character commit SHA.
+ * fixup artifacts must normalize to a complete Git object identity.
  *
  * @param {string} fieldLabel
  * @param {string} value
  * @returns {string|null}
  */
 function githubFixupArtifactError(fieldLabel, value) {
-  if (isFullCommitSha(normalizeGitHubFixupArtifact(value))) return null;
-  return `'${fieldLabel}' must be a full 40-character commit SHA for the GitHub backend (got '${value}')`;
+  if (isGitObjectId(normalizeGitHubFixupArtifact(value))) return null;
+  return `'${fieldLabel}' must be a complete Git object identity for the GitHub backend (got '${value}')`;
+}
+
+/**
+ * One fixup episode belongs to one repository object format.
+ * @param {any} episode
+ * @param {string|null} [currentHead]
+ */
+function githubFixupObjectFormatError(episode, currentHead = null) {
+  const base = normalizeGitHubFixupArtifact(episode?.fields?.base_artifact);
+  const resulting = normalizeGitHubFixupArtifact(episode?.fields?.resulting_artifact);
+  const identities = [base, resulting, currentHead]
+    .filter(value => value !== null && value !== undefined && value !== '');
+  if (!identities.every(isGitObjectId) || sameGitObjectFormat(identities)) return null;
+  return 'Maintainer Review Fixup base, resulting, and current-head identities must use one Git object format';
 }
 
 /**
@@ -216,14 +238,20 @@ function collectPrCommits(prData) {
   }
   const commits = [];
   for (const commit of raw) {
-    const oid = String(commit?.oid ?? '').toLowerCase();
-    if (!isFullCommitSha(oid)) {
+    const oid = String(commit?.oid ?? '');
+    if (!isGitObjectId(oid)) {
       return {
         commits: [],
-        error: 'pull request commit data is malformed (a commit is missing a full oid); cannot verify Maintainer Review Fixup attribution',
+        error: 'pull request commit data is malformed (a commit is missing a complete Git object identity); cannot verify Maintainer Review Fixup attribution',
       };
     }
     commits.push({ oid, message: commitMessageText(commit) });
+  }
+  if (!sameGitObjectFormat(commits.map(commit => commit.oid))) {
+    return {
+      commits: [],
+      error: 'pull request commit inventory mixes Git object formats; cannot verify Maintainer Review Fixup attribution',
+    };
   }
   return { commits, error: null };
 }
@@ -298,15 +326,49 @@ function markerValues(liveBody, name) {
 // lives in the shared durable-history module used by preflight and files tasks.
 export const parseReviewMarker = parseSharedReviewMarker;
 
-/** @param {any} prData */
-export function collectReviewMarkers(prData) {
+/**
+ * Collect PR review markers, binding actor attribution to the authenticated
+ * source through the same shared authority validator the durable-history
+ * collector uses. Authority failures are recorded on the marker's own error
+ * inventory so a forged actor account cannot become the current-head outcome.
+ * `expectedAccount` is mandatory authority context: without it no marker can
+ * be trusted, and every outcome marker receives an explicit fail-closed
+ * diagnostic instead of silently skipping authority evaluation.
+ *
+ * @param {any} prData
+ * @param {any} expectedAccount the trusted loop account; must be resolved by the caller
+ */
+export function collectReviewMarkers(prData, expectedAccount) {
+  const authorityAccount = normalizeGitHubLogin(expectedAccount?.login) ? expectedAccount : null;
   const markerSources = [
     ...(Array.isArray(prData?.comments) ? prData.comments : []),
     ...(Array.isArray(prData?.reviews) ? prData.reviews : []),
   ];
 
   return markerSources
-    .map(source => parseReviewMarker(typeof source === 'string' ? source : source?.body, source))
+    .map(source => {
+      const body = typeof source === 'string' ? source : String(source?.body ?? '');
+      const marker = parseReviewMarker(typeof source === 'string' ? source : source?.body, source);
+      if (!marker || marker.type !== 'outcome' || marker.nearMiss) return marker;
+      if (!authorityAccount) {
+        return {
+          ...marker,
+          errors: [
+            ...marker.errors,
+            'review marker authority cannot be evaluated without the authenticated expected account',
+          ],
+        };
+      }
+      if (!isTrustedReviewMarker(marker, authorityAccount)) return marker;
+      const authority = validateReviewMarkerAuthority(marker, {
+        body,
+        authenticatedAuthor: extractReviewAuthor(source),
+        expectedAccount: authorityAccount,
+        label: 'review marker',
+      });
+      if (authority.ok) return marker;
+      return { ...marker, errors: [...marker.errors, ...authority.errors] };
+    })
     .filter(marker => marker !== null);
 }
 
@@ -556,7 +618,7 @@ const VALID_EXPECTED_STATUSES = new Set(['accepted', 'needs_revision']);
  * @param {Array<any>} [params.humanReviews]
  * @param {string} [params.expectedStatus]
  * @param {any} [params.expectedAccount]
- * @param {string|null} [params.expectedArtifact] Full 40-char SHA of the dispatched artifact.
+ * @param {string|null} [params.expectedArtifact] Complete Git object identity of the dispatched artifact.
  */
 export function evaluateGitHubReviewAudit({
   prData,
@@ -583,12 +645,13 @@ export function evaluateGitHubReviewAudit({
   }
 
   const errors = [];
-  const headRefOid = String(prData?.headRefOid ?? '').toLowerCase();
-  const markers = collectReviewMarkers(prData);
+  const headRefOid = String(prData?.headRefOid ?? '');
+  const markers = collectReviewMarkers(prData, expectedAccount);
   const trustedMarkers = markers.filter(marker => isTrustedReviewMarker(marker, expectedAccount));
   const trustedOutcomeMarkers = trustedMarkers.filter(marker => marker.type === 'outcome');
   const requirement = taskRequiresIndependentReview(issueData?.body);
-  if (!headRefOid) errors.push('PR head SHA is unavailable; cannot audit review provenance');
+  if (!headRefOid) errors.push('PR head identity is unavailable; cannot audit review provenance');
+  else if (!isGitObjectId(headRefOid)) errors.push(`PR head '${headRefOid}' is not a complete Git object identity; cannot audit review provenance`);
   if (requirement.error) errors.push(requirement.error);
   for (const marker of trustedOutcomeMarkers) {
     if (isLegacyMissingFindingsMarker(marker, headRefOid)) continue;
@@ -599,8 +662,11 @@ export function evaluateGitHubReviewAudit({
   let normalizedExpectedArtifact = null;
   if (expectedArtifact !== null && expectedArtifact !== undefined && expectedArtifact !== '') {
     normalizedExpectedArtifact = String(expectedArtifact).toLowerCase().trim();
-    if (!/^[0-9a-f]{40}$/.test(normalizedExpectedArtifact)) {
-      errors.push(`--expect-artifact must be a full 40-character SHA, got '${expectedArtifact}'`);
+    if (!isGitObjectId(normalizedExpectedArtifact)) {
+      errors.push(`--expect-artifact must be a complete Git object identity, got '${expectedArtifact}'`);
+      normalizedExpectedArtifact = null;
+    } else if (headRefOid && !sameGitObjectFormat([normalizedExpectedArtifact, headRefOid])) {
+      errors.push(`expected dispatched artifact '${normalizedExpectedArtifact.slice(0, 8)}...' and current PR head '${headRefOid.slice(0, 8)}...' use different Git object formats`);
       normalizedExpectedArtifact = null;
     } else if (headRefOid && normalizedExpectedArtifact !== headRefOid) {
       errors.push(`expected dispatched artifact '${normalizedExpectedArtifact.slice(0, 8)}...' does not match current PR head '${headRefOid.slice(0, 8)}...'`);
@@ -677,6 +743,11 @@ export function evaluateGitHubReviewAudit({
           validateArtifact: githubFixupArtifactError,
         })
       );
+      const formatError = githubFixupObjectFormatError(
+        episode,
+        currentPrFixupEpisodes.includes(episode) ? headRefOid : null
+      );
+      if (formatError) errors.push(`${episode.source}: ${formatError}`);
     }
 
     if (fixupEpisodes.length > 1) {
@@ -960,8 +1031,8 @@ export function runGitHubReviewAudit({ pr, issue, repo, expectedStatus, expected
   }
 
   // Determine whether the current valid marker requires live human review data.
-  const headRefOid = String(prData?.headRefOid ?? '').toLowerCase();
-  const markers = collectReviewMarkers(prData);
+  const headRefOid = String(prData?.headRefOid ?? '');
+  const markers = collectReviewMarkers(prData, expectedAccount);
   const current = markers.filter(marker =>
     isTrustedReviewMarker(marker, expectedAccount) && marker.artifact === headRefOid
   );

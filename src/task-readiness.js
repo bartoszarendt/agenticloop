@@ -3,6 +3,7 @@
 import { parseFrontmatterStrict } from './frontmatter.js';
 import { fileMatchesScopePattern, isSafeScopePattern, parseScopePatterns, validatePathsAgainstDeviations } from './scope-matcher.js';
 import { createDiagnostic } from './repair-policy.js';
+import { deriveEvidenceState, dispositionForEvidenceState } from './result-envelope.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
 import { validateTaskRecord } from './validate-config.js';
 
@@ -243,17 +244,12 @@ export function evaluateTaskReadiness({
 function finish(diagnostics, detail) {
   const errors = diagnostics.filter(item => item.level === 'error');
   const warnings = diagnostics.filter(item => item.level === 'warning');
-  const evidenceState = errors
-    .map(item => item.evidence?.state)
-    .find(state => ['missing', 'malformed', 'stale', 'negative', 'changed'].includes(state))
+  // Evidence-state selection and disposition mapping share the one canonical
+  // precedence (missing, malformed, stale, negative, changed) with every
+  // other public boundary.
+  const evidenceState = deriveEvidenceState(errors)
     ?? (errors.length === 0 ? 'current' : 'negative');
-  const disposition = evidenceState === 'missing'
-    ? 'needs_context'
-    : evidenceState === 'malformed'
-      ? 'rejected'
-      : ['stale', 'changed'].includes(evidenceState)
-        ? 'superseded'
-        : errors.length === 0 ? 'proceed' : 'blocked';
+  const disposition = errors.length === 0 ? 'proceed' : dispositionForEvidenceState(evidenceState);
   return {
     schemaVersion: 1,
     ok: errors.length === 0,

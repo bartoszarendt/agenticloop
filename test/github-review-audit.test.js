@@ -1125,7 +1125,9 @@ describe('Fence parsing', () => {
   });
 
   it('four-space-indented fence is treated as indented code', () => {
-    const body = `    \`\`\`\n${liveMarker}\n    \`\`\`\nEnd.`;
+    // Trailing prose after the marker is followed by the Maintainer trailer:
+    // the trailer must be the final live nonblank line for the marker to speak.
+    const body = `    \`\`\`\n${liveMarker}\n    \`\`\`\nEnd.\n\n[[agent: maintainer]]`;
     const result = evaluateGitHubReviewAudit(data({ comments: [bodyWithMarker(body)] }));
     assert.equal(result.ok, true, result.errors.join('\n'));
   });
@@ -1199,7 +1201,7 @@ describe('Language-tagged and adversarial fence parsing', () => {
   });
 
   it('four leading spaces are treated as indented code, not a fence', () => {
-    const body = `    \`\`\`text\n${liveMarker}\n    \`\`\`\nEnd.`;
+    const body = `    \`\`\`text\n${liveMarker}\n    \`\`\`\nEnd.\n\n[[agent: maintainer]]`;
     const result = evaluateGitHubReviewAudit(data({ comments: [bodyWithMarker(body)] }));
     assert.equal(result.ok, true, result.errors.join('\n'));
   });
@@ -1233,7 +1235,7 @@ describe('Language-tagged and adversarial fence parsing', () => {
   });
 
   it('backtick opening info string containing a backtick is not accepted as a fence', () => {
-    const body = `\`\`\`te\`xt\n${liveMarker}\n\`\`\`te\`xt`;
+    const body = `\`\`\`te\`xt\n${liveMarker}\n\`\`\`te\`xt\n\n[[agent: maintainer]]`;
     const result = evaluateGitHubReviewAudit(data({ comments: [bodyWithMarker(body)] }));
     assert.equal(result.ok, true, result.errors.join('\n'));
   });
@@ -1469,8 +1471,8 @@ describe('Expected artifact validation', () => {
       expectedArtifact: 'a1b2c3d',
     });
     assert.equal(result.ok, false);
-    assert.ok(result.errors.some(e => /40-character/i.test(e)),
-      `Expected SHA length error, got: ${result.errors.join('; ')}`);
+    assert.ok(result.errors.some(e => /complete Git object identity/i.test(e)),
+      `Expected complete-object-identity error, got: ${result.errors.join('; ')}`);
   });
 
   it('passes without expected artifact (backward compatibility)', () => {
