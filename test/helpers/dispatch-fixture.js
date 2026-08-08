@@ -9,7 +9,7 @@
 
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
@@ -19,6 +19,11 @@ import {
   createRoleReturn,
   prepareRoleDispatch,
 } from '../../src/dispatch-envelope.js';
+import {
+  createTaskInventoryEnumeration,
+  evaluateParallelScan,
+  normalizeFilesTaskInventory,
+} from '../../src/parallel-scan.js';
 import { createHostHandoffReceipt } from '../../src/host-handoff.js';
 import { getHostRoleCapability } from '../../src/host-role-capabilities.js';
 import { canonicalJson } from '../../src/canonical-json.js';
@@ -77,6 +82,33 @@ export function activation(
     expiresAt,
     sign: { keyId: trust.keyId, privateKey: trust.privateKey },
   }, { capabilities: trust.capabilities });
+}
+
+/**
+ * Rebuild the retired schema-version-1 decomposition shape byte-exactly.
+ *
+ * Prior-evidence classification needs a record that is genuinely authentic, not
+ * a hand-waved approximation: only then does "authentic prior evidence is typed
+ * stale, a lookalike stays malformed" mean anything.
+ */
+export function legacyDecompositionProvenance(taskId, observedAt, sourceRef) {
+  const value = {
+    kind: 'agenticloop.decomposition-provenance',
+    schemaVersion: 1,
+    taskId,
+    authority: 'maintainer',
+    source: 'task-decomposition',
+    inventory: {
+      id: 'decomposition:fixture',
+      readyTaskIds: [taskId],
+      digest: sha256(canonicalJson({ taskId, readyTaskIds: [taskId] })),
+    },
+    completeness: 'complete',
+    observedAt,
+    freshnessPolicy: { maxAgeSeconds: 3600 },
+    sourceRef,
+  };
+  return { ...value, sourceDigest: sha256(canonicalJson(value)) };
 }
 
 function canonicalReadiness(raw) {
@@ -182,11 +214,38 @@ export async function createDispatchFixture(temp, name, options = {}) {
     dependencies: dependency.evidence, trustedRecordCount: current.trustedRecords.length, trustedRecordErrors: [],
   });
   const decompositionSource = '.agenticloop/decompositions/T-001.json';
+  // Decomposition completeness is derived from a real scan over the exact task
+  // surface, never asserted: the fixture must prove what a caller must prove.
+  const scanned = evaluateParallelScan({
+    workUnit: { id: 'fixture-work-unit', backend: 'files' },
+    inventory: normalizeFilesTaskInventory({
+      inventoryId: 'files:.agenticloop/tasks',
+      entries: [{ carrier: '.agenticloop/tasks/T-001.md', content: current.body, readError: null }],
+      complete: true,
+      enumeration: createTaskInventoryEnumeration({
+        backend: 'files', inventoryId: 'files:.agenticloop/tasks', observedAt,
+        discovered: 1, returned: 1,
+      }),
+    }),
+    decomposition: {
+      source: 'task-decomposition', sourceRef: decompositionSource,
+      revision: `git-commit:${git(root, ['rev-parse', 'HEAD'])}`,
+      declaredCompleteness: 'complete', attribution: 'maintainer',
+    },
+    observedAt,
+    freshnessPolicy: { maxAgeSeconds: 3600 },
+    basePaths,
+    dependencies: {},
+    // The base inventory and dependency snapshot the ready set was derived
+    // from are bound, not just used: dispatch revalidates both.
+    readinessContext: { base: evidence.base, dependencies: evidence.dependencies },
+    rescanTrigger: 'ready membership, dependencies, ownership, coupling, or source revision changes',
+  });
+  assert.equal(scanned.ok, true, scanned.result.errors.join('\n'));
   const decomposition = createDecompositionProvenance({
     taskId: 'T-001',
-    authority: 'maintainer', source: 'task-decomposition',
-    inventory: { id: 'decomposition:fixture', readyTaskIds: ['T-001'], digest: sha256(canonicalJson({ taskId: 'T-001', readyTaskIds: ['T-001'] })) },
-    completeness: 'complete', observedAt, freshnessPolicy: { maxAgeSeconds: 3600 },
+    scan: scanned.scan,
+    route: 'serial',
     sourceRef: decompositionSource,
   });
   mkdirSync(join(root, '.agenticloop', 'decompositions'), { recursive: true });
@@ -195,6 +254,28 @@ export async function createDispatchFixture(temp, name, options = {}) {
   git(root, ['commit', '-m', 'record decomposition\n\nTask: T-001\nAgent: maintainer']);
   const head = git(root, ['rev-parse', 'HEAD']);
   const repository = () => ({ worktree: resolve(root), branch: 'task/T-001', head, baseHead: head, baseTree: tree });
+  const refetchParallelScanInventory = () => {
+    const entries = readdirSync(join(root, '.agenticloop', 'tasks'))
+      .filter(name => name.endsWith('.md'))
+      .sort()
+      .map(name => ({
+        carrier: `.agenticloop/tasks/${name}`,
+        content: readFileSync(join(root, '.agenticloop', 'tasks', name), 'utf8'),
+        readError: null,
+      }));
+    return normalizeFilesTaskInventory({
+      inventoryId: 'files:.agenticloop/tasks',
+      entries,
+      complete: true,
+      enumeration: createTaskInventoryEnumeration({
+        backend: 'files',
+        inventoryId: 'files:.agenticloop/tasks',
+        observedAt: new Date().toISOString(),
+        discovered: entries.length,
+        returned: entries.length,
+      }),
+    });
+  };
   const assignment = {
     roleId: 'engineer', host: 'opencode',
     hostRoleCapability: getHostRoleCapability('opencode', 'engineer'),
@@ -215,9 +296,44 @@ export async function createDispatchFixture(temp, name, options = {}) {
     readiness: { evidence, result: readinessResult, resultDigest: validationResultDigest(readinessResult) },
     refetchReadiness: () => ({ evidence, result: readinessResult, resultDigest: validationResultDigest(readinessResult) }),
     decomposition,
+    // The authentic schema-version-1 shape, for prior-evidence classification
+    // tests. It is never used to authorize a dispatch.
+    legacyDecomposition: legacyDecompositionProvenance('T-001', observedAt, decompositionSource),
     refetchDecomposition: () => decomposition,
+    refetchParallelScanInventory,
     assignment,
   };
+}
+
+/**
+ * Base evidence for an exact Git tree, in the canonical readiness-evidence
+ * shape a scan binds. Shared so no test re-derives the base inventory digest.
+ */
+export function gitTreeBaseEvidence(root, treeish = 'HEAD') {
+  const treeOid = git(root, ['rev-parse', `${treeish}^{tree}`]);
+  const paths = git(root, ['ls-tree', '-r', '--name-only', treeOid]).split(/\r?\n/).filter(Boolean);
+  return {
+    paths,
+    evidence: {
+      kind: 'git_tree',
+      identity: `git-tree:${treeOid}`,
+      inventoryDigest: sha256(canonicalJson([...paths].sort())),
+      pathCount: paths.length,
+      revalidationArgs: ['--base', treeOid],
+    },
+  };
+}
+
+/** A files inventory with the typed receipt its authoritative enumerator issues. */
+export function filesScanInventory(inventoryId, entries, observedAt = new Date().toISOString()) {
+  return normalizeFilesTaskInventory({
+    inventoryId,
+    entries,
+    complete: true,
+    enumeration: createTaskInventoryEnumeration({
+      backend: 'files', inventoryId, observedAt, discovered: entries.length, returned: entries.length,
+    }),
+  });
 }
 
 /** Prepare through the fixture's injected capability inventory. */

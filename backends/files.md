@@ -40,6 +40,34 @@ advisory. Apply the shared freshness, terminal ordering, Markdown preservation,
 and audit-budget rules before adding a files mutation mechanism. Carrier absence
 uses typed applicability (`applicable: false`, `carrier: null`), never prose.
 
+Files defines the shared semantics for projection reconciliation. Its
+observations declare labels as `not_applicable` with a null carrier identity, no
+value, no evidence state, and no observation time - an absent carrier, not
+missing evidence. Every other fact is observed and compared exactly as on
+GitHub, so equivalent normalized facts reach one shared verdict.
+
+A files parallel-scan inventory enumerates the configured task-file surface and
+preserves each member's exact carrier path and content digest. A candidate
+record that cannot be read or parsed stays an inventory member carrying its
+error evidence; it is never dropped, and its presence makes inventory
+completeness fail closed.
+
+`agenticloop.files-task-directory.v1` is the authoritative files enumerator. It
+lists the configured task directory itself and issues the typed
+`agenticloop.task-inventory-enumeration` receipt that inventory completeness is
+derived from, so no caller can assert a complete task surface. The read-only
+`task prepare-decomposition` command is the production producer built on it: it
+enumerates, scans, validates the emitted record with the same validator dispatch
+uses, and prints the committable decomposition source as canonical JSON without
+mutating anything.
+
+Before a current-schema dispatch, the files boundary re-enumerates the
+configured task-file directory and compares its exact membership and content
+digests with the bound scan, and revalidates the scan's bound readiness context -
+the base inventory identity and the dependency-status evidence - for the whole
+ready set. A new, omitted, unreadable, or changed task, or a changed base or
+dependency status, makes the scan stale and refuses dispatch.
+
 ## Dispatch and return
 
 `task prepare-dispatch <id> --input <dispatch-input.json>` is the read-only files

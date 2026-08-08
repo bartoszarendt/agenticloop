@@ -361,7 +361,7 @@ export const COMMAND_REGISTRY = {
   },
   task: {
     summary: 'Manage files-backed task records and read-only dispatch preparation.',
-    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-dispatch|verify-return|status> [options]',
+    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|verify-return|status> [options]',
     subcommands: {
       list: {
         summary: 'List task records.',
@@ -412,6 +412,26 @@ export const COMMAND_REGISTRY = {
           opt('reason', 'string', 'Human-readable correction reason. Required.'),
           opt('authority', 'string', 'Durable authorization reference. Required.'),
           opt('actor', 'string', 'Expected committed Git author. Required.'),
+          jsonOption,
+        ],
+      },
+      'prepare-decomposition': {
+        summary: 'Enumerate the task surface, run the parallel scan, and emit a committable decomposition source. Read-only.',
+        usage: 'agenticloop task prepare-decomposition <id> --work-unit <id> --source-ref <path> --source-revision <ref> (--base <ref> | --base-paths <path>) --dependencies <path> [--route <serial|parallel>] [--observed-at <instant>] [--max-age-seconds <n>] [--rescan-trigger <text>] [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only',
+        positionals: [{ name: 'id', required: true }],
+        options: [
+          targetOption(),
+          opt('work-unit', 'string', 'Exact bounded work-unit identity the scan covers. Required.'),
+          opt('source-ref', 'string', 'Safe repository-relative path the emitted decomposition source will be committed to. Required.'),
+          opt('source-revision', 'string', 'Exact decomposition source revision (for example git-commit:<sha>). Required.'),
+          opt('base', 'string', 'Explicit Git base whose resolved tree supplies the base-path inventory.'),
+          opt('base-paths', 'string', 'Explicit JSON base-tree inventory. Mutually exclusive with --base.'),
+          opt('dependencies', 'string', 'Committed Maintainer-attributed dependency-status snapshot bound to the ready set. Required.'),
+          opt('route', 'string', 'Requested route. A parallel route requires the scan to place the task in a candidate pair.', { enum: ['serial', 'parallel'] }),
+          opt('observed-at', 'string', 'ISO-8601 UTC observation instant. Defaults to now.'),
+          opt('max-age-seconds', 'string', 'Freshness policy for the observation. Bounded by the trusted maximum.'),
+          opt('rescan-trigger', 'string', 'Concrete condition that invalidates this scan.'),
           jsonOption,
         ],
       },

@@ -76,6 +76,7 @@ import { assertLifecycleHandoffResolved } from './lifecycle-plan.js';
 import {
   activationCapabilityInventory,
   activationCaptureDisposition,
+  prepareDecompositionSource,
   prepareRoleDispatch,
   receiveRoleReturn,
   validateActivationCapture,
@@ -85,6 +86,10 @@ import { loadHostTrustStore, targetRepositoryIdentity } from './host-trust.js';
 import { CommitRangeError, deriveCommitRange } from './commit-range.js';
 import { gitTreeObjectId, isGitObjectId } from './git-oid.js';
 import { verifyCommittedAttributedSource } from './committed-source.js';
+import {
+  createTaskInventoryEnumeration,
+  normalizeFilesTaskInventory,
+} from './parallel-scan.js';
 
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -429,6 +434,53 @@ function refetchDispatchDecomposition(target, requested, taskId) {
 }
 
 /**
+ * Enumerate the configured files-backed task surface.
+ *
+ * This is the authoritative enumerator for the files backend: it lists the
+ * configured task directory itself and issues the typed enumeration receipt
+ * that inventory completeness is derived from. Completeness is never a caller
+ * assertion, so nothing outside this function can claim the surface was fully
+ * observed.
+ */
+function enumerateFilesTaskInventory(target, projectConfig, options = {}) {
+  const dir = taskDirectory(target, projectConfig);
+  const inventoryRoot = relative(target, dir).replace(/\\/g, '/');
+  const inventoryId = `files:${inventoryRoot}`;
+  const files = taskFiles(target, projectConfig);
+  const entries = files.map(file => {
+    const carrier = relative(target, file).replace(/\\/g, '/');
+    try {
+      return { carrier, content: readFileSync(file, 'utf8'), readError: null };
+    } catch (error) {
+      return { carrier, content: null, readError: error.message };
+    }
+  });
+  const enumeration = createTaskInventoryEnumeration({
+    backend: 'files',
+    inventoryId,
+    observedAt: options.observedAt ?? new Date().toISOString(),
+    discovered: entries.length,
+    returned: entries.length,
+    // A local directory listing is a single unpaginated observation; there is
+    // no cursor left unfollowed and nothing was dropped between discovery and
+    // return.
+    pageCount: 1,
+    truncated: false,
+    cursor: null,
+  });
+  return normalizeFilesTaskInventory({ inventoryId, entries, complete: true, enumeration }, { now: options.now });
+}
+
+function refetchDispatchParallelScanInventory(target, projectConfig, decomposition) {
+  if (decomposition?.scan?.workUnit?.backend !== 'files') {
+    throw new VerificationContextMalformedError(
+      'files-backed task dispatch requires a files parallel-scan work-unit inventory'
+    );
+  }
+  return enumerateFilesTaskInventory(target, projectConfig);
+}
+
+/**
  * Reconstruct files-backed return evidence from current durable Git state.
  * Host-signed checks remain transport evidence; repository identity, paths, and
  * attribution are always derived again before the receipt is authenticated.
@@ -752,7 +804,7 @@ export async function cmdTask(args, io = createIo()) {
     const suggestion = sub ? suggestName(sub, Object.keys(TASK_SUBCOMMANDS)) : null;
     io.err(suggestion
       ? `task: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
-      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-dispatch, verify-return, status.');
+      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, verify-return, status.');
     io.err('Run "agenticloop help task" for usage.');
     return EXIT_USAGE;
   }
@@ -1015,6 +1067,56 @@ export async function cmdTask(args, io = createIo()) {
       return 0;
     }
 
+    if (sub === 'prepare-decomposition') {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      if (!taskId || !opts.workUnit || !opts.sourceRef || !opts.sourceRevision) {
+        io.err('task prepare-decomposition requires <id>, --work-unit, --source-ref, and --source-revision');
+        return EXIT_USAGE;
+      }
+      let base;
+      let dependency;
+      try {
+        base = readExplicitBaseEvidence(target, { base: opts.base, basePaths: opts.basePaths });
+        dependency = readDependencyEvidence(target, opts.dependencies, taskId);
+      } catch (error) {
+        return printGateResult('task prepare-decomposition', commandFailure('task prepare-decomposition', error, 'operational_error', {}, target), asJson, io);
+      }
+      const maxAgeSeconds = opts.maxAgeSeconds === undefined ? 3600 : Number(opts.maxAgeSeconds);
+      // One observation instant for the enumeration receipt and the scan: they
+      // describe the same observation, so the emitted source is byte-identical
+      // for identical inputs.
+      const observedAt = opts.observedAt ? String(opts.observedAt) : new Date().toISOString();
+      const prepared = prepareDecompositionSource({
+        // The producer never receives a caller-supplied inventory: it calls the
+        // authoritative enumerator, which lists the configured task directory
+        // and issues the typed enumeration receipt completeness derives from.
+        enumerateInventory: () => enumerateFilesTaskInventory(target, projectConfig, { observedAt }),
+        workUnit: { id: String(opts.workUnit), backend: 'files' },
+        taskId,
+        sourceRef: String(opts.sourceRef),
+        sourceRevision: String(opts.sourceRevision),
+        route: opts.route ? String(opts.route) : 'serial',
+        observedAt,
+        freshnessPolicy: { maxAgeSeconds },
+        basePaths: base.paths,
+        dependencies: dependency.statuses,
+        readinessContext: { base: base.evidence, dependencies: dependency.evidence },
+        rescanTrigger: opts.rescanTrigger
+          ? String(opts.rescanTrigger)
+          : 'inventory membership or enumeration coverage, task carrier digests, base or dependency evidence, ownership, coupling, or decomposition source revision changes',
+      });
+      if (!prepared.ok) {
+        // The canonical validation-result envelope is the diagnostic surface;
+        // it is emitted as itself rather than re-wrapped.
+        return printGateResult('task prepare-decomposition', prepared.validation, asJson, io);
+      }
+      // The artifact is the committable source itself; the command writes
+      // nothing. Redirect stdout to `--source-ref` and commit it separately.
+      io.out(prepared.source.trimEnd());
+      return 0;
+    }
+
     if (sub === 'prepare-dispatch') {
       const taskId = positional[0];
       const asJson = Boolean(opts.json);
@@ -1068,6 +1170,8 @@ export async function cmdTask(args, io = createIo()) {
         input?.decomposition ?? packet?.decomposition,
         snapshot.taskId
       );
+      const refetchParallelScanInventory = ({ decomposition }) =>
+        refetchDispatchParallelScanInventory(target, projectConfig, decomposition);
       const readCarrierDigest = relPath => {
         const carrierPath = resolve(target, String(relPath));
         if (!existsSync(carrierPath)) return null;
@@ -1098,6 +1202,7 @@ export async function cmdTask(args, io = createIo()) {
         priorGateReceipts,
         readCarrierDigest,
         refetchActivation,
+        refetchParallelScanInventory,
       };
       let packet = null;
       let prepared;

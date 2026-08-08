@@ -167,27 +167,43 @@ If present, each field must be concrete.
 ## Concurrency Plan
 Required for the current Parallel Opportunity Scan of every authorized multi-task
 work unit. Keep one scan in the task-record or coordination surface rather than
-duplicating it into every task. With fewer than two ready tasks, record `Decision:
-not currently eligible - <n> ready task(s)` and its rescan trigger. With two or
-more ready tasks, record:
+duplicating it into every task. When the inventory or decomposition cannot be
+proven complete, record `Decision: incomplete` with what is missing - not a ready
+count. With a complete inventory and fewer than two ready tasks, record
+`Decision: not currently eligible - <n> ready task(s)` and its rescan trigger.
+With two or more ready tasks, record:
 
 ### Parallel Opportunity Scan
 
 - Work unit:
+- Inventory identity and digest:
+- Inventory completeness: complete | incomplete
+- Decomposition source, revision, and state: complete | incomplete
 - Ready-set snapshot:
+- Excluded tasks (task, reason code, evidence):
 - Source proposals considered:
 - Configured maximum implementation lanes:
 - Candidate lanes:
 - Mutation independence:
 - Knowledge independence:
+- Coupling blockers:
 - Decision scope:
 - Shared design questions:
 - Backend/worktree ownership:
 - Host and liveness capability:
 - Verification/integration implications:
-- Decision: parallel <lane ids> | serial | not currently eligible
+- Observed at and freshness policy:
+- Decision: parallel <lane ids> | serial | not currently eligible | incomplete
 - Independent rationale:
 - Rescan trigger:
+
+Every task the inventory discovered appears exactly once, as ready or as an
+explicit exclusion with a stable reason code (`record_unreadable`,
+`record_malformed`, `identity_ambiguous`, `lifecycle_terminal`,
+`dependency_unresolved`, `not_ready`). A record that could not be read or parsed
+is still an inventory member with error evidence and still makes completeness
+fail closed. `no eligible work` requires a complete inventory, a complete
+decomposition, and a validated exclusion for every task.
 
 When parallel delegation is authorized, also name each lane id, lane type (read-only,
 implementation, or coordination/review), role, read/write mode, owned backend

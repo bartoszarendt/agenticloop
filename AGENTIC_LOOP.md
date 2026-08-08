@@ -273,10 +273,10 @@ operator input.
 ### Single-role dispatch and return
 
 One implementation handoff uses `agenticloop.role-preparation`, schema version
-`4`, defined in the bundled `src/dispatch-envelope.js` module. It is a read-only
+`5`, defined in the bundled `src/dispatch-envelope.js` module. It is a read-only
 handoff artifact, not a controller, lane-result store, task mutation, or shared
 durable-state import. Its canonical digest is
-`sha256:agenticloop.role-preparation.v4:<64-lowercase-hex>` and it binds the
+`sha256:agenticloop.role-preparation.v5:<64-lowercase-hex>` and it binds the
 current task/contract/activation identities, freshly reevaluated P35-03
 readiness and base/dependency sources, committed Maintainer-attributed
 decomposition evidence, scoped checks, immutable role and invocation IDs, canonical
@@ -285,9 +285,33 @@ and canonical degraded-enforcement report inventory, branch/worktree,
 attribution, liveness, and
 cancellation. Any bound input changing stales the packet. The receiver verifies
 its ID, digest, role, and current bindings before its first mutation.
-Schema version 3 predates the mandatory degraded-report inventory and is
-rejected as `dispatch.packet.stale`; regenerate the packet as version 4 rather
-than reinterpreting or repairing version 3 in place.
+Schema versions 2, 3, and 4 are recognized as authentic prior evidence and
+rejected as `dispatch.packet.stale`; regenerate the packet as version 5 rather
+than reinterpreting or repairing an earlier version in place. Version 4 is not
+migrated: its decomposition field carries the version 1 caller-asserted
+completeness token, and no migration can supply the scan proof version 5
+requires.
+
+Decomposition provenance is `agenticloop.decomposition-provenance`, schema
+version `2`. Version 1 declared completeness as a caller-supplied token beside a
+visible ready set; version 2 replaces that with a full validated
+`agenticloop.parallel-scan` record, so completeness and ready membership are
+derived from evidence rather than asserted. Authentic version 1 records are
+recognized and returned as typed stale with regeneration guidance; a malformed
+version 1 lookalike stays malformed and is never promoted into the trusted prior
+class.
+
+The committed decomposition source carries the whole scan record, because that
+record is the proof. The packet carries `agenticloop.decomposition-binding`,
+schema version `1`: a constant-size projection naming the source reference and
+digest, the scan and inventory digests, derived inventory completeness, the scan
+conclusion, ready count, route, and freshness. Packet size therefore does not
+grow with the size of the work unit, and every dispatch refetches and
+revalidates the committed source the binding names before mutation. A current
+schema dispatch also re-enumerates the authoritative backend task inventory and
+requires its identity, membership, and carrier digests to equal the scan. A
+committed source cannot hide an omitted or newly authored task behind its own
+`complete` field.
 
 The single-role execution result is `agenticloop.role-return`, schema version
 `2`, with digest `sha256:agenticloop.role-return.v2:<64-lowercase-hex>`. It
@@ -349,6 +373,216 @@ Each projection identifies itself with `projectionBackend`, retains
 `supportedBackends` as the definition inventory, and selects each fact's
 `carrierApplicability`. Files and GitHub preserve every other shared semantic
 section.
+
+#### Projection reconciliation
+
+Observed carrier facts are compared through `agenticloop.projection-observation`
+schema version `1`, and the comparison result is
+`agenticloop.projection-reconciliation` schema version `1`. An observation binds
+one canonical fact on one carrier: fact ID, backend, carrier applicability and
+identity, the normalized value plus its
+`sha256:agenticloop.projection-observation.v1:<64-lowercase-hex>` digest,
+evidence state, producer/persister and typed-record authority, observation time,
+invalidators, state provenance, and a provenance source reference. Transport
+detail (issue numbers, URLs, revisions) travels in a separate `transport` field
+that is excluded from the value digest, so an equivalent files and GitHub fact
+digests identically.
+
+For every applicable non-missing authoritative fact, producer and persister must
+equal the owners in the canonical transition fact definition, the carrier must
+hold a typed record, and current evidence must carry a non-null canonical value.
+
+Construction and validation are separate. Building an observation may fill
+fields in; validating a *serialized* observation may not. A record that arrives
+from a carrier, a file, or another tool is held to the exact emitted shape -
+every field present, no unknown fields, the canonical kind and schema version,
+the closed carrier/authority/value shapes, and a `valueDigest` equal to the
+digest recomputed from its own canonical value. Reconciliation validates
+supplied records rather than repairing them, so a missing kind, an absent schema
+version, a tampered digest, or a value edited under a retained digest is a
+finding, not something the evaluator quietly fixes.
+
+##### Required observation coverage
+
+The required fact set for a backend is every fact that backend actually
+projects. Authority-sensitive conclusions require all of them:
+
+- zero observations stay `missing` / `needs_context`;
+- one observation cannot make an authority-sensitive conclusion available while
+  other required applicable facts are absent;
+- each missing applicable fact produces an explicit `evidence.missing`
+  diagnostic and is listed in `missingRequiredFacts`;
+- a non-applicable carrier stays `not_applicable` and is never counted missing;
+- partial reconciliation is still represented - each observed fact keeps its
+  exact relation - but the authority-sensitive conclusion stays `blocked` until
+  the required fact set is present.
+
+Duplicate-carrier detection runs after applicability, so two non-applicable null
+identities are never reported as one colliding carrier.
+
+A carrier the backend does not project is `not_applicable`, never `missing`: the
+files backend has no label carrier, and an observation that claims one is
+rejected. Comparison is bounded by the canonical fact definitions plus one
+closed cross-fact invariant inventory; any difference no invariant covers is two
+distinct facts, not a contradiction. `agent-ready` contract state beside a
+current structured runtime blocker is valid. A label proves label presence only.
+A comment carrier is authoritative only for the typed record it carries, and
+untyped prose is advisory. Stale review or closeout evidence is superseded, not
+silently current and not automatically drift. Genuine drift is two current
+authoritative carriers of one fact reporting different values, or a current
+closeout marker reporting a closed unit while the authoritative task carrier is
+non-terminal.
+
+Each reconciliation reports a per-fact row naming that fact's canonical
+producer, persister, authority, canonical source, and freshness rule - all read
+from the transition fact definitions, never restated independently - plus its
+relation, evidence state, state provenance, value digest, and observation count.
+It also reports the evaluated invariants, the exact contradictions found, the
+facts carrying unexplained drift, the required and missing required fact sets,
+and whether authority-sensitive conclusions are `available` or `blocked`.
+Contradictions, unexplained drift, invalid observations, and missing required
+facts all block them. A load-time guard requires every fact ID named by a
+cross-fact invariant to exist in the canonical fact inventory, so a contract
+rename cannot leave an invariant silently comparing a fact that no longer
+exists. The `verdictDigest` covers only the backend-neutral outcome, so files
+and GitHub reach one shared verdict over equivalent normalized facts while each
+keeps its own carrier applicability.
+
+##### PR state is not a fact
+
+There is no `pr_state` fact and none is needed. A pull request contributes two
+canonical facts - `review_readiness` and `review_verdict`, each bound to its
+exact reviewed artifact - and everything else about the PR (its number, URL,
+open/closed state, head ref) is transport. Transport travels in the observation's
+`transport` field, outside the semantic value digest, which is precisely what
+lets a files-backed and a GitHub-backed unit reach the same verdict for the same
+review facts. Adding a `pr_state` fact would make a transport detail an
+authority-bearing semantic fact and would have no files-backend counterpart.
+
+#### Parallel-scan provenance
+
+A Parallel Opportunity Scan produces `agenticloop.parallel-scan` schema version
+`1`, digested in the `agenticloop.parallel-scan.v1` domain with a separate
+backend-neutral `agenticloop.parallel-scan-semantics.v1` digest. The record binds
+the exact bounded work-unit identity and backend; the inventory ID, its digest,
+and every member's task identity, carrier, digest, revision, and readability
+state; the decomposition source, reference, revision, attribution, and derived
+`complete | incomplete` state; the observation time, freshness policy, and closed
+invalidator inventory; the ready task IDs; every excluded task with a stable
+reason code, evidence state, evidence reference, and carrier digest; per-task
+parallel eligibility and knowledge coupling with exact blockers; the pairwise
+mutation relation and candidate pairs; the conclusion and rescan trigger.
+
+Exclusion reason codes are `record_unreadable`, `record_malformed`,
+`identity_ambiguous`, `lifecycle_terminal`, `dependency_unresolved`, and
+`not_ready`. Conclusions are `parallel_candidates`, `not_currently_eligible`,
+`no_eligible_work`, and `incomplete`. Scan invalidators are
+`inventory_membership`, `inventory_enumeration_coverage`, `task_carrier_digest`,
+`base_inventory_identity`, `dependency_status`, `ownership_declaration`,
+`knowledge_coupling`, `decomposition_source_revision`, and
+`observation_freshness`.
+
+##### Authoritative inventory completeness
+
+Completeness is never a caller assertion. The record's inventory carries a typed
+`agenticloop.task-inventory-enumeration` version `1` receipt issued by the
+authoritative enumerator - `agenticloop.files-task-directory.v1` or
+`agenticloop.github-task-issue-inventory.v1` - naming the backend, the exact
+inventory identity, the observation instant, the bounded coverage
+(`discovered`, `returned`, `pageCount`, `truncated`, `cursor`), and a
+`exhaustive | truncated | unknown` completion. An inventory is complete only
+when its caller declared the exact boolean `true` **and** an exhaustive receipt
+covers that exact surface with that exact member count. `null`, `0`, `''`, a
+non-empty string, an object, and an omitted flag are never complete, and a
+truncated or cursor-bearing enumeration is never exhaustive. A truncated,
+invalid, unreadable, ambiguous, or caller-authored subset therefore cannot
+produce `no_eligible_work`, `not_currently_eligible`, or `parallel_candidates`.
+
+An issue whose transport identity is itself invalid is retained as unreadable
+inventory evidence rather than dropped: a discarded carrier is an invisible
+task, which is exactly the failure this contract prevents.
+
+##### Bound readiness context
+
+`basePaths` and dependency statuses change which tasks are ready without
+changing a single task carrier digest, so the record binds a closed
+`readinessContext`: the base evidence kind, identity, inventory digest, and path
+count; the dependency evidence source, digest, observation time, freshness and
+evaluated states, status count, and status digest; the observation time and
+freshness policy; and a digest over all three. Base and dependency evidence use
+the existing task-evidence contracts, not a second schema. Changing either
+changes the scan identity, `dependency_status` has an exact evidence identity to
+invalidate, and dispatch refetches and revalidates the bound context for the
+whole ready set - so an unchanged task carrier digest cannot hide a changed
+dependency status.
+
+##### Conclusion order
+
+Completeness is decided before ready count:
+
+1. inventory or decomposition incomplete -> `incomplete`;
+2. complete inventory with zero ready tasks -> `no_eligible_work`;
+3. complete inventory with one ready task, or no valid candidate pair ->
+   `not_currently_eligible` with the exact ready count and a concrete rescan
+   trigger;
+4. only a complete, fresh, fully accounted inventory can reach
+   `parallel_candidates`.
+
+Every discovered inventory member is accounted for exactly once, as ready or as
+an explicit exclusion. An unreadable, malformed, duplicate, or ambiguous record
+stays an inventory member and makes completeness fail closed; it never becomes
+an invisible task. Parallel candidacy requires current readiness, resolved dependencies,
+eligible structured ownership, a pairwise `disjoint` or valid `managed_join`
+relation, and `independent` knowledge coupling; `coupled` uses the two-wave
+rule and `unknown` stays non-eligible once the bounded discovery allowance is
+spent. Set-like inventories and pair ordering are canonicalized, so a shuffled
+listing produces the same scan identity while any changed bound input does not.
+The record and every nested object use closed schemas. Pair evidence covers
+every unordered ready-task pair exactly once, and `candidatePairs` equals only
+the pairs classified `disjoint` or `managed_join`; recomputing a digest cannot
+make a nonexistent task or an unclassified pair eligible.
+
+The scan is read-only and deterministic. It validates and derives; it does not
+decompose work or choose a solution, and it reuses the existing readiness,
+ownership, eligibility, and pair-classification rules rather than restating
+them.
+
+##### Producer, parity, and freshness
+
+`npx agenticloop task prepare-decomposition <task-id> --work-unit <id>
+--source-ref <path> --source-revision <ref> (--base <ref> | --base-paths <path>)
+--dependencies <path> [--route serial|parallel] [--observed-at <instant>]
+[--max-age-seconds <n>] [--rescan-trigger <text>]` is the production path. It
+lives inside the existing `task` command family, enumerates the configured task
+surface itself, evaluates the scan, validates the emitted record with the same
+validator its consumers run, constructs and validates the decomposition
+provenance, and prints the committable source as deterministic canonical JSON.
+It performs no task, Git, filesystem, GitHub, or lifecycle mutation, and returns
+canonical `agenticloop.validation-result` diagnostics on failure. The inventory
+enumerator is injectable, so a GitHub adapter can supply an authoritative
+paginated inventory without forking scan semantics.
+
+Construction and validation agree by contract: the evaluator runs the closed
+validator on the record it just built and refuses to return a successful scan
+for a record its consumers would reject. Every collection field -
+`readyTaskIds`, `excluded`, `eligibility`, `knowledgeCoupling`,
+`couplingBlockers`, `pairs`, `candidatePairs`, `invalidatedBy`, and inventory
+members - must be an explicit array; a wrong-typed collection is a schema
+violation, never coerced to an empty list that then re-digests as consistent.
+Both validators are total over arbitrary JSON-compatible input and return
+errors rather than throwing.
+
+One canonical instant format - `YYYY-MM-DDTHH:MM:SS[.mmm]Z`, UTC, second or
+exactly-millisecond precision - is parsed by one parser shared by scan
+construction, scan-record validation, decomposition validation, and dispatch, so
+no layer accepts a timestamp another layer rejects. A timestamp more than five
+seconds in the future is a future observation, not clock jitter, and is refused.
+Freshness policies are bounded by a trusted maximum of 86,400 seconds rather
+than any positive safe integer. Decomposition provenance restates the scan's own
+`observedAt` and freshness policy exactly; both are derived from the bound scan
+rather than accepted as producer inputs, so a caller cannot widen, narrow, or
+otherwise rebind the policy the scan was observed under. Construction and
+validation take an injectable clock.
 
 `review_readiness` is carried by the review-entry receipt at schema version `3`,
 digested in the `agenticloop.review-entry-receipt.v3` domain. The digest domain
@@ -1133,10 +1367,21 @@ for safe bounded parallelism before defaulting to serial. The default is not
 
 Serial is the safety floor, but it is not a reason to skip analysis. Every
 authorized multi-task work unit receives a current Parallel Opportunity Scan
-after decomposition. With fewer than two ready tasks, record a truthful
-not-currently-eligible result and rescan trigger. With two or more ready tasks,
-the orchestrator loads [[parallel-delegation]] and completes the full scan before
-choosing serial execution.
+after decomposition.
+
+Read inventory completeness before ready count, always in this order:
+
+1. inventory or decomposition incomplete -> `incomplete`; repair the evidence
+   and rescan. This is never reported as an eligibility answer.
+2. complete inventory, zero ready tasks -> `no_eligible_work`.
+3. complete inventory, one ready task or no valid candidate pair ->
+   `not_currently_eligible`, with the exact ready count and a rescan trigger.
+4. only a complete, fresh, fully accounted inventory can produce
+   `parallel_candidates`.
+
+With two or more ready tasks over a complete inventory, the orchestrator loads
+[[parallel-delegation]] and completes the full scan before choosing serial
+execution.
 
 A bounded parallel batch is preferred when 2 or more ready tasks are independent
 on both eligibility dimensions and collision criteria are known and disjoint.

@@ -140,46 +140,50 @@ fixup.
 ## Slice sizing
 
 Default: one independently verifiable task, the smallest useful slice. For a
-larger authorized bounded run, prefer the largest safe slice that stays bounded,
+larger authorized run, prefer the largest safe slice that stays bounded,
 reversible, and independently verifiable. Broad authorization isn't permission to
 create one oversized record; task sets still decompose.
 
 ## Host Delegation Mechanism
 
 Real delegation starts a separate role, task, named-agent, or subagent execution
-for maintainer, engineer, or auditor. Describing that role's actions in prose is
-not delegation.
+for maintainer, engineer, or auditor. Narrating that role's actions is not
+delegation.
 
 Auditor has no fallback. `single_agent_fallback` never satisfies a work-unit
-audit: a same-session continuation re-reads its own conclusions and is not an
-independent audit. If no real delegation mechanism is available, record the
-blocked condition instead of auditing inline.
+audit: a same-session continuation re-reads its own conclusions. If no real
+delegation mechanism is available, record the blocked condition instead of
+auditing inline.
 
 ## Delegation Capability Check
 
 Before single-agent fallback, explicitly check for a host task, subagent, role,
 agent, type, mode, or `subagent_type` mechanism. If one exists, use it. Otherwise
-record how absence was verified, or the attempted mechanism and failure reason,
-in the delegation output.
+record in the delegation output how absence was verified, or the attempted
+mechanism and its failure reason.
 
 ## Concurrency Policy
 
-Delegation is serial by default. Mutation governs concurrency safety, and
-knowledge coupling governs it alongside mutation: parallel write execution
-requires mutation independence plus knowledge independence. Every authorized
-multi-task unit carries a current Parallel Opportunity Scan after decomposition:
-with fewer than two ready tasks it records not-currently-eligible status and a
-rescan trigger; with two or more it loads [[parallel-delegation]] before routing
-implementation work. Planning, reviewing, and joining parallel lanes also load
-that skill.
+Delegation is serial by default. Parallel writes need mutation independence plus
+knowledge independence. Every authorized multi-task unit carries a current
+Parallel Opportunity Scan after decomposition, produced by the read-only
+`npx agenticloop task prepare-decomposition <id>`. Completeness is derived by
+that authoritative enumeration, never asserted; the inventory and bound readiness
+context are refetched before dispatch.
 
-Role-delegation keeps the delegation prompt contract: the `Concurrency:` line is
-required for delegated work and must be either `serial -- reason: <concrete
-blocker>` or `parallel batch <id> -- lanes: <n>/<configured maximum>; join:
-<condition>`. The
-`Lease:` line carries observable-step checkpoint cadence, no-progress budget,
-and any relevant duration or milestone. Parallel plans, backend-specific lane
-rules, join behavior, and parallel liveness details live in [[parallel-delegation]].
+Read inventory completeness before ready count, then route:
+
+- incomplete inventory or decomposition -> `incomplete`; never an eligibility
+  answer, never "no work"
+- complete, zero ready -> `no_eligible_work`
+- complete, one ready or no candidate pair -> `not_currently_eligible` plus ready
+  count and rescan trigger; two or more -> load [[parallel-delegation]]
+- complete, fresh, fully accounted -> `parallel_candidates`
+
+The `Concurrency:` and `Lease:` lines are required for delegated work in the
+shapes given under Orchestrator Output Requirements. Parallel plans, lane rules,
+joins, and parallel liveness live in [[parallel-delegation]], loaded also when
+planning, reviewing, or joining lanes.
 
 ## Event Logging
 
@@ -209,34 +213,33 @@ Keep the delegation mode and the review mode distinct:
 
 A `review_mode: single_agent_fallback` does not by itself prove a delegation
 failure or a fixup; only the durable fixup subsection and maintainer attribution
-identify a fixup.
+identify one.
 
 ## Single-Agent Fallback
 
-Single-agent fallback is legal only when the delegation capability check found no
-relevant mechanism (`fallback_cause: mechanism_absent`), or a named mechanism was
+Single-agent fallback is legal only when the capability check found no relevant
+mechanism (`fallback_cause: mechanism_absent`), or a named mechanism was
 attempted and concretely failed (`fallback_cause: invocation_failed`). A request
-such as "re-review round 2" is not a fallback cause. If allowed, the current agent
-may assume the requested role for one bounded role step only.
+such as "re-review round 2" is not a fallback cause. If allowed, the agent may
+assume the requested role for one bounded role step only.
 
 When using fallback:
 
-- announce it in output and record the capability-check result, `fallback_cause`, and reason,
+- announce it and record the capability-check result, `fallback_cause`, and reason,
 - follow the assumed role's boundaries and required skills,
 - stop at the role's normal stop condition, bounded to that one role step,
 - emit `role.invoked` with `fallback: true`, the `fallback_cause`, and the reason when event logging is enabled,
 - do not claim host delegation happened.
 
-If neither host delegation nor single-agent role assumption is allowed, use [[blocked-state]] with category `contract` and stop.
+If neither host delegation nor role assumption is allowed, use [[blocked-state]] with category `contract` and stop.
 
 ## Re-Review and Continuation
 
 Every orchestrator-routed implementation or review role step receives a fresh
-delegation decision, and every orchestrator-routed re-review round passes through
-delegation routing again. When host delegation is available, the orchestrator uses
-it for the new round instead of continuing the prior maintainer session for
-convenience. A new review round is not a reason to record
-`delegation_mode: single_agent_fallback`.
+delegation decision, and every re-review round passes through delegation routing
+again. When host delegation is available, the orchestrator uses it for the new
+round rather than continuing the prior maintainer session. A new review round is
+not a reason to record `delegation_mode: single_agent_fallback`.
 
 A human may directly continue an already-active maintainer session for ordinary
 tasks, but that continuation:
@@ -613,7 +616,7 @@ Every orchestrator update must include:
 - Host delegation check: <tool/mechanism found and used | verified absent by ... | attempted and failed with ...>
 - Host delegation used: <yes | no>
 - Concurrency: <`serial -- reason: <concrete blocker>` | `parallel batch <id> -- lanes: <n>/<configured maximum>; join: <condition>`>
-- Parallel scan: <`completed - <durable reference>` | `not currently eligible - <reason and rescan trigger>` for multi-task implementation>
+- Parallel scan: <`completed - <durable reference>` | `not currently eligible - <reason and rescan trigger>` | `incomplete - <missing evidence and rescan trigger>` for multi-task implementation>
 - Lease: <none | observable-step checkpoint cadence, no-progress budget, and stop condition>
 - Fallback: <none | single-agent role assumption as maintainer | single-agent role assumption as engineer>
 - Consequence: <none | fallback limited to one role step and boundary enforcement relies on explicit self-policing until return>
@@ -640,8 +643,9 @@ omit the delegation field.
 - An available host task, subagent, or named-agent mechanism for maintainer or engineer is skipped
   without a recorded failure.
 - A multi-task unit lacks a current Parallel Opportunity Scan result, a multi-task
-  implementation delegation omits `Parallel scan:`, or serial is chosen with no
-  concrete reason and rescan trigger.
+  implementation delegation omits `Parallel scan:`, serial is chosen with no
+  concrete reason and rescan trigger, or `incomplete` is reported as an
+  eligibility answer.
 - Parallel role work starts without a concurrency plan, lease, stop condition, or join condition;
   write lanes share checkout, branch, worktree, artifact, task record, or mutable files; or a copied
   directory is used as a pseudo-worktree.

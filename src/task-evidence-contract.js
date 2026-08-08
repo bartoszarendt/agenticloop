@@ -411,6 +411,30 @@ function normalizeDependencyEvidence(dependencies) {
   };
 }
 
+/**
+ * Normalize base evidence outside a full readiness-evidence record.
+ *
+ * Other evaluators (the parallel scan binds the base inventory its ready set
+ * was derived from) need exactly this contract without inventing a second
+ * base-evidence schema. Throws on any violation, like every other normalizer
+ * here.
+ *
+ * @param {unknown} base
+ */
+export function normalizeReadinessBaseEvidence(base) {
+  return normalizeBaseEvidence(base);
+}
+
+/**
+ * Normalize dependency evidence outside a full readiness-evidence record.
+ * Same contract, same code path, no second dependency schema.
+ *
+ * @param {unknown} dependencies
+ */
+export function normalizeReadinessDependencyEvidence(dependencies) {
+  return normalizeDependencyEvidence(dependencies);
+}
+
 // ---------------------------------------------------------------------------
 // Shared structural assertions
 //

@@ -30,11 +30,32 @@ verifies required task, artifact, host, liveness, and join inputs, then records
 and routes the batch decision. The orchestrator does not originate or override a
 semantic/code classification.
 
-With fewer than two ready tasks, record `not currently eligible - <n> ready
-task(s)` plus a concrete rescan trigger. With two or more ready tasks, perform
-the complete assessment below. Rescan when ready membership, dependencies, task
-scope or ownership, shared design assumptions, base artifact, host capability,
-backend collision state, or a cross-lane finding changes.
+**Decide inventory completeness before ready count.** A ready count over an
+inventory never proven complete is not an answer:
+
+1. incomplete inventory or decomposition -> `incomplete`; never an eligibility
+   answer, however few tasks are visible. Repair the evidence and rescan.
+2. complete inventory, zero ready tasks -> `no_eligible_work`.
+3. complete inventory, one ready task or no valid candidate pair ->
+   `not_currently_eligible`, recorded as `not currently eligible - <n> ready
+   task(s)` plus a rescan trigger.
+4. only a complete, fresh, fully accounted inventory reaches
+   `parallel_candidates`; then perform the assessment below.
+
+Rescan when inventory membership or enumeration coverage, task carrier digests,
+base or dependency evidence, ready membership, task scope or ownership, shared
+design assumptions, base artifact, host capability, backend collision state, or
+a cross-lane finding changes.
+
+**Producing the scan.** Run the read-only
+`npx agenticloop task prepare-decomposition <task-id> --work-unit <id>
+--source-ref <path> --source-revision <ref> (--base <ref> | --base-paths <path>)
+--dependencies <path>`. It enumerates the configured task surface itself,
+issues a typed enumeration receipt, validates the emitted record with the same
+validator dispatch uses, and prints the committable decomposition source as
+canonical JSON. It mutates nothing: redirect its output to `--source-ref` and
+commit that file with canonical Maintainer attribution. Producer, persister, and
+freshness rules come from the canonical transition fact definitions.
 
 For each ready task, the scan must cover:
 
@@ -70,21 +91,47 @@ The durable scan result contains:
 ### Parallel Opportunity Scan
 
 - Work unit:
+- Inventory identity and digest:
+- Inventory completeness: complete | incomplete
+- Decomposition source, revision, and state: complete | incomplete
 - Ready-set snapshot:
+- Excluded tasks (task, reason code, evidence):
 - Source proposals considered:
 - Configured maximum implementation lanes:
 - Candidate lanes:
 - Mutation independence:
 - Knowledge independence:
+- Coupling blockers:
 - Decision scope:
 - Shared design questions:
 - Backend/worktree ownership:
 - Host and liveness capability:
 - Verification/integration implications:
-- Decision: parallel <lane ids> | serial | not currently eligible
+- Observed at and freshness policy:
+- Decision: parallel <lane ids> | serial | not currently eligible | incomplete
 - Independent rationale:
 - Rescan trigger:
 ```
+
+The executable contract for this shape is `agenticloop.parallel-scan` schema
+version `1` (see the parallel-scan provenance section of
+`agenticloop/AGENTIC_LOOP.md`). Every discovered inventory member is accounted
+for exactly once, as ready or as an explicit exclusion with a stable reason
+code. Exclusion reason codes are `record_unreadable`, `record_malformed`,
+`identity_ambiguous`, `lifecycle_terminal`, `dependency_unresolved`, and
+`not_ready`.
+
+Inventory completeness is derived from the authoritative enumerator's typed
+receipt, never declared. An unreadable, malformed, duplicate, or ambiguous task
+record stays an inventory member and makes completeness fail closed; a truncated
+inventory or a stale observation is incomplete.
+
+Before dispatch, refetch the authoritative backend inventory and the scan's
+bound readiness context rather than reusing the authored scan input. Inventory
+identity, membership, and carrier digests, plus the bound base and dependency
+evidence, must still match. Treat any omitted, new, unreadable, or changed task -
+or a changed base or dependency status - as stale scan evidence and rescan before
+assigning a lane.
 
 The orchestrator records which source proposals it considered, accepts, narrows,
 reorders, or rejects each after current-state reassessment, and states its own

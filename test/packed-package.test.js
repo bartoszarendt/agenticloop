@@ -285,6 +285,41 @@ describe('packed package smoke tests', () => {
     assert.match(result.errors.join('\n'), /authenticated host-controlled IPC|unsupported.*in-process/i);
   });
 
+  it('emits a committable decomposition source from the installed read-only producer', async () => {
+    const fixture = await createDispatchFixture(tmpBase, 'packed-decomposition');
+    const baseTree = fixture.readiness.evidence.base.identity.slice('git-tree:'.length);
+    const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: fixture.root, encoding: 'utf-8' });
+    assert.equal(head.status, 0, head.stderr);
+    const before = spawnSync('git', ['status', '--porcelain'], { cwd: fixture.root, encoding: 'utf-8' }).stdout;
+
+    const produced = runPacked([
+      'task', 'prepare-decomposition', 'T-001',
+      '--work-unit', 'packed-work-unit',
+      '--source-ref', '.agenticloop/decompositions/T-001-packed.json',
+      '--source-revision', `git-commit:${String(head.stdout).trim()}`,
+      '--base', baseTree,
+      '--dependencies', 'dependencies.json',
+      '--json',
+      '--target', fixture.root,
+    ]);
+    assert.equal(produced.status, 0, produced.stderr);
+    const decomposition = JSON.parse(produced.stdout);
+    assert.equal(decomposition.kind, 'agenticloop.decomposition-provenance');
+    assert.equal(decomposition.scan.inventory.complete, true);
+    assert.equal(decomposition.scan.inventory.enumeration.enumerator, 'agenticloop.files-task-directory.v1');
+    assert.equal(decomposition.scan.inventory.enumeration.completion, 'exhaustive');
+    assert.ok(decomposition.scan.readinessContext.digest);
+
+    // The installed producer is read-only: it writes nothing, stages nothing,
+    // and leaves the target worktree exactly as it found it.
+    const after = spawnSync('git', ['status', '--porcelain'], { cwd: fixture.root, encoding: 'utf-8' }).stdout;
+    assert.equal(after, before);
+
+    // The installed validator accepts the source the installed producer emitted.
+    const scan = await import(pathToFileURL(join(packedRoot, 'src', 'parallel-scan.js')).href);
+    assert.equal(scan.validateParallelScanRecord(decomposition.scan).ok, true);
+  });
+
   it('exercises installed corrective capture, drift, diagnostic, and required-check contracts', async () => {
     const dispatch = await import(pathToFileURL(join(packedRoot, 'src', 'dispatch-envelope.js')).href);
     const handoff = await import(pathToFileURL(join(packedRoot, 'src', 'host-handoff.js')).href);

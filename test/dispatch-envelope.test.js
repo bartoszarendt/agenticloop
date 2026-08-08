@@ -7,11 +7,19 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import {
+  createTaskInventoryEnumeration,
+  evaluateParallelScan,
+  normalizeFilesTaskInventory,
+} from '../src/parallel-scan.js';
+import {
   SHIPPED_ACTIVATION_ADAPTERS,
   BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION,
+  DECOMPOSITION_BINDING_SCHEMA_VERSION,
+  DECOMPOSITION_SCHEMA_VERSION,
   DISPATCH_PREPARATION_SCHEMA_VERSION,
   LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION,
   ROLE_RETURN_SCHEMA_VERSION,
+  SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION,
   activationCapabilityInventory,
   activationCaptureDisposition,
   captureActivationInput,
@@ -802,6 +810,7 @@ describe('dispatch preparation and receipt verification', () => {
       refetchReadiness: fixture.refetchReadiness,
       refetchRepository: fixture.refetchRepository,
       refetchDecomposition: fixture.refetchDecomposition,
+      refetchParallelScanInventory: fixture.refetchParallelScanInventory,
       runGit: fixture.runGit,
       roleId: 'engineer',
     }, fixture.options);
@@ -877,19 +886,67 @@ describe('dispatch preparation and receipt verification', () => {
 
   it('keeps incomplete decomposition distinct from a complete empty ready inventory', async () => {
     const fixture = await currentFilesTask('decomposition');
-    const incomplete = structuredClone(fixture.decomposition);
-    incomplete.completeness = 'incomplete';
-    delete incomplete.sourceDigest;
-    incomplete.sourceDigest = sha256(canonicalJson(incomplete));
-    const empty = structuredClone(fixture.decomposition);
-    empty.inventory.readyTaskIds = [];
-    empty.inventory.digest = sha256(canonicalJson({ taskId: 'T-001', readyTaskIds: [] }));
-    delete empty.sourceDigest;
-    empty.sourceDigest = sha256(canonicalJson(empty));
+    const resign = value => {
+      const { sourceDigest, ...rest } = value;
+      return { ...rest, sourceDigest: sha256(canonicalJson(rest)) };
+    };
+    // Incompleteness now comes from the bound scan record, not a token: the
+    // scan itself reports that its inventory could not be proven complete.
+    const source = fixture.decomposition.scan.decomposition;
+    const bound = fixture.decomposition.scan.readinessContext;
+    const basePaths = git(fixture.root, ['ls-tree', '-r', '--name-only', bound.base.identity.slice('git-tree:'.length)])
+      .split(/\r?\n/).filter(Boolean);
+    const rescan = ({ complete, entries }) => evaluateParallelScan({
+      workUnit: { id: fixture.decomposition.scan.workUnit.id, backend: 'files' },
+      inventory: normalizeFilesTaskInventory({
+        inventoryId: 'files:.agenticloop/tasks',
+        entries,
+        complete,
+        // Completeness is only ever provable by the authoritative enumerator's
+        // typed receipt; the declared flag alone can never produce it.
+        enumeration: complete === true
+          ? createTaskInventoryEnumeration({
+            backend: 'files', inventoryId: 'files:.agenticloop/tasks',
+            observedAt: fixture.decomposition.observedAt,
+            discovered: entries.length, returned: entries.length,
+          })
+          : null,
+      }),
+      decomposition: {
+        source: source.source, sourceRef: source.sourceRef, revision: source.revision,
+        declaredCompleteness: 'complete', attribution: 'maintainer',
+      },
+      observedAt: fixture.decomposition.observedAt,
+      freshnessPolicy: { maxAgeSeconds: 3600 },
+      basePaths,
+      dependencies: {},
+      readinessContext: {
+        base: fixture.readiness.evidence.base,
+        dependencies: fixture.readiness.evidence.dependencies,
+      },
+      rescanTrigger: fixture.decomposition.scan.rescanTrigger,
+    }, { now: Date.parse(fixture.decomposition.observedAt) + 1000 }).scan;
+
+    const currentEntry = { carrier: '.agenticloop/tasks/T-001.md', content: fixture.snapshot().body, readError: null };
+    const incompleteScan = rescan({ complete: false, entries: [currentEntry] });
+    assert.equal(incompleteScan.conclusion, 'incomplete');
+    const incomplete = resign({ ...structuredClone(fixture.decomposition), scan: incompleteScan });
+
+    // A complete inventory that simply does not contain this task is a
+    // different answer from an inventory that could not be proven complete.
+    const foreignScan = rescan({
+      complete: true,
+      entries: [{ carrier: '.agenticloop/tasks/T-900.md', content: fixture.snapshot().body.replace('task_id: T-001', 'task_id: T-900'), readError: null }],
+    });
+    assert.equal(foreignScan.inventory.complete, true);
+    const empty = resign({ ...structuredClone(fixture.decomposition), scan: foreignScan });
+
     const incompleteResult = prepare(fixture, { refetchDecomposition: () => incomplete });
     const emptyResult = prepare(fixture, { refetchDecomposition: () => empty });
+    assert.equal(incompleteResult.ok, false);
+    assert.equal(emptyResult.ok, false);
     assert.match(incompleteResult.validation.errors.join('\n'), /incomplete/);
-    assert.match(emptyResult.validation.errors.join('\n'), /does not authorize/);
+    assert.match(emptyResult.validation.errors.join('\n'), /does not authorize this task as ready/);
   });
 
   it('emits a canonical validation result for unreadable dispatch JSON', async () => {
@@ -1572,20 +1629,25 @@ describe('authoritative blocked-return receive path', () => {
 describe('documented envelope identity contract', () => {
   it('AGENTIC_LOOP.md names the exact schema versions and digests the implementation emits', async () => {
     const doc = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf8');
-    assert.match(doc, /agenticloop\.role-preparation`, schema version\s*\n?`4`/);
-    assert.match(doc, /sha256:agenticloop\.role-preparation\.v4:<64-lowercase-hex>/);
+    assert.match(doc, /agenticloop\.role-preparation`, schema version\s*\n?`5`/);
+    assert.match(doc, /sha256:agenticloop\.role-preparation\.v5:<64-lowercase-hex>/);
     assert.match(doc, /agenticloop\.role-return`, schema version\s*\n?`2`/);
     assert.match(doc, /sha256:agenticloop\.role-return\.v2:<64-lowercase-hex>/);
+    assert.match(doc, /agenticloop\.decomposition-provenance`, schema\s*\n?version `2`/);
+    assert.match(doc, /agenticloop\.decomposition-binding`,\s*\n?schema version `1`/);
     assert.doesNotMatch(doc, /agenticloop\.role-preparation\.v1/);
     assert.doesNotMatch(doc, /agenticloop\.role-return\.v1/);
-    assert.equal(DISPATCH_PREPARATION_SCHEMA_VERSION, 4);
+    assert.equal(DISPATCH_PREPARATION_SCHEMA_VERSION, 5);
+    assert.equal(SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION, 4);
     assert.equal(BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION, 2);
     assert.equal(LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION, 3);
+    assert.equal(DECOMPOSITION_SCHEMA_VERSION, 2);
+    assert.equal(DECOMPOSITION_BINDING_SCHEMA_VERSION, 1);
     assert.equal(ROLE_RETURN_SCHEMA_VERSION, 2);
     const fixture = await currentFilesTask('doc-contract');
     const prepared = prepare(fixture);
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
-    assert.ok(prepared.packet.digest.startsWith('sha256:agenticloop.role-preparation.v4:'));
+    assert.ok(prepared.packet.digest.startsWith('sha256:agenticloop.role-preparation.v5:'));
     const roleReturn = readyReturn(prepared.packet, repositoryEvidence(prepared.packet));
     assert.ok(roleReturn.digest.startsWith('sha256:agenticloop.role-return.v2:'));
   });
@@ -1610,7 +1672,7 @@ describe('documented envelope identity contract', () => {
       code: 'dispatch.packet.stale',
       evidenceState: 'changed',
       disposition: 'superseded',
-      message: 'dispatch preparation schemaVersion 2 is stale; regenerate the packet as schemaVersion 4 before dispatch or return import',
+      message: 'dispatch preparation schemaVersion 2 is stale; regenerate the packet as schemaVersion 5 before dispatch or return import',
     }]);
   });
 
@@ -1633,8 +1695,31 @@ describe('documented envelope identity contract', () => {
       code: 'dispatch.packet.stale',
       evidenceState: 'changed',
       disposition: 'superseded',
-      message: 'dispatch preparation schemaVersion 3 is stale; regenerate the packet as schemaVersion 4 before dispatch or return import',
+      message: 'dispatch preparation schemaVersion 3 is stale; regenerate the packet as schemaVersion 5 before dispatch or return import',
     });
+  });
+
+  it('classifies a schemaVersion 4 scan-unbound carrier as typed stale rather than migrating it', async () => {
+    const fixture = await currentFilesTask('legacy-v4-contract');
+    const prepared = prepare(fixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    const legacy = structuredClone(prepared.packet);
+    legacy.schemaVersion = SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION;
+    // A version 4 packet carried the version 1 decomposition source inline.
+    legacy.decomposition = structuredClone(fixture.legacyDecomposition);
+    legacy.digest = legacyDispatchPreparationDigest(
+      legacy,
+      SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION
+    );
+
+    const checked = validateDispatchPreparation(legacy, fixture.options);
+    assert.equal(checked.ok, false);
+    assert.deepEqual(checked.findings, [{
+      code: 'dispatch.packet.stale',
+      evidenceState: 'changed',
+      disposition: 'superseded',
+      message: 'dispatch preparation schemaVersion 4 is stale; regenerate the packet as schemaVersion 5 before dispatch or return import',
+    }]);
   });
 
   it('does not promote malformed or current packets into a legacy version class', async () => {

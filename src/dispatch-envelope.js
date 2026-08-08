@@ -32,6 +32,15 @@ import {
   validateValidationResult,
   validationResultDigest,
 } from './result-envelope.js';
+import {
+  PARALLEL_SCAN_CLOCK_SKEW_SECONDS,
+  PARALLEL_SCAN_MAX_FRESHNESS_SECONDS,
+  evaluateParallelScan,
+  parseCanonicalInstant,
+  validateParallelScanInventoryBinding,
+  validateParallelScanReadinessBinding,
+  validateParallelScanRecord,
+} from './parallel-scan.js';
 import { fileMatchesScopePattern, parseDeviations } from './scope-matcher.js';
 import {
   HostReceiptStaleVersionError,
@@ -74,7 +83,24 @@ export const ACTIVATION_CAPTURE_SCHEMA_VERSION = 2;
 export const DISPATCH_PREPARATION_KIND = 'agenticloop.role-preparation';
 export const BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION = 2;
 export const LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION = 3;
-export const DISPATCH_PREPARATION_SCHEMA_VERSION = 4;
+/**
+ * The last packet version whose decomposition field carried the v1
+ * caller-asserted completeness token. Its wire projection differs from the
+ * current one, and no migration can supply the scan proof v2 requires, so an
+ * authentic v4 packet is recognized and routed to typed regeneration.
+ */
+export const SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION = 4;
+export const DISPATCH_PREPARATION_SCHEMA_VERSION = 5;
+/** Decomposition provenance: v1 asserted completeness, v2 derives it from a scan. */
+export const LEGACY_DECOMPOSITION_SCHEMA_VERSION = 1;
+export const DECOMPOSITION_SCHEMA_VERSION = 2;
+/**
+ * The committed decomposition source carries the whole scan record, because
+ * that record is the proof. The packet carries only a constant-size binding to
+ * it, so packet size stays independent of how many tasks the work unit has.
+ */
+export const DECOMPOSITION_BINDING_KIND = 'agenticloop.decomposition-binding';
+export const DECOMPOSITION_BINDING_SCHEMA_VERSION = 1;
 export const ROLE_RETURN_KIND = 'agenticloop.role-return';
 export const ROLE_RETURN_SCHEMA_VERSION = 2;
 
@@ -281,10 +307,18 @@ function normalizeSha256(value) {
   return /^[a-f0-9]{64}$/.test(input) ? `sha256:${input}` : input;
 }
 
+/**
+ * One canonical instant parser for the whole contract. Scan construction,
+ * scan-record validation, decomposition validation, and dispatch all resolve a
+ * timestamp through `parseCanonicalInstant`, so no layer can accept a
+ * timestamp another layer rejects.
+ */
 function isoTimestamp(value, { futureAllowed = false, now = Date.now() } = {}) {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) return false;
-  const instant = Date.parse(value);
-  return Number.isFinite(instant) && (futureAllowed || instant <= now + ACTIVATION_CLOCK_SKEW_MS);
+  return parseCanonicalInstant(value, {
+    now,
+    futureAllowed,
+    skewSeconds: ACTIVATION_CLOCK_SKEW_MS / 1000,
+  }).ok;
 }
 
 /** Canonical serialization is only defined for JSON-compatible values. */
@@ -493,6 +527,46 @@ function decompositionInventoryDigest(taskId, readyTaskIds) {
   return `sha256:${canonicalSha256({ taskId, readyTaskIds: [...readyTaskIds].sort() })}`;
 }
 
+/**
+ * The v1 inventory shape: a caller-declared completeness token plus a visible
+ * ready set. It is retained only to recognize authentic prior evidence for
+ * typed stale routing; it can no longer authorize dispatch, because it never
+ * proved that decomposition and authoring covered the whole work unit.
+ */
+function legacyDecompositionInventoryValid(value) {
+  const readyTaskIds = value?.inventory?.readyTaskIds;
+  return closedKeys(value?.inventory, ['id', 'digest', 'readyTaskIds']) &&
+    typeof value?.inventory?.id === 'string' && Boolean(value.inventory.id) &&
+    Array.isArray(readyTaskIds) &&
+    readyTaskIds.every(id => typeof id === 'string' && id) &&
+    new Set(readyTaskIds).size === readyTaskIds.length &&
+    value.inventory.digest === decompositionInventoryDigest(value?.taskId, readyTaskIds) &&
+    ['complete', 'incomplete'].includes(value?.completeness);
+}
+
+/**
+ * Recognize authentic `schemaVersion: 1` decomposition evidence.
+ *
+ * Authenticity here means the record is exactly what the v1 contract produced -
+ * closed field set, matching source and inventory digests, canonical Maintainer
+ * attribution. A malformed lookalike fails this and stays malformed; only
+ * authentic prior evidence earns typed stale/regeneration guidance.
+ */
+function authenticLegacyDecomposition(value, taskId) {
+  return value?.kind === 'agenticloop.decomposition-provenance' &&
+    value?.schemaVersion === LEGACY_DECOMPOSITION_SCHEMA_VERSION &&
+    closedKeys(value, [
+      'kind', 'schemaVersion', 'taskId', 'authority', 'source', 'inventory',
+      'completeness', 'observedAt', 'freshnessPolicy', 'sourceRef', 'sourceDigest',
+    ]) &&
+    value.taskId === taskId &&
+    value.authority === 'maintainer' &&
+    value.source === 'task-decomposition' &&
+    safeRepositoryPath(value.sourceRef) &&
+    value.sourceDigest === decompositionSourceDigest(value) &&
+    legacyDecompositionInventoryValid(value);
+}
+
 function decompositionSourceDigest(value) {
   if (!isObject(value)) return null;
   const { sourceDigest, ...rest } = value;
@@ -511,18 +585,160 @@ function safeRepositoryPath(value) {
     !value.split('/').some(segment => segment === '.' || segment === '..');
 }
 
-/** Build one closed decomposition record for a durable provider source. */
-export function createDecompositionProvenance(input = {}) {
+/**
+ * Build one closed decomposition record from validated parallel-scan evidence.
+ *
+ * Completeness and ready membership are *derived* from the scan record, never
+ * accepted as caller assertions. A caller that has not run a scan that can
+ * prove its bounded work unit was fully decomposed and authored cannot produce
+ * a decomposition record that authorizes dispatch.
+ *
+ * The observation time and freshness policy are *not* caller inputs. They are
+ * copied from the bound scan, because a caller that could supply them could
+ * wrap a one-second scan in a one-day decomposition and rebind the freshness
+ * policy the scan was actually observed under.
+ *
+ * @param {{ taskId: string, sourceRef: string, scan: any, route?: 'serial'|'parallel' }} input
+ * @param {{ now?: number }} [options]  Injectable clock for the freshness check.
+ */
+export function createDecompositionProvenance(input = {}, options = {}) {
+  const { taskId, sourceRef, scan, route = 'serial' } = input;
+  const unknown = Object.keys(input).filter(key =>
+    !['taskId', 'sourceRef', 'scan', 'route'].includes(key));
+  if (unknown.length) throw new TypeError(`invalid decomposition provenance: unknown input field(s): ${unknown.join(', ')}`);
   const value = {
-    ...input,
     kind: 'agenticloop.decomposition-provenance',
-    schemaVersion: 1,
+    schemaVersion: DECOMPOSITION_SCHEMA_VERSION,
+    taskId,
+    authority: 'maintainer',
+    source: 'task-decomposition',
+    route,
+    scan: structuredClone(scan ?? null),
+    observedAt: scan?.observedAt ?? null,
+    freshnessPolicy: { maxAgeSeconds: scan?.freshnessPolicy?.maxAgeSeconds ?? null },
+    sourceRef,
+    sourceDigest: null,
   };
   value.sourceDigest = decompositionSourceDigest(value);
   const findings = findingSet('task prepare-dispatch');
-  validateDecomposition(value, value.taskId, findings);
+  validateDecomposition(value, taskId, findings, { now: options.now });
   if (findings.length) throw new TypeError(`invalid decomposition provenance: ${findings.messages.join('; ')}`);
   return deepFreeze(value);
+}
+
+/**
+ * Produce one committed decomposition source from an authoritative enumeration.
+ *
+ * This is the production path that emits what dispatch requires. It is
+ * read-only: it enumerates, scans, validates, and renders canonical JSON, and
+ * it never touches a task, a carrier, Git, GitHub, or lifecycle state.
+ *
+ * The enumerator is injected. The files backend supplies a directory listing
+ * today; a GitHub adapter can supply an authoritative paginated inventory later
+ * without forking any scan semantics, because everything after enumeration is
+ * this one shared path.
+ *
+ * @param {{
+ *   enumerateInventory: () => any,
+ *   workUnit: { id: string, backend: string },
+ *   taskId: string,
+ *   sourceRef: string,
+ *   sourceRevision: string,
+ *   route?: 'serial'|'parallel',
+ *   observedAt: string,
+ *   freshnessPolicy: { maxAgeSeconds: number },
+ *   basePaths: string[],
+ *   readinessContext: { base: any, dependencies: any },
+ *   dependencies?: Record<string, string>,
+ *   rescanTrigger: string,
+ *   joinPlans?: Record<string, any>,
+ *   laneArtifacts?: Record<string, any>,
+ *   declaredCompleteness?: 'complete'|'incomplete',
+ * }} input
+ * @param {{ now?: number }} [options]
+ * @returns {{ ok: boolean, validation: any, scan: any|null, decomposition: any|null, source: string|null }}
+ */
+export function prepareDecompositionSource(input = {}, options = {}) {
+  const command = 'task prepare-decomposition';
+  const now = options.now ?? Date.now();
+  const emptyResult = (evidenceState, disposition, message) => ({
+    ...singleFailure(command, evidenceState, disposition, message),
+    scan: null,
+    decomposition: null,
+    source: null,
+  });
+  try {
+    if (typeof input?.enumerateInventory !== 'function') {
+      return emptyResult('missing', 'needs_context', 'an authoritative task-inventory enumerator is required');
+    }
+    if (!TASK_ID_RE.test(String(input?.taskId ?? ''))) {
+      return emptyResult('missing', 'needs_context', 'decomposition preparation requires the exact target task id');
+    }
+    let inventory;
+    try {
+      inventory = input.enumerateInventory();
+    } catch (error) {
+      return emptyResult('missing', 'needs_context', `authoritative task-inventory enumeration failed: ${error.message}`);
+    }
+    const scanned = evaluateParallelScan({
+      workUnit: input.workUnit,
+      inventory,
+      decomposition: {
+        source: 'task-decomposition',
+        sourceRef: input.sourceRef,
+        revision: input.sourceRevision,
+        declaredCompleteness: input.declaredCompleteness ?? 'complete',
+        attribution: 'maintainer',
+      },
+      observedAt: input.observedAt,
+      freshnessPolicy: input.freshnessPolicy,
+      basePaths: input.basePaths,
+      dependencies: input.dependencies ?? {},
+      readinessContext: input.readinessContext,
+      rescanTrigger: input.rescanTrigger,
+      joinPlans: input.joinPlans ?? {},
+      laneArtifacts: input.laneArtifacts ?? {},
+    }, { now });
+    if (!scanned.ok) {
+      return { ok: false, validation: scanned.result, scan: scanned.scan, decomposition: null, source: null };
+    }
+    // The emitted scan is held to the exact validator dispatch runs on it, in
+    // this process, before anything is rendered for commit.
+    const scanCheck = validateParallelScanRecord(scanned.scan, { now });
+    if (!scanCheck.ok) {
+      const findings = findingSet(command);
+      for (const error of scanCheck.errors) {
+        findings.malformed(`emitted parallel-scan record is not consumer-valid: ${error}`, {
+          code: 'parallel_scan.record.invalid',
+        });
+      }
+      return { ...failure(command, findings), scan: scanned.scan, decomposition: null, source: null };
+    }
+    let decomposition;
+    try {
+      decomposition = createDecompositionProvenance({
+        taskId: input.taskId,
+        sourceRef: input.sourceRef,
+        scan: scanned.scan,
+        route: input.route ?? 'serial',
+      }, { now });
+    } catch (error) {
+      const findings = findingSet(command);
+      findings.negative(error.message, { code: 'parallel_scan.decomposition.invalid' });
+      return { ...failure(command, findings), scan: scanned.scan, decomposition: null, source: null };
+    }
+    return {
+      ok: true,
+      validation: validation(command, true, 'current', 'proceed', null),
+      scan: scanned.scan,
+      decomposition,
+      // Deterministic canonical JSON: the same inputs render the same bytes, so
+      // the committed source digest is reproducible by any reviewer.
+      source: `${canonicalJson(decomposition)}\n`,
+    };
+  } catch (error) {
+    return emptyResult('malformed', 'rejected', `decomposition preparation could not be evaluated: ${error.message}`);
+  }
 }
 
 /**
@@ -779,38 +995,189 @@ export function activationCaptureDisposition(capture, options = {}) {
   return { ok: true, evidenceState: 'current', disposition: 'proceed', errors: [], findings: [] };
 }
 
-function validateDecomposition(value, taskId, findings) {
+/**
+ * Validate decomposition provenance.
+ *
+ * Authentic prior-version evidence is routed to typed stale/regeneration
+ * guidance rather than silently reinterpreted under the current rules: the v1
+ * record simply does not contain the inventory proof v2 requires, and no
+ * migration can invent it.
+ *
+ * @param {any} value
+ * @param {string} taskId
+ * @param {any} findings
+ * @param {{ allowLegacy?: boolean }} [options]  `allowLegacy` is used only to
+ *   authenticate a prior-version dispatch packet before reporting it stale.
+ */
+function validateDecomposition(value, taskId, findings, options = {}) {
+  if (value?.schemaVersion !== DECOMPOSITION_SCHEMA_VERSION && authenticLegacyDecomposition(value, taskId)) {
+    if (options.allowLegacy) return;
+    findings.stale(
+      `decomposition provenance schemaVersion ${value.schemaVersion} is stale; ` +
+      `regenerate it as schemaVersion ${DECOMPOSITION_SCHEMA_VERSION} from a validated parallel-scan record before dispatch`,
+      { code: 'dispatch.packet.stale', disposition: 'superseded' }
+    );
+    return;
+  }
   const shapeOk = exactKeys(value, [
-    'kind', 'schemaVersion', 'taskId', 'authority', 'source', 'inventory',
-    'completeness', 'observedAt', 'freshnessPolicy', 'sourceRef', 'sourceDigest',
+    'kind', 'schemaVersion', 'taskId', 'authority', 'source', 'route', 'scan',
+    'observedAt', 'freshnessPolicy', 'sourceRef', 'sourceDigest',
   ], 'decomposition provenance', findings);
   if (value?.kind !== 'agenticloop.decomposition-provenance') findings.malformed("decomposition provenance kind must be 'agenticloop.decomposition-provenance'");
-  if (value?.schemaVersion !== 1) findings.malformed('decomposition provenance schemaVersion must be 1');
+  if (value?.schemaVersion !== DECOMPOSITION_SCHEMA_VERSION) findings.malformed(`decomposition provenance schemaVersion must be ${DECOMPOSITION_SCHEMA_VERSION}`);
   if (value?.taskId !== taskId) findings.malformed('decomposition provenance taskId must match the dispatched task');
   if (value?.authority !== 'maintainer' || value?.source !== 'task-decomposition') findings.malformed('decomposition provenance must name the canonical maintainer task-decomposition authority');
+  if (!['serial', 'parallel'].includes(value?.route)) findings.malformed("decomposition route must be 'serial' or 'parallel'");
   if (!safeRepositoryPath(value?.sourceRef)) findings.malformed('decomposition provenance sourceRef must be a safe repository-relative path');
   if (shapeOk && value?.sourceDigest !== decompositionSourceDigest(value)) {
     findings.malformed('decomposition provenance sourceDigest does not match its exact source projection');
   }
-  const inventoryOk = exactKeys(value?.inventory, ['id', 'digest', 'readyTaskIds'], 'decomposition inventory', findings);
-  if (typeof value?.inventory?.id !== 'string' || !value.inventory.id) findings.malformed('decomposition inventory id is required');
-  const readyTaskIds = Array.isArray(value?.inventory?.readyTaskIds) ? value.inventory.readyTaskIds : null;
-  if (!readyTaskIds || readyTaskIds.some(id => typeof id !== 'string' || !id) ||
-      new Set(readyTaskIds).size !== readyTaskIds.length) {
-    findings.malformed('decomposition inventory readyTaskIds must be a unique string array');
-  } else if (inventoryOk && value.inventory.digest !== decompositionInventoryDigest(value?.taskId, readyTaskIds)) {
-    findings.malformed('decomposition inventory digest does not match its exact task inventory');
+
+  // Completeness is never read as a token. It is re-derived from the bound
+  // scan record, and the scan's own invariants are re-checked here so a
+  // hand-edited "complete" cannot outrank the evidence it claims to summarize.
+  const scan = value?.scan;
+  const scanCheck = validateParallelScanRecord(scan, { now: options.now });
+  if (!scanCheck.ok) {
+    for (const error of scanCheck.errors) findings.malformed(`decomposition parallel-scan evidence is invalid: ${error}`);
+  } else {
+    if (scan.conclusion === 'incomplete') {
+      findings.negative('decomposition parallel-scan evidence is incomplete and cannot authorize dispatch');
+    }
+    if (scan.inventory.complete !== true || scan.decomposition.state !== 'complete') {
+      findings.negative('decomposition is incomplete and cannot authorize dispatch');
+    }
+    const excludedHere = scan.excluded.find(item => item.taskId === taskId);
+    if (excludedHere) {
+      findings.negative(
+        `task '${taskId}' is excluded from the validated scan (${excludedHere.reasonCode}) and cannot be dispatched`
+      );
+    } else if (!scan.readyTaskIds.includes(taskId)) {
+      findings.negative('complete decomposition inventory does not authorize this task as ready');
+    }
+    // A parallel route needs the scan to have actually found this task in a
+    // candidate pair; coupling or ownership blockers refuse the claimed route.
+    if (value?.route === 'parallel') {
+      const paired = (scan.candidatePairs ?? []).some(pair => pair.includes(taskId));
+      if (scan.conclusion !== 'parallel_candidates' || !paired) {
+        findings.negative(
+          `the validated scan does not place task '${taskId}' in a parallel candidate pair; the claimed parallel route is blocked`
+        );
+      }
+    }
+    // Freshness cannot be rebound after scanning. The decomposition restates
+    // the scan's own observation time and policy exactly; it can never widen,
+    // narrow, or otherwise replace them.
+    if (scan.observedAt !== value?.observedAt) {
+      findings.malformed('decomposition observedAt must equal its bound parallel-scan observation time');
+    }
+    if (scan.freshnessPolicy?.maxAgeSeconds !== value?.freshnessPolicy?.maxAgeSeconds) {
+      findings.malformed('decomposition freshnessPolicy must equal its bound parallel-scan freshness policy');
+    }
   }
-  if (!['complete', 'incomplete'].includes(value?.completeness)) findings.malformed('decomposition completeness is invalid');
-  else if (value.completeness !== 'complete') findings.negative('decomposition is incomplete and cannot authorize dispatch');
-  if (readyTaskIds && !readyTaskIds.includes(taskId)) findings.negative('complete decomposition inventory does not authorize this task as ready');
-  if (!isoTimestamp(value?.observedAt)) findings.malformed('decomposition observedAt must be a current ISO-8601 UTC instant');
+
+  validateDecompositionFreshness(value, findings, options);
+}
+
+function validateDecompositionFreshness(value, findings, options = {}) {
+  const now = options.now ?? Date.now();
+  const observed = parseCanonicalInstant(value?.observedAt, {
+    now,
+    skewSeconds: PARALLEL_SCAN_CLOCK_SKEW_SECONDS,
+  });
+  if (!observed.ok) findings.malformed(`decomposition observedAt ${observed.reason}`);
   exactKeys(value?.freshnessPolicy, ['maxAgeSeconds'], 'decomposition freshnessPolicy', findings);
-  if (!Number.isSafeInteger(value?.freshnessPolicy?.maxAgeSeconds) || value.freshnessPolicy.maxAgeSeconds <= 0) {
-    findings.malformed('decomposition freshnessPolicy maxAgeSeconds must be a positive integer');
-  } else if (isoTimestamp(value?.observedAt) && Date.now() - Date.parse(value.observedAt) > value.freshnessPolicy.maxAgeSeconds * 1000) {
+  const maxAgeSeconds = value?.freshnessPolicy?.maxAgeSeconds;
+  // A "positive safe integer" policy admits a hundred million years, which is
+  // not a freshness policy. The trusted maximum is the same one the scan
+  // contract enforces.
+  if (!Number.isSafeInteger(maxAgeSeconds) || maxAgeSeconds <= 0 || maxAgeSeconds > PARALLEL_SCAN_MAX_FRESHNESS_SECONDS) {
+    findings.malformed(
+      `decomposition freshnessPolicy maxAgeSeconds must be an integer between 1 and ${PARALLEL_SCAN_MAX_FRESHNESS_SECONDS}`
+    );
+  } else if (observed.ok && now - observed.epochMs > maxAgeSeconds * 1000) {
     findings.stale('decomposition provenance is stale');
   }
+}
+
+const DECOMPOSITION_BINDING_FIELDS = Object.freeze([
+  'kind', 'schemaVersion', 'taskId', 'route', 'sourceRef', 'sourceDigest',
+  'scanDigest', 'scanSemanticDigest', 'workUnitId', 'inventoryId', 'inventoryDigest',
+  'inventoryComplete', 'decompositionState', 'conclusion', 'readyCount',
+  'taskDisposition', 'observedAt', 'freshnessPolicy',
+]);
+
+/**
+ * Project a validated decomposition source into the constant-size packet
+ * binding. Only a source that already passed `validateDecomposition` reaches
+ * this, so the binding restates verified facts rather than asserting new ones.
+ */
+function decompositionBinding(source) {
+  const scan = source.scan;
+  return {
+    kind: DECOMPOSITION_BINDING_KIND,
+    schemaVersion: DECOMPOSITION_BINDING_SCHEMA_VERSION,
+    taskId: source.taskId,
+    route: source.route,
+    sourceRef: source.sourceRef,
+    sourceDigest: source.sourceDigest,
+    scanDigest: scan.digest,
+    scanSemanticDigest: scan.semanticDigest,
+    workUnitId: scan.workUnit.id,
+    inventoryId: scan.inventory.id,
+    inventoryDigest: scan.inventory.digest,
+    inventoryComplete: scan.inventory.complete,
+    decompositionState: scan.decomposition.state,
+    conclusion: scan.conclusion,
+    readyCount: scan.readyCount,
+    taskDisposition: 'ready',
+    observedAt: source.observedAt,
+    freshnessPolicy: { ...source.freshnessPolicy },
+  };
+}
+
+/**
+ * Validate the packet-carried binding.
+ *
+ * The binding cannot re-derive the scan (it deliberately does not carry it), so
+ * it is verified as a shape plus an exact identity pair, and every dispatch
+ * refetches and revalidates the committed source it names before mutation.
+ */
+function validateDecompositionBinding(value, taskId, findings, options = {}) {
+  if (value?.kind === 'agenticloop.decomposition-provenance') {
+    if (options.allowLegacy && authenticLegacyDecomposition(value, taskId)) return;
+    validateDecomposition(value, taskId, findings, options);
+    if (value?.schemaVersion === DECOMPOSITION_SCHEMA_VERSION) {
+      findings.malformed('dispatch packets carry the decomposition binding, not the full decomposition source');
+    }
+    return;
+  }
+  exactKeys(value, DECOMPOSITION_BINDING_FIELDS, 'decomposition binding', findings);
+  if (value?.kind !== DECOMPOSITION_BINDING_KIND) findings.malformed(`decomposition binding kind must be '${DECOMPOSITION_BINDING_KIND}'`);
+  if (value?.schemaVersion !== DECOMPOSITION_BINDING_SCHEMA_VERSION) {
+    findings.malformed(`decomposition binding schemaVersion must be ${DECOMPOSITION_BINDING_SCHEMA_VERSION}`);
+  }
+  if (value?.taskId !== taskId) findings.malformed('decomposition binding taskId must match the dispatched task');
+  if (!['serial', 'parallel'].includes(value?.route)) findings.malformed("decomposition binding route must be 'serial' or 'parallel'");
+  if (!safeRepositoryPath(value?.sourceRef)) findings.malformed('decomposition binding sourceRef must be a safe repository-relative path');
+  if (!SHA256_RE.test(value?.sourceDigest ?? '')) findings.malformed('decomposition binding sourceDigest must be sha256:<64 lowercase hex>');
+  for (const key of ['scanDigest', 'scanSemanticDigest', 'inventoryDigest']) {
+    if (!SEMANTIC_DIGEST_RE.test(value?.[key] ?? '')) findings.malformed(`decomposition binding ${key} must be a canonical semantic digest`);
+  }
+  for (const key of ['workUnitId', 'inventoryId']) {
+    if (typeof value?.[key] !== 'string' || !value[key]) findings.malformed(`decomposition binding ${key} is required`);
+  }
+  if (value?.taskDisposition !== 'ready') findings.negative('decomposition binding does not report this task as ready');
+  if (value?.inventoryComplete !== true) findings.negative('decomposition is incomplete and cannot authorize dispatch');
+  if (value?.decompositionState !== 'complete') findings.negative('decomposition is incomplete and cannot authorize dispatch');
+  if (value?.conclusion === 'incomplete') findings.negative('decomposition parallel-scan evidence is incomplete and cannot authorize dispatch');
+  if (!Number.isSafeInteger(value?.readyCount) || value.readyCount < 1) {
+    findings.negative('decomposition binding must report at least one ready task');
+  }
+  if (value?.route === 'parallel' && value?.conclusion !== 'parallel_candidates') {
+    findings.negative('the bound scan does not support the claimed parallel route');
+  }
+  validateDecompositionFreshness(value, findings, options);
 }
 
 function validateCleanStateBinding(value, findings, label = 'dispatch clean-state binding') {
@@ -1155,7 +1522,7 @@ function packetFromBindings({ snapshot, activation, readiness, decomposition, as
     task: packetTaskBinding(snapshot, contract),
     activation: structuredClone(activation),
     readiness: structuredClone(readiness),
-    decomposition: structuredClone(decomposition),
+    decomposition: decompositionBinding(decomposition),
     assignment: structuredClone(assignment),
     repository: structuredClone(repository),
     freshness: { invalidatedBy: [...RETURN_INVALIDATORS] },
@@ -1166,16 +1533,20 @@ function packetFromBindings({ snapshot, activation, readiness, decomposition, as
 
 /** Public canonical digest helper for persisted packet readers and fixtures. */
 export function dispatchPreparationDigest(packet) {
-  return semanticDigest('agenticloop.role-preparation.v4', projection(packet));
+  return semanticDigest(`agenticloop.role-preparation.v${DISPATCH_PREPARATION_SCHEMA_VERSION}`, projection(packet));
 }
 
 export function legacyDispatchPreparationDigest(packet, schemaVersion = packet?.schemaVersion) {
-  if (![BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION, LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION]
-    .includes(schemaVersion)) {
-    return null;
-  }
+  if (!LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSIONS.includes(schemaVersion)) return null;
   return semanticDigest(`agenticloop.role-preparation.v${schemaVersion}`, projection(packet));
 }
+
+/** Prior packet versions this boundary can still authenticate as typed stale. */
+const LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSIONS = Object.freeze([
+  BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION,
+  LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION,
+  SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION,
+]);
 
 /**
  * Refetch, validate, and bind one single-role implementation dispatch.
@@ -1191,6 +1562,7 @@ export function prepareRoleDispatch(input = {}, options = {}) {
       refetchReadiness,
       refetchRepository,
       refetchDecomposition,
+      refetchParallelScanInventory,
       refetchActivation = null,
       runGit,
       priorGateReceipts = [],
@@ -1204,6 +1576,7 @@ export function prepareRoleDispatch(input = {}, options = {}) {
       ['refetchReadiness', 'an authoritative readiness refetch function is required'],
       ['refetchRepository', 'a current repository refetch function is required'],
       ['refetchDecomposition', 'an authoritative decomposition refetch function is required'],
+      ['refetchParallelScanInventory', 'an authoritative parallel-scan inventory refetch function is required'],
     ]) {
       if (typeof input[name] !== 'function') return singleFailure(command, 'missing', 'needs_context', label);
     }
@@ -1212,6 +1585,7 @@ export function prepareRoleDispatch(input = {}, options = {}) {
     let readiness;
     let repository;
     let decomposition;
+    let parallelScanInventory;
     try {
       snapshot = refetchTask();
       // When a provider is supplied the capture is read from the task's own
@@ -1220,6 +1594,9 @@ export function prepareRoleDispatch(input = {}, options = {}) {
       readiness = refetchReadiness({ snapshot });
       repository = refetchRepository({ snapshot, readiness });
       decomposition = refetchDecomposition({ snapshot, readiness, repository });
+      if (decomposition?.schemaVersion === DECOMPOSITION_SCHEMA_VERSION) {
+        parallelScanInventory = refetchParallelScanInventory({ snapshot, readiness, repository, decomposition });
+      }
     } catch (error) {
       const state = typeof error?.evidenceState === 'string' ? error.evidenceState : 'missing';
       const disposition = typeof error?.disposition === 'string' ? error.disposition : 'blocked';
@@ -1261,6 +1638,26 @@ export function prepareRoleDispatch(input = {}, options = {}) {
       capabilities: options.capabilities,
       hostRoleCapabilities: options.hostRoleCapabilities,
     }, findings);
+    if (findings.length) return failure(command, findings);
+    if (decomposition?.schemaVersion === DECOMPOSITION_SCHEMA_VERSION &&
+        decomposition?.scan?.inventory?.complete === true &&
+        decomposition?.scan?.decomposition?.state === 'complete') {
+      const inventoryBinding = validateParallelScanInventoryBinding(decomposition.scan, parallelScanInventory);
+      for (const error of inventoryBinding.errors) {
+        findings.stale(error, { code: 'dispatch.packet.stale', disposition: 'superseded' });
+      }
+      // The base inventory and dependency snapshot decide readiness for the
+      // whole ready set without changing any task carrier digest, so the
+      // authoritatively refetched readiness evidence is compared with the
+      // context the scan bound - not only with the dispatched task's record.
+      const readinessBinding = validateParallelScanReadinessBinding(decomposition.scan, {
+        base: readiness?.evidence?.base,
+        dependencies: readiness?.evidence?.dependencies ?? null,
+      });
+      for (const error of readinessBinding.errors) {
+        findings.stale(error, { code: 'dispatch.packet.stale', disposition: 'superseded' });
+      }
+    }
     if (findings.length) return failure(command, findings);
     const packet = packetFromBindings({
       snapshot, activation, readiness, decomposition, assignment: boundAssignment,
@@ -1313,10 +1710,14 @@ const V3_ASSIGNMENT_FIELDS = Object.freeze([
   'attribution', 'liveness', 'cancellationBoundary', 'invocationId',
 ]);
 
+const V4_ASSIGNMENT_FIELDS = Object.freeze([...V3_ASSIGNMENT_FIELDS, 'degradedEnforcementReports']);
+
 function legacyDispatchCandidate(packet, schemaVersion) {
   const assignmentFields = schemaVersion === BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION
     ? V2_ASSIGNMENT_FIELDS
-    : V3_ASSIGNMENT_FIELDS;
+    : schemaVersion === SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION
+      ? V4_ASSIGNMENT_FIELDS
+      : V3_ASSIGNMENT_FIELDS;
   return packet?.kind === DISPATCH_PREPARATION_KIND &&
     packet?.schemaVersion === schemaVersion &&
     closedKeys(packet, DISPATCH_FIELDS) &&
@@ -1396,7 +1797,9 @@ function validateCurrentDispatchPreparation(packet, options = {}) {
     validateReadiness(packet?.readiness, {
       backend: packet?.backend, taskId: packet?.task?.id, carrier: packet?.task?.carrier, digest: packet?.task?.digest,
     }, findings);
-    validateDecomposition(packet?.decomposition, packet?.task?.id, findings);
+    validateDecompositionBinding(packet?.decomposition, packet?.task?.id, findings, {
+      allowLegacy: options.allowLegacyDecomposition === true,
+    });
     validateRepositoryBinding(packet?.repository, findings);
     if (packet?.activation?.repositoryIdentity !== targetRepositoryIdentity(packet?.repository?.worktree)) {
       findings.changed('packet activation target repository does not match dispatch repository');
@@ -1422,14 +1825,14 @@ function validateCurrentDispatchPreparation(packet, options = {}) {
 }
 
 export function validateDispatchPreparation(packet, options = {}) {
-  for (const version of [
-    BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION,
-    LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION,
-  ]) {
+  for (const version of LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSIONS) {
     if (!legacyDispatchCandidate(packet, version)) continue;
     try {
       const projected = currentProjectionOfLegacy(packet, version, options);
-      if (projected && validateCurrentDispatchPreparation(projected, options).ok) {
+      // Prior packets carry v1 decomposition evidence. `allowLegacyDecomposition`
+      // authenticates them for this classification only; it never lets that
+      // evidence authorize a dispatch.
+      if (projected && validateCurrentDispatchPreparation(projected, { ...options, allowLegacyDecomposition: true }).ok) {
         return staleDispatchVersionResult(version);
       }
     } catch {
@@ -1465,6 +1868,7 @@ export function verifyDispatchBeforeMutation(input = {}, options = {}) {
       refetchReadiness: input.refetchReadiness,
       refetchRepository: input.refetchRepository,
       refetchDecomposition: input.refetchDecomposition,
+      refetchParallelScanInventory: input.refetchParallelScanInventory,
       refetchActivation: input.refetchActivation ?? null,
       runGit: input.runGit,
       priorGateReceipts: input.priorGateReceipts ?? [],

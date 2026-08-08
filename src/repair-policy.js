@@ -117,6 +117,19 @@ export const REPAIR_POLICY = Object.freeze({
   'ready.cross_gate_identity': policy('cross_gate_identity', 'reconcile_cross_gate_identity', 'none', 'Cross-gate task identity is inconsistent.'),
   'review_audit.task_contract': policy('task_contract', 'repair_task_record', 'contract_reconciliation', 'Task record is malformed for review audit.'),
   'review_audit.failure': policy('review_audit', 'repair_review_audit', 'none', 'Review audit failed.'),
+  // Projection reconciliation and parallel-scan provenance reuse the existing
+  // repair and escalation kinds. Both report evidence facts; neither introduces
+  // a new repair capability that role declarations would have to own.
+  'projection.observation.invalid': policy('projection', 'repair_evidence', 'none', 'A backend projection observation is malformed or does not describe a canonical transition-contract fact.'),
+  'projection.carrier.not_applicable': policy('projection', 'repair_evidence', 'none', 'The observation claims a carrier the selected backend does not project.'),
+  'projection.evidence.superseded': policy('projection', 'repair_evidence', 'none', 'Projection evidence is stale or changed and is superseded rather than current.'),
+  'projection.fact.contradiction': policy('projection', 'repair_evidence', 'contract_reconciliation', 'Two current authoritative carriers report contradictory values for one fact.'),
+  'projection.authority.untyped': policy('projection', 'repair_evidence', 'none', 'An untyped carrier confers no lifecycle authority and is advisory only.'),
+  'projection.state.unexplained': policy('workspace', 'repair_review_workspace', 'contract_reconciliation', 'Observed state is unclassified drift and blocks authority-sensitive conclusions.'),
+  'parallel_scan.inventory.incomplete': policy('parallel_scan', 'repair_evidence', 'contract_reconciliation', 'The bounded work-unit task inventory is incomplete and cannot support a complete ready-set conclusion.'),
+  'parallel_scan.record.invalid': policy('parallel_scan', 'repair_evidence', 'none', 'The parallel-scan record is malformed, mis-digested, or does not account for its inventory.'),
+  'parallel_scan.evidence.stale': policy('parallel_scan', 'repair_evidence', 'none', 'The parallel-scan observation is outside its declared freshness policy.'),
+  'parallel_scan.decomposition.invalid': policy('parallel_scan', 'repair_evidence', 'contract_reconciliation', 'The decomposition source, attribution, or completeness declaration is invalid.'),
 });
 
 function policy(category, repairKind, escalationKind, description) {

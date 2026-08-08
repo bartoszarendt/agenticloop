@@ -144,17 +144,66 @@ describe('canonical Parallel Opportunity Scan policy is documented', () => {
   it('requires a current scan, independent proposal reassessment, and implementation-only ceiling', () => {
     const text = readFileSync(join(REPO_ROOT, 'skills', 'parallel-delegation', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
     assert.match(text, /Every authorized multi-task work unit.*current scan/i);
-    assert.match(text, /fewer than two ready tasks.*not currently eligible/i);
     assert.match(text, /Source plans.*inputs only/i);
     assert.match(text, /accepts, narrows, reorders, or rejects/i);
     assert.match(text, /ceiling, never a target or total-live-agent budget/i);
     assert.match(text, /Review, coordination, and integration lanes do not inherit/i);
   });
 
+  // The scan's completeness guard must precede its ready-count branches in every
+  // canonical entry point. A ready count over an inventory that was never proven
+  // complete used to be reported as an eligibility answer.
+  for (const skill of ['parallel-delegation', 'role-delegation']) {
+    it(`${skill} checks inventory completeness before ready count`, () => {
+      const text = readFileSync(join(REPO_ROOT, 'skills', skill, 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
+      const completeness = text.search(/inventory completeness before ready count/i);
+      assert.ok(completeness >= 0, 'the completeness-first rule must be stated');
+      assert.match(text, /incomplete inventory or decomposition -> `incomplete`/i);
+      assert.match(text, /never an eligibility\s+answer/i);
+      assert.match(text, /zero ready( tasks)? -> `no_eligible_work`/i);
+      assert.match(text, /one ready( task)? or no( valid)? candidate pair -> `not_currently_eligible`/i);
+      assert.match(text, /complete, fresh, fully accounted/i);
+      // The completeness guard is stated before any ready-count conclusion.
+      const firstReadyCount = Math.min(
+        ...['no_eligible_work', 'not_currently_eligible', 'parallel_candidates']
+          .map(token => text.indexOf(token))
+          .filter(index => index >= 0),
+      );
+      assert.ok(completeness < firstReadyCount, `${skill} states a ready-count conclusion before the completeness guard`);
+    });
+  }
+
+  it('documents the read-only production scan producer in both entry points', () => {
+    for (const skill of ['parallel-delegation', 'role-delegation']) {
+      const text = readFileSync(join(REPO_ROOT, 'skills', skill, 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
+      assert.match(text, /task prepare-decomposition/, skill);
+    }
+    const parallel = readFileSync(join(REPO_ROOT, 'skills', 'parallel-delegation', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
+    assert.match(parallel, /--work-unit <id> --source-ref <path> --source-revision <ref>/);
+    assert.match(parallel, /--dependencies <path>/);
+    assert.match(parallel, /derived from the authoritative enumerator's typed receipt, never declared/i);
+    const role = readFileSync(join(REPO_ROOT, 'skills', 'role-delegation', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
+    assert.match(role, /Completeness is derived by that authoritative enumeration, never asserted/i);
+    assert.match(role, /bound readiness context are refetched before dispatch/i);
+  });
+
+  it('states the corrected conclusion order in AGENTIC_LOOP.md', () => {
+    const text = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf-8').replace(/\s+/g, ' ');
+    assert.match(text, /Read inventory completeness before ready count/i);
+    assert.match(text, /inventory or decomposition incomplete -> `incomplete`/i);
+    assert.match(text, /complete inventory, zero ready tasks -> `no_eligible_work`/i);
+    assert.match(text, /complete inventory, one ready task or no valid candidate pair -> `not_currently_eligible`/i);
+    assert.match(text, /only a complete, fresh, fully accounted inventory can produce `parallel_candidates`/i);
+    // PR state is represented through review facts plus transport, not a fact.
+    assert.match(text, /There is no `pr_state` fact and none is needed/);
+    assert.match(text, /`review_readiness` and `review_verdict`/);
+  });
+
   it('requires every multi-task implementation delegation to carry the scan reference', () => {
     const text = readFileSync(join(REPO_ROOT, 'skills', 'role-delegation', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
     assert.match(text, /Parallel scan:\s+`completed - <durable reference>`/i);
     assert.match(text, /not currently eligible - <reason and rescan trigger>/i);
+    assert.match(text, /incomplete - <missing evidence and rescan trigger>/i);
     assert.match(text, /Do not delegate multi-task implementation work with the field missing/i);
   });
 });

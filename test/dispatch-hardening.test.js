@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 
 import {
   activationCaptureDisposition,
+  createDecompositionProvenance,
   createRoleReturn,
   prepareRoleDispatch,
   receiveRoleReturn,
@@ -25,6 +26,7 @@ import {
   validateRoleReturn,
   verifyDispatchBeforeMutation,
 } from '../src/dispatch-envelope.js';
+import { evaluateParallelScan, normalizeFilesTaskInventory } from '../src/parallel-scan.js';
 import {
   blockedAuthoritySignaturePayload,
   blockedResultRedelegationDigest,
@@ -61,8 +63,10 @@ import { resolveWorkflowRoleRegistry } from '../src/workflow-roles.js';
 import {
   activation,
   createDispatchFixture,
+  filesScanInventory,
   git,
   gitRunner,
+  gitTreeBaseEvidence,
   prepare,
   producerBinding,
   readyReturn,
@@ -368,6 +372,7 @@ describe('initial repository state binds the dispatch', () => {
       refetchReadiness: fixture.refetchReadiness,
       refetchRepository: fixture.refetchRepository,
       refetchDecomposition: fixture.refetchDecomposition,
+      refetchParallelScanInventory: fixture.refetchParallelScanInventory,
       runGit: fixture.runGit,
       roleId: 'engineer',
     }, fixture.options);
@@ -386,10 +391,52 @@ describe('initial repository state binds the dispatch', () => {
     git(fixture.root, ['add', '.agenticloop/tasks/T-002.md']);
     git(fixture.root, ['commit', '-m', 'record prior gate\n\nTask: T-002\nAgent: maintainer']);
 
-    const resolved = prepare(fixture, { priorGateReceipts: [receipt], readCarrierDigest: relPath => {
+    const taskEntries = ['T-001', 'T-002'].map(taskId => ({
+      carrier: `.agenticloop/tasks/${taskId}.md`,
+      content: readFileSync(join(fixture.root, '.agenticloop', 'tasks', `${taskId}.md`), 'utf8'),
+      readError: null,
+    }));
+    const observedAt = new Date().toISOString();
+    const currentInventory = filesScanInventory('files:.agenticloop/tasks', taskEntries, observedAt);
+    // The scan must bind the same base the dispatch boundary refetches; a
+    // different tree is exactly the staleness this binding now reports.
+    const base = gitTreeBaseEvidence(
+      fixture.root,
+      fixture.readiness.evidence.base.identity.slice('git-tree:'.length),
+    );
+    const scanned = evaluateParallelScan({
+      workUnit: { id: fixture.decomposition.scan.workUnit.id, backend: 'files' },
+      inventory: currentInventory,
+      decomposition: {
+        source: 'task-decomposition',
+        sourceRef: fixture.decomposition.sourceRef,
+        revision: `git-commit:${git(fixture.root, ['rev-parse', 'HEAD'])}`,
+        declaredCompleteness: 'complete',
+        attribution: 'maintainer',
+      },
+      observedAt,
+      freshnessPolicy: { maxAgeSeconds: 3600 },
+      basePaths: base.paths,
+      dependencies: {},
+      readinessContext: { base: base.evidence, dependencies: fixture.readiness.evidence.dependencies },
+      rescanTrigger: fixture.decomposition.scan.rescanTrigger,
+    });
+    assert.equal(scanned.scan.inventory.complete, true, scanned.result.errors.join('\n'));
+    const currentDecomposition = createDecompositionProvenance({
+      taskId: 'T-001',
+      scan: scanned.scan,
+      route: 'serial',
+      sourceRef: fixture.decomposition.sourceRef,
+    });
+
+    const resolved = prepare(fixture, {
+      refetchDecomposition: () => currentDecomposition,
+      refetchParallelScanInventory: () => currentInventory,
+      priorGateReceipts: [receipt], readCarrierDigest: relPath => {
       const digestPath = join(fixture.root, relPath);
       return `sha256:${sha256Hex(readFileSync(digestPath, 'utf8'))}`;
-    } });
+      },
+    });
     assert.equal(resolved.ok, true, resolved.validation.errors?.join('\n'));
     assert.deepEqual(resolved.packet.repository.cleanState.priorGates, [{
       taskId: 'T-002',
