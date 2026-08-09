@@ -1199,8 +1199,42 @@ describe('packed package smoke tests', () => {
     assert.match(prompt, /advisory only/i);
     assert.match(prompt, /never be serialized as activation proof/i);
 
+    // Every generated activation surface stays fail-closed *and* routes the
+    // operator to the exact plugin-free command. The two properties travel
+    // together: an artifact that only blocked would make the toolkit unusable,
+    // and one that offered a shortcut would make the block meaningless.
+    const opencodeCommand = readFileSync(join(target, '.opencode', 'commands', 'agenticloop.md'), 'utf8');
+    assert.match(opencodeCommand, /Activation adapter: `opencode\.command\.positional\.v1`\./);
+    assert.match(opencodeCommand, /Activation capture capability: `unsupported`\./);
+    assert.match(opencodeCommand, /npx agenticloop activate T-016 T-017/);
+    assert.match(opencodeCommand, /outside the agent session|in the operator's own terminal/i);
+    assert.match(opencodeCommand, /operator_confirmed/);
+    assert.match(opencodeCommand, /session_reported/);
+    assert.match(opencodeCommand, /not host-authenticated/i);
+    assert.doesNotMatch(opencodeCommand, /\$ARGUMENTS|\$1|\$2/);
+    assert.deepEqual(slots.validateFilledAdapterSlots(opencodeCommand, '.opencode/commands/agenticloop.md'), []);
+
     const validated = runPacked(['validate', '--target', target]);
     assert.equal(validated.status, 0, `${validated.stdout}\n${validated.stderr}`);
+  });
+
+  it('ships the activation and host-trust commands in the packed CLI', () => {
+    for (const path of ['src/activation-cli.js', 'src/activation-grant.js', 'src/activation-store.js',
+      'src/activation-trust.js', 'src/activation-policy.js', 'src/activation-resolution.js',
+      'src/host-trust-cli.js']) {
+      assert.ok(existsSync(join(packedRoot, ...path.split('/'))), `${path} must be shipped`);
+    }
+    const help = runPacked(['help', 'activate']);
+    assert.equal(help.status, 0, help.stderr);
+    assert.match(help.stdout, /npx agenticloop activate T-016 T-017/);
+    assert.match(help.stdout, /no --yes flag/i);
+
+    // The packed CLI refuses this grade non-interactively, from a real process.
+    const target = mkdtempSync(join(tmpBase, 'packed-activate-'));
+    const refused = runPacked(['activate', 'T-001', '--target', target, '--json']);
+    assert.equal(refused.status, 1);
+    assert.doesNotMatch(refused.stdout, /"grantId":\s*"grant:/);
+    assert.equal(existsSync(join(target, '.agenticloop', 'activations')), false);
   });
 
   it('ships docs/cli-reference.md', () => {
@@ -1248,6 +1282,23 @@ describe('packed package smoke tests', () => {
       'assert.equal(typeof receipts.AUDITOR_RECEIPT_MAX_VALIDITY_MS, "number");',
       'assert.equal(typeof trust.HOST_TRUST_CHALLENGE_TTL_MS, "number");',
       'assert.equal(typeof trust.HOST_SIGNATURE_BYTE_LENGTH, "number");',
+      '// Universal activation: the grant/binding contract and the policy model.',
+      'const grants = await import("agenticloop/activation-grant");',
+      'assert.equal(typeof grants.createActivationGrant, "function");',
+      'assert.equal(typeof grants.createTaskActivationBinding, "function");',
+      'assert.equal(typeof grants.resolveTaskActivationBinding, "function");',
+      'assert.deepEqual([...grants.ACTIVATION_ASSURANCE_ORDER], ["operator_confirmed", "host_signed"]);',
+      'assert.deepEqual([...grants.RETURN_ASSURANCE_ORDER], ["session_reported", "host_receipt"]);',
+      'assert.match(grants.ACTIVATION_ASSURANCE_LIMITATIONS.operator_confirmed, /not an isolated host signer/);',
+      'assert.match(grants.RETURN_ASSURANCE_LIMITATIONS.session_reported, /NOT host-authenticated/);',
+      '// The packaged module exposes no signing entry point of its own.',
+      'assert.equal(grants.signActivationGrant, undefined);',
+      'const policy = await import("agenticloop/activation-policy");',
+      'assert.deepEqual(policy.MODE_MINIMUMS.standard, { activation: "operator_confirmed", return: "session_reported" });',
+      'assert.deepEqual(policy.MODE_MINIMUMS.hardened, { activation: "host_signed", return: "host_receipt" });',
+      'assert.equal(typeof policy.resolveActivationPolicy, "function");',
+      'const deepStore = await import("agenticloop/src/activation-store.js");',
+      'assert.equal(deepStore.ACTIVATION_STORE_ROOT, ".agenticloop/activations");',
       '// The shipped reference host integration for the protected boundary.',
       'const boundary = await import("agenticloop/protected-host-boundary");',
       'assert.equal(typeof boundary.loadProtectedAuditorReturnVerifier, "function");',
@@ -1895,7 +1946,7 @@ describe('packed audit, closeout, and improvement flows', () => {
    */
   const DISPATCH_PACKET_BUDGET_BYTES = 16_384;
 
-  it('keeps a real installed schema-v5 packet inside the canonical byte budget', async () => {
+  it('keeps a real installed current-schema packet inside the canonical byte budget', async () => {
     const envelope = await import(pathToFileURL(join(packedRoot, 'src', 'dispatch-envelope.js')).href);
     const canonical = await import(pathToFileURL(join(packedRoot, 'src', 'canonical-json.js')).href);
     // A stable, realistically sized target directory name, so the measurement
@@ -1934,7 +1985,7 @@ describe('packed audit, closeout, and improvement flows', () => {
     // A real current packet from installed code, not a synthetic stand-in.
     assert.equal(packet.kind, 'agenticloop.role-preparation');
     assert.equal(packet.schemaVersion, envelope.DISPATCH_PREPARATION_SCHEMA_VERSION);
-    assert.equal(packet.schemaVersion, 5);
+    assert.equal(packet.schemaVersion, 6);
     const validated = envelope.validateDispatchPreparation(packet, { capabilities: fixture.trust.capabilities });
     assert.equal(validated.ok, true, JSON.stringify(validated.findings ?? validated.errors ?? null));
 
@@ -1955,7 +2006,7 @@ describe('packed audit, closeout, and improvement flows', () => {
     writeFileSync(packetBudget.path, JSON.stringify(packet), 'utf8');
   });
 
-  it('classifies an installed schema-v5 packet carrying canonical v3 degraded reports as typed stale', async () => {
+  it('classifies an installed current-schema packet carrying canonical v3 degraded reports as typed stale', async () => {
     assert.ok(packetBudget, 'the real installed packet must be prepared first');
     const envelope = await import(pathToFileURL(join(packedRoot, 'src', 'dispatch-envelope.js')).href);
     const legacy = structuredClone(packetBudget.packet);
@@ -1983,7 +2034,7 @@ describe('packed audit, closeout, and improvement flows', () => {
     const scriptPath = join(packedRoot, 'scripts', 'measure-dispatch-context.mjs');
     assert.ok(existsSync(scriptPath), 'packed package must ship scripts/measure-dispatch-context.mjs');
     assert.ok(packetBudget, 'the real installed packet must be measured first');
-    // The measurement runs against the real corrected schema-v5 packet, not a
+    // The measurement runs against the real corrected current-schema packet, not a
     // synthetic stand-in, so `canonical_packet` reports the bytes a role
     // invocation actually carries.
     const packetPath = packetBudget.path;

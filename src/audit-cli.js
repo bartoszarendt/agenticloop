@@ -68,6 +68,12 @@ import {
 import { createLocalVerificationContext } from './verification-context.js';
 import { fetchGitHubTaskInventory, resolveGhRunner } from './closeout-github.js';
 import { resolveCoveredGitHubTask } from './github-task-identity.js';
+import { ACTIVATION_ASSURANCE_LIMITATIONS } from './activation-grant.js';
+import {
+  loadTaskActivationEvidence,
+  resolveEffectiveActivationPolicy,
+} from './activation-resolution.js';
+import { loadHostTrustStore } from './host-trust.js';
 
 // Memory safety valve for the stdin reader, not a report-size policy: a valid
 // report is never rejected for ordinary size.
@@ -229,6 +235,91 @@ function auditInvocationReuseErrors(target, incoming) {
  * @param {string} [repair]
  * @param {ReturnType<typeof createIo>} io
  */
+/**
+ * Report both assurance dimensions beside an audit gate result.
+ *
+ * This is a report, not a gate: the composite closeout gate owns the decision.
+ * The activation grade per covered task is read from durable records; the
+ * return ceiling is derived from the operator-pinned host trust store, so no
+ * role claim can inflate it. A resolution failure is reported as unknown
+ * rather than assumed favourable.
+ */
+function auditAssuranceReport(target, io, config, coveredTasks) {
+  const tasks = normalizeCoveredTasks(coveredTasks ?? []);
+  const backend = String(config?.task_backend ?? 'files') === 'github' ? 'github' : 'files';
+  let policy;
+  try {
+    policy = resolveEffectiveActivationPolicy(target, io);
+  } catch (error) {
+    return {
+      mode: null,
+      policy_source: 'unresolved',
+      error: error.publicMessage ?? error.message,
+      tasks: [],
+      limitations: ['activation and return assurance could not be evaluated'],
+    };
+  }
+  let returnCapability = 'no authenticated returnReceipt adapter is currently available';
+  try {
+    const store = loadHostTrustStore(target, {
+      operatorTrustRoot: io?.operatorTrustRoot ?? undefined,
+      protectedBoundary: io?.hostAuthority ?? undefined,
+    });
+    if (store.ok && Object.values(store.adapters).some(adapter => adapter.capabilities?.returnReceipt === 'supported')) {
+      returnCapability = 'an authenticated returnReceipt adapter is available (capability only; no return event is implied)';
+    }
+  } catch {
+    returnCapability = 'operator host trust could not be loaded';
+  }
+  const taskReport = tasks.map(taskId => {
+    let evidence = null;
+    try {
+      evidence = loadTaskActivationEvidence(target, { backend, taskId });
+    } catch (error) {
+      return { task_id: taskId, activation: null, note: error.publicMessage ?? error.message };
+    }
+    if (!evidence) return { task_id: taskId, activation: null, note: 'no activation grant recorded' };
+    return {
+      task_id: taskId,
+      activation: evidence.binding?.assurance ?? null,
+      activation_producer: evidence.grant?.producer?.id ?? null,
+      activation_channel: evidence.grant?.producer?.channel ?? null,
+      binding_derivation: evidence.binding?.derivation ?? null,
+      note: null,
+    };
+  });
+  const limitations = [];
+  for (const entry of taskReport) {
+    const limitation = ACTIVATION_ASSURANCE_LIMITATIONS[entry.activation];
+    if (limitation && !limitations.includes(limitation)) limitations.push(limitation);
+  }
+  limitations.push(returnCapability);
+  return {
+    mode: policy.mode,
+    policy_source: policy.source,
+    minimum_activation: policy.minimumActivation,
+    minimum_return: policy.minimumReturn,
+    return_capability_limitation: returnCapability,
+    tasks: taskReport,
+    limitations,
+  };
+}
+
+function printAuditAssurance(assurance, io) {
+  if (!assurance) return;
+  io.out(`  assurance mode: ${assurance.mode ?? 'unresolved'} (policy source: ${assurance.policy_source})`);
+  if (assurance.error) {
+    io.out(`    ${assurance.error}`);
+    return;
+  }
+  io.out(`    minimum activation: ${assurance.minimum_activation}; minimum return: ${assurance.minimum_return}`);
+  io.out(`    return capability limitation: ${assurance.return_capability_limitation}`);
+  for (const task of assurance.tasks) {
+    io.out(`    ${task.task_id}: activation ${task.activation ?? 'unknown'}${task.note ? ` (${task.note})` : ''}`);
+  }
+  for (const limitation of assurance.limitations) io.out(`    note: ${limitation}`);
+}
+
 function printMutationErrors(errors, repair, io) {
   for (const error of errors) io.err(error);
   if (repair) io.err(`repair: ${repair}`);
@@ -953,13 +1044,20 @@ export async function cmdAudit(args, io = createIo()) {
           ? { taskStatus: taskId => filesTaskStatus(target, config, taskId) }
           : { taskStatus: gateOptions.taskStatus }),
       });
+      // The audit gate is the audit-only subset closeout composes, so it
+      // reports the same two assurance dimensions rather than leaving them to
+      // be discovered at the closeout boundary. It never gates on them: the
+      // composite closeout gate owns that decision.
+      const assurance = auditAssuranceReport(target, io, config, selected?.record?.coveredTasks ?? []);
       if (opts.json) {
-        io.out(JSON.stringify(result, null, 2));
+        io.out(JSON.stringify({ ...result, assurance }, null, 2));
       } else if (result.allowed) {
         io.out(`${identity.canonical}: closeout audit gate passed${result.optOut ? ' (disabled by project policy)' : ''}`);
+        printAuditAssurance(assurance, io);
       } else {
         io.out(`${identity.canonical}: closeout audit gate failed (${result.state})`);
         for (const reason of result.reasons) io.out(`  - ${reason}`);
+        printAuditAssurance(assurance, io);
       }
       return result.allowed ? 0 : 1;
     }

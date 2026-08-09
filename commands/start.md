@@ -17,9 +17,34 @@ into activation capture JSON.
 <!-- /AGENTICLOOP_ADAPTER_SLOT:activation_capability -->
 
 Each generated host artifact replaces the capability slot above with its own
-adapter's declaration. When activation capture is `unsupported`, report that
-typed blocked result and stop before activation-bound task authoring or role
-dispatch. Prompt-visible input must never be converted into capture JSON.
+adapter's declaration. Every shipped host declares `unsupported`, and that never
+changes from inside a session: prompt-visible input must never be converted into
+capture JSON.
+
+`unsupported` is not the end of the workflow. It only means this host cannot
+*itself* prove activation. The universal path is one explicit operator action
+outside the agent session:
+
+```
+npx agenticloop activate T-016 T-017
+npx agenticloop activate --work-unit <work-unit-id>
+```
+
+That command runs in the operator's own terminal, shows the exact tasks,
+carriers, contract digests, repository, work unit, and resulting assurance, and
+requires the operator to type a confirmation. It never rewrites a task record,
+so existing task ids, bodies, history, and decomposition state are preserved.
+
+When a task you need is not activated, do not stop the session and do not
+attempt to author activation evidence. Report the blocked activation state, tell
+the operator the exact command above, and continue in the same project and
+session once they have run it. Activation assurance is then
+`operator_confirmed` and role returns are `session_reported` - honest grades
+that are not host-authenticated and must never be described as if they were.
+Hardened projects still require a registered protected host adapter.
+Activation and return adapters are independent, and capability declarations are
+not evidence that either event occurred. Hardened closeout requires an observed
+authenticated host receipt.
 
 Before any setup check, orientation, document loading, task selection, or
 delegation, normalize the supplied argument by trimming surrounding whitespace.

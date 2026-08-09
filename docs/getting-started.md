@@ -325,11 +325,12 @@ On the setup edit path, choose the task-ID convention from the numbered
 selector. Presets write the human-readable pattern and regex together so they
 cannot drift. The custom option requires an anchored regex and a safe matching
 example. Automatic allocation currently supports only the recommended
-`T-###` convention. For other conventions, create non-activated Markdown with
-`agenticloop task new "Title" --scaffold --id <TASK-ID>`, or pass the same
-explicit ID with `--activation-input <host-capture.json>` when a supported
-host-produced v2 capture exists. No shipped adapter currently supplies that
-supported capture path.
+`T-###` convention. For other conventions, create the task with
+`agenticloop task new "Title" --scaffold --id <TASK-ID>` and then authorize it
+with `npx agenticloop activate <TASK-ID>`. Passing
+`--activation-input <host-capture.json>` at creation remains available for a
+protected host integration that produces a supported v2 capture; no shipped
+adapter supplies one.
 
 Document roles are typed: `rules`, `plan`, `overview`, `process`, `spec`,
 `design`, `context`, and `history`.
@@ -499,6 +500,83 @@ older targets and should be removed when `.agenticloop/project.md` exists.
    in Copilot IDE prompt-file surfaces, use the generated `agenticloop` prompt
    file. For Cursor, invoke `/agenticloop` in Cursor Agent chat. For other
    hosts, ask it to use Agentic Loop.
+
+## Activating tasks for dispatch
+
+Agentic Loop separates *asking an agent to work on a task* from *authorizing
+that work*. No host can prove the second from inside a session: every shipped
+adapter's request text is model-visible, so it declares activation capture
+`unsupported`, permanently.
+
+The universal path is one explicit command in your own terminal, outside the
+agent session:
+
+```text
+/agenticloop T-016 T-017                  # in the agent, as usual
+
+npx agenticloop activate T-016 T-017      # once, in your terminal
+```
+
+`activate` prints the exact tasks, carriers, contract digests, repository, work
+unit, and resulting assurance, then asks you to type `activate` to confirm.
+After that the tasks are eligible for dispatch if every other gate passes, and
+you continue in the same project and session.
+
+It works on every host, with no plugin. It requires a real interactive terminal
+and refuses to run under CI; there is no `--yes` flag, because that would let an
+agent authorize its own work.
+
+Other forms:
+
+```text
+npx agenticloop activate --work-unit phase:4   # the committed decomposition's ready set
+npx agenticloop activation status              # what is activated and still usable
+npx agenticloop activation revoke grant:<uuid>
+```
+
+### Migrating an existing project
+
+Nothing needs to be recreated. Point `activate` at the task ids you already
+have:
+
+```text
+npx agenticloop activate T-016 T-017
+```
+
+Task ids, bodies, history, decomposition state, and repository state are all
+preserved. A scaffold task created with `task new --scaffold` becomes
+dispatchable the same way. Existing tasks that already carry
+`activation_input_digest` and `activation_capture_ref` keep working unchanged.
+
+After dispatch, run `task verify-return`. Standard mode can persist an observed
+`session_reported` return without a plugin; hardened mode requires the
+independently packet-bound protected return adapter and an authenticated host
+receipt. Capability registration alone is not evidence that a return occurred.
+
+Old work units completed before activation assurance do not pass through silent
+missing evidence. In standard mode, `closeout prepare --legacy-unactivated
+--legacy-reason <text>` creates or reuses one interactive, short-lived signed
+waiver bound to the repository, work unit, covered tasks, and current contract
+digests. It makes no activation claim. Hardened mode rejects it.
+
+### What you are told about assurance
+
+Dispatch and closeout output states both grades plainly, for example:
+
+```text
+activation: operator_confirmed
+return:     session_reported
+```
+
+`operator_confirmed` means a human at this terminal confirmed the exact scope.
+`session_reported` means a role result was schema-checked and revalidated
+against refetched repository evidence, but the producing role identity was not
+host-authenticated. Neither is cryptographically host-authenticated, and no
+output will tell you otherwise.
+
+To require the stronger grades, register a protected host adapter
+(`npx agenticloop host-trust register ...`) and set hardened mode. See
+[Host Adapters](host-adapters.md#universal-activation).
 
 Recommended prompt for hosts without command activation:
 

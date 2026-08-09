@@ -26,6 +26,19 @@ let tmpDir;
 before(() => { tmpDir = mkdtempSync(join(tmpdir(), 'al-closeout-gh-')); });
 after(() => { rmSync(tmpDir, { recursive: true, force: true }); });
 
+function legacyOptions(ghCommandRunner) {
+  return {
+    ghCommandRunner,
+    operatorActivationRoot: join(tmpDir, 'operator-activation'),
+    stdinIsTTY: true, isTTY: true, ci: false,
+    promptFactory: () => ({ ask: async () => 'waive', close() {} }),
+  };
+}
+
+function legacyPrepareArgs(args) {
+  return [...args, '--legacy-unactivated', '--legacy-reason', 'historical unactivated GitHub closeout fixture'];
+}
+
 function issue(number, { state = 'OPEN', title = '', body = '', labels = [] } = {}) {
   return { number, state, title, body, labels: labels.map(name => ({ name })) };
 }
@@ -46,7 +59,7 @@ function coveredTaskBody(status = 'accepted') {
     '## Scope', 'One work unit.', '',
     '## Out of Scope', 'Everything else.', '',
     '## Acceptance Criteria', '- accepted', '',
-    '## Required Checks', '- npm test', '',
+    '## Required Checks', '- [RC-1] command: `npm test`', '',
     '## Expected Files or Areas', '- src/', '',
     '## Implementation Notes', 'none', '',
     '## Completion Summary Template', 'Use the template.', '',
@@ -143,7 +156,7 @@ describe('terminal PR lifecycle', () => {
   const full = 'a'.repeat(40);
 
   function lifecycleRunner({ closingRefs = [{ number: 5 }], pr = null, issues = null } = {}) {
-    const issueList = issues ?? [issue(1, { state: 'CLOSED', body: '---\ntask_id: T-001\n---\n' })];
+    const issueList = issues ?? [issue(1, { state: 'CLOSED', body: coveredTaskBody('closed') })];
     const prData = pr ?? {
       number: 5,
       state: 'MERGED',
@@ -157,8 +170,13 @@ describe('terminal PR lifecycle', () => {
     return (command, args) => {
       if (args[0] === 'issue' && args[1] === 'list') return { status: 0, stdout: JSON.stringify(issueList), stderr: '' };
       if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify({ login: 'loop' }), stderr: '' };
+      if (args[0] === 'api') return { status: 0, stdout: JSON.stringify([[]]), stderr: '' };
+      if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'example/repo' }), stderr: '' };
       if (args[0] === 'issue' && args[1] === 'view' && args.includes('closedByPullRequestsReferences')) {
         return { status: 0, stdout: JSON.stringify({ closedByPullRequestsReferences: closingRefs }), stderr: '' };
+      }
+      if (args[0] === 'issue' && args[1] === 'view' && String(args[args.indexOf('--json') + 1] ?? '').includes('body')) {
+        return { status: 0, stdout: JSON.stringify({ number: 1, body: issueList[0].body }), stderr: '' };
       }
       if (args[0] === 'issue' && args[1] === 'view') return { status: 0, stdout: JSON.stringify({ comments: [], updatedAt: 'now' }), stderr: '' };
       if (args[0] === 'pr' && args[1] === 'view') return { status: 0, stdout: JSON.stringify(prData), stderr: '' };
@@ -170,8 +188,9 @@ describe('terminal PR lifecycle', () => {
     const target = makeLifecycleTarget(name);
     const result = await runCliInProcess([
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
-      '--artifact', `commit:${full}`, '--json', '--target', target,
-    ], { ghCommandRunner: runner });
+      '--artifact', `commit:${full}`, '--json', '--legacy-unactivated',
+      '--legacy-reason', 'historical unactivated GitHub lifecycle fixture', '--target', target,
+    ], legacyOptions(runner));
     return result;
   }
 
@@ -519,14 +538,14 @@ describe('github closeout evaluation', () => {
       return { status: 1, stdout: '', stderr: `unexpected ${args.join(' ')}` };
     };
     const packetPath = join(target, '.agenticloop', 'tmp', 'github-packet.json');
-    const prepared = await runCliInProcess([
+    const prepared = await runCliInProcess(legacyPrepareArgs([
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
       '--artifact', `commit:${full}`, '--output', packetPath, '--target', target,
-    ], { ghCommandRunner: runner });
+    ]), legacyOptions(runner));
     assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
     const recorded = await runCliInProcess([
       'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
-    ], { ghCommandRunner: runner });
+    ], legacyOptions(runner));
     assert.equal(recorded.status, 0, `${recorded.stdout}${recorded.stderr}`);
     assert.equal(comments.length, 1);
     // The canonical closeout-owned terminal transition reaches `closed`.
@@ -535,7 +554,7 @@ describe('github closeout evaluation', () => {
     (await import('node:fs')).unlinkSync(packetPath);
     const status = await runCliInProcess([
       'closeout', 'status', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001', '--target', target,
-    ], { ghCommandRunner: runner });
+    ], legacyOptions(runner));
     assert.equal(status.status, 0, `${status.stdout}${status.stderr}`);
     assert.match(status.stdout, /complete \(current\)/);
   });
@@ -545,15 +564,15 @@ describe('github closeout evaluation', () => {
     mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
     const harness = closeoutHarness({ publishVisible: false });
     const packetPath = join(target, '.agenticloop', 'tmp', 'github-packet.json');
-    const prepared = await runCliInProcess([
+    const prepared = await runCliInProcess(legacyPrepareArgs([
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
       '--artifact', `commit:${harness.full}`, '--output', packetPath, '--target', target,
-    ], { ghCommandRunner: harness.runner });
+    ]), legacyOptions(harness.runner));
     assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
     harness.state.recording = true;
     const recorded = await runCliInProcess([
       'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
-    ], { ghCommandRunner: harness.runner });
+    ], legacyOptions(harness.runner));
     assert.equal(recorded.status, 1);
     assert.match(recorded.stderr, /not the unique current packet/);
     assert.equal(harness.state.postAttempts, 1);
@@ -566,15 +585,15 @@ describe('github closeout evaluation', () => {
     mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
     const harness = closeoutHarness({ conflictOnFinalRead: true });
     const packetPath = join(target, '.agenticloop', 'tmp', 'github-packet.json');
-    const prepared = await runCliInProcess([
+    const prepared = await runCliInProcess(legacyPrepareArgs([
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
       '--artifact', `commit:${harness.full}`, '--output', packetPath, '--target', target,
-    ], { ghCommandRunner: harness.runner });
+    ]), legacyOptions(harness.runner));
     assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
     harness.state.recording = true;
     const recorded = await runCliInProcess([
       'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
-    ], { ghCommandRunner: harness.runner });
+    ], legacyOptions(harness.runner));
     assert.equal(recorded.status, 1);
     assert.match(recorded.stderr, /marker carrier changed after final evaluation/);
     assert.equal(harness.state.postAttempts, 0);
@@ -602,12 +621,17 @@ describe('github closeout evaluation', () => {
       if (args[0] === 'issue' && args[1] === 'list') {
         inventoryReads += 1;
         return { status: 0, stdout: JSON.stringify([issue(1, {
-          state: inventoryReads >= 3 ? 'OPEN' : 'CLOSED', body: '---\ntask_id: T-001\n---\n',
+          state: inventoryReads >= 3 ? 'OPEN' : 'CLOSED', body: coveredTaskBody('accepted'),
         })]), stderr: '' };
       }
       if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify({ login: 'loop' }), stderr: '' };
+      if (args[0] === 'api') return { status: 0, stdout: JSON.stringify([[]]), stderr: '' };
+      if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'example/repo' }), stderr: '' };
       if (args[0] === 'issue' && args[1] === 'view' && args.includes('closedByPullRequestsReferences')) {
         return { status: 0, stdout: JSON.stringify({ closedByPullRequestsReferences: [{ number: 5 }] }), stderr: '' };
+      }
+      if (args[0] === 'issue' && args[1] === 'view' && String(args[args.indexOf('--json') + 1] ?? '').includes('body')) {
+        return { status: 0, stdout: JSON.stringify({ number: 1, body: coveredTaskBody('accepted') }), stderr: '' };
       }
       if (args[0] === 'issue' && args[1] === 'view') return { status: 0, stdout: JSON.stringify({ comments, updatedAt: 'now' }), stderr: '' };
       if (args[0] === 'pr' && args[1] === 'view') return { status: 0, stdout: JSON.stringify(mergedPr), stderr: '' };
@@ -615,13 +639,13 @@ describe('github closeout evaluation', () => {
       return { status: 1, stdout: '', stderr: `unexpected ${args.join(' ')}` };
     };
     const packetPath = join(target, '.agenticloop', 'tmp', 'github-packet.json');
-    assert.equal((await runCliInProcess([
+    assert.equal((await runCliInProcess(legacyPrepareArgs([
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
       '--artifact', `commit:${full}`, '--output', packetPath, '--target', target,
-    ], { ghCommandRunner: runner })).status, 0);
+    ]), legacyOptions(runner))).status, 0);
     const recorded = await runCliInProcess([
       'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
-    ], { ghCommandRunner: runner });
+    ], legacyOptions(runner));
     assert.equal(recorded.status, 1);
     assert.match(recorded.stderr, /GitHub state changed/);
     assert.deepEqual(comments, []);

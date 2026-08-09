@@ -98,20 +98,41 @@ generated `.opencode/agents/*.md` file disagrees with
 `adapters.opencode.roleSettings` in `agenticloop.json`, the doctor output
 reports the stale roles and suggests `agenticloop update --adapter opencode`.
 
-The generated command currently reports activation capture as `unsupported` and
-stops before task authoring. OpenCode documents positional arguments as prompt
-template substitutions, not a lossless parser-owned byte artifact, so the command
-does not expose `$ARGUMENTS`, `$1`, or `$2` as activation proof and never asks the
-model to construct a capture JSON file. It remains a safe orientation/blocked
-capability surface until a separately proven adapter-owned capture producer and
-protected host-authority boundary exist. It is not a supported live dispatch
-path.
+The generated command reports activation capture as `unsupported`, permanently.
+OpenCode documents positional arguments as prompt template substitutions, not a
+lossless parser-owned byte artifact, so the command does not expose
+`$ARGUMENTS`, `$1`, or `$2` as activation proof and never asks the model to
+construct a capture JSON file. Shell interpolation, permission prompts, and
+model-authored artifacts are equally not proof.
+
+**You do not need an OpenCode plugin to use Agentic Loop.** When a task needs
+activation, run one command in your own terminal, outside the agent session:
+
+```text
+npx agenticloop activate T-016 T-017
+```
+
+Then continue in the same OpenCode project and session. Activation assurance is
+`operator_confirmed` and role returns are `session_reported`; both are reported
+truthfully everywhere and neither is described as host-authenticated. Existing
+tasks and projects do not need to be recreated. See
+[Universal activation](host-adapters.md#universal-activation).
+
+No OpenCode plugin is required for this standard workflow. Hardened mode instead
+requires an isolated signer and an independently bound protected return adapter
+that produces an actually observed authenticated receipt. Positional command
+substitution remains unsupported and unpromotable.
+
+A future `opencode.command.before.v1` integration could automate this and raise
+assurance to `host_signed`, but only with an isolated signer outside the agent
+process. See
+[Optional future OpenCode integration](host-adapters.md#optional-future-opencode-integration).
 
 Apart from that activation boundary, the command body tells OpenCode to:
 
 1. read `.agenticloop/project.md` first and stop for setup/profile confirmation when setup is unconfirmed or `development_stage` is not human-confirmed
 2. follow `agenticloop/AGENTIC_LOOP.md` plus the canonical role contracts in `agenticloop/agents/`
-3. report the typed capture limitation before creating or refining a durable task record
+3. report the typed capture limitation and the exact `npx agenticloop activate` command before creating or refining a durable task record
 4. route task-record, review, acceptance, and closeout work through maintainer
 5. route scoped implementation and revision work through engineer
 

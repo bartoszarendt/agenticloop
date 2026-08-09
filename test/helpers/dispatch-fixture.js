@@ -130,16 +130,24 @@ function canonicalReadiness(raw) {
  * @param {string} name  Distinct fixture name.
  */
 export async function createDispatchFixture(temp, name, options = {}) {
+  // `scaffold: true` builds the same project without any legacy activation
+  // provenance: the task is authored as a plain scaffold record, exactly like a
+  // project that predates activation or was created with `task new --scaffold`.
+  const scaffold = options.scaffold === true;
   const root = mkdtempSync(join(temp, `${name}-`));
   createTaskProjectFixture(root);
   const trust = createTestHostTrust({ target: root });
   const operatorTrustRoot = join(temp, `${name}-operator-trust`);
-  const trustStorePath = writeHostTrustStore(operatorTrustRoot, trust);
+  const trustStorePath = scaffold
+    ? writeHostTrustStore(join(temp, `${name}-unused-trust`), trust)
+    : writeHostTrustStore(operatorTrustRoot, trust);
   mkdirSync(join(root, 'src'), { recursive: true });
   writeFileSync(join(root, 'src', 'existing.js'), 'export const current = true;\n', 'utf8');
-  const capture = activation(trust);
-  mkdirSync(join(root, '.agenticloop', 'activation'), { recursive: true });
-  writeFileSync(join(root, ACTIVATION_CARRIER), JSON.stringify(capture, null, 2), 'utf8');
+  const capture = scaffold ? null : activation(trust);
+  if (capture) {
+    mkdirSync(join(root, '.agenticloop', 'activation'), { recursive: true });
+    writeFileSync(join(root, ACTIVATION_CARRIER), JSON.stringify(capture, null, 2), 'utf8');
+  }
   const taskPath = join(root, '.agenticloop', 'tasks', 'T-001.md');
   let body = readFileSync(join(root, 'agenticloop', 'memory', 'task-record.md'), 'utf8')
     .replaceAll('Short Task Title', 'Dispatch envelope fixture')
@@ -148,11 +156,13 @@ export async function createDispatchFixture(temp, name, options = {}) {
     .replace(
       '- [RC-2] manual: Inspect the final state against the task acceptance criteria.',
       '- [RC-2] command: `npm run typecheck`'
-    )
-    .replace(
+    );
+  if (capture) {
+    body = body.replace(
       'status: agent-ready',
       `status: agent-ready\nactivation_input_digest: ${capture.normalizedActivationDigest}\nactivation_capture_ref: ${ACTIVATION_CARRIER}`
     );
+  }
   if (typeof options.requiredChecksText === 'string') {
     body = body.replace(
       '- [RC-1] command: `npm test`\n- [RC-2] command: `npm run typecheck`',
@@ -160,7 +170,7 @@ export async function createDispatchFixture(temp, name, options = {}) {
     );
   }
   writeFileSync(taskPath, body, 'utf8');
-  git(root, ['add', 'src', '.agenticloop/tasks', '.agenticloop/activation']);
+  git(root, ['add', 'src', '.agenticloop/tasks', ...(capture ? ['.agenticloop/activation'] : [])]);
   git(root, ['commit', '-m', 'task fixture']);
   git(root, ['branch', '-M', 'task/T-001']);
   const baseline = await runCliInProcess([
@@ -288,7 +298,10 @@ export async function createDispatchFixture(temp, name, options = {}) {
     cancellationBoundary: 'return_on_cancellation',
   };
   return {
-    root, taskPath, trust, operatorTrustRoot, trustStorePath, options: { capabilities: trust.capabilities },
+    root, taskPath, trust, operatorTrustRoot, trustStorePath, options: {
+      capabilities: trust.capabilities,
+      returnAdapter: { adapterId: trust.adapterId, keyId: trust.keyId, capability: 'returnReceipt' },
+    },
     activation: capture, snapshot, refetchTask: snapshot,
     repository, refetchRepository: repository,
     runGit: gitRunner(root),

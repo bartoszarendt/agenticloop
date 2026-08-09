@@ -311,11 +311,100 @@ fill the shared activation slots with a stable adapter ID and the typed
 capability `unsupported`. Their request text is model-visible and does not
 establish a lossless parser-owned byte artifact. Generated activation surfaces
 therefore contain no `$ARGUMENTS`, `$1`, or `$2` capture claims, never ask a
-model to create capture JSON, and block before activation-bound task authoring.
-No shipped configuration currently provides a supported live dispatch path.
-This is an intentional fail-closed state, not successful live-host support.
+model to create capture JSON, and never grant activation from inside a session.
+This is an intentional fail-closed state and it does not change.
 
-An adapter with a future proven parser-owned capture producer may issue a verified
+### `agenticloop activate`
+
+The universal, host-neutral activation path. No host plugin, no host
+integration, and no change to any existing task:
+
+```text
+npx agenticloop activate T-016 T-017
+npx agenticloop activate --work-unit phase:4
+npx agenticloop activate T-016 --dry-run
+```
+
+The command prints the exact tasks, carriers, contract digests, repository, work
+unit, and resulting assurance, then requires you to type `activate` to confirm.
+It **refuses non-interactive invocation and refuses to run under CI**, and there
+is deliberately no `--yes`: a flag that let an agent mint this grade silently
+would erase the only thing separating it from an unsigned repository file.
+
+Options: `--work-unit <id>` (mutually exclusive with explicit task ids),
+`--expires-in-hours <n>` (default 12, maximum 168), `--repo <owner/name>` for
+the GitHub backend, `--dry-run`, `--json`, `--target <dir>`.
+
+Exit statuses: 0 on activation, dry run, or operator cancellation; 1 on refusal
+or write failure; 2 on invalid usage.
+
+Both backends are supported through their canonical identity and digest loaders.
+Nothing rewrites a task body: task ids, frontmatter, history, and decomposition
+state are preserved, so **existing tasks and projects never need recreation.**
+
+A work-unit activation derives child bindings only from current committed
+Maintainer-attributed decomposition evidence, and only for canonical ready-set
+members. For existing tasks without suitable decomposition evidence, name the
+task ids directly.
+
+Records are written as one transaction under `.agenticloop/activations/`:
+either the grant and every binding land, or none do and the versioned mutation
+receipt says so. A failed multi-task activation therefore produces no partial
+authority.
+
+### `agenticloop activation`
+
+```text
+npx agenticloop activation status [<task-id>] [--json]
+npx agenticloop activation revoke <grant-id> [--reason <text>] [--json]
+npx agenticloop activation provision-key [--json]
+```
+
+`status` reports every stored binding, whether it is still usable against
+current task state, and the effective policy with its source. `revoke` creates
+an externally authoritative repository-specific create-only tombstone; every binding derived from that grant is then refused
+by dispatch. `provision-key` creates the external operator confirmation key
+explicitly; `activate` provisions it lazily, so running it separately is
+optional.
+
+### Assurance grades
+
+| Dimension | Grade | Meaning |
+| --- | --- | --- |
+| Activation | `host_signed` | Parser/host-owned capture authenticated by an isolated signer. |
+| Activation | `operator_confirmed` | Explicit local operator confirmation of exact task state. |
+| Return | `host_receipt` | Authenticated host handoff receipt proving the producer role. |
+| Return | `session_reported` | Schema-valid, revalidated role result with no authenticated producer proof. |
+
+`standard` mode requires at least `operator_confirmed` activation and permits
+`session_reported` returns. `hardened` mode requires `host_signed` and
+`host_receipt`. Repository configuration (`agenticloop.json` `activation.mode`)
+may raise the minimum but never lowers the external operator pin at
+`~/.agenticloop/operator-activation/<target-sha256>.policy.json`.
+
+`operator_confirmed` is procedural, local-user assurance. It is not equivalent
+to an isolated host signer and does not resist arbitrary code running as the
+same OS user. No command output describes it, or a `session_reported` return, as
+cryptographically host-authenticated.
+
+### `agenticloop host-trust`
+
+```text
+npx agenticloop host-trust status [--json]
+npx agenticloop host-trust register <adapter-id> --key-id <id> --public-key <base64-or-path> \
+    [--activation-capture supported] [--return-receipt supported] [--dry-run]
+npx agenticloop host-trust rotate <adapter-id> --key-id <id> --public-key <base64-or-path> [--dry-run]
+npx agenticloop host-trust revoke <adapter-id> [--dry-run]
+```
+
+Bounded provisioning for the external operator trust store that makes hardened
+mode possible. Registration accepts only a **public** key; a private key is
+refused rather than stored. There is deliberately no command that signs an
+activation capture or a return receipt with the protected host key.
+
+### Legacy host-signed captures
+
+An adapter with a proven parser-owned capture producer may issue a verified
 receipt to task creation:
 
 ```text
@@ -355,12 +444,16 @@ repository-local
 `.agenticloop/host-trust.json` is ordinary untrusted data and cannot authorize a
 capture, packet, or return.
 
-For ordinary non-activated Markdown scaffolding only, use `task new <title>
---scaffold`. This route creates no verified activation binding and cannot
-authorize Agentic Loop dispatch in that state. The toolkit does not claim a
-durable non-upgrade property. Unless a separately authorized binding conversion
-is implemented, create a fresh activation-bound task when implementation
-handoff is required.
+For ordinary non-activated Markdown scaffolding, use `task new <title>
+--scaffold`. A scaffold task carries no activation authority and cannot be
+dispatched in that state. It does not have to be recreated: run
+`npx agenticloop activate <task-id>` and it becomes eligible for dispatch with
+`operator_confirmed` assurance.
+
+Dispatch resolves activation in one fixed order: a current valid legacy
+host-signed task capture, then a current valid task activation binding, then
+blocked. An existing activation-bound project therefore behaves exactly as
+before, with no change to any task record.
 
 New task contracts declare required checks with stable identities and explicit
 kinds:
@@ -403,16 +496,16 @@ command reruns readiness from the exact Git tree and dependency snapshot, reads
 decomposition from its committed `sourceRef`, and requires the source commit to
 carry canonical `Task:` and `Agent: maintainer` attribution before emitting a versioned
 `agenticloop.role-preparation` packet only when every binding is current. The
-current packet is schema version 5 and binds the selected host, the exact closed
+current packet is schema version 6 and binds the selected host, the exact closed
 Engineer capability declaration and digest, and the canonical derived
 degraded-enforcement report inventory plus a constant-size decomposition binding
 to the committed scan source. The real shipped baseline was schema
-version 2. Authentic version 2 packets, and authentic transitional version 3
-and 4 packets, fail with typed `dispatch.packet.stale`; regenerate them as version 5
+version 2. Authentic versions 2 through 5 fail with typed
+`dispatch.packet.stale`; regenerate them as version 6
 instead of repairing them in place. Merely setting an old version number on
 malformed input does not classify it as a legacy packet. A missing, malformed, non-canonical, or
 implementation-denying declaration fails before dispatch.
-An otherwise-current schema-v5 packet carrying the exact former version 3
+An otherwise-current schema-v6 packet carrying the exact former version 3
 degraded-report set is also classified as typed `dispatch.packet.stale` only
 after its original digest and complete projected-current semantics validate;
 regenerate it rather than accepting or rewriting it. A malformed v3 lookalike
@@ -421,14 +514,35 @@ The
 Engineer revalidates it with `task prepare-dispatch T-001 --packet <packet.json>
 --role engineer [--host-trust-store <expected-registered-path>]` before
 mutation. A scaffold made with `task new --scaffold` has no verified activation
-identity and cannot dispatch in that state; use a fresh activation-bound task
-unless a separately authorized conversion is implemented.
+identity and cannot dispatch in that state; activate the existing task with
+`npx agenticloop activate <task-id>` before dispatch.
+
+Packet v6 embeds the complete signed grant and binding and independently binds a
+nullable return adapter (`--return-adapter <adapter-id>`). Packet digests are
+integrity only. `task verify-return` persists observed version-1 evidence under
+`.agenticloop/returns/verifications/`; closeout revalidates it and never treats a
+registered capability as proof an event happened. Standard plugin-free operation
+uses `operator_confirmed` activation and freshly revalidated `session_reported`
+returns. Optional protected host integration is required for `host_signed`
+activation and `host_receipt` returns. Missing evidence fails both modes.
+Return evidence is bound to the exact work unit as well as the task, contract,
+and activation authority. When several successful observations exist for that
+same tuple, the latest verified observation is current; older observations are
+history and an equal-time conflict fails closed. GitHub verification and
+closeout refetch the live PR identity. Git rederives the exact returned commit
+range and requires its head to remain an ancestor of the current checkout, so
+later contract-preserving workflow commits do not erase valid return evidence.
+`closeout prepare --legacy-unactivated --legacy-reason <text>` is the interactive,
+standard-only, exact-work-unit compatibility exception. Its signed scope names
+missing activation and/or return evidence explicitly; it never hides revoked,
+stale, malformed, conflicting, mismatched, or cryptographically invalid evidence,
+and hardened mode rejects it.
 
 A raw return is checked with the exact repository evidence and an authenticated
 host-adapter receipt:
 
 ```text
-npx agenticloop task verify-return T-001 --packet packet.json --return role-return.json [--repository-evidence repository-evidence.json] [--producer-receipt producer-receipt.json] [--resume-owner <role-id> --redelegation-authority redelegation.json | --recovery-request recovery.json --human-disposition disposition.json --human-disposition-authority <authority-id> --human-disposition-key-id <key-id>] [--host-trust-store <expected-registered-path>] --json
+npx agenticloop task verify-return T-001 --packet packet.json --return role-return.json [--repository-evidence repository-evidence.json] [--producer-receipt producer-receipt.json] [--repo <owner/name>] [--resume-owner <role-id> --redelegation-authority redelegation.json | --recovery-request recovery.json --human-disposition disposition.json --human-disposition-authority <authority-id> --human-disposition-key-id <key-id>] [--host-trust-store <expected-registered-path>] --json
 ```
 
 The CLI never receives a signing secret. The operator registry contains only
@@ -445,7 +559,8 @@ observed producer must match both packet assignment and return claim;
 cooperative `Task:`/`Agent:` trailers cannot repair a mismatch. The files
 verifier also reconstructs the current branch, head, changed paths, durable
 commit range, and canonical attribution from Git and rejects dirty tracked or
-untracked in-scope state. Missing, stale, or invalid authentication blocks
+untracked in-scope state. The GitHub verifier additionally refetches the live PR
+number, state, URL, branch, and head; a closed or changed PR is stale. Missing, stale, or invalid authentication blocks
 rather than trusting Orchestrator assertions. The shipped receipt baseline,
 schema version 1, receives typed `role_return.receipt_stale` reissue guidance
 only when its complete canonical bytes authenticate. A successful result uses

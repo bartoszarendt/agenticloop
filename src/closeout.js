@@ -43,6 +43,13 @@ import {
   resolveWorkUnitAudit,
 } from './project-map.js';
 import { resolveCoveredGitHubTask } from './github-task-identity.js';
+import {
+  ACTIVATION_ASSURANCE_LIMITATIONS,
+  RETURN_ASSURANCE_LIMITATIONS,
+  activationAssuranceMeets,
+  returnAssuranceMeets,
+} from './activation-grant.js';
+import { ACTIVATION_MODES, MODE_MINIMUMS } from './activation-policy.js';
 import { evaluatePullRequestLifecycle } from './closeout-github.js';
 import { validateEvent, DEFAULT_LOG_DIR } from './event-logging.js';
 import { deriveConfiguredGroupScopes, deriveExplicitScopes } from './terminal-scope.js';
@@ -439,6 +446,160 @@ export function verifyPlanSynchronization(target, params) {
 }
 
 // ---------------------------------------------------------------------------
+// Assurance
+// ---------------------------------------------------------------------------
+
+/**
+ * Project both assurance dimensions into the closeout verdict.
+ *
+ * `input` is resolved by the CLI, which owns filesystem and trust-store access:
+ *
+ *   mode, policySource, minimumActivation, minimumReturn
+ *   resolveReturns          current persisted observations for each task
+ *   tasks[]                 { taskId, activation, source, derivation,
+ *                             producer, channel, usable, reasons[] }
+ *
+ * The gate fails when any covered task's activation grade is below the
+ * effective minimum, when a covered task carries no usable activation evidence
+ * at all, or when the observed return evidence is below the effective minimum. Standard
+ * mode passes with `operator_confirmed`/`session_reported` and says so.
+ */
+export function summarizeCloseoutAssurance(input, coveredTasks = []) {
+  const mode = ACTIVATION_MODES.includes(input?.mode) ? input.mode : 'hardened';
+  const minimums = MODE_MINIMUMS[mode];
+  const minimumActivation = input?.minimumActivation ?? minimums.activation;
+  const minimumReturn = input?.minimumReturn ?? minimums.return;
+  const policySource = typeof input?.policySource === 'string' ? input.policySource : 'unresolved';
+  const tasks = Array.isArray(input?.tasks) ? input.tasks : [];
+  /** @type {object[]} */
+  const reasons = [];
+  const limitations = [];
+  /** @type {string[]} */
+  const unresolvedTasks = [];
+  const compatibilityWaiver = mode === 'standard'
+    ? input?.legacyWaiver ?? (typeof input?.resolveLegacyWaiver === 'function' ? input.resolveLegacyWaiver(coveredTasks) : null)
+    : null;
+  const waivedScopes = new Set(compatibilityWaiver?.waivedDimensions ?? []);
+
+  if (!input) {
+    // No resolved assurance context is not "fine by default": the closeout
+    // cannot state either dimension, so it fails closed and says why.
+    return {
+      ok: false,
+      reasons: [{
+        category: 'assurance_unresolved',
+        message: 'closeout could not resolve activation or return assurance for this work unit',
+        repair: 'run closeout prepare from the target checkout so activation records and operator policy can be read',
+      }],
+      report: {
+        mode,
+        policy_source: policySource,
+        minimum_activation: minimumActivation,
+        minimum_return: minimumReturn,
+        observed_return_assurance: null,
+        return_capability_limitation: null,
+        returns: [],
+        compatibility_waiver: null,
+        tasks: [],
+        limitations: ['activation and return assurance could not be evaluated'],
+      },
+    };
+  }
+
+  const taskReport = [];
+  for (const taskId of coveredTasks) {
+    // The covered set is derived inside the evaluator, so per-task evidence is
+    // resolved through an injected reader rather than precomputed by the caller.
+    const observed = tasks.find(item => item?.taskId === taskId)
+      ?? (typeof input.resolveTask === 'function' ? input.resolveTask(taskId) : null);
+    const grade = observed?.usable ? observed.activation : null;
+    taskReport.push({
+      task_id: taskId,
+      activation: grade,
+      activation_source: observed?.source ?? null,
+      activation_producer: observed?.producer ?? null,
+      activation_channel: observed?.channel ?? null,
+      binding_derivation: observed?.derivation ?? null,
+      meets_minimum: grade !== null && activationAssuranceMeets(grade, minimumActivation),
+      compatibility_waived: grade === null && waivedScopes.has(observed?.failureCategory ?? 'activation_evidence_absent'),
+    });
+    if (grade === null) {
+      const detail = observed?.reasons?.length ? `: ${observed.reasons.join('; ')}` : '';
+      const failureCategory = observed?.failureCategory ?? 'activation_evidence_absent';
+      if (!waivedScopes.has(failureCategory)) {
+        reasons.push({
+          category: failureCategory,
+          message: `covered task ${taskId} has no usable activation authority${detail}`,
+          repair: `npx agenticloop activate ${taskId}`,
+        });
+      }
+      unresolvedTasks.push(`${taskId}${detail}`);
+      continue;
+    }
+    if (!activationAssuranceMeets(grade, minimumActivation)) {
+      reasons.push({
+        category: 'assurance_below_policy',
+        message:
+          `covered task ${taskId} has activation assurance '${grade}', below the effective minimum ` +
+          `'${minimumActivation}' required by ${mode} mode (policy source: ${policySource})`,
+        repair: 'register a protected host adapter and re-activate with a host-signed capture, or relax the operator activation policy pin',
+      });
+    }
+    if (ACTIVATION_ASSURANCE_LIMITATIONS[grade] && !limitations.includes(ACTIVATION_ASSURANCE_LIMITATIONS[grade])) {
+      limitations.push(ACTIVATION_ASSURANCE_LIMITATIONS[grade]);
+    }
+  }
+
+  const returnReports = [];
+  let observedReturn = 'host_receipt';
+  for (const taskId of coveredTasks) {
+    const observed = typeof input.resolveReturns === 'function' ? input.resolveReturns(taskId) : null;
+    const records = observed?.usable ? observed.records ?? [] : [];
+    const grades = records.map(record => record.observedReturnGrade);
+    returnReports.push({ task_id: taskId, observed_grades: grades, records: records.map(record => record.recordId), current: observed?.usable === true });
+    if (records.length === 0) {
+      observedReturn = null;
+      const failureCategory = observed?.failureCategory ?? 'return_evidence_absent';
+      if (!waivedScopes.has(failureCategory)) reasons.push({ category: failureCategory, message: `covered task ${taskId} has no current successful role-return verification${observed?.reasons?.length ? `: ${observed.reasons.join('; ')}` : ''}`, repair: `npx agenticloop task verify-return ${taskId} ...` });
+    } else if (grades.some(grade => grade === 'session_reported')) {
+      if (observedReturn !== null) observedReturn = 'session_reported';
+    }
+  }
+  if (observedReturn && !limitations.includes(RETURN_ASSURANCE_LIMITATIONS[observedReturn])) limitations.push(RETURN_ASSURANCE_LIMITATIONS[observedReturn]);
+  if (!returnAssuranceMeets(observedReturn, minimumReturn) && !(observedReturn === null && waivedScopes.has('return_evidence_absent'))) {
+    reasons.push({
+      category: 'assurance_below_policy',
+      message: `observed return assurance '${observedReturn ?? 'missing'}' is below the effective minimum '${minimumReturn}' required by ${mode} mode (policy source: ${policySource})`,
+      repair: 'verify every required role return with the packet-bound protected host receipt, or use standard mode where policy permits session_reported evidence',
+    });
+  }
+  if (input.returnCapabilityLimitation) limitations.push(`return capability limitation (repair guidance only): ${input.returnCapabilityLimitation}`);
+  if (unresolvedTasks.length > 0) {
+    limitations.push(
+      `activation assurance is unknown for ${unresolvedTasks.length} covered task(s): ${unresolvedTasks.join('; ')}. ` +
+      'This closeout makes no activation claim about them.'
+    );
+  }
+
+  return {
+    ok: reasons.length === 0,
+    reasons,
+    report: {
+      mode,
+      policy_source: policySource,
+      minimum_activation: minimumActivation,
+      minimum_return: minimumReturn,
+      observed_return_assurance: observedReturn,
+      return_capability_limitation: input.returnCapabilityLimitation ?? null,
+      returns: returnReports,
+      compatibility_waiver: compatibilityWaiver,
+      tasks: taskReport,
+      limitations,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Composite evaluation
 // ---------------------------------------------------------------------------
 
@@ -668,7 +829,10 @@ export function evaluateCloseout(target, params) {
     ? carrierForTree
     : params?.carrier ?? null;
   const markerText = backend === 'files'
-    ? (markdownSection(carrier?.content ?? '', '## Comments')?.body ?? '')
+    // Historical files carriers may have marker blocks outside `## Comments`.
+    // Parse the complete carrier so those claims cannot disappear from the
+    // current-marker set merely because a later template added headings.
+    ? (carrier?.content ?? '')
     : String(params?.carrierComments ?? '');
   const markers = parseCloseoutMarkers(markerText);
   const markerResolution = params?.markerResolution ?? resolveCurrentCloseoutMarkers(markers);
@@ -805,6 +969,17 @@ export function evaluateCloseout(target, params) {
   }
   gate('improvement_refs', improvementsOk);
 
+  // --- assurance ---------------------------------------------------------------
+  // Both assurance dimensions travel into closeout. The activation grade is
+  // read from durable per-task activation evidence; the return grade comes
+  // from the one current work-unit-bound verification observation after its
+  // packet, repository evidence, and external trust have been revalidated.
+  const assurance = summarizeCloseoutAssurance(params?.assurance, coveredTasks);
+  gate('assurance', assurance.ok);
+  for (const item of assurance.reasons) {
+    reasons.push(reason('assurance', item.category, item.message, { repair: item.repair ?? null }));
+  }
+
   // --- packet ----------------------------------------------------------------------
   const predecessor = currentMarker
     ? currentMarker.reference
@@ -831,6 +1006,11 @@ export function evaluateCloseout(target, params) {
       : null,
     plan_sync: packetPlanSync,
     gates,
+    // Reported, never digested: the provenance projection is a fixed whitelist,
+    // and the `assurance` gate above is what binds the verdict. This block
+    // exists so a human reading the packet sees both grades, their producers,
+    // the effective policy and its source, and the honest limitation text.
+    assurance: assurance.report,
     finding_dispositions: dispositionProjection,
     improvement_refs: [...(params?.improvementRefs ?? [])].map(String).sort(),
     predecessor_marker: predecessor,

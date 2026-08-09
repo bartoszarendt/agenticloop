@@ -492,7 +492,7 @@ describe('task CLI', () => {
       'authorize-correction': ['files'],
       'prepare-decomposition': ['files', 'github'],
       'prepare-dispatch': ['files', 'github'],
-      'verify-return': ['files'],
+      'verify-return': ['files', 'github'],
       status: ['files'],
     };
 

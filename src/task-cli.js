@@ -95,9 +95,18 @@ import {
   normalizeGitHubTaskInventory,
 } from './parallel-scan.js';
 import { resolveGhRunner } from './closeout-github.js';
-import { runGhJson } from './gh-helpers.js';
+import { resolveGitHubRepository, runGhJson } from './gh-helpers.js';
+import {
+  loadTaskActivationEvidence,
+  resolveActivationVerification,
+  resolveEffectiveActivationPolicy,
+  resolvePacketActivationBinding,
+  unactivatedTaskError,
+} from './activation-resolution.js';
 import { buildGitHubTaskIdentityInventory, resolveCoveredGitHubTask } from './github-task-identity.js';
 import { fetchGitHubTaskBody } from './github-task-body.js';
+import { createReturnVerification, writeReturnVerification } from './return-verification.js';
+import { refetchGitHubReturnEvidence } from './github-return-evidence.js';
 
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -141,7 +150,7 @@ const TASK_SUBCOMMAND_BACKENDS = Object.freeze({
   'authorize-correction': Object.freeze(['files']),
   'prepare-decomposition': Object.freeze(['files', 'github']),
   'prepare-dispatch': Object.freeze(['files', 'github']),
-  'verify-return': Object.freeze(['files']),
+  'verify-return': Object.freeze(['files', 'github']),
   status: Object.freeze(['files']),
 });
 
@@ -374,17 +383,47 @@ function resolveActivationCapabilities(target, io, assertedPath) {
   return activationCapabilityInventory(store.adapters);
 }
 
+/**
+ * Read the target's `agenticloop.json` when it exists.
+ *
+ * A files-only project that never generated a host adapter legitimately has no
+ * such file, and the plugin-free activation path makes that the common case. An
+ * absent file means "no target overrides"; a present but unreadable one stays a
+ * typed malformed context rather than a silent default.
+ */
+function loadOptionalTargetConfig(target) {
+  const path = join(target, 'agenticloop.json');
+  if (!existsSync(path)) return {};
+  try {
+    return loadAgenticLoopConfig(path);
+  } catch (error) {
+    throw new VerificationContextMalformedError(`agenticloop.json is unreadable: ${error.message}`);
+  }
+}
+
+/**
+ * Report both assurance dimensions for one prepared dispatch.
+ *
+ * The activation grade is a fact about the packet; the return grade printed
+ * here is the *minimum the policy requires*, because no return exists yet. The
+ * wording says so rather than implying an observed return.
+ */
+function printDispatchAssurance(assurance, io) {
+  if (!assurance) return;
+  io.err(`activation: ${assurance.activation} (${assurance.activationDerivation}, via ${assurance.activationProducer})`);
+  io.err(`return:     ${assurance.minimumReturn} (minimum required by ${assurance.mode} mode; policy source: ${assurance.policySource})`);
+  for (const limitation of assurance.limitations ?? []) io.err(`  note: ${limitation}`);
+}
+
 function resolveEffectiveHostRoleCapabilities(target) {
-  const config = loadAgenticLoopConfig(join(target, 'agenticloop.json'));
+  const config = loadOptionalTargetConfig(target);
   return buildHostRoleCapabilityInventory({
     adapterConfigs: config.adapters ?? {},
   });
 }
 
 function resolveEffectiveWorkflowRegistry(target) {
-  return resolveWorkflowRoleRegistry(
-    loadAgenticLoopConfig(join(target, 'agenticloop.json'))
-  );
+  return resolveWorkflowRoleRegistry(loadOptionalTargetConfig(target));
 }
 
 /** Resolve one pinned host adapter for return-receipt verification. */
@@ -584,16 +623,6 @@ function enumerateFilesTaskInventory(target, projectConfig, options = {}) {
     cursor: null,
   });
   return normalizeFilesTaskInventory({ inventoryId, entries, complete: true, enumeration }, { now: options.now });
-}
-
-function resolveGitHubRepository(commandRunner, assertedRepo) {
-  const repo = assertedRepo
-    ? String(assertedRepo).trim()
-    : String(runGhJson(commandRunner, ['repo', 'view', '--json', 'nameWithOwner'])?.nameWithOwner ?? '').trim();
-  if (!/^[^\s/]+\/[^\s/]+$/.test(repo)) {
-    throw new VerificationContextMalformedError('GitHub task inventory requires a repository identity in owner/name form');
-  }
-  return repo;
 }
 
 /**
@@ -1138,7 +1167,7 @@ export async function cmdTask(args, io = createIo()) {
             `Task creation refused before mutation: ${disposition.errors.join('; ')}`, {
               code, evidenceState: disposition.evidenceState, disposition: disposition.disposition,
               committedStateEvaluated: false,
-              safeRepair: 'Use --scaffold for non-activated Markdown scaffolding, or obtain a fresh task-bound capture from a supported host adapter. Never edit or author capture JSON.',
+              safeRepair: 'Use --scaffold for non-activated Markdown scaffolding, then run npx agenticloop activate <task-id> before dispatch. Use a supported host capture only when hardened host_signed assurance is required. Never edit or author capture JSON.',
             }
           ), 'operational_error', {}, target), Boolean(opts.json), io);
         }
@@ -1412,31 +1441,81 @@ export async function cmdTask(args, io = createIo()) {
         if (!existsSync(carrierPath)) return null;
         return taskRecordDigest(readFileSync(carrierPath, 'utf8'));
       };
-      // The activation capture is read from the task's own authoring reference,
-      // never from the dispatch request: a caller cannot substitute a capture for
-      // the one the authored contract is bound to.
-      const refetchActivation = ({ snapshot }) => {
+      // Activation is read from the task's own durable provenance, never from
+      // the dispatch request, and it resolves in one fixed order:
+      //
+      //   1. a current valid legacy host-signed task capture;
+      //   2. a current valid task activation binding;
+      //   3. otherwise blocked.
+      //
+      // The legacy path stays first so an existing activation-bound project
+      // behaves exactly as before, with no change to any task record.
+      const refetchActivationEvidence = ({ snapshot }) => {
         const contract = taskContractDigest(snapshot.body);
         if (!contract.ok) throw new VerificationContextMalformedError(contract.error);
         const ref = contract.projection.activation_capture_ref;
-        if (!ref) {
-          throw new VerificationContextError(
-            `task '${snapshot.taskId}' has no activation_capture_ref; it cannot authorize dispatch in this state, and when no separately authorized activation-binding conversion exists a fresh activation-bound task is required`
-          );
+        if (ref) {
+          const capture = readActivationCaptureInput(target, ref, capabilities, snapshot.taskId);
+          if (capture.normalizedActivationDigest !== contract.projection.activation_input_digest) {
+            throw new VerificationContextStaleError(
+              `activation capture '${ref}' no longer matches the task contract activation_input_digest`
+            );
+          }
+          return { source: 'legacy_task_capture', capture };
         }
-        const capture = readActivationCaptureInput(target, ref, capabilities, snapshot.taskId);
-        if (capture.normalizedActivationDigest !== contract.projection.activation_input_digest) {
-          throw new VerificationContextStaleError(
-            `activation capture '${ref}' no longer matches the task contract activation_input_digest`
-          );
-        }
-        return capture;
+        const evidence = loadTaskActivationEvidence(target, {
+          backend: snapshot.backend,
+          taskId: snapshot.taskId,
+        });
+        if (!evidence) throw unactivatedTaskError(snapshot.taskId);
+        return evidence;
       };
+      let activationVerification;
+      let assurancePolicy;
+      try {
+        activationVerification = resolveActivationVerification(target, io, {
+          hostTrustStorePath: opts.hostTrustStore,
+        });
+        const resolvedPolicy = resolveEffectiveActivationPolicy(target, io);
+        assurancePolicy = { mode: resolvedPolicy.mode, policySource: resolvedPolicy.source };
+      } catch (error) {
+        return printGateResult('task prepare-dispatch', commandFailure('task prepare-dispatch', error, 'operational_error', {}, target), asJson, io);
+      }
+      const dispatchOptions = {
+        capabilities,
+        hostRoleCapabilities,
+        assurancePolicy,
+        verifyActivationSignature: activationVerification.verify,
+        resolveActivationBinding: candidate => resolvePacketActivationBinding(target, io, candidate, {
+          hostTrustStorePath: opts.hostTrustStore,
+        }),
+      };
+      const eligibleReturnAdapters = Object.values(activationVerification.adapters ?? {})
+        .filter(adapter => adapter.capabilities?.returnReceipt === 'supported');
+      if (opts.returnAdapter) {
+        const selected = eligibleReturnAdapters.find(adapter => adapter.adapterId === String(opts.returnAdapter));
+        if (!selected) {
+          const error = new VerificationContextError(`return adapter '${String(opts.returnAdapter)}' is not an authenticated protected-boundary adapter with returnReceipt support`);
+          return printGateResult('task prepare-dispatch', commandFailure('task prepare-dispatch', error, 'operational_error', {}, target), asJson, io);
+        }
+        dispatchOptions.returnAdapter = { adapterId: selected.adapterId, keyId: selected.keyId, capability: 'returnReceipt' };
+      } else if (assurancePolicy.mode === 'hardened') {
+        if (eligibleReturnAdapters.length > 1) {
+          const detail = 'multiple authenticated returnReceipt adapters are available; select one with --return-adapter <adapter-id>';
+          return printGateResult('task prepare-dispatch', commandFailure('task prepare-dispatch', new VerificationContextError(detail), 'operational_error', {}, target), asJson, io);
+        }
+        const selected = eligibleReturnAdapters[0] ?? null;
+        dispatchOptions.returnAdapter = selected
+          ? { adapterId: selected.adapterId, keyId: selected.keyId, capability: 'returnReceipt' }
+          : null;
+      } else {
+        dispatchOptions.returnAdapter = null;
+      }
       const stateInputs = {
         runGit: targetGitRunner(target),
         priorGateReceipts,
         readCarrierDigest,
-        refetchActivation,
+        refetchActivationEvidence,
         refetchParallelScanInventory,
       };
       let packet = null;
@@ -1455,7 +1534,7 @@ export async function cmdTask(args, io = createIo()) {
           refetchDecomposition,
           ...stateInputs,
           roleId: opts.role,
-        }, { capabilities, hostRoleCapabilities });
+        }, dispatchOptions);
       } else {
         prepared = prepareRoleDispatch({
           refetchTask,
@@ -1465,7 +1544,7 @@ export async function cmdTask(args, io = createIo()) {
           ...stateInputs,
           activation: input?.activation,
           assignment: input?.assignment,
-        }, { capabilities, hostRoleCapabilities });
+        }, dispatchOptions);
       }
       const presentedValidation = presentGateResultForTarget(prepared.validation, target);
       if (asJson) {
@@ -1474,7 +1553,18 @@ export async function cmdTask(args, io = createIo()) {
         else printGateResult('task prepare-dispatch', presentedValidation, true, io);
       }
       else if (prepared.ok) io.out(JSON.stringify(prepared.packet, null, 2));
-      else for (const error of prepared.validation.errors) io.err(error);
+      else {
+        for (const error of prepared.validation.errors) io.err(error);
+        // The typed first safe repair is the actionable half of a blocked
+        // dispatch - for an unactivated task it is the literal
+        // `npx agenticloop activate <task-id>` command - so human output shows
+        // it rather than leaving it visible only in `--json`.
+        if (presentedValidation.firstSafeRepair) io.err(`first safe repair: ${presentedValidation.firstSafeRepair}`);
+      }
+      // stdout stays exactly one packet document so it can be piped. The two
+      // assurance grades go to stderr, where a human sees them without a reader
+      // having to dig them out of the packet.
+      if (prepared.ok) printDispatchAssurance(prepared.packet?.assurance ?? packet?.assurance, io);
       return prepared.ok ? 0 : 1;
     }
 
@@ -1504,12 +1594,15 @@ export async function cmdTask(args, io = createIo()) {
       let capabilities;
       let hostRoleCapabilities;
       let workflowRoleRegistry;
+      let returnPolicy;
+      let activationVerification;
       try {
         packet = JSON.parse(readJsonText(opts.packet, 'dispatch packet'));
         raw = readJsonText(opts.return, 'role return');
         capabilities = resolveActivationCapabilities(target, io, opts.hostTrustStore);
         hostRoleCapabilities = resolveEffectiveHostRoleCapabilities(target);
         workflowRoleRegistry = resolveEffectiveWorkflowRegistry(target);
+        returnPolicy = resolveEffectiveActivationPolicy(target, io);
         repositoryEvidence = opts.repositoryEvidence
           ? JSON.parse(readJsonText(opts.repositoryEvidence, 'repository evidence'))
           : null;
@@ -1565,16 +1658,48 @@ export async function cmdTask(args, io = createIo()) {
         );
         return EXIT_USAGE;
       }
-      const filePath = taskPathForId(target, projectConfig, taskId);
-      const carrier = relative(target, filePath).replace(/\\/g, '/');
-      const refetchTask = () => {
-        if (!existsSync(filePath)) throw new VerificationContextError(`task record not found: ${carrier}`);
-        const body = readFileSync(filePath, 'utf8');
-        const history = loadFilesTaskContractRecords(target, taskId);
-        return { backend: 'files', taskId, carrier, body, digest: taskRecordDigest(body), trustedRecords: history.trustedRecords, trustedRecordErrors: history.errors };
+      const backend = selectedBackend.backend;
+      const filePath = backend === 'files' ? taskPathForId(target, projectConfig, taskId) : null;
+      const carrier = filePath ? relative(target, filePath).replace(/\\/g, '/') : null;
+      let githubSnapshot = null;
+      const currentGitHubSnapshot = () => {
+        if (!githubSnapshot) githubSnapshot = enumerateGitHubTaskInventory(projectConfig, io, { repo: opts.repo });
+        return githubSnapshot;
       };
+      const refetchTask = () => {
+        if (backend === 'files') {
+          if (!existsSync(filePath)) throw new VerificationContextError(`task record not found: ${carrier}`);
+          const body = readFileSync(filePath, 'utf8');
+          const history = loadFilesTaskContractRecords(target, taskId);
+          return { backend: 'files', taskId, carrier, body, digest: taskRecordDigest(body), trustedRecords: history.trustedRecords, trustedRecordErrors: history.errors };
+        }
+        const snapshot = currentGitHubSnapshot();
+        const resolvedTask = resolveCoveredGitHubTask(snapshot.identityInventory, taskId);
+        if (!resolvedTask.found) throw new VerificationContextError(resolvedTask.error);
+        const fetched = fetchGitHubTaskBody({
+          issue: resolvedTask.issue.number,
+          repo: snapshot.repo,
+          commandRunner: resolveGhRunner(io),
+          projectMapConfig: projectConfig,
+        });
+        return {
+          backend: 'github', taskId, carrier: `issue:${resolvedTask.issue.number}`,
+          body: fetched.body, digest: fetched.digest,
+          trustedRecords: fetched.trustedRecords,
+          trustedRecordErrors: fetched.trustedRecordErrors,
+        };
+      };
+      let verifiedRepositoryEvidence = null;
       const refetchRepositoryEvidence = repositoryEvidence
-        ? () => refetchFilesReturnEvidence(target, packet, repositoryEvidence)
+        ? () => {
+            verifiedRepositoryEvidence = backend === 'github'
+              ? refetchGitHubReturnEvidence(repositoryEvidence, {
+                  commandRunner: resolveGhRunner(io),
+                  repo: opts.repo ?? currentGitHubSnapshot().repo,
+                })
+              : refetchFilesReturnEvidence(target, packet, repositoryEvidence);
+            return verifiedRepositoryEvidence;
+          }
         : null;
       // Verification consumes only the operator-pinned public key. No signing
       // secret is read from the environment, so an agent invoking this command
@@ -1615,8 +1740,39 @@ export async function cmdTask(args, io = createIo()) {
         },
         workflowRoleRegistry,
         runGit: targetGitRunner(target),
-      }, { capabilities, hostRoleCapabilities });
+      }, {
+        capabilities,
+        hostRoleCapabilities,
+        // The effective minimum comes from current external operator policy as
+        // well as the packet, and the boundary takes the stronger of the two.
+        // A packet minted under a since-hardened policy cannot carry its old
+        // permissive minimum into a return.
+        minimumReturnAssurance: returnPolicy.minimumReturn,
+        resolveActivationBinding: candidate => resolvePacketActivationBinding(target, io, candidate, {
+          hostTrustStorePath: opts.hostTrustStore,
+        }),
+      });
       const presentedValidation = presentGateResultForTarget(received.validation, target);
+      let returnVerification = null;
+      if (received.ok && received.exceptional === undefined) {
+        try {
+          returnVerification = createReturnVerification({
+            target,
+            packet,
+            roleReturn: JSON.parse(raw),
+            repositoryEvidence: verifiedRepositoryEvidence,
+            producerReceipt,
+            received,
+          });
+          const stored = writeReturnVerification(target, returnVerification);
+          if (!stored.ok) {
+            throw new VerificationContextError(`successful return verification could not be persisted: ${stored.errors.join('; ')}`);
+          }
+          returnVerification = { record: returnVerification, path: stored.path };
+        } catch (error) {
+          return printGateResult('task verify-return', commandFailure('task verify-return', error, 'operational_error', {}, target), asJson, io);
+        }
+      }
       if (asJson) printGateResult('task verify-return', presentedValidation, true, io);
       else if (received.ok && received.exceptional?.state === 'exception_requested') {
         // A valid exception request is routed, not granted. Do not print a
@@ -1625,7 +1781,18 @@ export async function cmdTask(args, io = createIo()) {
           `Exceptional verification recorded as exception_requested; routed to ${received.exceptional.route.ownerRole} ` +
           `for disposition. No exception has been accepted or rejected and no further authority is granted.`
         );
-      } else if (received.ok) io.out('Role return is current.');
+      } else if (received.ok) {
+        io.out('Role return is current.');
+        io.out(`  activation: ${received.assurance?.activation ?? 'unknown'}`);
+        io.out(`  return:     ${received.returnAssurance}`);
+        if (returnVerification) io.out(`  evidence:   ${returnVerification.path}`);
+        if (received.returnAssurance === 'session_reported') {
+          io.warn(
+            '  WARN: the producing role identity was NOT host-authenticated. ' +
+            'This result is session_reported, not cryptographically host-authenticated.'
+          );
+        }
+      }
       else for (const error of received.validation.errors) io.err(error);
       return received.ok ? 0 : 1;
     }

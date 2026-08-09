@@ -154,6 +154,9 @@ describe('public envelope validators are total', () => {
       for (const replacement of [null, 'text', 7, [], {}, true]) {
         const retyped = structuredClone(packet);
         retyped[key] = replacement;
+        // A legacy-capture packet carries `activationBinding: null` already, so
+        // assigning the already-valid value is not a malformed-wire probe.
+        if (key === 'activationBinding' && replacement === null) continue;
         cases.push([`packet ${key}=${JSON.stringify(replacement)}`, value => validateDispatchPreparation(value, fixture.options), retyped]);
       }
     }
@@ -1071,7 +1074,7 @@ describe('role-return core boundary authenticates evidence itself', () => {
       observedProducerRole: prepared.packet.assignment.roleId,
       repositoryEvidence: evidence,
     }, fixture.trust.privateKey);
-    const receive = (patch = {}) => receiveRoleReturn({
+    const receive = (patch = {}, options = {}) => receiveRoleReturn({
       raw: JSON.stringify(roleReturn),
       packet: prepared.packet,
       refetchTask: fixture.refetchTask,
@@ -1080,7 +1083,7 @@ describe('role-return core boundary authenticates evidence itself', () => {
       resolveTrustedAdapter: () => fixture.trust.adapter,
       runGit: fixture.runGit,
       ...patch,
-    }, fixture.options);
+    }, { ...fixture.options, ...options });
     return { fixture, prepared, evidence, roleReturn, receipt, receive };
   }
 
@@ -1235,14 +1238,31 @@ describe('role-return core boundary authenticates evidence itself', () => {
 
   it('cannot be satisfied by a caller-authored producer evidence callback', async () => {
     const { receipt, receive } = await committed('boundary-callback');
-    const received = receive({
-      producerReceipt: null,
-      refetchProducerEvidence: () => receipt,
-    });
+    const received = receive(
+      { producerReceipt: null, refetchProducerEvidence: () => receipt },
+      { minimumReturnAssurance: 'host_receipt' }
+    );
     assert.equal(received.ok, false);
     assert.equal(received.validation.evidenceState, 'missing');
     assert.equal(received.validation.disposition, 'blocked');
     assert.match(received.validation.errors.join('\n'), /raw host-adapter producer receipt is required/);
+  });
+
+  it('grades a receipt-less return session_reported and never claims an authenticated producer', async () => {
+    const { receipt, receive } = await committed('boundary-session-reported');
+    const received = receive({ producerReceipt: null, refetchProducerEvidence: () => receipt });
+    assert.equal(received.ok, true, received.validation.errors?.join('\n'));
+    assert.equal(received.returnAssurance, 'session_reported');
+    assert.equal(received.producerAuthenticated, false);
+    assert.equal(received.assurance.return, 'session_reported');
+    assert.equal(received.assurance.activation, 'host_signed');
+    assert.ok(received.validation.warningDiagnostics.some(item =>
+      item.code === 'return.assurance.session_reported' && /NOT host-authenticated/.test(item.message)));
+    assert.equal(
+      received.validation.warningDiagnostics.some(item => /cryptographically host-authenticated/.test(item.message) &&
+        !/Do not describe/.test(item.message)),
+      false
+    );
   });
 
   it('blocks a files-backend return when no Git reader can rederive the evidence', async () => {

@@ -449,6 +449,7 @@ export function parseHostTrustStore(text, options = {}) {
   }
   /** @type {Record<string, object>} */
   const adapters = {};
+  const adapterKeyIds = new Map();
   parsed.adapters.forEach((entry, index) => {
     const entryErrors = [];
     const validated = validateEntry(entry, index, entryErrors, parsed.target?.repositoryIdentity ?? null);
@@ -458,6 +459,11 @@ export function parseHostTrustStore(text, options = {}) {
       errors.push(`host trust store registers adapter '${validated.adapterId}' more than once`);
       return;
     }
+    if (adapterKeyIds.has(validated.keyId)) {
+      errors.push(`host trust store keyId '${validated.keyId}' is ambiguously assigned to adapters '${adapterKeyIds.get(validated.keyId)}' and '${validated.adapterId}'`);
+      return;
+    }
+    adapterKeyIds.set(validated.keyId, validated.adapterId);
     adapters[validated.adapterId] = validated;
   });
   /** @type {Record<string, object>} */

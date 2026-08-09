@@ -105,6 +105,7 @@ function detectColor(env, stdoutIsTTY, ci) {
  * @param {Function} [options.ghCommandRunner]  Injectable read-only GitHub command runner for tests.
  * @param {Function} [options.auditProvenanceVerifier] Host receipt verifier for Auditor delegations.
  * @param {string} [options.operatorTrustRoot] Test-only alternate registry root; it cannot authorize supported adapters.
+ * @param {string} [options.operatorActivationRoot] Alternate per-user root for operator activation confirmation material and the activation policy pin. It must resolve outside the target.
  * @param {Function} [options.hostAuthority] Host transport for a nonce-bound, Ed25519-signed boundary challenge response.
  * @returns {object} io context
  */
@@ -137,6 +138,7 @@ export function createIo(options = {}) {
     ghCommandRunner: options.ghCommandRunner ?? null,
     auditProvenanceVerifier: options.auditProvenanceVerifier ?? null,
     operatorTrustRoot: options.operatorTrustRoot ?? null,
+    operatorActivationRoot: options.operatorActivationRoot ?? null,
     hostAuthority: options.hostAuthority ?? null,
     fsMutationOptions: options.fsMutationOptions ?? null,
   };

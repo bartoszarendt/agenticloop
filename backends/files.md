@@ -333,10 +333,14 @@ Operation mapping:
 
 - Create a non-activated Markdown scaffold: `agenticloop task new <title>
   --scaffold [--id <id>]`.
-- Create an activation-bound task only from a supported host-produced v2
+- Authorize one or more existing tasks for dispatch: `agenticloop activate
+  <task-id...>` or `agenticloop activate --work-unit <id>`. This is the
+  universal path; it needs no host plugin, requires an interactive operator
+  confirmation, and never rewrites a task record.
+- Create an activation-bound task directly from a supported host-produced v2
   capture: `agenticloop task new <title> --activation-input <capture.json>
-  [--host-trust-store <derived-path>] [--id <id>]`. No shipped adapter currently
-  provides that supported capture path.
+  [--host-trust-store <derived-path>] [--id <id>]`. No shipped adapter provides
+  that supported capture path; it requires a registered protected host adapter.
 - Read task record: open `.agenticloop/tasks/<TASK-ID>.md` directly.
 - List task records: `agenticloop task list [--status <status>] [--json]`.
 - Update status: `agenticloop task status <id> <status> [--note <text>]`.
@@ -356,10 +360,22 @@ Operation mapping:
 ID, the intended task ID, the canonical target repository, capture/expiry
 timestamps, the operator and normalized activation digests, and the host key.
 The CLI resolves an automatic `T-###` ID before verifying the capture; a
-conflict or mismatch fails before authoring. A scaffold has no verified
-activation binding and cannot authorize dispatch in that state. Unless a
-separately authorized binding conversion exists, create a fresh
-activation-bound task when a supported host capture becomes available.
+conflict or mismatch fails before authoring.
+
+A scaffold task has no activation authority and cannot be dispatched in that
+state. It does not have to be recreated: run `agenticloop activate <task-id>`
+in an interactive terminal and it becomes eligible for dispatch with
+`operator_confirmed` assurance. Activation records live under
+`.agenticloop/activations/` and are authenticated against an operator key held
+outside the repository, so a hand-authored record in the target cannot
+self-authorize. Dispatch resolves a current legacy host-signed capture first,
+then a current task activation binding, then blocks.
+
+Successful return verification records live under
+`.agenticloop/returns/verifications/` and are workflow evidence, never
+implementation output. Closeout revalidates their packet authority and retained
+host receipts. Revocation authority is the external create-only operator
+tombstone; a target-local revocation is only a mirror.
 
 Create `.agenticloop/tasks/<TASK-ID>.md` using `agenticloop/memory/task-record.md`.
 Do not leave placeholder sections.

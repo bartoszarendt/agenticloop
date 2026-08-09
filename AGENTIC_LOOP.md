@@ -253,6 +253,117 @@ Machine vocabulary inventories are closed:
 - Return kinds: `agenticloop.role-return`, `agenticloop.exceptional-verification`.
 - Liveness entries: `delegationLiveness`, `lease`, `cancellation`, `managedJoin`, `reviewNoMutation`, `rollback`.
 
+### Activation assurance
+
+Activation authority is graded on two independent dimensions. Neither is ever
+silently upgraded, and neither substitutes for the other.
+
+Activation assurance - how the authorization to work on a task was obtained:
+
+| Grade | Meaning |
+| --- | --- |
+| `host_signed` | Parser/host-owned activation capture authenticated by an isolated signer registered in the operator trust store. |
+| `operator_confirmed` | Explicit local operator confirmation of the exact task/work-unit state, authored by the CLI and signed with an operator key held outside the target repository. |
+| absent | Scaffold or unactivated. Dispatch stays blocked. This is not a grade. |
+
+Return assurance - how a role result's producer was established:
+
+| Grade | Meaning |
+| --- | --- |
+| `host_receipt` | Authenticated host handoff receipt proving the observed producer role. |
+| `session_reported` | Schema-valid role result reported through the coordinating session and revalidated against refetched repository evidence, with **no** authenticated host producer proof. |
+
+Two overall modes combine them:
+
+| Mode | Minimum activation | Minimum return |
+| --- | --- | --- |
+| `standard` | `operator_confirmed` | `session_reported` |
+| `hardened` | `host_signed` | `host_receipt` |
+
+`operator_confirmed` is procedural, local-user assurance: a human at an
+interactive terminal on this machine saw the exact task set, carriers, and
+contract digests and typed a confirmation. It is not equivalent to an isolated
+host signer and does not resist arbitrary hostile code running as the same OS
+user. No surface may describe it, or a `session_reported` return, as
+cryptographically host-authenticated.
+
+Effective policy resolves from two sources. An operator pin held outside the
+target repository sets a floor; the target's own `agenticloop.json` may only
+raise it. Hardened policy therefore never rests on model-writable repository
+configuration alone, and an agent editing target configuration cannot relax an
+operator's floor. A malformed pin or a malformed repository request fails closed
+at `hardened`.
+
+Both dimensions travel together through dispatch packets, validation results,
+return results, audit records, closeout results, and human-readable output.
+
+Closeout accepts return evidence only for its exact work unit, task contract,
+and activation authority. For that tuple the latest successfully verified
+observation is the current terminal return; older observations remain history,
+and equal-time competing observations fail closed. Files and GitHub returns
+both rederive the exact returned commit range and require its head to remain an
+ancestor of the current checkout, allowing later contract-preserving workflow
+commits without accepting rebased-away work. GitHub also refetches the live PR
+identity before an observation can remain current.
+
+Activation and return adapters are independent. A declared capability is repair
+guidance, not evidence that a capture or receipt occurred.
+
+#### Durable activation records
+
+`agenticloop.activation-grant` (schema version `1`) and
+`agenticloop.task-activation-binding` (schema version `1`) are durable
+target-owned records under `.agenticloop/activations/`. They are evidence
+dispatch consumes later, so they never live in `.agenticloop/tmp/`.
+
+A grant names its canonical grant ID, repository identity, backend, scope
+(an exact task set, one work unit, or a captured request), operator-intent
+digest where applicable, assurance, producer and channel, issue and expiry
+instants, revocation identity and state, the confirmation or host evidence, an
+authentication signature, and its canonical semantic digest.
+
+A binding names its canonical binding ID, the grant ID and grant digest,
+repository identity, backend, task ID and carrier, the **exact current
+task-contract digest**, its derivation (direct operator confirmation, direct
+protected-host binding, or committed decomposition membership), the committed
+decomposition source reference and digest when derived, inherited assurance,
+issue and expiry instants, an authentication signature, and its canonical
+semantic digest.
+
+Signatures are verified against a key held outside the target repository. A
+hand-authored grant inside the repository therefore cannot self-authorize, even
+when every field and digest is internally self-consistent. Unknown fields,
+unknown assurance values, contradictory derivations, stale task-contract
+digests, expiry, revocation, and cross-repository reuse all fail closed.
+
+A work-unit grant derives a child binding only from current committed
+decomposition evidence: canonical work-unit match, Maintainer attribution, the
+exact committed source reference and digest, a complete authoritative inventory,
+membership in the canonical `readyTaskIds`, the exact child task-contract digest,
+current freshness, and a bounded grant expiry. One work-unit activation is never
+unlimited authorization for arbitrary future tasks.
+
+Existing `activation_input_digest` and `activation_capture_ref` task frontmatter
+remain valid legacy provenance. Grant records are an alternate authorized
+source, not a forced rewrite: existing tasks and projects never need recreation.
+
+Dispatch packet schema version `6` carries the complete signed grant and task
+binding in `activationBinding`; its packet digest is integrity, not
+authentication. Preparation, pre-mutation revalidation, return import, and
+closeout revalidate signatures, repository/backend/carrier/task-contract
+binding, expiry, decomposition, effective policy, and external revocation state.
+Authentic packet versions `2` through `5` are typed stale.
+
+Successful returns are persisted as `agenticloop.return-verification` version
+`1` under `.agenticloop/returns/verifications/`. Closeout derives return
+assurance only from these observed records and reauthenticates retained host
+receipts. Missing activation or return evidence is below both mode minimums.
+Genuinely pre-activation work has one explicit, interactive, standard-only
+`closeout prepare --legacy-unactivated` signed waiver path; the exact-work-unit
+waiver explicitly makes no activation claim. Revocation is externally
+authoritative through repository-specific create-only tombstones under the
+operator activation root, so deleting target-local state cannot restore a grant.
+
 ### Identity chain
 
 The operator's expected request digest is the root of request-integrity proof.
@@ -273,11 +384,12 @@ operator input.
 ### Single-role dispatch and return
 
 One implementation handoff uses `agenticloop.role-preparation`, schema version
-`5`, defined in the bundled `src/dispatch-envelope.js` module. It is a read-only
+`6`, defined in the bundled `src/dispatch-envelope.js` module. It is a read-only
 handoff artifact, not a controller, lane-result store, task mutation, or shared
 durable-state import. Its canonical digest is
-`sha256:agenticloop.role-preparation.v5:<64-lowercase-hex>` and it binds the
-current task/contract/activation identities, freshly reevaluated P35-03
+`sha256:agenticloop.role-preparation.v6:<64-lowercase-hex>` and it binds the
+current task/contract/activation identities, both assurance dimensions, freshly
+reevaluated P35-03
 readiness and base/dependency sources, committed Maintainer-attributed
 decomposition evidence, scoped checks, immutable role and invocation IDs, canonical
 references, the selected host, exact closed host-role capability declaration,
@@ -285,17 +397,32 @@ and canonical degraded-enforcement report inventory, branch/worktree,
 attribution, liveness, and
 cancellation. Any bound input changing stales the packet. The receiver verifies
 its ID, digest, role, and current bindings before its first mutation.
-Schema versions 2, 3, and 4 are recognized as authentic prior evidence and
-rejected as `dispatch.packet.stale`; regenerate the packet as version 5 rather
+Schema versions 2, 3, 4, and 5 are recognized as authentic prior evidence and
+rejected as `dispatch.packet.stale`; regenerate the packet as version 6 rather
 than reinterpreting or repairing an earlier version in place. Version 4 is not
 migrated: its decomposition field carries the version 1 caller-asserted
-completeness token, and no migration can supply the scan proof version 5
-requires.
-An otherwise-current version 5 packet carrying the exact former version 3
+completeness token, and no migration can supply the scan proof version 6
+requires. Version 5 is not migrated either: it predates the assurance
+dimensions, so it can neither state its activation grade nor carry an activation
+grant binding.
+An otherwise-current version 6 packet carrying the exact former version 3
 degraded-enforcement report set is likewise rejected as
 `dispatch.packet.stale` only after its original digest and complete
 projected-current semantics validate. It is never migrated or accepted in
 place, and malformed v3 lookalikes remain malformed.
+
+Exactly one activation model is bound per packet:
+
+- `activation` carries the legacy host-signed `agenticloop.activation-capture`
+  (schema version `2`) and `activationBinding` is `null`; or
+- `activationBinding` carries `agenticloop.activation-binding` (schema version
+  `1`), a constant-size projection of a durable `agenticloop.activation-grant`
+  plus `agenticloop.task-activation-binding` pair, and `activation` is `null`.
+
+`assurance` is `agenticloop.dispatch-assurance` (schema version `1`). It states
+both dimensions, the effective mode and its policy source, the minimums that
+mode requires, and the verbatim honest limitation text for each grade. See
+[Activation assurance](#activation-assurance).
 
 Decomposition provenance is `agenticloop.decomposition-provenance`, schema
 version `2`. Version 1 declared completeness as a caller-supplied token beside a
@@ -896,11 +1023,11 @@ after that authentication. A forged producer role therefore produces the
 generic authentication failure, while an authentically signed wrong producer
 produces `role_return.producer_mismatch`.
 
-Dispatch packet schema version 5 is current and carries a constant-size
-decomposition binding to the committed scan source. The shipped pre-capability
-dispatch baseline was schema version 2; an authentic version 2 packet receives typed
-`dispatch.packet.stale` upgrade guidance and is never accepted as current.
-Authentic transitional versions 3 and 4 receive the same fail-closed treatment.
+Dispatch packet schema version 6 is current. It carries the constant-size
+decomposition binding, the complete signed activation grant and task binding,
+both assurance dimensions, and an independent nullable return adapter. Packet
+versions 2 through 5 remain authentic historical evidence but receive typed
+`dispatch.packet.stale` upgrade guidance and are never accepted as current.
 The shipped host-receipt baseline was schema version 1; an authentic version 1
 receipt receives typed `role_return.receipt_stale` reissue guidance. Malformed
 inputs do not become legacy packets or receipts merely by carrying an old

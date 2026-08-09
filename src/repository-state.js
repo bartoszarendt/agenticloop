@@ -17,7 +17,8 @@ import { fileMatchesScopePattern } from './scope-matcher.js';
 import { validateTaskMutationReceipt } from './task-evidence-contract.js';
 
 export const CLEAN_STATE_KIND = 'agenticloop.dispatch-clean-state';
-export const CLEAN_STATE_SCHEMA_VERSION = 1;
+/** v2 adds the operator-owned activation state class. */
+export const CLEAN_STATE_SCHEMA_VERSION = 3;
 
 /**
  * Bounded scratch state a dispatch may carry. `.agenticloop/tmp/` is the
@@ -36,8 +37,34 @@ export const CLEAN_STATE_SCHEMA_VERSION = 1;
  */
 export const PERMITTED_SCRATCH_PREFIXES = Object.freeze(['.agenticloop/tmp/']);
 
+/**
+ * Operator-owned activation state a dispatch may carry untracked.
+ *
+ * Activation grants and task bindings are durable evidence, not scratch, but
+ * they are *operator* state rather than project history: they are short-lived,
+ * machine-local, and authenticated at use time against a key held outside the
+ * repository. Requiring them to be committed would put expiring signed records
+ * into project history and force a commit after every activation, without
+ * adding any authority - a committed grant is no more trustworthy than an
+ * untracked one, because the signature is what proves it.
+ *
+ * They are therefore permitted at the dispatch clean gate and, like scratch,
+ * separately refused as implementation work at the return boundary.
+ */
+export const PERMITTED_OPERATOR_STATE_PREFIXES = Object.freeze([
+  '.agenticloop/activations/',
+  '.agenticloop/returns/verifications/',
+  '.agenticloop/closeout-waivers/',
+]);
+
 /** Shared workflow state whose untracked additions are always relevant. */
 export const SHARED_STATE_PREFIXES = Object.freeze(['.agenticloop/']);
+
+/** Every prefix whose untracked or ignored content the clean gate tolerates. */
+export const PERMITTED_UNTRACKED_PREFIXES = Object.freeze([
+  ...PERMITTED_SCRATCH_PREFIXES,
+  ...PERMITTED_OPERATOR_STATE_PREFIXES,
+]);
 
 /** Prior-gate dispositions that leave no unproven carrier mutation behind. */
 export const RESOLVED_MUTATION_DISPOSITIONS = Object.freeze([
@@ -54,6 +81,7 @@ function cleanStateProjection() {
     untrackedRelevantPaths: [],
     ignoredRelevantPaths: [],
     permittedScratchPrefixes: [...PERMITTED_SCRATCH_PREFIXES],
+    permittedOperatorStatePrefixes: [...PERMITTED_OPERATOR_STATE_PREFIXES],
     ignoredFilesPermitted: true,
   };
 }
@@ -63,10 +91,10 @@ function cleanStateProjection() {
  * bind this identity: any other evaluated state fails the gate before emission.
  */
 export const CLEAN_DISPATCH_STATE_IDENTITY =
-  `sha256:${CLEAN_STATE_KIND}.v1:${canonicalSha256(cleanStateProjection())}`;
+  `sha256:${CLEAN_STATE_KIND}.v${CLEAN_STATE_SCHEMA_VERSION}:${canonicalSha256(cleanStateProjection())}`;
 
 function permitted(path) {
-  return PERMITTED_SCRATCH_PREFIXES.some(prefix => path === prefix.replace(/\/$/, '') || path.startsWith(prefix));
+  return PERMITTED_UNTRACKED_PREFIXES.some(prefix => path === prefix.replace(/\/$/, '') || path.startsWith(prefix));
 }
 
 function shared(path) {
@@ -153,9 +181,10 @@ export function evaluateDispatchCleanState(input = {}) {
     untrackedRelevantPaths: relevantUntracked,
     ignoredRelevantPaths: relevantIgnored,
     permittedScratchPrefixes: [...PERMITTED_SCRATCH_PREFIXES],
+    permittedOperatorStatePrefixes: [...PERMITTED_OPERATOR_STATE_PREFIXES],
     ignoredFilesPermitted: true,
   };
-  const identity = `sha256:${CLEAN_STATE_KIND}.v1:${canonicalSha256(state)}`;
+  const identity = `sha256:${CLEAN_STATE_KIND}.v${CLEAN_STATE_SCHEMA_VERSION}:${canonicalSha256(state)}`;
 
   if (state.stagedPaths.length) {
     findings.push(finding('negative', 'blocked', 'worktree.clean_gate.failed',

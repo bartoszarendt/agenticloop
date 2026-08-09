@@ -72,6 +72,10 @@ function writeTask(target, taskId, status, grouping = 'milestone:M00') {
       '',
       grouping,
       '',
+      '## Required Checks',
+      '',
+      '- [RC-1] command: `npm test`',
+      '',
       '## Comments',
       '',
       '',
@@ -110,7 +114,14 @@ async function audit(args, target) {
 }
 
 async function closeout(args, target) {
-  return runCliInProcess(['closeout', ...args, '--target', target]);
+  const compatibility = args[0] === 'prepare'
+    ? ['--legacy-unactivated', '--legacy-reason', 'historical unactivated workflow-delta fixture']
+    : [];
+  return runCliInProcess(['closeout', ...args, ...compatibility, '--target', target], {
+    operatorActivationRoot: join(tmpDir, 'operator-activation'),
+    stdinIsTTY: true, isTTY: true, ci: false,
+    promptFactory: () => ({ ask: async () => 'waive', close() {} }),
+  });
 }
 
 async function certify(target, tasks = ['T-001', 'T-002']) {

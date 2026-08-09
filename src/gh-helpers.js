@@ -7,6 +7,24 @@
 
 import { spawnSync } from 'node:child_process';
 
+import { VerificationContextMalformedError } from './public-error.js';
+
+/**
+ * Resolve the repository identity a GitHub-backed command acts on.
+ *
+ * The identity comes from `--repo` or the authenticated `gh` context, never
+ * from the local checkout, so no target path is required or accepted here.
+ */
+export function resolveGitHubRepository(commandRunner, assertedRepo) {
+  const repo = assertedRepo
+    ? String(assertedRepo).trim()
+    : String(runGhJson(commandRunner, ['repo', 'view', '--json', 'nameWithOwner'])?.nameWithOwner ?? '').trim();
+  if (!/^[^\s/]+\/[^\s/]+$/.test(repo)) {
+    throw new VerificationContextMalformedError('GitHub task inventory requires a repository identity in owner/name form');
+  }
+  return repo;
+}
+
 export function defaultGhCommandRunner(command, args, options = {}) {
   return spawnSync(command, args, { encoding: 'utf-8', ...options });
 }

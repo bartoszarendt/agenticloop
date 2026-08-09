@@ -14,11 +14,23 @@ Adapters are status-bearing in `agenticloop.json` so downstream projects can
 see what is supported and what is reserved.
 
 The table below describes artifact generation and ordinary host integration,
-not parser-owned activation capture. Every shipped adapter currently declares
-activation capture `unsupported` through the shared generated slots because its
-request text is model-visible. Consequently, no shipped configuration provides
-a runnable supported live dispatch path. This is intentional fail-closed
-behavior.
+not parser-owned activation capture. Every shipped adapter declares activation
+capture `unsupported` through the shared generated slots because its request
+text is model-visible. That is intentional fail-closed behavior and it does not
+change from inside a session.
+
+`unsupported` no longer means "unusable". It means the *host* cannot prove
+activation, so the operator does, through one explicit command outside the agent
+session:
+
+```text
+npx agenticloop activate T-016 T-017
+npx agenticloop activate --work-unit <work-unit-id>
+```
+
+See [Universal activation](#universal-activation) below. Registering a protected
+host adapter remains the only route to `host_signed` activation and
+`host_receipt` returns, and therefore to hardened mode.
 
 A registry document may describe a target-bound key and supported capabilities,
 but the current public and delegated in-process CLI always rejects such entries.
@@ -400,6 +412,113 @@ instant receipt freshness is evaluated against. Passing only `now` therefore
 leaves challenge expiry on the real monotonic clock rather than freezing it. A
 non-finite clock is refused rather than treated as "no freshness check".
 
+## Universal activation
+
+The plugin-free path works on every host, including hosts Agentic Loop has no
+adapter for at all. It needs no OpenCode plugin, no host integration, and no
+change to any existing task.
+
+```text
+/agenticloop T-016 T-017                  # in the agent session, as usual
+npx agenticloop activate T-016 T-017      # once, in your own terminal
+```
+
+The `activate` command prints the exact tasks, carriers, contract digests,
+repository, work unit, and resulting assurance, then requires you to type a
+confirmation. After it succeeds, those tasks are eligible for dispatch if every
+other gate passes. Their IDs, bodies, history, decomposition state, and
+repository state are untouched: **existing tasks and projects never need to be
+recreated.**
+
+Work-unit activation derives child bindings from committed decomposition
+evidence:
+
+```text
+npx agenticloop activate --work-unit phase:4
+```
+
+Inspect and manage what exists:
+
+```text
+npx agenticloop activation status            # every binding and its usability
+npx agenticloop activation status T-016      # one task
+npx agenticloop activation revoke grant:<uuid>
+npx agenticloop activation provision-key     # optional; activate provisions lazily
+```
+
+### What the grades mean
+
+| Dimension | Grade | Meaning |
+| --- | --- | --- |
+| Activation | `host_signed` | Parser/host-owned capture authenticated by an isolated signer pinned in the operator trust store. |
+| Activation | `operator_confirmed` | A human at an interactive terminal on this machine confirmed the exact task set and contract digests. |
+| Return | `host_receipt` | Authenticated host handoff receipt proving the observed producer role. |
+| Return | `session_reported` | Schema-valid, fully revalidated role result with **no** authenticated host producer proof. |
+
+Two modes combine them. `standard` requires at least `operator_confirmed`
+activation and permits `session_reported` returns. `hardened` requires
+`host_signed` activation and `host_receipt` returns.
+
+Activation and return adapters are independent packet bindings. A capability
+declaration is never evidence that a capture or receipt occurred. Hardened
+closeout requires a persisted, observed, authenticated host receipt from the
+exact packet-bound return adapter and key.
+
+`operator_confirmed` is **procedural, local-user assurance**. It proves a human
+saw the exact scope and typed a confirmation on this machine. It is not
+equivalent to an isolated host signer and it does not resist arbitrary hostile
+code running as the same OS user. No output describes it, or a
+`session_reported` return, as cryptographically host-authenticated.
+
+### Why a repository file cannot forge it
+
+Grants and bindings live under `.agenticloop/activations/`, but their authority
+does not. Each record is signed with an operator confirmation key held **outside**
+the repository, under `~/.agenticloop/operator-activation/<target-sha256>.json`,
+provisioned lazily on first activation. A hand-authored grant inside the
+repository fails verification however self-consistent its fields and digests
+are, and copying `.agenticloop/activations/` into another checkout carries no
+authority because every record binds one canonical repository identity.
+
+On POSIX the key file and its directory are created `0600`/`0700`. On Windows
+the toolkit sets no explicit ACL and reports that honestly rather than claiming
+protection it did not apply; keep your per-user profile directory restricted.
+
+`init` and `setup` add `.agenticloop/activations/` to the managed `.gitignore`
+block. The records are short-lived, machine-local, and authenticated at use
+time against an external key, so committing them would add noise without adding
+authority. The dispatch clean gate names them as a distinct permitted class -
+neither scratch nor shared workflow state - and the return boundary still
+refuses those paths as implementation work.
+
+`activate` refuses non-interactive invocation and refuses to run under CI. There
+is deliberately no `--yes`: a flag that let an agent mint this grade silently
+would erase the only thing that distinguishes it from an unsigned file.
+
+### Setting an activation policy
+
+Repository configuration may *raise* the bar in `agenticloop.json`:
+
+```json
+{ "activation": { "mode": "hardened" } }
+```
+
+An operator pin held outside the repository sets a floor the repository cannot
+lower, at `~/.agenticloop/operator-activation/<target-sha256>.policy.json`:
+
+```json
+{
+  "kind": "agenticloop.activation-policy-pin",
+  "schemaVersion": 1,
+  "target": { "repositoryIdentity": "file:/absolute/target" },
+  "mode": "hardened"
+}
+```
+
+Hardened policy therefore never rests on model-writable repository
+configuration alone. A malformed pin or a malformed repository request fails
+closed at `hardened`.
+
 ## Operator Trust Stores
 
 The public CLI reads one pre-registered store from the fixed per-user operator
@@ -707,10 +826,42 @@ implemented adapter artifact.
 OpenCode is explicitly activated by command. After generating the adapter, run
 `/agenticloop [task-id or task description]` from the target project root.
 Normal OpenCode prompts stay outside Agentic Loop mode until that command is
-invoked. The current command reports parser-owned activation capture as
-`unsupported` and blocks before task authoring: OpenCode positional placeholders
-are documented prompt substitutions, not lossless parser-produced bytes. Do not
-use prompt text or a model-created JSON file as a capture substitute.
+invoked. The command reports parser-owned activation capture as `unsupported`:
+OpenCode positional placeholders are documented prompt substitutions, not
+lossless parser-produced bytes. Do not use `$ARGUMENTS`, `$1`, `$2`, shell
+interpolation, a permission prompt, prompt text, or a model-created JSON file as
+a capture substitute. This stays `unsupported` permanently.
+
+**No OpenCode plugin is required.** When a task needs activation, the generated
+command tells the operator to run, outside the agent session:
+
+```text
+npx agenticloop activate T-016 T-017
+```
+
+and then continue in the same project and session. Activation assurance is
+`operator_confirmed` and returns are `session_reported`. See
+[Universal activation](#universal-activation).
+
+### Optional future OpenCode integration
+
+An `opencode.command.before.v1` integration could raise assurance, and is
+deliberately not required. To be worth anything it must:
+
+- create `host_signed` activation grants from the parser-owned command bytes,
+  before any model sees them;
+- inject an **opaque grant handle** into the session rather than the grant
+  itself, so nothing the model can read is the authority;
+- produce authenticated host-return receipts binding the observed producer role;
+- communicate with an **isolated broker** that holds the signing key outside the
+  agent process.
+
+A same-process plugin without an isolated signer must not receive `host_signed`
+assurance, and this toolkit will not grant it: the trust store's supported
+capabilities are only honored after the protected `hostAuthority` boundary
+answers a fresh nonce challenge with a signature from the pinned key. A plugin
+that can only return a boolean, a file path, or JSON it authored itself is
+indistinguishable from the model and stays `unsupported`.
 
 ## Codex Activation
 

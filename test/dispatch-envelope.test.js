@@ -13,6 +13,7 @@ import {
 } from '../src/parallel-scan.js';
 import {
   SHIPPED_ACTIVATION_ADAPTERS,
+  ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION,
   BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION,
   DECOMPOSITION_BINDING_SCHEMA_VERSION,
   DECOMPOSITION_SCHEMA_VERSION,
@@ -1639,18 +1640,32 @@ describe('authoritative blocked-return receive path', () => {
   });
 });
 
+/**
+ * Strip the current envelope down to the v2-v5 field set. Prior packets carried
+ * exactly one activation model and no assurance statement, so a genuine legacy
+ * carrier has neither field.
+ */
+function assuranceUnboundEnvelope(packet) {
+  const legacy = structuredClone(packet);
+  delete legacy.activationBinding;
+  delete legacy.returnAdapter;
+  delete legacy.assurance;
+  return legacy;
+}
+
 describe('documented envelope identity contract', () => {
   it('AGENTIC_LOOP.md names the exact schema versions and digests the implementation emits', async () => {
     const doc = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf8');
-    assert.match(doc, /agenticloop\.role-preparation`, schema version\s*\n?`5`/);
-    assert.match(doc, /sha256:agenticloop\.role-preparation\.v5:<64-lowercase-hex>/);
+    assert.match(doc, /agenticloop\.role-preparation`, schema version\s*\n?`6`/);
+    assert.match(doc, /sha256:agenticloop\.role-preparation\.v6:<64-lowercase-hex>/);
     assert.match(doc, /agenticloop\.role-return`, schema version\s*\n?`2`/);
     assert.match(doc, /sha256:agenticloop\.role-return\.v2:<64-lowercase-hex>/);
     assert.match(doc, /agenticloop\.decomposition-provenance`, schema\s*\n?version `2`/);
     assert.match(doc, /agenticloop\.decomposition-binding`,\s*\n?schema version `1`/);
     assert.doesNotMatch(doc, /agenticloop\.role-preparation\.v1/);
     assert.doesNotMatch(doc, /agenticloop\.role-return\.v1/);
-    assert.equal(DISPATCH_PREPARATION_SCHEMA_VERSION, 5);
+    assert.equal(DISPATCH_PREPARATION_SCHEMA_VERSION, 6);
+    assert.equal(ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION, 5);
     assert.equal(SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION, 4);
     assert.equal(BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION, 2);
     assert.equal(LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION, 3);
@@ -1660,7 +1675,7 @@ describe('documented envelope identity contract', () => {
     const fixture = await currentFilesTask('doc-contract');
     const prepared = prepare(fixture);
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
-    assert.ok(prepared.packet.digest.startsWith('sha256:agenticloop.role-preparation.v5:'));
+    assert.ok(prepared.packet.digest.startsWith('sha256:agenticloop.role-preparation.v6:'));
     const roleReturn = readyReturn(prepared.packet, repositoryEvidence(prepared.packet));
     assert.ok(roleReturn.digest.startsWith('sha256:agenticloop.role-return.v2:'));
   });
@@ -1669,7 +1684,7 @@ describe('documented envelope identity contract', () => {
     const fixture = await currentFilesTask('baseline-v2-contract');
     const prepared = prepare(fixture);
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
-    const baseline = structuredClone(prepared.packet);
+    const baseline = assuranceUnboundEnvelope(prepared.packet);
     baseline.schemaVersion = BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION;
     delete baseline.assignment.host;
     delete baseline.assignment.hostRoleCapability;
@@ -1685,7 +1700,28 @@ describe('documented envelope identity contract', () => {
       code: 'dispatch.packet.stale',
       evidenceState: 'changed',
       disposition: 'superseded',
-      message: 'dispatch preparation schemaVersion 2 is stale; regenerate the packet as schemaVersion 5 before dispatch or return import',
+      message: 'dispatch preparation schemaVersion 2 is stale; regenerate the packet as schemaVersion 6 before dispatch or return import',
+    }]);
+  });
+
+  it('classifies an assurance-unbound schemaVersion 5 carrier as typed stale', async () => {
+    const fixture = await currentFilesTask('legacy-v5-contract');
+    const prepared = prepare(fixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    const legacy = assuranceUnboundEnvelope(prepared.packet);
+    legacy.schemaVersion = ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION;
+    legacy.digest = legacyDispatchPreparationDigest(
+      legacy,
+      ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION
+    );
+
+    const checked = validateDispatchPreparation(legacy, fixture.options);
+    assert.equal(checked.ok, false);
+    assert.deepEqual(checked.findings, [{
+      code: 'dispatch.packet.stale',
+      evidenceState: 'changed',
+      disposition: 'superseded',
+      message: 'dispatch preparation schemaVersion 5 is stale; regenerate the packet as schemaVersion 6 before dispatch or return import',
     }]);
   });
 
@@ -1693,7 +1729,7 @@ describe('documented envelope identity contract', () => {
     const fixture = await currentFilesTask('legacy-v3-contract');
     const prepared = prepare(fixture);
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
-    const legacy = structuredClone(prepared.packet);
+    const legacy = assuranceUnboundEnvelope(prepared.packet);
     legacy.schemaVersion = LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION;
     delete legacy.assignment.degradedEnforcementReports;
     legacy.digest = legacyDispatchPreparationDigest(
@@ -1708,7 +1744,7 @@ describe('documented envelope identity contract', () => {
       code: 'dispatch.packet.stale',
       evidenceState: 'changed',
       disposition: 'superseded',
-      message: 'dispatch preparation schemaVersion 3 is stale; regenerate the packet as schemaVersion 5 before dispatch or return import',
+      message: 'dispatch preparation schemaVersion 3 is stale; regenerate the packet as schemaVersion 6 before dispatch or return import',
     });
   });
 
@@ -1716,7 +1752,7 @@ describe('documented envelope identity contract', () => {
     const fixture = await currentFilesTask('legacy-v4-contract');
     const prepared = prepare(fixture);
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
-    const legacy = structuredClone(prepared.packet);
+    const legacy = assuranceUnboundEnvelope(prepared.packet);
     legacy.schemaVersion = SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION;
     // A version 4 packet carried the version 1 decomposition source inline.
     legacy.decomposition = structuredClone(fixture.legacyDecomposition);
@@ -1731,11 +1767,11 @@ describe('documented envelope identity contract', () => {
       code: 'dispatch.packet.stale',
       evidenceState: 'changed',
       disposition: 'superseded',
-      message: 'dispatch preparation schemaVersion 4 is stale; regenerate the packet as schemaVersion 5 before dispatch or return import',
+      message: 'dispatch preparation schemaVersion 4 is stale; regenerate the packet as schemaVersion 6 before dispatch or return import',
     }]);
   });
 
-  it('classifies an authentic schema-v5 packet with canonical v3 degraded reports as typed stale', async () => {
+  it('classifies an authentic current packet with canonical v3 degraded reports as typed stale', async () => {
     const fixture = await currentFilesTask('nested-v3-contract');
     const prepared = prepare(fixture);
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
@@ -1786,7 +1822,7 @@ describe('documented envelope identity contract', () => {
     const fixture = await currentFilesTask('legacy-misclassification');
     const prepared = prepare(fixture);
     assert.equal(validateDispatchPreparation(prepared.packet, fixture.options).ok, true);
-    const malformed = structuredClone(prepared.packet);
+    const malformed = assuranceUnboundEnvelope(prepared.packet);
     malformed.schemaVersion = BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION;
     delete malformed.assignment.host;
     delete malformed.assignment.hostRoleCapability;

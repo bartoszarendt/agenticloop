@@ -189,6 +189,38 @@ export const LEGACY_SCRATCH_GITIGNORE_PATTERNS = Object.freeze([
   '/tmp/',
 ]);
 
+/**
+ * Durable activation grants and task bindings.
+ *
+ * These are evidence dispatch consumes later, so they are not scratch and never
+ * live under `.agenticloop/tmp/`. They are still *operator* state rather than
+ * project history: short-lived, machine-local, and authenticated at use time
+ * against a key held outside the repository. Committing expiring signed records
+ * would add noise and no authority, so the directory is ignored by default and
+ * the dispatch clean gate permits it untracked.
+ */
+export const ACTIVATIONS_DIRECTORY_RELATIVE_PATH = '.agenticloop/activations';
+
+export const ACTIVATIONS_GITIGNORE_PATTERNS = Object.freeze([
+  '.agenticloop/activations',
+  '.agenticloop/activations/',
+  '/.agenticloop/activations',
+  '/.agenticloop/activations/',
+]);
+
+export const RETURN_VERIFICATIONS_DIRECTORY_RELATIVE_PATH = '.agenticloop/returns/verifications';
+export const RETURN_VERIFICATIONS_GITIGNORE_PATTERNS = Object.freeze([
+  '.agenticloop/returns/verifications',
+  '.agenticloop/returns/verifications/',
+  '/.agenticloop/returns/verifications',
+  '/.agenticloop/returns/verifications/',
+]);
+export const CLOSEOUT_WAIVERS_DIRECTORY_RELATIVE_PATH = '.agenticloop/closeout-waivers';
+export const CLOSEOUT_WAIVERS_GITIGNORE_PATTERNS = Object.freeze([
+  '.agenticloop/closeout-waivers', '.agenticloop/closeout-waivers/',
+  '/.agenticloop/closeout-waivers', '/.agenticloop/closeout-waivers/',
+]);
+
 // Per-lane parallel worktrees live inside the repo root so they stay within the
 // host's workspace sandbox and never trigger an external-directory prompt.
 export const WORKTREES_DIRECTORY_RELATIVE_PATH = '.agenticloop/worktrees';

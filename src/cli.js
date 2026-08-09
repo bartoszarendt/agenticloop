@@ -103,6 +103,8 @@ import { isGitObjectId } from './git-oid.js';
 import { resolveTaskBackend } from './task-backend.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
 import { cmdTask } from './task-cli.js';
+import { cmdActivate, cmdActivation } from './activation-cli.js';
+import { cmdHostTrust } from './host-trust-cli.js';
 import {
   GitHubTaskBodyError,
   TASK_BODY_MALFORMED_CONTEXT,
@@ -3108,6 +3110,9 @@ const COMMAND_HANDLERS = {
   worktree: cmdWorktree,
   'bootstrap-labels': cmdBootstrapLabels,
   generate: cmdGenerate,
+  activate: cmdActivate,
+  activation: cmdActivation,
+  'host-trust': cmdHostTrust,
 };
 
 function printHelpFor(path, io) {

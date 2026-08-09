@@ -13,6 +13,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.js';
 import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
@@ -63,6 +64,37 @@ import { presentDiagnostic } from './diagnostic-presentation.js';
 import { getProjectRoleCapabilities } from './role-capabilities.js';
 import { PublicCommandError } from './public-error.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
+import { taskContractDigest } from './task-contract-baseline.js';
+import { loadHostTrustStore, targetRepositoryIdentity } from './host-trust.js';
+import { resolveTaskActivationBinding } from './activation-grant.js';
+import {
+  ACTIVATION_BINDING_KIND,
+  ACTIVATION_BINDING_SCHEMA_VERSION,
+  activationCapabilityInventory,
+  activationCaptureDisposition,
+} from './dispatch-envelope.js';
+import {
+  loadTaskActivationEvidence,
+  resolveActivationVerification,
+  resolveEffectiveActivationPolicy,
+  resolvePacketActivationBinding,
+} from './activation-resolution.js';
+import { readCommittedDecomposition } from './activation-cli.js';
+import {
+  listReturnVerifications,
+  revalidateReturnVerification,
+  returnActivationAuthorityDigest,
+  selectCurrentReturnVerifications,
+} from './return-verification.js';
+import { loadFilesTaskContractRecords } from './files-task-contract.js';
+import { provisionOperatorActivationKey, readExternalActivationRevocations } from './activation-trust.js';
+import { refetchGitHubReturnEvidence } from './github-return-evidence.js';
+import {
+  createLegacyUnactivatedWaiver,
+  readLegacyUnactivatedWaiver,
+  verifyLegacyUnactivatedWaiver,
+  writeLegacyUnactivatedWaiver,
+} from './closeout-waiver.js';
 
 function optionString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -75,6 +107,27 @@ function optionList(value) {
   return optionString(value).split(',').map(item => item.trim()).filter(Boolean);
 }
 
+function activationFailureCategory(reasons, absent = false) {
+  if (absent) return 'activation_evidence_absent';
+  const text = reasons.map(item => typeof item === 'string' ? item : `${item?.code ?? ''} ${item?.message ?? ''}`).join(' ').toLowerCase();
+  if (text.includes('revok')) return 'activation_revoked';
+  if (text.includes('expir')) return 'activation_expired';
+  if (text.includes('contract')) return 'activation_for_changed_contract';
+  if (text.includes('stale') || text.includes('supersed')) return 'activation_stale';
+  if (text.includes('adapter') || text.includes('key') || text.includes('trust')) return 'trust_key_adapter_mismatch';
+  return 'activation_malformed';
+}
+
+function returnFailureCategory(reasons) {
+  const text = reasons.join(' ').toLowerCase();
+  if (text.includes('conflict') || text.includes('ambiguous')) return 'ambiguous_or_conflicting_evidence';
+  if (text.includes('host') || text.includes('receipt') || text.includes('authentication')) return 'host_receipt_invalid';
+  if (text.includes('adapter') || text.includes('key') || text.includes('trust')) return 'trust_key_adapter_mismatch';
+  if (text.includes('generation') || text.includes('contract') || text.includes('activation')) return 'return_for_another_generation';
+  if (text.includes('stale') || text.includes('supersed') || text.includes('current repository')) return 'return_evidence_stale';
+  return 'return_verification_failed';
+}
+
 function projectConfig(target) {
   return loadProjectMap(target)?.config ?? PROJECT_MAP_DEFAULTS;
 }
@@ -82,6 +135,274 @@ function projectConfig(target) {
 function defaultPacketPath(target, workUnit) {
   const safe = workUnit.replace(/[^A-Za-z0-9._-]+/g, '-');
   return join(target, SCRATCH_DIRECTORY_RELATIVE_PATH, `${safe}-closeout.json`);
+}
+
+/**
+ * Resolve both assurance dimensions for one closeout evaluation.
+ *
+ * Everything here comes from operator-owned state: the external activation
+ * policy pin, the external operator confirmation key, the operator-pinned host
+ * trust store, and the durable activation records the CLI can independently
+ * authenticate. Nothing a role or a repository file claims is consulted.
+ *
+ * Returns `null` when the context cannot be resolved, which makes the closeout
+ * assurance gate fail closed rather than pass by default.
+ */
+export function resolveCloseoutAssuranceContext(target, io, backend, params) {
+  let policy;
+  let verification;
+  try {
+    policy = resolveEffectiveActivationPolicy(target, io);
+    verification = resolveActivationVerification(target, io);
+  } catch {
+    return null;
+  }
+  let trustedAdapters = {};
+  let returnCapabilityLimitation = null;
+  try {
+    const store = loadHostTrustStore(target, {
+      operatorTrustRoot: io?.operatorTrustRoot ?? undefined,
+      protectedBoundary: io?.hostAuthority ?? undefined,
+    });
+    if (store.ok) trustedAdapters = store.adapters;
+    if (!store.ok || !Object.values(store.adapters).some(adapter => adapter.capabilities?.returnReceipt === 'supported')) {
+      returnCapabilityLimitation = store.errors?.[0] ?? 'no authenticated protected-boundary adapter declares returnReceipt support';
+    }
+  } catch {
+    returnCapabilityLimitation = 'operator host trust could not be loaded';
+  }
+  const repositoryIdentity = targetRepositoryIdentity(target);
+  const projectConfigForTasks = params?.config ?? PROJECT_MAP_DEFAULTS;
+  return {
+    mode: policy.mode,
+    policySource: policy.source,
+    minimumActivation: policy.minimumActivation,
+    minimumReturn: policy.minimumReturn,
+    returnCapabilityLimitation,
+    resolveTask: taskId => resolveCoveredTaskAssurance(target, io, {
+      backend,
+      taskId,
+      params,
+      projectConfig: projectConfigForTasks,
+      repositoryIdentity,
+      verify: verification.verify,
+    }),
+    resolveReturns: taskId => {
+      let identity;
+      try {
+        identity = closeoutTaskIdentity(target, backend, taskId, params, projectConfigForTasks, io);
+      } catch (error) {
+        return { taskId, usable: false, records: [], failureCategory: 'return_verification_failed', reasons: [error.publicMessage ?? error.message] };
+      }
+      const activation = resolveCoveredTaskAssurance(target, io, {
+        backend, taskId, params, projectConfig: projectConfigForTasks, repositoryIdentity, verify: verification.verify,
+      });
+      if (!identity) return { taskId, usable: false, records: [], failureCategory: 'return_verification_failed', reasons: [`task '${taskId}' could not be read for return evaluation`] };
+      const listed = listReturnVerifications(target, taskId, {
+        taskContractDigest: identity.contract.digest,
+        activationAuthorityDigest: activation?.authorityDigest ?? null,
+        workUnitIdentity: params.workUnit,
+      });
+      if (!listed.ok) return { taskId, usable: false, records: [], failureCategory: 'return_evidence_malformed', reasons: listed.errors };
+      const selected = selectCurrentReturnVerifications(listed.records);
+      if (!selected.ok) return { taskId, usable: false, records: [], failureCategory: 'ambiguous_or_conflicting_evidence', reasons: selected.errors };
+      const checked = selected.records.map(record => revalidateReturnVerification(record, {
+        target,
+        capabilities: activationCapabilityInventory(trustedAdapters),
+        resolveActivationBinding: packet => resolvePacketActivationBinding(target, io, packet),
+        resolveTrustedAdapter: adapterId => {
+          const adapter = trustedAdapters[adapterId];
+          if (!adapter) throw new PublicCommandError(`return adapter '${adapterId}' is not currently trusted through the protected boundary`);
+          return adapter;
+        },
+        expectedBackend: backend,
+        expectedTaskId: taskId,
+        expectedTaskContractDigest: identity.contract.digest,
+        expectedActivationAuthorityDigest: activation?.authorityDigest ?? null,
+        expectedWorkUnitIdentity: params.workUnit,
+        refetchTask: () => identity.snapshot,
+        // Both backends rederive commit-range facts from the target checkout.
+        // GitHub additionally re-observes the live PR transport before either a
+        // session report or a host receipt can be described as current.
+        refetchRepositoryEvidence: () => backend === 'github'
+          ? refetchGitHubReturnEvidence(record.evidence.repositoryEvidence, {
+              commandRunner: params.ghRunner ?? defaultGhCommandRunner,
+              repo: params.repo,
+            })
+          : structuredClone(record.evidence.repositoryEvidence),
+        runGit: args => spawnSync('git', args, { cwd: target, encoding: 'utf8' }),
+        minimumReturnAssurance: policy.minimumReturn,
+      }));
+      const valid = checked.filter(item => item.ok).map(item => item.record);
+      return {
+        taskId,
+        usable: checked.length > 0 && checked.every(item => item.ok),
+        records: valid,
+        failureCategory: checked.length === 0
+          ? (listed.supersededCount > 0 || selected.supersededCount > 0 ? 'return_for_another_generation' : 'return_evidence_absent')
+          : (checked.every(item => item.ok) ? null : returnFailureCategory(checked.flatMap(item => item.errors ?? []))),
+        reasons: checked.flatMap(item => item.errors ?? []),
+      };
+    },
+    resolveLegacyWaiver: taskIds => {
+      const workUnit = params?.workUnit;
+      if (!workUnit) return null;
+      const read = readLegacyUnactivatedWaiver(target, workUnit);
+      if (!read.record) return null;
+      const tasks = taskIds.map(taskId => {
+        const identity = closeoutTaskIdentity(target, backend, taskId, params, projectConfigForTasks, io);
+        return { taskId, taskContractDigest: identity?.contract?.digest ?? null };
+      });
+      const checked = verifyLegacyUnactivatedWaiver(read.record, {
+        target, workUnit, tasks, verify: verification.verify, path: read.path,
+      });
+      return checked.ok ? checked.record : null;
+    },
+  };
+}
+
+/** Authenticate one covered task's durable activation evidence, if any. */
+function resolveCoveredTaskAssurance(target, io, context) {
+  const { backend, taskId, params, projectConfig: config, repositoryIdentity, verify } = context;
+  let identity;
+  try {
+    identity = closeoutTaskIdentity(target, backend, taskId, params, config, io);
+  } catch (error) {
+      const reasons = [error.publicMessage ?? error.message];
+      return { taskId, usable: false, activation: null, failureCategory: activationFailureCategory(reasons), reasons };
+  }
+  if (!identity) {
+    return { taskId, usable: false, activation: null, failureCategory: 'activation_malformed', reasons: [`task '${taskId}' could not be read for activation evaluation`] };
+  }
+  // Legacy host-signed provenance stays first, exactly as dispatch resolves it.
+  if (identity.contract.projection?.activation_capture_ref) {
+    const ref = identity.contract.projection.activation_capture_ref;
+    let capture;
+    try {
+      const path = resolve(target, ref);
+      const root = resolve(target);
+      if (path !== root && !path.startsWith(`${root}\\`) && !path.startsWith(`${root}/`)) throw new PublicCommandError('legacy activation capture reference escapes the target');
+      capture = JSON.parse(readFileSync(path, 'utf8'));
+      const store = loadHostTrustStore(target, {
+        operatorTrustRoot: io?.operatorTrustRoot ?? undefined,
+        protectedBoundary: io?.hostAuthority ?? undefined,
+      });
+      const disposition = activationCaptureDisposition(capture, {
+        capabilities: activationCapabilityInventory(store.ok ? store.adapters : {}),
+        intendedTaskId: taskId,
+        repositoryIdentity,
+      });
+      if (!disposition.ok || capture.normalizedActivationDigest !== identity.contract.projection.activation_input_digest) {
+        const reasons = disposition.errors ?? ['legacy activation capture does not match the task contract'];
+        return { taskId, usable: false, activation: null, failureCategory: activationFailureCategory(reasons), reasons };
+      }
+    } catch (error) {
+      return { taskId, usable: false, activation: null, failureCategory: activationFailureCategory([error.message]), reasons: [error.message] };
+    }
+    return {
+      taskId,
+      usable: true,
+      activation: 'host_signed',
+      source: 'legacy_task_capture',
+      derivation: 'legacy_task_capture',
+      producer: capture.adapter,
+      channel: 'protected_host_boundary',
+      authorityDigest: returnActivationAuthorityDigest({ activationBinding: null, activation: capture }),
+      reasons: [],
+    };
+  }
+  let evidence;
+  try {
+    evidence = loadTaskActivationEvidence(target, { backend, taskId });
+  } catch (error) {
+    const reasons = [error.publicMessage ?? error.message];
+    return { taskId, usable: false, activation: null, failureCategory: activationFailureCategory(reasons), reasons };
+  }
+  if (!evidence) {
+    return { taskId, usable: false, activation: null, failureCategory: 'activation_evidence_absent', reasons: ['no activation grant or legacy capture'] };
+  }
+  const externalRevocations = readExternalActivationRevocations(target, {
+    operatorActivationRoot: io?.operatorActivationRoot ?? undefined,
+  });
+  if (!externalRevocations.ok) {
+    return { taskId, usable: false, activation: null, failureCategory: activationFailureCategory(externalRevocations.errors), reasons: externalRevocations.errors };
+  }
+  const resolved = resolveTaskActivationBinding({
+    grant: evidence.grant,
+    binding: evidence.binding,
+    repositoryIdentity,
+    backend,
+    taskId,
+    carrier: identity.carrier,
+    taskContractDigest: identity.contract.digest,
+    verifySignature: verify,
+    revocations: [...externalRevocations.revocations, ...evidence.revocations],
+    decomposition: evidence.binding?.derivation === 'committed_decomposition_membership'
+      ? readCommittedDecomposition(target, evidence.binding?.decompositionSource?.sourceRef)
+      : null,
+  });
+  return {
+    taskId,
+    usable: resolved.ok,
+    activation: resolved.ok ? resolved.assurance : null,
+    source: 'activation_grant',
+    derivation: evidence.binding?.derivation ?? null,
+    producer: evidence.grant?.producer?.id ?? null,
+    channel: evidence.grant?.producer?.channel ?? null,
+    authorityDigest: returnActivationAuthorityDigest({
+      activationBinding: {
+        kind: ACTIVATION_BINDING_KIND,
+        schemaVersion: ACTIVATION_BINDING_SCHEMA_VERSION,
+        grant: evidence.grant,
+        binding: evidence.binding,
+      },
+      activation: null,
+    }),
+    failureCategory: resolved.ok ? null : activationFailureCategory(resolved.errors ?? []),
+    reasons: resolved.ok ? [] : resolved.errors.map(item => item.message),
+  };
+}
+
+/** Read one covered task's canonical carrier and current contract digest. */
+function closeoutTaskIdentity(target, backend, taskId, params, config, io) {
+  if (backend === 'files') {
+    const info = filesTaskInfo(target, config, taskId);
+    if (!info.exists) return null;
+    const body = readFileSync(join(target, info.relPath ?? ''), 'utf-8');
+    const contract = taskContractDigest(body);
+    if (!contract.ok) throw new PublicCommandError(`task '${taskId}' contract is invalid: ${contract.error}`);
+    const history = loadFilesTaskContractRecords(target, taskId);
+    return {
+      carrier: info.relPath,
+      contract,
+      snapshot: {
+        backend: 'files', taskId, carrier: info.relPath, body,
+        digest: `sha256:${createHash('sha256').update(body, 'utf8').digest('hex')}`,
+        trustedRecords: history.trustedRecords,
+        trustedRecordErrors: history.errors,
+      },
+    };
+  }
+  const resolved = resolveCoveredGitHubTask(params?.inventory, taskId);
+  if (!resolved.found) return null;
+  const fetched = fetchGitHubTaskBody({
+    issue: resolved.issue.number,
+    repo: params?.repo,
+    commandRunner: params?.ghRunner ?? io.ghCommandRunner ?? defaultGhCommandRunner,
+    projectMapConfig: config,
+  });
+  const contract = taskContractDigest(fetched.body);
+  if (!contract.ok) throw new PublicCommandError(`task '${taskId}' contract is invalid: ${contract.error}`);
+  return {
+    carrier: `issue:${resolved.issue.number}`,
+    contract,
+    snapshot: {
+      backend: 'github', taskId, carrier: `issue:${resolved.issue.number}`, body: fetched.body,
+      digest: fetched.digest,
+      trustedRecords: fetched.trustedRecords,
+      trustedRecordErrors: fetched.trustedRecordErrors,
+    },
+  };
 }
 
 /**
@@ -113,6 +434,10 @@ async function buildEvaluationParams(target, config, opts, io) {
       },
     },
   };
+  // Both assurance dimensions are resolved from operator-owned state outside
+  // the repository, never from a claim inside it. Resolution failure is carried
+  // as an absent context so the closeout assurance gate fails closed.
+  params.assurance = resolveCloseoutAssuranceContext(target, io, backend, params);
   if (backend === 'github') {
     const ghRunner = io.ghCommandRunner ?? defaultGhCommandRunner;
     params.inventory = fetchGitHubTaskInventory(ghRunner, {
@@ -174,6 +499,88 @@ function printReasons(reasons, io) {
     io.out(`    owner: ${item.owner}`);
     if (item.repair) io.out(`    repair: ${item.repair}`);
   }
+}
+
+/**
+ * Print both assurance dimensions prominently, with the honest limitation text
+ * verbatim. A closeout that rests on `operator_confirmed` activation and
+ * `session_reported` returns must say so where a human will read it.
+ */
+function printAssurance(assurance, io) {
+  if (!assurance) return;
+  io.out(`  assurance mode: ${assurance.mode} (policy source: ${assurance.policy_source})`);
+  io.out(`    minimum activation: ${assurance.minimum_activation}; minimum return: ${assurance.minimum_return}`);
+  io.out(`    observed return assurance: ${assurance.observed_return_assurance ?? 'missing'}`);
+  if (assurance.return_capability_limitation) io.out(`    return capability limitation: ${assurance.return_capability_limitation}`);
+  if (assurance.compatibility_waiver) io.out(`    compatibility waiver: ${assurance.compatibility_waiver.waiverId} (${assurance.compatibility_waiver.waivedDimensions.join(', ')}; no activation or return-authentication claim)`);
+  for (const task of assurance.tasks ?? []) {
+    const derivation = task.binding_derivation ? ` (${task.binding_derivation})` : '';
+    io.out(`    ${task.task_id}: activation ${task.activation ?? 'unknown'}${derivation}`);
+  }
+  for (const limitation of assurance.limitations ?? []) io.out(`    note: ${limitation}`);
+}
+
+async function applyLegacyCompatibilityWaiver(target, params, evaluation, opts, io) {
+  if (!opts.legacyUnactivated) return evaluation;
+  if (params.assurance?.mode !== 'standard') throw new PublicCommandError('--legacy-unactivated is permitted only in standard activation mode');
+  const assuranceCategories = new Set([
+    'activation_evidence_absent', 'return_evidence_absent', 'activation_revoked',
+    'activation_expired', 'activation_malformed', 'activation_stale',
+    'activation_for_changed_contract', 'return_evidence_malformed',
+    'return_verification_failed', 'return_evidence_stale',
+    'return_for_another_generation', 'host_receipt_invalid',
+    'trust_key_adapter_mismatch', 'ambiguous_or_conflicting_evidence',
+  ]);
+  const assuranceFailures = evaluation.reasons.filter(item => assuranceCategories.has(item.category));
+  const absentScopes = [...new Set(assuranceFailures
+    .map(item => item.category)
+    .filter(category => category === 'activation_evidence_absent' || category === 'return_evidence_absent'))].sort();
+  const negativeFailures = assuranceFailures.filter(item => !absentScopes.includes(item.category));
+  if (negativeFailures.length > 0) {
+    throw new PublicCommandError(`legacy compatibility cannot waive unusable assurance evidence: ${negativeFailures.map(item => item.message).join('; ')}`);
+  }
+  if (absentScopes.length === 0) {
+    return evaluation;
+  }
+  const tasks = (evaluation.packet.covered_tasks ?? []).map(taskId => {
+    const identity = closeoutTaskIdentity(target, params.backend, taskId, params, params.config, io);
+    if (!identity) throw new PublicCommandError(`compatibility waiver cannot resolve covered task '${taskId}'`);
+    return { taskId, taskContractDigest: identity.contract.digest };
+  });
+  const verification = resolveActivationVerification(target, io);
+  const existing = readLegacyUnactivatedWaiver(target, params.workUnit);
+  if (existing.record) {
+    const checked = verifyLegacyUnactivatedWaiver(existing.record, {
+      target, workUnit: params.workUnit, tasks, verify: verification.verify, path: existing.path,
+    });
+    if (checked.ok && absentScopes.every(scope => existing.record.waivedDimensions.includes(scope))) {
+      params.assurance.legacyWaiver = existing.record;
+      return evaluateCloseout(target, params);
+    }
+  }
+  const reason = optionString(opts.legacyReason);
+  if (!reason) throw new CliUsageError('closeout prepare --legacy-unactivated requires --legacy-reason when no current waiver exists');
+  if (!io.stdinIsTTY || io.ci) throw new PublicCommandError('creating a legacy-unactivated waiver requires an interactive operator terminal');
+  const prompts = io.createPrompts();
+  try {
+    if (!opts.json) {
+      io.out(`Legacy compatibility scope: ${params.workUnit}; tasks: ${tasks.map(item => `${item.taskId} (${item.taskContractDigest})`).join(', ')}`);
+      io.out(`Missing-evidence dimensions waived: ${absentScopes.join(', ')}.`);
+      io.out('This makes no activation or return-authentication claim and cannot suppress unusable evidence.');
+    }
+    const answer = String(await prompts.ask("Type 'waive' to create the short-lived compatibility waiver: ")).trim();
+    if (answer !== 'waive') throw new PublicCommandError('legacy-unactivated compatibility waiver was not confirmed');
+  } finally { prompts.close?.(); }
+  const provisioned = provisionOperatorActivationKey(target, { operatorActivationRoot: io.operatorActivationRoot ?? undefined });
+  if (!provisioned.ok) throw new PublicCommandError(`operator confirmation key is unavailable: ${provisioned.errors.join('; ')}`);
+  const waiver = createLegacyUnactivatedWaiver({
+    target, workUnit: params.workUnit, tasks, reason, key: provisioned.key,
+    waivedDimensions: absentScopes,
+  });
+  const written = writeLegacyUnactivatedWaiver(target, waiver);
+  if (!written.ok) throw new PublicCommandError(`compatibility waiver could not be written: ${written.errors.join('; ')}`);
+  params.assurance.legacyWaiver = waiver;
+  return evaluateCloseout(target, params);
 }
 
 function resolvePacketOutputPath(target, output, workUnit) {
@@ -285,7 +692,8 @@ export async function cmdCloseout(args, io = createIo()) {
         return EXIT_USAGE;
       }
       const params = await buildEvaluationParams(target, config, opts, io);
-      const evaluation = evaluateCloseout(target, params);
+      let evaluation = evaluateCloseout(target, params);
+      evaluation = await applyLegacyCompatibilityWaiver(target, params, evaluation, opts, io);
       const packet = evaluation.packet;
       const contractErrors = evaluation.contractErrors?.length
         ? evaluation.contractErrors
@@ -302,6 +710,7 @@ export async function cmdCloseout(args, io = createIo()) {
         io.out(`${packet.work_unit}: ${packet.recommended_status} (packet ${packet.digest})`);
         io.out(`  publishable: ${packet.publishable}  completion_eligible: ${packet.completion_eligible}`);
         io.out(`  packet: ${packetPath} (transient; provenance is the digest)`);
+        printAssurance(packet.assurance, io);
         if (packet.reasons.length > 0) printReasons(packet.reasons, io);
       }
       return packet.completion_eligible ? 0 : 1;
@@ -407,6 +816,30 @@ export async function cmdCloseout(args, io = createIo()) {
         improvementRef: packet.improvement_refs,
         repo: optionString(opts.repo),
       }, io);
+      if (packet.assurance?.compatibility_waiver) {
+        if (liveParams.assurance?.mode !== 'standard') {
+          io.err('closeout record: a legacy-unactivated compatibility waiver is invalid under hardened mode');
+          return 1;
+        }
+        const tasks = packet.covered_tasks.map(taskId => {
+          const identity = closeoutTaskIdentity(target, liveParams.backend, taskId, liveParams, liveParams.config, io);
+          return { taskId, taskContractDigest: identity?.contract?.digest ?? null };
+        });
+        const verification = resolveActivationVerification(target, io);
+        const storedWaiver = readLegacyUnactivatedWaiver(target, packet.work_unit);
+        if (!storedWaiver.record || storedWaiver.record.digest !== packet.assurance.compatibility_waiver.digest) {
+          io.err('closeout record: compatibility waiver does not match the canonical stored waiver');
+          return 1;
+        }
+        const waiver = verifyLegacyUnactivatedWaiver(packet.assurance.compatibility_waiver, {
+          target, workUnit: packet.work_unit, tasks, verify: verification.verify, path: storedWaiver.path,
+        });
+        if (!waiver.ok) {
+          io.err(`closeout record: compatibility waiver is no longer current: ${waiver.errors.join('; ')}`);
+          return 1;
+        }
+        liveParams.assurance.legacyWaiver = waiver.record;
+      }
       const live = evaluateCloseout(target, liveParams);
       const staleReasons = [];
       if (live.contractErrors?.length > 0) {

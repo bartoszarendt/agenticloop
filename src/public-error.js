@@ -36,7 +36,7 @@ export const TASK_TRANSITION_NEGATIVE_CONTEXT = Object.freeze({
 });
 
 const FINDING_REPAIR = Object.freeze({
-  'activation.capture.expired': 'Obtain a fresh supported host capture and create or dispatch a fresh activation-bound task as applicable; do not mutate or silently rebind the expired task.',
+  'activation.capture.expired': 'Run npx agenticloop activate <task-id> to bind current operator-confirmed authority to the existing task, or obtain a fresh supported host capture when hardened host_signed assurance is required; never edit the expired capture.',
   'activation.capture.unsupported': 'Use a host integration with a resolved supported parser-owned capture capability; a scaffold or unsupported capture cannot dispatch.',
   'activation.capture.mismatch': 'Stop and obtain a new host capture for the exact authorized activation bytes.',
   'activation.capture.malformed': 'Repair or regenerate the malformed host capture, then rerun without changing task state.',

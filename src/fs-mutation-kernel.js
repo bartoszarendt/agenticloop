@@ -153,7 +153,7 @@ export function atomicWriteFile(path, content) {
 }
 
 /** Atomically create a new file without ever replacing an existing path. */
-function atomicCreateFile(path, content) {
+export function atomicCreateFile(path, content) {
   mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {

@@ -74,6 +74,10 @@ function writeTask(target, taskId, status, grouping) {
     '',
     grouping,
     '',
+    '## Required Checks',
+    '',
+    '- [RC-1] command: `npm test`',
+    '',
     '## Comments',
     '',
     '',
@@ -81,7 +85,14 @@ function writeTask(target, taskId, status, grouping) {
 }
 
 function run(args, target) {
-  return runCliInProcess(args.concat(['--target', target]));
+  const compatibility = args[0] === 'closeout' && args[1] === 'prepare'
+    ? ['--legacy-unactivated', '--legacy-reason', 'historical unactivated incident fixture']
+    : [];
+  return runCliInProcess(args.concat(compatibility, ['--target', target]), {
+    operatorActivationRoot: join(tmpDir, 'operator-activation'),
+    stdinIsTTY: true, isTTY: true, ci: false,
+    promptFactory: () => ({ ask: async () => 'waive', close() {} }),
+  });
 }
 
 function wireReport(artifact, coveredTasks, overrides = {}) {
@@ -122,6 +133,7 @@ describe('reproduced closeout-integrity failure sequence', () => {
     // 2. Status exposes it as legacy history, never valid completion.
     const legacyStatus = await run(['closeout', 'status', '--work-unit', 'milestone:M00', '--json'], target);
     assert.equal(legacyStatus.status, 1);
+    assert.ok(legacyStatus.stdout, legacyStatus.stderr);
     assert.equal(JSON.parse(legacyStatus.stdout).state, 'legacy_unprovenanced');
 
     // 3. Preparation emits a truthful correction packet (first invalid transition stops here).

@@ -3,6 +3,110 @@
 ## Unreleased
 
 ### Added
+- **Universal, host-neutral activation.** Agentic Loop no longer requires a host
+  integration to authorize work. Every shipped adapter still declares activation
+  capture `unsupported` - that is unchanged and permanent - but `unsupported` no
+  longer means unusable. One explicit operator command outside the agent session
+  authorizes existing tasks:
+
+  ```text
+  /agenticloop T-016 T-017                  # in the agent session, as usual
+  npx agenticloop activate T-016 T-017      # once, in your own terminal
+  ```
+
+  The command prints the exact tasks, carriers, contract digests, repository,
+  work unit, and resulting assurance, then requires the operator to type a
+  confirmation. It refuses non-interactive invocation and refuses to run under
+  CI, and there is deliberately no `--yes`. **Existing tasks and projects do not
+  need to be recreated**: ids, bodies, history, decomposition state, and
+  repository state are all preserved, and no task record is rewritten.
+
+  Also available: `agenticloop activate --work-unit <id>` (derives child
+  bindings from committed Maintainer-attributed decomposition evidence for
+  canonical ready-set members only), `agenticloop activation status`,
+  `agenticloop activation revoke <grant-id>`, and
+  `agenticloop activation provision-key`.
+- **Two independent assurance dimensions.** Activation is graded `host_signed`
+  or `operator_confirmed`; role returns are graded `host_receipt` or
+  `session_reported`. `standard` mode requires at least
+  `operator_confirmed`/`session_reported`; `hardened` mode requires
+  `host_signed`/`host_receipt`. Both grades, their producer and channel, the
+  binding derivation, the effective policy and its source, and the honest
+  limitation text travel through dispatch packets, validation results, return
+  results, audit gate output, closeout packets, and human-readable output.
+  `operator_confirmed` and `session_reported` are never described as
+  cryptographically host-authenticated anywhere.
+- **Durable activation records.** `agenticloop.activation-grant` (schema
+  version 1) and `agenticloop.task-activation-binding` (schema version 1) live
+  under `.agenticloop/activations/`, written as one transaction with a versioned
+  mutation receipt, so a failed multi-task activation leaves no partial
+  authority. A binding pins the exact current task-contract digest, so a
+  contract change supersedes it. Both records are signed with an operator key
+  held **outside** the repository; a hand-authored record inside the target
+  cannot self-authorize however self-consistent its fields and digest are, and
+  copying the directory to another checkout carries no authority.
+- **Activation policy.** Repository configuration may request a stronger minimum
+  through `agenticloop.json` `activation.mode`, but it can never lower the
+  external operator pin at
+  `~/.agenticloop/operator-activation/<target-sha256>.policy.json`. Hardened
+  policy therefore never rests on model-writable repository configuration alone,
+  and a malformed pin or request fails closed at hardened.
+- **`agenticloop host-trust`** provides bounded provisioning and status for the
+  external operator trust store: `status`, `register`, `rotate`, and `revoke`,
+  each with `--dry-run`. Registration accepts only a public key. There is
+  deliberately no command that signs an activation capture or a return receipt
+  with the protected host key.
+
+### Changed
+- `agenticloop.role-preparation` is schema version 6. A packet now binds exactly
+  one activation model - the legacy host-signed capture in `activation`, or the
+  new `activationBinding` authenticated envelope containing the complete signed
+  grant plus task binding - together
+  with a closed `agenticloop.dispatch-assurance` statement. Versions 2 through 5
+  are recognized as authentic prior evidence and rejected as
+  `dispatch.packet.stale`; regenerate rather than migrating. Version 5 is not
+  migrated because it predates the assurance dimensions entirely.
+- `task prepare-dispatch` resolves activation in one fixed order: a current
+  valid legacy host-signed task capture, then a current valid task activation
+  binding, then blocked. An existing activation-bound project behaves exactly as
+  before. An unactivated task is refused with the exact
+  `npx agenticloop activate <task-id>` command as its first safe repair.
+- `task verify-return` accepts a return with no host producer receipt only in
+  `standard` mode, grades it `session_reported`, and emits a warning diagnostic
+  stating that the producing role identity was **not** host-authenticated. The
+  existing `host_receipt` path is unchanged, and hardened policy still refuses a
+  receipt-less return.
+- Packet v6 independently binds the nullable return adapter. Successful returns
+  persist `agenticloop.return-verification` v1 evidence, and closeout derives
+  assurance only from observed records, never capability ceilings.
+- Revocation uses an externally authoritative repository-specific create-only
+  tombstone; deleting target-local ignored state cannot restore a grant.
+- Missing evidence fails both closeout modes. Standard mode has an explicit
+  interactive `--legacy-unactivated` compatibility waiver for exact old work;
+  it makes no activation claim and hardened mode rejects it.
+- `agenticloop.dispatch-clean-state` is schema version 3. It adds the
+  operator-owned activation state class, so untracked records under
+  `.agenticloop/activations/` no longer fail the dispatch clean gate. Like
+  scratch state, they remain refused as implementation work at the return
+  boundary. `init` and `setup` add `.agenticloop/activations/` to the managed
+  `.gitignore` block: these are short-lived, machine-local, externally
+  authenticated records, and committing them would add noise without adding
+  authority.
+- The closeout packet carries an `assurance` block and an `assurance` gate.
+  Hardened closeout fails when either dimension is below policy; standard
+  closeout may proceed with `operator_confirmed`/`session_reported` and reports
+  those grades prominently.
+- The generated OpenCode command - and the canonical activation command every
+  adapter derives from - now tells the operator the exact
+  `npx agenticloop activate ...` command to run outside the agent session, then
+  to continue in the same project and session. It remains fail-closed: no
+  `$ARGUMENTS`, `$1`, `$2`, shell interpolation, permission prompt, or
+  model-authored artifact is ever activation proof.
+- `task prepare-dispatch`, `task verify-return`, and closeout no longer fail on
+  a target without `agenticloop.json`. An absent file means "no target
+  overrides"; a present but unreadable one is still a typed malformed context.
+
+### Added (earlier in this release)
 - `prepareAuditorReturnReportForSigning()` gives a protected host the exact
   normalized Auditor report and the exact `auditor-return-report.v1` digest the
   CLI will later derive, without needing a receipt that does not exist yet. The

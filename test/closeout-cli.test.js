@@ -24,6 +24,8 @@ import { parseCloseoutMarkers, validateCloseoutPacket } from '../src/closeout-co
 import { serializeValidationResult } from '../src/result-envelope.js';
 import { getProjectRoleCapabilities } from '../src/role-capabilities.js';
 
+const TASK_TEMPLATE = readFileSync(new URL('../memory/task-record.md', import.meta.url), 'utf8');
+
 let tmpDir;
 before(() => { tmpDir = mkdtempSync(join(tmpdir(), 'al-closeout-')); });
 after(() => { rmSync(tmpDir, { recursive: true, force: true }); });
@@ -66,24 +68,14 @@ function makeGitTarget(name, { grouping = 'milestone' } = {}) {
 }
 
 function writeTask(target, taskId, status, grouping = '') {
+  const content = TASK_TEMPLATE
+    .replace(/^task_id: T-001$/m, `task_id: ${taskId}`)
+    .replace(/^status: agent-ready$/m, `status: ${status}`)
+    .replace(/^# T-001 - Short Task Title$/m, `# ${taskId}`)
+    .replace('## Grouping\nOptional when the target project uses grouping.', `## Grouping\n\n${grouping}`);
   writeFileSync(
     join(target, '.agenticloop', 'tasks', `${taskId}.md`),
-    [
-      '---',
-      `task_id: ${taskId}`,
-      `status: ${status}`,
-      '---',
-      '',
-      `# ${taskId}`,
-      '',
-      '## Grouping',
-      '',
-      grouping,
-      '',
-      '## Comments',
-      '',
-      '',
-    ].join('\n'),
+    content,
     'utf-8'
   );
 }
@@ -118,7 +110,17 @@ function run(args, target) {
 }
 
 async function closeout(args, target, options = {}) {
-  return runCliInProcess(['closeout', ...args, '--target', target], options);
+  const compatibility = args[0] === 'prepare'
+    ? ['--legacy-unactivated', '--legacy-reason', 'pre-activation test fixture']
+    : [];
+  return runCliInProcess(['closeout', ...args, ...compatibility, '--target', target], {
+    operatorActivationRoot: join(tmpDir, 'operator-activation'),
+    stdinIsTTY: true,
+    isTTY: true,
+    ci: false,
+    promptFactory: () => ({ ask: async () => 'waive', close() {} }),
+    ...options,
+  });
 }
 
 async function audit(args, target) {
@@ -160,7 +162,7 @@ describe('closeout prepare', () => {
     ], target);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     const packet = JSON.parse(readFileSync(packetPath, 'utf-8'));
-    assert.equal(packet.completion_eligible, true);
+    assert.equal(packet.completion_eligible, true, JSON.stringify(packet.reasons));
     assert.equal(packet.recommended_status, 'complete');
     assert.equal(packet.publishable, true);
     assert.match(packet.digest, /^sha256:[0-9a-f]{64}$/);
@@ -198,7 +200,7 @@ describe('closeout prepare', () => {
     assert.equal(packet.audit_opt_out, true);
     assert.equal(packet.audit, null);
     // The opt-out is visible; closeout never claims certification.
-    assert.equal(packet.completion_eligible, true);
+    assert.equal(packet.completion_eligible, true, JSON.stringify(packet.reasons));
     assert.equal(packet.recommended_status, 'complete');
   });
 

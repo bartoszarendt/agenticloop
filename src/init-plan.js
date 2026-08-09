@@ -25,6 +25,12 @@ import {
   MEMORY_SCAFFOLD_RELATIVE_PATH,
   PACKAGE_SOURCE_RELATIVE_PATHS,
   SCRATCH_DIRECTORY_RELATIVE_PATH,
+  ACTIVATIONS_DIRECTORY_RELATIVE_PATH,
+  ACTIVATIONS_GITIGNORE_PATTERNS,
+  RETURN_VERIFICATIONS_DIRECTORY_RELATIVE_PATH,
+  RETURN_VERIFICATIONS_GITIGNORE_PATTERNS,
+  CLOSEOUT_WAIVERS_DIRECTORY_RELATIVE_PATH,
+  CLOSEOUT_WAIVERS_GITIGNORE_PATTERNS,
   SCRATCH_GITIGNORE_PATTERNS,
   WORKTREES_DIRECTORY_RELATIVE_PATH,
   WORKTREES_GITIGNORE_PATTERNS,
@@ -52,6 +58,9 @@ const MEMORY_SCAFFOLD = bundledToolkitPath(MEMORY_SCAFFOLD_RELATIVE_PATH);
 const MANAGED_GITIGNORE_ENTRIES = Object.freeze([
   { dir: SCRATCH_DIRECTORY_RELATIVE_PATH, patterns: SCRATCH_GITIGNORE_PATTERNS },
   { dir: WORKTREES_DIRECTORY_RELATIVE_PATH, patterns: WORKTREES_GITIGNORE_PATTERNS },
+  { dir: ACTIVATIONS_DIRECTORY_RELATIVE_PATH, patterns: ACTIVATIONS_GITIGNORE_PATTERNS },
+  { dir: RETURN_VERIFICATIONS_DIRECTORY_RELATIVE_PATH, patterns: RETURN_VERIFICATIONS_GITIGNORE_PATTERNS },
+  { dir: CLOSEOUT_WAIVERS_DIRECTORY_RELATIVE_PATH, patterns: CLOSEOUT_WAIVERS_GITIGNORE_PATTERNS },
 ]);
 
 function createPlan(command) {
@@ -641,7 +650,7 @@ function planGitignoreActions(target, plan) {
     path: '.gitignore',
     category: 'gitignore',
     ownership: 'shared',
-    reason: 'gitignore Agentic Loop scratch and worktree directories',
+    reason: 'gitignore Agentic Loop scratch, worktree, and operator activation directories',
     content,
     baseHash: existed ? hashFileOrNull(gitignorePath) : null,
     display: existed ? `.gitignore (${summary} appended)` : `.gitignore (created with ${summary})`,

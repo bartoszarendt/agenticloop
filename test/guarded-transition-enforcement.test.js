@@ -410,7 +410,7 @@ describe('prior-gate receipts are verified on read', () => {
       'intended_creations:', '  - src/new.js', '---', '', '# Draft', '',
       '## Task', 'Readiness.', '', '## Source Documents Reviewed', '- README.md', '',
       '## Current State', 'Draft.', '', '## Scope', 'One field.', '', '## Out of Scope', 'Everything else.', '',
-      '## Acceptance Criteria', '- valid', '', '## Required Checks', '- npm test', '',
+      '## Acceptance Criteria', '- valid', '', '## Required Checks', '- [RC-1] command: `npm test`', '',
       '## Expected Files or Areas', '- src/', '', '## Implementation Notes', 'none', '',
       '## Completion Summary Template', 'none', '', '## Reviewer Checklist', '- [ ] review', '',
       '[[agent: maintainer]]', '',
@@ -498,14 +498,19 @@ describe('GitHub closeout resumes the terminal transition after publication', ()
     const packetPath = join(target, '.agenticloop', 'tmp', 'github-packet.json');
     const prepared = await runCliInProcess([
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
-      '--artifact', `commit:${full}`, '--output', packetPath, '--target', target,
-    ], { ghCommandRunner: runner });
+      '--artifact', `commit:${full}`, '--output', packetPath,
+      '--legacy-unactivated', '--legacy-reason', 'historical unactivated transition fixture', '--target', target,
+    ], {
+      ghCommandRunner: runner, operatorActivationRoot: join(temp, 'operator-activation'),
+      stdinIsTTY: true, isTTY: true, ci: false,
+      promptFactory: () => ({ ask: async () => 'waive', close() {} }),
+    });
     assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
 
     // Run 1: the marker publishes, then the terminal transition fails.
     const first = await runCliInProcess([
       'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
-    ], { ghCommandRunner: runner });
+    ], { ghCommandRunner: runner, operatorActivationRoot: join(temp, 'operator-activation') });
     assert.notEqual(first.status, 0, 'a failed terminal transition must not report success');
     assert.equal(comments.length, 1, 'the marker published exactly once');
     assert.match(carrier.body, /status: accepted/);
@@ -515,7 +520,7 @@ describe('GitHub closeout resumes the terminal transition after publication', ()
     state.failBodyEdit = false;
     const second = await runCliInProcess([
       'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
-    ], { ghCommandRunner: runner });
+    ], { ghCommandRunner: runner, operatorActivationRoot: join(temp, 'operator-activation') });
     assert.equal(second.status, 0, `${second.stdout}${second.stderr}`);
     assert.match(carrier.body, /status: "?closed"?/, 'the rerun must complete the terminal transition');
     assert.equal(comments.length, 1, 'the rerun must not republish the marker');

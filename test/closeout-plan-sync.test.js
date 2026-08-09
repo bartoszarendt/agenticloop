@@ -71,7 +71,8 @@ function writeTask(target, taskId, status) {
     join(target, '.agenticloop', 'tasks', `${taskId}.md`),
     [
       '---', `task_id: ${taskId}`, `status: ${status}`, '---', '',
-      `# ${taskId}`, '', '## Grouping', '', 'milestone:M00', '', '## Comments', '', '',
+      `# ${taskId}`, '', '## Grouping', '', 'milestone:M00', '',
+      '## Required Checks', '', '- [RC-1] command: `npm test`', '', '## Comments', '', '',
     ].join('\n'),
     'utf-8'
   );
@@ -106,7 +107,14 @@ async function audit(args, target) {
 }
 
 async function closeout(args, target) {
-  return runCliInProcess(['closeout', ...args, '--target', target]);
+  const compatibility = args[0] === 'prepare'
+    ? ['--legacy-unactivated', '--legacy-reason', 'historical unactivated plan-sync fixture']
+    : [];
+  return runCliInProcess(['closeout', ...args, ...compatibility, '--target', target], {
+    operatorActivationRoot: join(tmpDir, 'operator-activation'),
+    stdinIsTTY: true, isTTY: true, ci: false,
+    promptFactory: () => ({ ask: async () => 'waive', close() {} }),
+  });
 }
 
 async function certify(target) {

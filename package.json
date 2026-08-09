@@ -16,6 +16,8 @@
     "./auditor-return-receipt": "./src/auditor-return-receipt.js",
     "./audit-report-schema": "./src/audit-report-schema.js",
     "./host-trust": "./src/host-trust.js",
+    "./activation-grant": "./src/activation-grant.js",
+    "./activation-policy": "./src/activation-policy.js",
     "./protected-host-boundary": "./src/protected-host-boundary.js",
     "./package.json": "./package.json",
     "./src/*": "./src/*",

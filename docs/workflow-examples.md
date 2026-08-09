@@ -81,7 +81,53 @@ record:
 
 Stop for human approval before implementation.
 
-### 8. Engineer implementation
+### 8. Activate the tasks
+
+Authoring a task record is not authorization to work on it. No host can prove
+activation from inside a session, so the operator does it explicitly, in their
+own terminal:
+
+```text
+npx agenticloop activate T-001
+```
+
+The command shows the exact task ids, carriers, contract digests, repository,
+and resulting assurance, then asks for a typed confirmation. Then continue in
+the same OpenCode session. Several tasks can share one confirmation:
+
+```text
+npx agenticloop activate T-016 T-017
+```
+
+A decomposed work unit can be activated from its committed decomposition:
+
+```text
+npx agenticloop activate --work-unit phase:4
+```
+
+Migrating an existing project needs nothing else: the tasks keep their ids,
+bodies, history, and decomposition state. Check state at any time with
+`npx agenticloop activation status`.
+
+From here, dispatch and closeout report both assurance dimensions truthfully:
+
+```text
+activation: operator_confirmed
+return:     session_reported
+```
+
+Neither is host-authenticated. To require `host_signed` activation and
+`host_receipt` returns, register a protected host adapter with
+`npx agenticloop host-trust register ...` and pin hardened mode.
+
+Select a protected return adapter independently with `--return-adapter` when a
+host receipt is required, then run `task verify-return` to persist the observed
+evidence for closeout. Missing evidence never satisfies a minimum. Genuinely
+pre-activation work may use the explicit interactive standard-only
+`--legacy-unactivated --legacy-reason <text>` waiver, which makes no activation
+claim; hardened mode rejects it.
+
+### 9. Engineer implementation
 
 After approval, the orchestrator delegates to the engineer. The engineer:
 
@@ -96,7 +142,7 @@ After approval, the orchestrator delegates to the engineer. The engineer:
 For files-backed work, the implementation artifact and review outcome stay in the task file. For
 GitHub-backed work, they project to the linked PR and review markers.
 
-### 9. Maintainer review
+### 10. Maintainer review
 
 The orchestrator routes the implementation artifact to the maintainer. The
 maintainer uses `[[review-and-accept]]`, checks for an existing review marker on
@@ -131,7 +177,7 @@ it; markers inside such regions are treated as quoted examples, not live state.
 For files-backed work the same values are set in task-file frontmatter
 (`review_status` and `review_mode`).
 
-### 10. Closeout
+### 11. Closeout
 
 The maintainer runs `[[task-closeout]]`, a verify-and-mark gate. It confirms the
 inline `## Scope Completed` summary and evidence in each task record are

@@ -468,6 +468,13 @@ function normalizeSlashes(value) {
 export function classifyCloseoutPath(relPath, options = {}) {
   const normalized = normalizeSlashes(relPath);
   if (!normalized) return 'product';
+  for (const prefix of [
+    '.agenticloop/activations/',
+    '.agenticloop/returns/verifications/',
+    '.agenticloop/closeout-waivers/',
+  ]) {
+    if (normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)) return 'workflow_metadata';
+  }
   const scratch = normalizeSlashes(options.scratchRelPrefix ?? '.agenticloop/tmp/');
   if (normalized === scratch.replace(/\/$/, '') || normalized.startsWith(scratch.endsWith('/') ? scratch : `${scratch}/`)) {
     // Transient packet activity is never product.
@@ -589,6 +596,9 @@ export function validateWorkflowDeltaContent(classification, change, options = {
     if (isCarrier) {
       // The carrier permits the exact marker mutation and, independently, the
       // valid terminal transition - never arbitrary carrier-file edits.
+      if (workflowRecordSubstance(oldContent) === workflowRecordSubstance(newContent)) {
+        return { ok: true };
+      }
       if (stripCloseoutMarkers(oldContent) === stripCloseoutMarkers(newContent)) {
         return { ok: true };
       }

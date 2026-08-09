@@ -53,7 +53,9 @@ import {
 import { HOST_SIGNATURE_ALGORITHM, targetRepositoryIdentity } from './host-trust.js';
 import {
   CLEAN_DISPATCH_STATE_IDENTITY,
+  PERMITTED_OPERATOR_STATE_PREFIXES,
   PERMITTED_SCRATCH_PREFIXES,
+  PERMITTED_UNTRACKED_PREFIXES,
   evaluateDispatchCleanState,
   evaluatePriorGateReceipts,
 } from './repository-state.js';
@@ -78,6 +80,19 @@ import {
   validateHostRoleCapabilityDeclaration,
   validateHostRoleCapabilityInventory,
 } from './host-role-capabilities.js';
+import {
+  ACTIVATION_ASSURANCE_LIMITATIONS,
+  ACTIVATION_ASSURANCE_VALUES,
+  ACTIVATION_CHANNELS,
+  ACTIVATION_DERIVATIONS,
+  RETURN_ASSURANCE_LIMITATIONS,
+  RETURN_ASSURANCE_VALUES,
+  activationAssuranceMeets,
+  resolveTaskActivationBinding,
+  validateActivationGrantShape,
+  validateTaskActivationBindingShape,
+} from './activation-grant.js';
+import { ACTIVATION_MODES, MODE_MINIMUMS } from './activation-policy.js';
 
 export const ACTIVATION_CAPTURE_KIND = 'agenticloop.activation-capture';
 export const ACTIVATION_CAPTURE_SCHEMA_VERSION = 2;
@@ -91,7 +106,25 @@ export const LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION = 3;
  * authentic v4 packet is recognized and routed to typed regeneration.
  */
 export const SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION = 4;
-export const DISPATCH_PREPARATION_SCHEMA_VERSION = 5;
+/**
+ * The last packet version whose only activation model was a host-signed,
+ * task-bound capture. A v5 packet carries no assurance dimensions and no
+ * activation-grant binding, so it is recognized for typed stale routing and
+ * regenerated rather than reinterpreted.
+ */
+export const ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION = 5;
+export const DISPATCH_PREPARATION_SCHEMA_VERSION = 6;
+/** Packet-carried authenticated envelope containing a complete signed grant and binding. */
+export const ACTIVATION_BINDING_KIND = 'agenticloop.activation-binding';
+export const ACTIVATION_BINDING_SCHEMA_VERSION = 1;
+/** Packet-carried, closed statement of both assurance dimensions. */
+export const DISPATCH_ASSURANCE_KIND = 'agenticloop.dispatch-assurance';
+export const DISPATCH_ASSURANCE_SCHEMA_VERSION = 1;
+/** Closed inventory of where a packet's activation authority came from. */
+export const ACTIVATION_SOURCES = Object.freeze(['legacy_task_capture', 'activation_grant']);
+export const POLICY_SOURCES = Object.freeze([
+  'default', 'repository', 'operator_pin', 'operator_pin+repository',
+]);
 /** Decomposition provenance: v1 asserted completeness, v2 derives it from a scan. */
 export const LEGACY_DECOMPOSITION_SCHEMA_VERSION = 1;
 export const DECOMPOSITION_SCHEMA_VERSION = 2;
@@ -108,7 +141,7 @@ export const ROLE_RETURN_SCHEMA_VERSION = 2;
 const SHA256_RE = /^sha256:[a-f0-9]{64}$/;
 const CONTRACT_DIGEST_RE = /^sha256:v1:[a-f0-9]{64}$/;
 const SEMANTIC_DIGEST_RE = /^sha256:agenticloop\.[a-z-]+\.v[1-9]\d*:[a-f0-9]{64}$/;
-const CLEAN_STATE_IDENTITY_RE = /^sha256:agenticloop\.dispatch-clean-state\.v1:[a-f0-9]{64}$/;
+const CLEAN_STATE_IDENTITY_RE = /^sha256:agenticloop\.dispatch-clean-state\.v3:[a-f0-9]{64}$/;
 const INTEGRITY_STATES = new Set(['verified', 'missing', 'mismatch']);
 const CHECK_OUTCOMES = new Set(['passed', 'failed', 'blocked', 'not_run']);
 const RETURN_DISPOSITIONS = new Set(['proceed', 'blocked']);
@@ -242,6 +275,7 @@ class FindingSet {
         ? options.disposition ?? DEFAULT_DISPOSITION[normalizedEvidenceState] ?? 'blocked'
         : dispositionForEvidenceState(normalizedEvidenceState),
       message: String(message),
+      ...(options.repairHint ? { repairHint: options.repairHint } : {}),
       ...(options.domain ?? {}),
     };
     if (!this.items.some(existing =>
@@ -411,6 +445,9 @@ function validation(command, ok, evidenceState, disposition, findings, domain = 
         supplied: (item?.evidenceState ?? evidenceState) !== 'missing',
         rollbackAuthorized: false,
       },
+      // A finding that already knows its exact operator repair keeps it; the
+      // presentation layer renders it ahead of the generic repair-kind text.
+      ...(item?.repairHint ? { repairHint: item.repairHint } : {}),
     })];
   });
   return createValidationResult({
@@ -468,9 +505,9 @@ function failure(command, findings, domain = {}) {
 }
 
 /** One typed finding shorthand for the common single-cause failure. */
-function singleFailure(command, evidenceState, disposition, message, domain = {}, code = null) {
+function singleFailure(command, evidenceState, disposition, message, domain = {}, code = null, repairHint = null) {
   const findings = findingSet(command, evidenceState);
-  findings.add(evidenceState, message, { disposition, code: code ?? undefined });
+  findings.add(evidenceState, message, { disposition, code: code ?? undefined, repairHint: repairHint ?? undefined });
   return failure(command, findings, domain);
 }
 
@@ -1195,8 +1232,166 @@ function validateDecompositionBinding(value, taskId, findings, options = {}) {
   validateDecompositionFreshness(value, findings, options);
 }
 
+const ACTIVATION_BINDING_FIELDS = Object.freeze(['kind', 'schemaVersion', 'grant', 'binding']);
+
+const RETURN_ADAPTER_FIELDS = Object.freeze(['adapterId', 'keyId', 'capability']);
+
+const DISPATCH_ASSURANCE_FIELDS = Object.freeze([
+  'kind', 'schemaVersion', 'mode', 'policySource', 'activation', 'activationSource',
+  'activationProducer', 'activationChannel', 'activationDerivation',
+  'minimumActivation', 'minimumReturn', 'limitations',
+]);
+
+/**
+ * Project one validated grant/binding pair into the constant-size packet
+ * binding. Like the decomposition binding, this restates verified facts; the
+ * durable records themselves are refetched and revalidated on every dispatch.
+ */
+function activationBindingProjection(grant, binding) {
+  return {
+    kind: ACTIVATION_BINDING_KIND,
+    schemaVersion: ACTIVATION_BINDING_SCHEMA_VERSION,
+    grant: structuredClone(grant),
+    binding: structuredClone(binding),
+  };
+}
+
+/**
+ * Build the packet's closed assurance statement.
+ *
+ * Both dimensions travel together, and the honest limitation text for each
+ * grade is carried verbatim so no downstream renderer has to invent it - or can
+ * quietly drop it.
+ */
+function dispatchAssurance({ policy, activation, activationSource, producerId, channel, derivation }) {
+  const limitations = [ACTIVATION_ASSURANCE_LIMITATIONS[activation]];
+  const minimumReturn = policy.minimumReturn;
+  limitations.push(RETURN_ASSURANCE_LIMITATIONS[minimumReturn]);
+  return {
+    kind: DISPATCH_ASSURANCE_KIND,
+    schemaVersion: DISPATCH_ASSURANCE_SCHEMA_VERSION,
+    mode: policy.mode,
+    policySource: policy.policySource,
+    activation,
+    activationSource,
+    activationProducer: producerId,
+    activationChannel: channel,
+    activationDerivation: derivation,
+    minimumActivation: policy.minimumActivation,
+    minimumReturn,
+    limitations,
+  };
+}
+
+function validateActivationBindingProjection(value, { taskId, contract, findings }) {
+  exactKeys(value, ACTIVATION_BINDING_FIELDS, 'dispatch activation binding', findings);
+  if (value?.kind !== ACTIVATION_BINDING_KIND) findings.malformed(`dispatch activation binding kind must be '${ACTIVATION_BINDING_KIND}'`);
+  if (value?.schemaVersion !== ACTIVATION_BINDING_SCHEMA_VERSION) {
+    findings.malformed(`dispatch activation binding schemaVersion must be ${ACTIVATION_BINDING_SCHEMA_VERSION}`);
+  }
+  const grantShape = validateActivationGrantShape(value?.grant);
+  const bindingShape = validateTaskActivationBindingShape(value?.binding);
+  for (const error of grantShape.errors) findings.malformed(`dispatch activation grant: ${error.message}`);
+  for (const error of bindingShape.errors) findings.malformed(`dispatch activation binding: ${error.message}`);
+  if (!CONTRACT_DIGEST_RE.test(String(value?.binding?.taskContractDigest ?? ''))) {
+    findings.malformed('dispatch activation binding taskContractDigest must be sha256:v1:<64 lowercase hex>');
+  } else if (contract?.ok && value.binding.taskContractDigest !== contract.digest) {
+    findings.changed(
+      `the task contract for '${String(taskId)}' changed after activation; re-run the activation command`,
+      { code: 'activation.binding.stale_contract', disposition: 'superseded' }
+    );
+  }
+}
+
+function validateReturnAdapter(value, findings) {
+  if (value === null) return;
+  exactKeys(value, RETURN_ADAPTER_FIELDS, 'dispatch return adapter', findings);
+  if (typeof value?.adapterId !== 'string' || !value.adapterId.trim()) findings.malformed('dispatch return adapter adapterId is required');
+  if (typeof value?.keyId !== 'string' || !value.keyId.trim()) findings.malformed('dispatch return adapter keyId is required');
+  if (value?.capability !== 'returnReceipt') findings.malformed("dispatch return adapter capability must be 'returnReceipt'");
+}
+
+function validateDispatchAssurance(value, { activationBinding, activation, findings }) {
+  exactKeys(value, DISPATCH_ASSURANCE_FIELDS, 'dispatch assurance', findings);
+  if (value?.kind !== DISPATCH_ASSURANCE_KIND) findings.malformed(`dispatch assurance kind must be '${DISPATCH_ASSURANCE_KIND}'`);
+  if (value?.schemaVersion !== DISPATCH_ASSURANCE_SCHEMA_VERSION) {
+    findings.malformed(`dispatch assurance schemaVersion must be ${DISPATCH_ASSURANCE_SCHEMA_VERSION}`);
+  }
+  if (!ACTIVATION_MODES.includes(value?.mode)) findings.malformed('dispatch assurance mode must be standard or hardened');
+  if (!POLICY_SOURCES.includes(value?.policySource)) findings.malformed('dispatch assurance policySource is invalid');
+  if (!ACTIVATION_ASSURANCE_VALUES.has(value?.activation)) findings.malformed('dispatch assurance activation grade is invalid');
+  if (!ACTIVATION_SOURCES.includes(value?.activationSource)) findings.malformed('dispatch assurance activationSource is invalid');
+  if (!ACTIVATION_ASSURANCE_VALUES.has(value?.minimumActivation)) findings.malformed('dispatch assurance minimumActivation is invalid');
+  if (!RETURN_ASSURANCE_VALUES.has(value?.minimumReturn)) findings.malformed('dispatch assurance minimumReturn is invalid');
+  if (typeof value?.activationProducer !== 'string' || !value.activationProducer.trim()) {
+    findings.malformed('dispatch assurance activationProducer is required');
+  }
+  if (!ACTIVATION_CHANNELS.includes(value?.activationChannel)) findings.malformed('dispatch assurance activationChannel is invalid');
+  if (![...ACTIVATION_DERIVATIONS, 'legacy_task_capture'].includes(value?.activationDerivation)) {
+    findings.malformed('dispatch assurance activationDerivation is invalid');
+  }
+  // The mode is not a label: it must equal exactly the minimums it names.
+  if (ACTIVATION_MODES.includes(value?.mode)) {
+    const expected = MODE_MINIMUMS[value.mode];
+    if (value?.minimumActivation !== expected.activation || value?.minimumReturn !== expected.return) {
+      findings.malformed(`dispatch assurance ${value.mode} mode must require ${expected.activation}/${expected.return}`);
+    }
+  }
+  if (!activationAssuranceMeets(value?.activation, value?.minimumActivation)) {
+    findings.negative(
+      `activation assurance '${String(value?.activation)}' is below the packet's declared minimum '${String(value?.minimumActivation)}'`,
+      { code: 'activation.assurance.insufficient', disposition: 'blocked' }
+    );
+  }
+  if (!Array.isArray(value?.limitations) || value.limitations.length === 0 ||
+      value.limitations.some(item => typeof item !== 'string' || !item.trim())) {
+    findings.malformed('dispatch assurance limitations must be a non-empty array of honest limitation statements');
+  } else if (ACTIVATION_ASSURANCE_VALUES.has(value?.activation) &&
+      !value.limitations.includes(ACTIVATION_ASSURANCE_LIMITATIONS[value.activation])) {
+    findings.malformed('dispatch assurance must carry the canonical limitation text for its activation grade');
+  } else if (RETURN_ASSURANCE_VALUES.has(value?.minimumReturn) &&
+      !value.limitations.includes(RETURN_ASSURANCE_LIMITATIONS[value.minimumReturn])) {
+    findings.malformed('dispatch assurance must carry the canonical limitation text for its minimum return grade');
+  }
+  // Source, presence, and grade form one consistent triple. A packet cannot
+  // claim host-signed activation while carrying only an operator-confirmed
+  // grant, and it cannot claim a grant while carrying a legacy capture.
+  if (value?.activationSource === 'legacy_task_capture') {
+    if (activationBinding !== null) findings.malformed('a legacy-capture packet must not also carry an activation binding');
+    if (!isObject(activation)) findings.malformed('a legacy-capture packet must carry its activation capture');
+    if (value?.activation !== 'host_signed') findings.malformed('a legacy host-signed capture always grades as host_signed activation');
+    if (value?.activationDerivation !== 'legacy_task_capture') {
+      findings.malformed("a legacy-capture packet must record derivation 'legacy_task_capture'");
+    }
+    if (value?.activationChannel !== 'protected_host_boundary') {
+      findings.malformed('a legacy host-signed capture is produced over a protected host boundary');
+    }
+  }
+  if (value?.activationSource === 'activation_grant') {
+    if (activation !== null) findings.malformed('a grant-bound packet must not also carry a legacy activation capture');
+    if (!isObject(activationBinding)) findings.malformed('a grant-bound packet must carry its activation binding');
+    if (isObject(activationBinding)) {
+      if (activationBinding.binding?.assurance !== value?.activation) {
+        findings.malformed('dispatch assurance activation grade must equal the bound grant assurance');
+      }
+      if (activationBinding.binding?.derivation !== value?.activationDerivation) {
+        findings.malformed('dispatch assurance activationDerivation must equal the bound binding derivation');
+      }
+      if (activationBinding.grant?.producer?.id !== value?.activationProducer) {
+        findings.malformed('dispatch assurance activationProducer must equal the bound grant producer');
+      }
+      if (activationBinding.grant?.producer?.channel !== value?.activationChannel) {
+        findings.malformed('dispatch assurance activationChannel must equal the bound grant channel');
+      }
+    }
+  }
+}
+
 function validateCleanStateBinding(value, findings, label = 'dispatch clean-state binding') {
-  const shapeOk = exactKeys(value, ['identity', 'permittedScratchPrefixes', 'ignoredFilesPermitted', 'priorGates'], label, findings);
+  const shapeOk = exactKeys(value, [
+    'identity', 'permittedScratchPrefixes', 'permittedOperatorStatePrefixes',
+    'ignoredFilesPermitted', 'priorGates',
+  ], label, findings);
   if (!CLEAN_STATE_IDENTITY_RE.test(value?.identity ?? '')) {
     findings.malformed(`${label} identity must be a canonical clean-state digest`);
   } else if (value.identity !== CLEAN_DISPATCH_STATE_IDENTITY) {
@@ -1204,6 +1399,9 @@ function validateCleanStateBinding(value, findings, label = 'dispatch clean-stat
   }
   if (!sameCanonical(value?.permittedScratchPrefixes, [...PERMITTED_SCRATCH_PREFIXES])) {
     findings.malformed(`${label} permittedScratchPrefixes must equal the canonical permitted inventory`);
+  }
+  if (!sameCanonical(value?.permittedOperatorStatePrefixes, [...PERMITTED_OPERATOR_STATE_PREFIXES])) {
+    findings.malformed(`${label} permittedOperatorStatePrefixes must equal the canonical permitted inventory`);
   }
   if (value?.ignoredFilesPermitted !== true) findings.malformed(`${label} must declare the ignored-file exception explicitly`);
   if (!Array.isArray(value?.priorGates)) {
@@ -1416,31 +1614,113 @@ function evaluateInitialState({ runGit, scopePatterns, intendedCreations, priorG
   return {
     identity: clean.identity,
     permittedScratchPrefixes: [...PERMITTED_SCRATCH_PREFIXES],
+    permittedOperatorStatePrefixes: [...PERMITTED_OPERATOR_STATE_PREFIXES],
     ignoredFilesPermitted: true,
     priorGates: gates.gates,
+  };
+}
+
+/**
+ * Resolve one task's activation authority in the fixed precedence order:
+ *
+ *   1. a current, valid, legacy host-signed task capture;
+ *   2. a current, valid task activation binding;
+ *   3. otherwise blocked.
+ *
+ * Both paths are total and recompute every relation. Nothing is graded from a
+ * self-asserted field: the legacy path re-verifies the host signature against
+ * the pinned adapter, and the grant path re-verifies grant and binding
+ * signatures against a key held outside the target repository.
+ */
+function resolveDispatchActivation(input, findings) {
+  const { evidence, snapshot, contract, decomposition, repository, capabilities, verifyActivationSignature } = input;
+  const repositoryIdentity = targetRepositoryIdentity(repository?.worktree);
+  if (evidence?.source === 'activation_grant') {
+    if (typeof verifyActivationSignature !== 'function') {
+      findings.missing(
+        'an external activation signature verifier is required to consume an activation grant',
+        { code: 'activation.grant.unauthenticated' }
+      );
+      return null;
+    }
+    const resolved = resolveTaskActivationBinding({
+      grant: evidence.grant,
+      binding: evidence.binding,
+      repositoryIdentity,
+      backend: snapshot?.backend,
+      taskId: snapshot?.taskId,
+      carrier: snapshot?.carrier,
+      taskContractDigest: contract?.ok ? contract.digest : null,
+      verifySignature: verifyActivationSignature,
+      revocations: evidence.revocations ?? [],
+      decomposition,
+      now: input.now,
+    });
+    if (!resolved.ok) {
+      for (const error of resolved.errors) {
+        findings.add(error.evidenceState, error.message, { code: error.code });
+      }
+      return null;
+    }
+    return {
+      source: 'activation_grant',
+      assurance: resolved.assurance,
+      producerId: evidence.grant.producer.id,
+      channel: evidence.grant.producer.channel,
+      derivation: evidence.binding.derivation,
+      binding: activationBindingProjection(evidence.grant, evidence.binding),
+      capture: null,
+    };
+  }
+  const capture = evidence?.source === 'legacy_task_capture' ? evidence.capture : evidence;
+  const disposition = activationCaptureDisposition(capture, {
+    capabilities,
+    intendedTaskId: snapshot?.taskId,
+    repositoryIdentity,
+  });
+  if (!disposition.ok) {
+    findings.extend(disposition.findings);
+    return null;
+  }
+  if (capture?.repositoryIdentity !== repositoryIdentity) {
+    findings.changed('activation capture target repository does not match dispatch repository');
+    return null;
+  }
+  let bound = true;
+  if (contract?.projection?.activation_input_digest !== capture?.normalizedActivationDigest) {
+    findings.changed('task contract activation_input_digest does not match verified activation digest');
+    bound = false;
+  }
+  // The authored task must reference the exact signed capture artifact, so a
+  // frontmatter digest alone cannot stand in for parser-owned authoring.
+  if (contract?.ok && !safeRepositoryPath(contract.projection?.activation_capture_ref)) {
+    findings.missing(
+      'task contract lacks a validated activation_capture_ref authoring provenance reference; ' +
+      'a scaffold task cannot authorize dispatch until `npx agenticloop activate <task-id>` creates a task activation binding'
+    );
+    bound = false;
+  }
+  if (!bound) return null;
+  return {
+    source: 'legacy_task_capture',
+    assurance: 'host_signed',
+    producerId: capture.adapter,
+    channel: 'protected_host_boundary',
+    derivation: 'legacy_task_capture',
+    binding: null,
+    capture,
   };
 }
 
 function dispatchBindings(input, findings) {
   const {
     snapshot,
-    activation,
     readiness,
     decomposition,
     assignment,
     repository,
-    capabilities,
     hostRoleCapabilities,
   } = input;
-  const capture = activationCaptureDisposition(activation, {
-    capabilities,
-    intendedTaskId: snapshot?.taskId,
-    repositoryIdentity: targetRepositoryIdentity(repository?.worktree),
-  });
-  if (!capture.ok) {
-    findings.extend(capture.findings);
-    return { contract: null };
-  }
   const contract = validateCurrentTask(snapshot, findings);
   if (contract?.ok) {
     const strictChecks = parseRequiredCheckInventory(contract.projection.required_checks);
@@ -1448,9 +1728,6 @@ function dispatchBindings(input, findings) {
   }
   validateReadiness(readiness, snapshot, findings);
   validateRepositoryBinding(repository, findings);
-  if (activation?.repositoryIdentity !== targetRepositoryIdentity(repository?.worktree)) {
-    findings.changed('activation capture target repository does not match dispatch repository');
-  }
   validateDecomposition(decomposition, snapshot?.taskId, findings);
   validateAssignment(assignment, {
     backend: snapshot?.backend,
@@ -1458,18 +1735,20 @@ function dispatchBindings(input, findings) {
     repository,
     hostRoleCapabilities,
   }, findings);
-  if (contract?.projection?.activation_input_digest !== activation?.normalizedActivationDigest) {
-    findings.changed('task contract activation_input_digest does not match verified activation digest');
-  }
-  // The authored task must reference the exact signed capture artifact, so a
-  // frontmatter digest alone cannot stand in for parser-owned authoring.
-  if (contract?.ok && !safeRepositoryPath(contract.projection?.activation_capture_ref)) {
-    findings.missing('task contract lacks a validated activation_capture_ref authoring provenance reference');
-  }
+  const activation = resolveDispatchActivation({
+    evidence: input.activationEvidence,
+    snapshot,
+    contract,
+    decomposition,
+    repository,
+    capabilities: input.capabilities,
+    verifyActivationSignature: input.verifyActivationSignature,
+    now: input.now,
+  }, findings);
   const baseIdentity = gitTreeObjectId(readiness?.evidence?.base?.identity);
   if (!baseIdentity) findings.malformed('dispatch readiness base identity must be a full git-tree identity');
   else if (repository?.baseTree !== baseIdentity) findings.changed('dispatch repository baseTree must equal readiness base Git-tree identity');
-  return { contract };
+  return { contract, activation };
 }
 
 function packetTaskBinding(snapshot, contract) {
@@ -1480,8 +1759,10 @@ function packetTaskBinding(snapshot, contract) {
     carrier: snapshot.carrier,
     digest: snapshot.digest,
     contractDigest: contract.digest,
-    activationDigest: projection.activation_input_digest,
-    activationCaptureRef: projection.activation_capture_ref,
+    // Grant-bound activation never rewrites task frontmatter, so these legacy
+    // provenance fields are absent - and null - for that path.
+    activationDigest: projection.activation_input_digest ?? null,
+    activationCaptureRef: projection.activation_capture_ref ?? null,
     scope: projection.scope,
     outOfScope: projection.out_of_scope,
     allowedPaths: projection.allowed_paths,
@@ -1527,7 +1808,7 @@ export function authoritativePacketTaskBinding(snapshot) {
   };
 }
 
-function packetFromBindings({ snapshot, activation, readiness, decomposition, assignment, repository, contract }) {
+function packetFromBindings({ snapshot, activation, returnAdapter, readiness, decomposition, assignment, repository, contract, policy }) {
   /** @type {any} */
   const packet = {
     kind: DISPATCH_PREPARATION_KIND,
@@ -1535,7 +1816,17 @@ function packetFromBindings({ snapshot, activation, readiness, decomposition, as
     packetId: `dispatch:${randomUUID()}`,
     backend: snapshot.backend,
     task: packetTaskBinding(snapshot, contract),
-    activation: structuredClone(activation),
+    activation: activation.capture === null ? null : structuredClone(activation.capture),
+    activationBinding: activation.binding === null ? null : structuredClone(activation.binding),
+    returnAdapter: returnAdapter === null ? null : structuredClone(returnAdapter),
+    assurance: dispatchAssurance({
+      policy,
+      activation: activation.assurance,
+      activationSource: activation.source,
+      producerId: activation.producerId,
+      channel: activation.channel,
+      derivation: activation.derivation,
+    }),
     readiness: structuredClone(readiness),
     decomposition: decompositionBinding(decomposition),
     assignment: structuredClone(assignment),
@@ -1544,6 +1835,35 @@ function packetFromBindings({ snapshot, activation, readiness, decomposition, as
   };
   packet.digest = dispatchPreparationDigest(packet);
   return packet;
+}
+
+/**
+ * The default assurance policy for a caller that supplies none: standard mode
+ * from the shipped default source. A caller that has resolved external operator
+ * policy passes it explicitly; nothing here reads configuration.
+ */
+const DEFAULT_ASSURANCE_POLICY = Object.freeze({
+  mode: 'standard',
+  policySource: 'default',
+  minimumActivation: MODE_MINIMUMS.standard.activation,
+  minimumReturn: MODE_MINIMUMS.standard.return,
+});
+
+function normalizeAssurancePolicy(value) {
+  if (!isObject(value)) return { ok: true, policy: DEFAULT_ASSURANCE_POLICY };
+  const mode = value.mode ?? DEFAULT_ASSURANCE_POLICY.mode;
+  if (!ACTIVATION_MODES.includes(mode)) return { ok: false, policy: null };
+  const source = value.policySource ?? value.source ?? 'default';
+  if (!POLICY_SOURCES.includes(source)) return { ok: false, policy: null };
+  return {
+    ok: true,
+    policy: {
+      mode,
+      policySource: source,
+      minimumActivation: MODE_MINIMUMS[mode].activation,
+      minimumReturn: MODE_MINIMUMS[mode].return,
+    },
+  };
 }
 
 /** Public canonical digest helper for persisted packet readers and fixtures. */
@@ -1561,13 +1881,21 @@ const LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSIONS = Object.freeze([
   BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION,
   LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION,
   SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION,
+  ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION,
 ]);
 
 /**
  * Refetch, validate, and bind one single-role implementation dispatch.
  *
+ * Activation resolves in one fixed order: a current valid legacy host-signed
+ * task capture, then a current valid task activation binding, then blocked.
+ *
  * @param {any} input
- * @param {{ capabilities?: Record<string, any> }} [options]
+ * @param {{
+ *   capabilities?: Record<string, any>,
+ *   verifyActivationSignature?: Function,
+ *   assurancePolicy?: { mode?: string, policySource?: string },
+ * }} [options]
  */
 export function prepareRoleDispatch(input = {}, options = {}) {
   const command = 'task prepare-dispatch';
@@ -1579,6 +1907,7 @@ export function prepareRoleDispatch(input = {}, options = {}) {
       refetchDecomposition,
       refetchParallelScanInventory,
       refetchActivation = null,
+      refetchActivationEvidence = null,
       runGit,
       priorGateReceipts = [],
       readCarrierDigest = null,
@@ -1586,6 +1915,9 @@ export function prepareRoleDispatch(input = {}, options = {}) {
     } = input;
     const resolved = resolveInventory(options);
     if (!resolved.ok) return singleFailure(command, 'malformed', 'rejected', 'activation capability inventory must be an object');
+    const policyCheck = normalizeAssurancePolicy(options.assurancePolicy);
+    if (!policyCheck.ok) return singleFailure(command, 'malformed', 'rejected', 'dispatch assurance policy is invalid');
+    const policy = policyCheck.policy;
     for (const [name, label] of [
       ['refetchTask', 'a current task refetch function is required'],
       ['refetchReadiness', 'an authoritative readiness refetch function is required'],
@@ -1595,7 +1927,10 @@ export function prepareRoleDispatch(input = {}, options = {}) {
     ]) {
       if (typeof input[name] !== 'function') return singleFailure(command, 'missing', 'needs_context', label);
     }
-    let activation = input.activation;
+    let activationEvidence = input.activationEvidence
+      ?? (input.activation === undefined || input.activation === null
+        ? null
+        : { source: 'legacy_task_capture', capture: input.activation });
     let snapshot;
     let readiness;
     let repository;
@@ -1603,9 +1938,13 @@ export function prepareRoleDispatch(input = {}, options = {}) {
     let parallelScanInventory;
     try {
       snapshot = refetchTask();
-      // When a provider is supplied the capture is read from the task's own
-      // durable authoring reference, so a caller cannot substitute one.
-      if (typeof refetchActivation === 'function') activation = refetchActivation({ snapshot });
+      // When a provider is supplied the activation evidence is read from the
+      // task's own durable provenance, so a caller cannot substitute one.
+      if (typeof refetchActivationEvidence === 'function') {
+        activationEvidence = refetchActivationEvidence({ snapshot });
+      } else if (typeof refetchActivation === 'function') {
+        activationEvidence = { source: 'legacy_task_capture', capture: refetchActivation({ snapshot }) };
+      }
       readiness = refetchReadiness({ snapshot });
       repository = refetchRepository({ snapshot, readiness });
       decomposition = refetchDecomposition({ snapshot, readiness, repository });
@@ -1615,7 +1954,13 @@ export function prepareRoleDispatch(input = {}, options = {}) {
     } catch (error) {
       const state = typeof error?.evidenceState === 'string' ? error.evidenceState : 'missing';
       const disposition = typeof error?.disposition === 'string' ? error.disposition : 'blocked';
-      return singleFailure(command, state, disposition, `authoritative refetch failed: ${error.message}`);
+      // A typed public error already names its own exact repair - for an
+      // unactivated task that is the literal `npx agenticloop activate ...`
+      // command. Preserve it instead of replacing it with a generic hint.
+      const repairHint = error instanceof PublicCommandError ? error.safeRepair : null;
+      return singleFailure(
+        command, state, disposition, `authoritative refetch failed: ${error.message}`, {}, null, repairHint
+      );
     }
     const findings = findingSet(command);
     let boundAssignment = assignment;
@@ -1645,15 +1990,33 @@ export function prepareRoleDispatch(input = {}, options = {}) {
     const bound = { ...repository, cleanState };
     const checked = dispatchBindings({
       snapshot,
-      activation,
+      activationEvidence,
       readiness,
       decomposition,
       assignment: boundAssignment,
       repository: bound,
       capabilities: options.capabilities,
+      verifyActivationSignature: options.verifyActivationSignature,
       hostRoleCapabilities: options.hostRoleCapabilities,
     }, findings);
     if (findings.length) return failure(command, findings);
+    if (!checked.activation) {
+      findings.missing(
+        'dispatch could not resolve any current activation authority for this task',
+        { code: 'activation.capture.missing' }
+      );
+      return failure(command, findings);
+    }
+    // Effective policy is enforced before the packet is minted, so a
+    // below-policy grade never reaches a signed dispatch artifact.
+    if (!activationAssuranceMeets(checked.activation.assurance, policy.minimumActivation)) {
+      findings.negative(
+        `activation assurance '${checked.activation.assurance}' is below the effective minimum ` +
+        `'${policy.minimumActivation}' required by ${policy.mode} mode (policy source: ${policy.policySource})`,
+        { code: 'activation.assurance.insufficient', disposition: 'blocked' }
+      );
+      return failure(command, findings);
+    }
     if (decomposition?.schemaVersion === DECOMPOSITION_SCHEMA_VERSION &&
         decomposition?.scan?.inventory?.complete === true &&
         decomposition?.scan?.decomposition?.state === 'complete') {
@@ -1674,11 +2037,33 @@ export function prepareRoleDispatch(input = {}, options = {}) {
       }
     }
     if (findings.length) return failure(command, findings);
+    const returnAdapter = options.returnAdapter ?? null;
+    if (policy.minimumReturn === 'host_receipt' && returnAdapter === null) {
+      findings.missing('hardened dispatch requires an explicitly pinned protected-boundary return adapter', {
+        code: 'return.assurance.insufficient', disposition: 'blocked',
+      });
+      return failure(command, findings);
+    }
     const packet = packetFromBindings({
-      snapshot, activation, readiness, decomposition, assignment: boundAssignment,
-      repository: bound, contract: checked.contract,
+      snapshot, activation: checked.activation, readiness, decomposition,
+      assignment: boundAssignment, repository: bound, contract: checked.contract, policy, returnAdapter,
     });
-    const packetValidation = validateDispatchPreparation(packet, options);
+    const resolveEmittedAuthority = candidate => resolveTaskActivationBinding({
+      grant: candidate.activationBinding?.grant,
+      binding: candidate.activationBinding?.binding,
+      repositoryIdentity: targetRepositoryIdentity(candidate.repository?.worktree),
+      backend: candidate.backend,
+      taskId: candidate.task?.id,
+      carrier: candidate.task?.carrier,
+      taskContractDigest: candidate.task?.contractDigest,
+      verifySignature: options.verifyActivationSignature,
+      revocations: activationEvidence?.revocations ?? [],
+      decomposition,
+    });
+    const packetValidation = validateDispatchPreparation(packet, {
+      ...options,
+      resolveActivationBinding: options.resolveActivationBinding ?? resolveEmittedAuthority,
+    });
     if (!packetValidation.ok) {
       const emitted = findingSet(command);
       emitted.extend(packetValidation.findings);
@@ -1715,6 +2100,11 @@ function closedKeys(value, expected) {
 }
 
 const DISPATCH_FIELDS = Object.freeze([
+  'kind', 'schemaVersion', 'packetId', 'backend', 'task', 'activation', 'activationBinding',
+  'returnAdapter', 'assurance', 'readiness', 'decomposition', 'assignment', 'repository', 'freshness', 'digest',
+]);
+/** The v2-v5 envelope: one activation model, no assurance dimensions. */
+const ASSURANCE_UNBOUND_DISPATCH_FIELDS = Object.freeze([
   'kind', 'schemaVersion', 'packetId', 'backend', 'task', 'activation', 'readiness',
   'decomposition', 'assignment', 'repository', 'freshness', 'digest',
 ]);
@@ -1733,12 +2123,13 @@ const V4_ASSIGNMENT_FIELDS = Object.freeze([...V3_ASSIGNMENT_FIELDS, 'degradedEn
 function legacyDispatchCandidate(packet, schemaVersion) {
   const assignmentFields = schemaVersion === BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION
     ? V2_ASSIGNMENT_FIELDS
-    : schemaVersion === SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION
+    : schemaVersion === SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION ||
+      schemaVersion === ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION
       ? V4_ASSIGNMENT_FIELDS
       : V3_ASSIGNMENT_FIELDS;
   return packet?.kind === DISPATCH_PREPARATION_KIND &&
     packet?.schemaVersion === schemaVersion &&
-    closedKeys(packet, DISPATCH_FIELDS) &&
+    closedKeys(packet, ASSURANCE_UNBOUND_DISPATCH_FIELDS) &&
     closedKeys(packet.assignment, assignmentFields) &&
     typeof packet.packetId === 'string' &&
     /^dispatch:[0-9a-f-]{36}$/.test(packet.packetId) &&
@@ -1758,6 +2149,20 @@ function currentProjectionOfLegacy(packet, schemaVersion, options) {
   }
   projected.assignment.degradedEnforcementReports =
     createDegradedEnforcementReports(projected.assignment.hostRoleCapability);
+  // Prior envelopes had exactly one activation model - a host-signed capture -
+  // and no assurance statement. The projection restates that truthfully so the
+  // packet can be recognized as authentic prior evidence and routed to typed
+  // regeneration; it never lets that evidence authorize a dispatch.
+  projected.activationBinding = null;
+  projected.returnAdapter = null;
+  projected.assurance = dispatchAssurance({
+    policy: DEFAULT_ASSURANCE_POLICY,
+    activation: 'host_signed',
+    activationSource: 'legacy_task_capture',
+    producerId: projected.activation?.adapter ?? 'unknown',
+    channel: 'protected_host_boundary',
+    derivation: 'legacy_task_capture',
+  });
   projected.digest = dispatchPreparationDigest(projected);
   return projected;
 }
@@ -1842,18 +2247,58 @@ function validateCurrentDispatchPreparation(packet, options = {}) {
       label: 'dispatch preparation task requiredChecks',
     });
     for (const error of inventory.errors) findings.malformed(error);
-    for (const key of ['digest', 'activationDigest']) {
-      if (!SHA256_RE.test(packet?.task?.[key] ?? '')) findings.malformed(`dispatch preparation task ${key} must be sha256:<64 lowercase hex>`);
-    }
+    if (!SHA256_RE.test(packet?.task?.digest ?? '')) findings.malformed('dispatch preparation task digest must be sha256:<64 lowercase hex>');
     if (!CONTRACT_DIGEST_RE.test(packet?.task?.contractDigest ?? '')) findings.malformed('dispatch preparation task contractDigest must be sha256:v1:<64 lowercase hex>');
-    if (!safeRepositoryPath(packet?.task?.activationCaptureRef)) findings.malformed('dispatch preparation task activationCaptureRef must be a safe repository-relative path');
-    const capture = activationCaptureDisposition(packet?.activation, {
-      ...options,
-      intendedTaskId: packet?.task?.id,
-      repositoryIdentity: targetRepositoryIdentity(packet?.repository?.worktree),
+    const grantBound = packet?.assurance?.activationSource === 'activation_grant';
+    if (grantBound) {
+      // A grant never rewrites task frontmatter, so the legacy provenance
+      // fields must be absent rather than invented.
+      if (packet?.task?.activationDigest !== null || packet?.task?.activationCaptureRef !== null) {
+        findings.malformed('a grant-bound dispatch packet must not claim legacy activation frontmatter provenance');
+      }
+      validateActivationBindingProjection(packet?.activationBinding, {
+        taskId: packet?.task?.id,
+        contract: { ok: true, digest: packet?.task?.contractDigest },
+        findings,
+      });
+      if (typeof options.resolveActivationBinding !== 'function') {
+        findings.missing('an external activation authority resolver is required for a grant-bound packet', {
+          code: 'activation.grant.unauthenticated', disposition: 'blocked',
+        });
+      } else {
+        const authority = options.resolveActivationBinding(packet);
+        if (!authority?.ok) {
+          for (const error of authority?.errors ?? [{ message: 'grant-bound packet activation authority did not validate', evidenceState: 'negative', code: 'activation.grant.unauthenticated' }]) {
+            findings.add(error.evidenceState ?? 'negative', error.message, { code: error.code, disposition: authority?.disposition });
+          }
+        }
+      }
+    } else {
+      if (!SHA256_RE.test(packet?.task?.activationDigest ?? '')) findings.malformed('dispatch preparation task activationDigest must be sha256:<64 lowercase hex>');
+      if (!safeRepositoryPath(packet?.task?.activationCaptureRef)) findings.malformed('dispatch preparation task activationCaptureRef must be a safe repository-relative path');
+      const capture = activationCaptureDisposition(packet?.activation, {
+        ...options,
+        intendedTaskId: packet?.task?.id,
+        repositoryIdentity: targetRepositoryIdentity(packet?.repository?.worktree),
+      });
+      if (!capture.ok) findings.extend(capture.findings);
+      if (packet?.task?.activationDigest !== packet?.activation?.normalizedActivationDigest) findings.changed('packet task activation digest must equal activation capture digest');
+      if (packet?.activation?.repositoryIdentity !== targetRepositoryIdentity(packet?.repository?.worktree)) {
+        findings.changed('packet activation target repository does not match dispatch repository');
+      }
+      if (packet?.activationBinding !== null) {
+        findings.malformed('a legacy-capture dispatch packet must not also carry an activation binding');
+      }
+    }
+    validateDispatchAssurance(packet?.assurance, {
+      activationBinding: packet?.activationBinding ?? null,
+      activation: packet?.activation ?? null,
+      findings,
     });
-    if (!capture.ok) findings.extend(capture.findings);
-    if (packet?.task?.activationDigest !== packet?.activation?.normalizedActivationDigest) findings.changed('packet task activation digest must equal activation capture digest');
+    validateReturnAdapter(packet?.returnAdapter, findings);
+    if (packet?.assurance?.minimumReturn === 'host_receipt' && packet?.returnAdapter === null) {
+      findings.missing('a host_receipt packet minimum requires a pinned return adapter', { code: 'return.assurance.insufficient' });
+    }
     validateReadiness(packet?.readiness, {
       backend: packet?.backend, taskId: packet?.task?.id, carrier: packet?.task?.carrier, digest: packet?.task?.digest,
     }, findings);
@@ -1861,9 +2306,6 @@ function validateCurrentDispatchPreparation(packet, options = {}) {
       allowLegacy: options.allowLegacyDecomposition === true,
     });
     validateRepositoryBinding(packet?.repository, findings);
-    if (packet?.activation?.repositoryIdentity !== targetRepositoryIdentity(packet?.repository?.worktree)) {
-      findings.changed('packet activation target repository does not match dispatch repository');
-    }
     validateAssignment(packet?.assignment, {
       backend: packet?.backend,
       taskId: packet?.task?.id,
@@ -1936,12 +2378,13 @@ export function verifyDispatchBeforeMutation(input = {}, options = {}) {
       refetchDecomposition: input.refetchDecomposition,
       refetchParallelScanInventory: input.refetchParallelScanInventory,
       refetchActivation: input.refetchActivation ?? null,
+      refetchActivationEvidence: input.refetchActivationEvidence ?? null,
       runGit: input.runGit,
       priorGateReceipts: input.priorGateReceipts ?? [],
       readCarrierDigest: input.readCarrierDigest ?? null,
       activation: packet.activation,
       assignment: packet.assignment,
-    }, options);
+    }, { ...options, assurancePolicy: options.assurancePolicy ?? packet.assurance });
     if (!current.ok) {
       const findings = findingSet(command);
       const state = current.validation.evidenceState;
@@ -1953,7 +2396,11 @@ export function verifyDispatchBeforeMutation(input = {}, options = {}) {
       for (const error of current.validation.errors.slice(1)) findings.add(state, error, { disposition: 'superseded' });
       return failure(command, findings);
     }
-    const fields = ['backend', 'task', 'activation', 'decomposition', 'assignment', 'repository', 'freshness'];
+    const fields = [
+      'backend', 'task', 'activation', 'activationBinding', 'assurance',
+      'returnAdapter',
+      'decomposition', 'assignment', 'repository', 'freshness',
+    ];
     if (fields.some(field => !sameCanonical(current.packet[field], packet[field])) ||
         !sameCanonical(stableReadinessProjection(current.packet.readiness), stableReadinessProjection(packet.readiness))) {
       return singleFailure(command, 'changed', 'superseded', 'dispatch packet bindings changed after preparation');
@@ -2147,23 +2594,42 @@ function validateRepositoryEvidence(value, findings) {
   if (value?.backend === 'files' && !sameCanonical(value?.pr, { state: 'not_applicable', number: null, url: null })) findings.malformed('files repository evidence must derive PR state as not_applicable');
 }
 
-function validateReturnAgainstCurrent({ wire, packet, snapshot, repositoryEvidence, producerEvidence, runGit }, findings) {
+function validateReturnAgainstCurrent({
+  wire, packet, snapshot, repositoryEvidence, producerEvidence, runGit,
+  returnAssurance = 'host_receipt', historicalCloseout = false,
+}, findings) {
   validateRepositoryEvidence(repositoryEvidence, findings);
   const authoritative = authoritativePacketTaskBinding(snapshot);
   if (!authoritative.ok) {
     findings.malformed(`authoritative current task contract cannot be derived: ${authoritative.error}`);
-  } else if (!sameCanonical(
-    { backend: packet.backend, task: packet.task },
-    authoritative.binding
-  )) {
-    findings.changed('dispatch packet task binding does not equal the refetched authoritative task and contract');
+  } else {
+    const currentBinding = historicalCloseout
+      ? {
+          ...authoritative.binding,
+          task: { ...authoritative.binding.task, digest: packet?.task?.digest },
+        }
+      : authoritative.binding;
+    if (!sameCanonical({ backend: packet.backend, task: packet.task }, currentBinding)) {
+      findings.changed('dispatch packet task binding does not equal the refetched authoritative task and contract');
+    }
   }
-  if (producerEvidence?.producerRole !== wire.producerRole || wire.producerRole !== packet.assignment.roleId) findings.malformed('role return producer does not match trusted producer evidence and dispatch assignment');
+  // With a host receipt the observed producer role is authenticated evidence.
+  // A session-reported return has no producer proof at all: the role is only
+  // checked for internal consistency with the packet assignment, and nothing
+  // downstream may describe it as authenticated.
+  if (returnAssurance === 'host_receipt') {
+    if (producerEvidence?.producerRole !== wire.producerRole || wire.producerRole !== packet.assignment.roleId) {
+      findings.malformed('role return producer does not match trusted producer evidence and dispatch assignment');
+    }
+  } else if (wire.producerRole !== packet.assignment.roleId) {
+    findings.malformed('role return producerRole does not match the dispatch assignment');
+  }
   if (wire.packet.packetId !== packet.packetId || wire.packet.digest !== packet.digest) findings.changed('role return did not consume the exact dispatch packet');
   if (wire.task.backend !== packet.backend || wire.task.id !== packet.task.id || wire.task.digest !== packet.task.digest) {
     findings.changed('role return task identity does not equal the persisted dispatch packet');
   }
-  if (wire.task.backend !== snapshot.backend || wire.task.id !== snapshot.taskId || wire.task.digest !== snapshot.digest) findings.changed('role return task identity does not equal refetched task');
+  if (wire.task.backend !== snapshot.backend || wire.task.id !== snapshot.taskId ||
+      (!historicalCloseout && wire.task.digest !== snapshot.digest)) findings.changed('role return task identity does not equal refetched task');
   if (wire.task.backend !== repositoryEvidence?.backend || wire.task.id !== repositoryEvidence?.task?.id || wire.task.digest !== repositoryEvidence?.task?.digest) findings.changed('role return task identity does not equal repository evidence');
   if (wire.worktree !== packet.assignment.worktree || wire.worktree !== repositoryEvidence?.worktree) findings.changed('role return worktree does not match dispatched/current worktree');
   if (wire.branch !== packet.assignment.branch || wire.branch !== repositoryEvidence?.branch) findings.changed('role return branch does not match dispatched/current branch');
@@ -2192,9 +2658,16 @@ function validateReturnAgainstCurrent({ wire, packet, snapshot, repositoryEviden
       const currentHeadId = String(currentHead?.stdout ?? '').trim();
       if (currentHead?.status !== 0 || !isGitObjectId(currentHeadId)) {
         findings.missing('current repository head could not be reread before accepting the role return');
-      } else if (currentHeadId !== wire.head) {
+      } else if (!historicalCloseout && currentHeadId !== wire.head) {
         findings.changed('role return head is no longer the current repository head');
       } else {
+        if (historicalCloseout) {
+          const ancestor = runGit(['merge-base', '--is-ancestor', wire.head, currentHeadId]);
+          if (ancestor?.status !== 0) {
+            findings.changed('historical role-return head is no longer an ancestor of the current repository head');
+            return;
+          }
+        }
         const derived = deriveCommitRange({
           runGit, baseHead: wire.baseHead, head: wire.head, taskId: packet.task.id, roleId: packet.assignment.roleId,
         });
@@ -2208,7 +2681,15 @@ function validateReturnAgainstCurrent({ wire, packet, snapshot, repositoryEviden
   } else if (typeof runGit === 'function') {
     const currentHead = runGit(['rev-parse', '--verify', 'HEAD']);
     const currentHeadId = String(currentHead?.stdout ?? '').trim();
-    if (currentHead?.status === 0 && isGitObjectId(currentHeadId) && currentHeadId === wire.head) {
+    if (currentHead?.status === 0 && isGitObjectId(currentHeadId) &&
+        (currentHeadId === wire.head || historicalCloseout)) {
+      if (historicalCloseout) {
+        const ancestor = runGit(['merge-base', '--is-ancestor', wire.head, currentHeadId]);
+        if (ancestor?.status !== 0) {
+          findings.changed('historical role-return head is no longer an ancestor of the current repository head');
+          return;
+        }
+      }
       const derived = deriveCommitRange({
         runGit, baseHead: wire.baseHead, head: wire.head, taskId: packet.task.id, roleId: packet.assignment.roleId,
       });
@@ -2230,6 +2711,61 @@ function validateReturnAgainstCurrent({ wire, packet, snapshot, repositoryEviden
     }
     if (![...allowedPaths].some(pattern => fileMatchesScopePattern(path, pattern))) findings.negative(`role return changed path '${path}' is outside task scope and current deviations`);
   }
+}
+
+function compareReturnAssuranceGrade(left, right) {
+  return RETURN_ASSURANCE_ORDER_INDEX(left) - RETURN_ASSURANCE_ORDER_INDEX(right);
+}
+
+function RETURN_ASSURANCE_ORDER_INDEX(grade) {
+  return grade === 'host_receipt' ? 1 : grade === 'session_reported' ? 0 : -1;
+}
+
+/**
+ * One warning per session-reported return, so the degraded producer guarantee
+ * is impossible to miss in human output and impossible to drop from the
+ * structured validation result.
+ */
+function sessionReportedWarningDiagnostics(returnAssurance, producerRole) {
+  if (returnAssurance !== 'session_reported') return [];
+  return [createDiagnostic({
+    level: 'warning',
+    code: 'return.assurance.session_reported',
+    message:
+      `Role return for '${String(producerRole)}' is session_reported: schema, packet binding, and refetched ` +
+      'repository evidence were all revalidated, but the producing role identity was NOT host-authenticated. ' +
+      'Do not describe this result as cryptographically host-authenticated.',
+    evidence: {
+      state: 'current',
+      supplied: true,
+      rollbackAuthorized: false,
+      returnAssurance,
+      producerAuthenticated: false,
+    },
+  })];
+}
+
+/** The closed, honest assurance statement carried by every accepted return. */
+function returnAssuranceStatement(packet, returnAssurance, minimumReturn) {
+  return Object.freeze({
+    kind: 'agenticloop.return-assurance',
+    schemaVersion: 1,
+    activation: packet?.assurance?.activation ?? null,
+    activationSource: packet?.assurance?.activationSource ?? null,
+    activationProducer: packet?.assurance?.activationProducer ?? null,
+    activationChannel: packet?.assurance?.activationChannel ?? null,
+    activationDerivation: packet?.assurance?.activationDerivation ?? null,
+    return: returnAssurance,
+    producerAuthenticated: returnAssurance === 'host_receipt',
+    mode: packet?.assurance?.mode ?? null,
+    policySource: packet?.assurance?.policySource ?? null,
+    minimumActivation: packet?.assurance?.minimumActivation ?? null,
+    minimumReturn,
+    limitations: Object.freeze([
+      ACTIVATION_ASSURANCE_LIMITATIONS[packet?.assurance?.activation] ?? 'activation assurance is unknown',
+      RETURN_ASSURANCE_LIMITATIONS[returnAssurance],
+    ]),
+  });
 }
 
 /**
@@ -2266,6 +2802,7 @@ export function receiveRoleReturn(input = {}, options = {}) {
       workflowRoleRegistry,
       now = Date.now(),
       runGit = null,
+      historicalCloseout = false,
     } = input;
     let wire;
     try {
@@ -2308,15 +2845,43 @@ export function receiveRoleReturn(input = {}, options = {}) {
         producerDomain, 'role_return.invalid'
       );
     }
+    // Return assurance is decided here, before any evidence is consumed, from
+    // the effective minimum and what the caller actually supplied. It is never
+    // inferred later from how far verification happened to get.
+    const packetMinimum = RETURN_ASSURANCE_VALUES.has(packet?.assurance?.minimumReturn)
+      ? packet.assurance.minimumReturn
+      : 'host_receipt';
+    const callerMinimum = RETURN_ASSURANCE_VALUES.has(options.minimumReturnAssurance)
+      ? options.minimumReturnAssurance
+      : null;
+    // Fail closed: the stronger of the packet-bound and caller-supplied minimum.
+    const minimumReturn = callerMinimum === null
+      ? packetMinimum
+      : (compareReturnAssuranceGrade(callerMinimum, packetMinimum) >= 0 ? callerMinimum : packetMinimum);
+    const hasProducerReceipt = Boolean(producerReceipt) && typeof producerReceipt === 'object' && !Array.isArray(producerReceipt);
+    const returnAssurance = hasProducerReceipt ? 'host_receipt' : 'session_reported';
     for (const [value, label] of [
       [refetchTask, 'current task refetch function is required'],
       [refetchRepositoryEvidence, 'trusted repository-evidence refetch function is required'],
-      [resolveTrustedAdapter, 'pinned host-adapter trust resolver is required'],
     ]) {
       if (typeof value !== 'function') return singleFailure(command, 'missing', 'blocked', label, producerDomain);
     }
-    if (!producerReceipt || typeof producerReceipt !== 'object' || Array.isArray(producerReceipt)) {
-      return singleFailure(command, 'missing', 'blocked', 'raw host-adapter producer receipt is required', producerDomain);
+    if (returnAssurance === 'host_receipt' && typeof resolveTrustedAdapter !== 'function') {
+      return singleFailure(command, 'missing', 'blocked', 'pinned host-adapter trust resolver is required', producerDomain);
+    }
+    if (!hasProducerReceipt && minimumReturn === 'host_receipt') {
+      return singleFailure(
+        command, 'missing', 'blocked',
+        'raw host-adapter producer receipt is required: the effective policy requires host_receipt return assurance',
+        producerDomain, 'return.assurance.insufficient'
+      );
+    }
+    if (!hasProducerReceipt && exceptionalVerification !== null) {
+      return singleFailure(
+        command, 'missing', 'blocked',
+        'exceptional verification requires an authenticated host producer receipt',
+        producerDomain, 'return.assurance.insufficient'
+      );
     }
     let snapshot;
     try {
@@ -2344,53 +2909,67 @@ export function receiveRoleReturn(input = {}, options = {}) {
     // public CLI resolves the pinned adapter from the fail-closed operator
     // trust store; fixture seams inject an explicitly trusted resolver and are
     // never production-reachable.
-    let trustedAdapter;
-    try {
-      trustedAdapter = resolveTrustedAdapter(packet?.activation?.adapter);
-    } catch (error) {
-      // A typed unsupported-boundary fault is a capability limitation, not a
-      // forgery: the registry is well-formed and nothing failed authentication,
-      // so it stays `negative/blocked` instead of being reported as a rejected
-      // authentication attempt. Every other resolver fault - unpinned adapter,
-      // unknown key, malformed store - remains `negative/rejected`.
-      const fault = classifyBoundaryFault(error, 'negative', 'rejected', [UNSUPPORTED_BOUNDARY_CODE]);
-      const message = fault.code === UNSUPPORTED_BOUNDARY_CODE
-        ? `host producer authentication boundary is unsupported: ${error.message}`
-        : `host producer authentication failed: ${error.message}`;
-      return singleFailure(command, fault.evidenceState, fault.disposition, message, producerDomain, fault.code);
-    }
-    let producerEvidence;
-    try {
-      producerEvidence = verifyHostHandoffReceipt(producerReceipt, {
-        trustedAdapter,
-        packet,
-        roleReturn: wire,
-        repositoryEvidence,
-        now,
-      });
-    } catch (error) {
-      const producerMismatch = error instanceof HostProducerMismatchError;
-      const staleReceipt = error instanceof HostReceiptStaleVersionError;
-      return singleFailure(
-        command,
-        staleReceipt ? 'stale' : 'negative',
-        staleReceipt ? 'superseded' : 'rejected',
-        producerMismatch || staleReceipt
-          ? error.message
-          : `host producer authentication failed: ${error.message}`,
-        producerDomain,
-        producerMismatch || staleReceipt ? error.code : 'role_return.invalid'
-      );
+    let trustedAdapter = null;
+    let producerEvidence = null;
+    if (returnAssurance === 'host_receipt') {
+      try {
+        if (!isObject(packet?.returnAdapter)) {
+          return singleFailure(command, 'negative', 'rejected', 'a producer receipt requires the exact packet-bound return adapter', producerDomain, 'role_return.invalid');
+        }
+        trustedAdapter = resolveTrustedAdapter(packet.returnAdapter.adapterId);
+        if (trustedAdapter?.adapterId !== packet.returnAdapter.adapterId ||
+            trustedAdapter?.keyId !== packet.returnAdapter.keyId ||
+            trustedAdapter?.capabilities?.returnReceipt !== 'supported') {
+          return singleFailure(command, 'negative', 'rejected', 'host producer authentication failed: producer receipt adapter does not match the packet-bound adapter, key, and returnReceipt capability', producerDomain, 'role_return.invalid');
+        }
+      } catch (error) {
+        // A typed unsupported-boundary fault is a capability limitation, not a
+        // forgery: the registry is well-formed and nothing failed authentication,
+        // so it stays `negative/blocked` instead of being reported as a rejected
+        // authentication attempt. Every other resolver fault - unpinned adapter,
+        // unknown key, malformed store - remains `negative/rejected`.
+        const fault = classifyBoundaryFault(error, 'negative', 'rejected', [UNSUPPORTED_BOUNDARY_CODE]);
+        const message = fault.code === UNSUPPORTED_BOUNDARY_CODE
+          ? `host producer authentication boundary is unsupported: ${error.message}`
+          : `host producer authentication failed: ${error.message}`;
+        return singleFailure(command, fault.evidenceState, fault.disposition, message, producerDomain, fault.code);
+      }
+      try {
+        producerEvidence = verifyHostHandoffReceipt(producerReceipt, {
+          trustedAdapter,
+          packet,
+          roleReturn: wire,
+          repositoryEvidence,
+          now,
+        });
+      } catch (error) {
+        const producerMismatch = error instanceof HostProducerMismatchError;
+        const staleReceipt = error instanceof HostReceiptStaleVersionError;
+        return singleFailure(
+          command,
+          staleReceipt ? 'stale' : 'negative',
+          staleReceipt ? 'superseded' : 'rejected',
+          producerMismatch || staleReceipt
+            ? error.message
+            : `host producer authentication failed: ${error.message}`,
+          producerDomain,
+          producerMismatch || staleReceipt ? error.code : 'role_return.invalid'
+        );
+      }
     }
     const findings = findingSet(command);
     validateCurrentTask(snapshot, findings);
-    validateReturnAgainstCurrent({ wire, packet, snapshot, repositoryEvidence, producerEvidence, runGit }, findings);
+    validateReturnAgainstCurrent({
+      wire, packet, snapshot, repositoryEvidence, producerEvidence, runGit,
+      returnAssurance, historicalCloseout,
+    }, findings);
     const degradedReports = packet.assignment.degradedEnforcementReports;
     const implementation = packet.assignment.hostRoleCapability.actionBindings
       .find(binding => binding.action === 'implementation_mutate');
     if ((wire.changedPaths?.length ?? 0) > 0 && implementation?.policy !== 'allowed') {
       findings.negative(
-        `authenticated role '${wire.producerRole}' returned implementation changes while implementation_mutate is ${implementation?.policy ?? 'unbound'}`,
+        `${returnAssurance === 'host_receipt' ? 'authenticated' : 'session-reported'} role '${wire.producerRole}' ` +
+        `returned implementation changes while implementation_mutate is ${implementation?.policy ?? 'unbound'}`,
         { code: 'capability.action.denied', disposition: 'rejected' }
       );
     }
@@ -2456,6 +3035,9 @@ export function receiveRoleReturn(input = {}, options = {}) {
         ok: true,
         roleReturn: deepFreeze(wire),
         exceptional,
+        returnAssurance,
+        producerAuthenticated: true,
+        assurance: returnAssuranceStatement(packet, returnAssurance, minimumReturn),
         blockedAuthority: null,
         validation: exceptional.validation,
       };
@@ -2539,19 +3121,24 @@ export function receiveRoleReturn(input = {}, options = {}) {
         'role_return.invalid'
       );
     }
-    const warningDiagnostics = degradedWarningDiagnostics(
-      degradedReports,
-      packet.assignment.hostRoleCapability
-    );
+    const warningDiagnostics = [
+      ...degradedWarningDiagnostics(degradedReports, packet.assignment.hostRoleCapability),
+      ...sessionReportedWarningDiagnostics(returnAssurance, wire.producerRole),
+    ];
+    const assurance = returnAssuranceStatement(packet, returnAssurance, minimumReturn);
     return {
       ok: true,
       roleReturn: deepFreeze(wire),
+      returnAssurance,
+      producerAuthenticated: returnAssurance === 'host_receipt',
+      assurance,
       blockedAuthority: blockedAuthority ? blockedAuthority.value : null,
       validation: validation(command, true, 'current', 'proceed', null, {
         producerRole: wire.producerRole,
         blockedAuthority: blockedAuthority ? structuredClone(blockedAuthority.value) : null,
         degradedEnforcementReports: degradedReports,
         warningDiagnostics,
+        assurance,
       }),
     };
   } catch (error) {

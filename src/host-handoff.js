@@ -71,6 +71,10 @@ export function repositoryEvidenceDigest(evidence) {
   return `sha256:agenticloop.repository-evidence.v1:${canonicalSha256(evidence)}`;
 }
 
+function packetRepositoryIdentity(packet) {
+  return packet?.activationBinding?.grant?.repositoryIdentity ?? packet?.activation?.repositoryIdentity ?? null;
+}
+
 /**
  * The exact bytes an activation-capture signature covers. Everything a capture
  * asserts about its own authority is inside this payload.
@@ -147,7 +151,7 @@ export function createHostHandoffReceipt(input = {}, privateKey) {
   if (typeof observedProducerRole !== 'string' || !observedProducerRole.trim()) {
     throw new TypeError('host-observed producer role is required');
   }
-  if (typeof packet?.activation?.repositoryIdentity !== 'string' || !packet.activation.repositoryIdentity) {
+  if (typeof packetRepositoryIdentity(packet) !== 'string') {
     throw new TypeError('dispatch packet target repository identity is required');
   }
   const receipt = {
@@ -159,7 +163,7 @@ export function createHostHandoffReceipt(input = {}, privateKey) {
     invocationId: packet.assignment.invocationId,
     packet: { packetId: packet.packetId, digest: packet.digest },
     roleReturn: { returnId: roleReturn.returnId, digest: roleReturn.digest },
-    targetRepository: packet.activation.repositoryIdentity,
+    targetRepository: packetRepositoryIdentity(packet),
     repositoryEvidenceDigest: repositoryEvidenceDigest(repositoryEvidence),
     packetLiveness: { expiry: packet.assignment.liveness.expiry },
     receivedAt: input.receivedAt ?? new Date().toISOString(),
@@ -229,9 +233,9 @@ export function verifyHostHandoffReceipt(receipt, {
   if (receipt.schemaVersion === LEGACY_ROLE_RETURN_RECEIPT_SCHEMA_VERSION) {
     throw new HostReceiptStaleVersionError();
   }
-  if (packet?.activation?.adapter !== trustedAdapter.adapterId ||
-      packet?.activation?.signature?.keyId !== trustedAdapter.keyId ||
-      packet?.activation?.repositoryIdentity !== trustedAdapter.repositoryIdentity ||
+  if (packet?.returnAdapter?.adapterId !== trustedAdapter.adapterId ||
+      packet?.returnAdapter?.keyId !== trustedAdapter.keyId ||
+      packetRepositoryIdentity(packet) !== trustedAdapter.repositoryIdentity ||
       receipt.targetRepository !== trustedAdapter.repositoryIdentity ||
       targetRepositoryIdentity(repositoryEvidence?.worktree) !== trustedAdapter.repositoryIdentity) {
     throw new TypeError('host handoff receipt target, adapter, or key is not the packet-bound operator trust identity');
@@ -267,14 +271,14 @@ export function createHostExceptionalVerificationReceipt(input = {}, privateKey)
   if (typeof adapterId !== 'string' || !adapterId.trim() || typeof keyId !== 'string' || !keyId.trim()) throw new TypeError('host exceptional receipt adapterId and keyId are required');
   if (!packet?.assignment?.invocationId || !packet?.assignment?.liveness?.expiry || !packet?.packetId || !SEMANTIC_DIGEST_RE.test(packet?.digest ?? '')) throw new TypeError('dispatch packet identity and liveness are required');
   if (!exceptionalVerification?.requestId || !SEMANTIC_DIGEST_RE.test(exceptionalVerification?.digest ?? '')) throw new TypeError('exceptional-verification identity is invalid');
-  if (typeof observedProducerRole !== 'string' || !observedProducerRole.trim() || !packet?.activation?.repositoryIdentity) throw new TypeError('host-observed producer role and target repository are required');
+  if (typeof observedProducerRole !== 'string' || !observedProducerRole.trim() || !packetRepositoryIdentity(packet)) throw new TypeError('host-observed producer role and target repository are required');
   const receipt = {
     kind: EXCEPTIONAL_VERIFICATION_RECEIPT_KIND, schemaVersion: EXCEPTIONAL_VERIFICATION_RECEIPT_SCHEMA_VERSION,
     producerRole: observedProducerRole, source: 'host_adapter', adapterId,
     invocationId: packet.assignment.invocationId,
     packet: { packetId: packet.packetId, digest: packet.digest },
     exceptionalVerification: { requestId: exceptionalVerification.requestId, digest: exceptionalVerification.digest },
-    targetRepository: packet.activation.repositoryIdentity,
+    targetRepository: packetRepositoryIdentity(packet),
     repositoryEvidenceDigest: repositoryEvidenceDigest(repositoryEvidence),
     packetLiveness: { expiry: packet.assignment.liveness.expiry },
     receivedAt: input.receivedAt ?? new Date().toISOString(),
@@ -299,7 +303,7 @@ export function verifyHostExceptionalVerificationReceipt(receipt, {
   if (receipt.kind !== EXCEPTIONAL_VERIFICATION_RECEIPT_KIND || receipt.schemaVersion !== EXCEPTIONAL_VERIFICATION_RECEIPT_SCHEMA_VERSION || receipt.source !== 'host_adapter') throw new TypeError('host exceptional-verification receipt identity is invalid');
   if (!trustedAdapter || trustedAdapter.capabilities?.returnReceipt !== 'supported' || receipt.adapterId !== trustedAdapter.adapterId || receipt.authentication.algorithm !== HOST_SIGNATURE_ALGORITHM || receipt.authentication.keyId !== trustedAdapter.keyId) throw new TypeError('host exceptional-verification receipt adapter or key is not trusted');
   if (!verifyHostPayload(hostHandoffReceiptSignaturePayload(receipt), receipt.authentication.value, trustedAdapter.publicKey)) throw new TypeError('host exceptional-verification receipt authentication failed');
-  if (packet?.activation?.adapter !== trustedAdapter.adapterId || packet?.activation?.signature?.keyId !== trustedAdapter.keyId || packet?.activation?.repositoryIdentity !== trustedAdapter.repositoryIdentity || receipt.targetRepository !== trustedAdapter.repositoryIdentity || targetRepositoryIdentity(repositoryEvidence?.worktree) !== trustedAdapter.repositoryIdentity) throw new TypeError('host exceptional-verification receipt target is not packet-bound');
+  if (packet?.returnAdapter?.adapterId !== trustedAdapter.adapterId || packet?.returnAdapter?.keyId !== trustedAdapter.keyId || packetRepositoryIdentity(packet) !== trustedAdapter.repositoryIdentity || receipt.targetRepository !== trustedAdapter.repositoryIdentity || targetRepositoryIdentity(repositoryEvidence?.worktree) !== trustedAdapter.repositoryIdentity) throw new TypeError('host exceptional-verification receipt target is not packet-bound');
   if (!ISO_INSTANT_RE.test(receipt.receivedAt ?? '') || !Number.isFinite(Date.parse(receipt.receivedAt)) || Date.parse(receipt.receivedAt) > now + 1000) throw new TypeError('host exceptional-verification receipt receivedAt is invalid or future-dated');
   if (receipt.producerRole !== packet?.assignment?.roleId || receipt.producerRole !== exceptionalVerification?.producer?.roleId || receipt.invocationId !== packet?.assignment?.invocationId || receipt.packet.packetId !== packet?.packetId || receipt.packet.digest !== packet?.digest || receipt.exceptionalVerification.requestId !== exceptionalVerification?.requestId || receipt.exceptionalVerification.digest !== exceptionalVerification?.digest || receipt.repositoryEvidenceDigest !== repositoryEvidenceDigest(repositoryEvidence) || receipt.packetLiveness.expiry !== packet?.assignment?.liveness?.expiry) throw new TypeError('host exceptional-verification receipt does not bind the exact invocation artifacts');
   const expiry = Date.parse(receipt.packetLiveness.expiry);

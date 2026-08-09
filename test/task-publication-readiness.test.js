@@ -1646,12 +1646,13 @@ describe('closeout-owned terminal transition', () => {
     const packetPath = '.agenticloop/tmp/closeout.json';
     const prepared = await runCliInProcess([
       'closeout', 'prepare', '--work-unit', 'work-unit:manual', '--covered-tasks', 'T-001',
-      '--artifact', `commit:${git(root, ['rev-parse', 'HEAD'])}`, '--output', packetPath, '--target', root, '--json',
-    ]);
+      '--artifact', `commit:${git(root, ['rev-parse', 'HEAD'])}`, '--output', packetPath,
+      '--legacy-unactivated', '--legacy-reason', 'historical unactivated terminal fixture', '--target', root, '--json',
+    ], { operatorActivationRoot: join(temp, 'operator-activation'), stdinIsTTY: true, isTTY: true, ci: false, promptFactory: () => ({ ask: async () => 'waive', close() {} }) });
     assert.equal(prepared.status, 0, prepared.stdout + prepared.stderr);
     const recorded = await runCliInProcess([
       'closeout', 'record', '--packet', packetPath, '--yes', '--target', root,
-    ]);
+    ], { operatorActivationRoot: join(temp, 'operator-activation') });
     assert.equal(recorded.status, 0, recorded.stdout + recorded.stderr);
     assert.match(recorded.stdout, /closeout_owned_accepted_to_closed: closed 1 covered task carrier/);
     assert.match(recorded.stdout, /one guarded filesystem transaction/);
@@ -1660,7 +1661,7 @@ describe('closeout-owned terminal transition', () => {
     // A safe rerun resumes from the already-verified terminal step.
     const rerun = await runCliInProcess([
       'closeout', 'record', '--packet', packetPath, '--yes', '--target', root,
-    ]);
+    ], { operatorActivationRoot: join(temp, 'operator-activation') });
     assert.equal(rerun.status, 0, rerun.stdout + rerun.stderr);
     assert.match(rerun.stdout, /already current|already closed|nothing to do/i);
   });
@@ -1671,14 +1672,15 @@ describe('closeout-owned terminal transition', () => {
     const packetPath = '.agenticloop/tmp/closeout.json';
     const prepared = await runCliInProcess([
       'closeout', 'prepare', '--work-unit', 'work-unit:manual', '--covered-tasks', 'T-001',
-      '--artifact', `commit:${git(root, ['rev-parse', 'HEAD'])}`, '--output', packetPath, '--target', root, '--json',
-    ]);
+      '--artifact', `commit:${git(root, ['rev-parse', 'HEAD'])}`, '--output', packetPath,
+      '--legacy-unactivated', '--legacy-reason', 'historical unactivated terminal fixture', '--target', root, '--json',
+    ], { operatorActivationRoot: join(temp, 'operator-activation'), stdinIsTTY: true, isTTY: true, ci: false, promptFactory: () => ({ ask: async () => 'waive', close() {} }) });
     assert.equal(prepared.status, 0, prepared.stdout + prepared.stderr);
     // Changed task evidence after preparation must block publication.
     writeFileSync(file, readFileSync(file, 'utf8').replace('status: accepted', 'status: in-progress'), 'utf8');
     const recorded = await runCliInProcess([
       'closeout', 'record', '--packet', packetPath, '--yes', '--target', root,
-    ]);
+    ], { operatorActivationRoot: join(temp, 'operator-activation') });
     assert.equal(recorded.status, 1);
     assert.match(readFileSync(file, 'utf8'), /status: in-progress/);
   });

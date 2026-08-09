@@ -41,6 +41,7 @@ class MemoryStream {
  * @param {Function} [options.promptFactory]
  * @param {Function} [options.ghCommandRunner]  Injectable read-only GitHub command runner.
  * @param {string} [options.operatorTrustRoot]  Injectable host-owned trust registry root.
+ * @param {string} [options.operatorActivationRoot]  Injectable per-user operator activation root.
  * @param {Function} [options.hostAuthority] Test transport for a signed host-boundary challenge response.
  * @param {Function|null} [options.auditProvenanceVerifier] Protected test-only Auditor receipt verifier.
  * @param {object} [options.fsMutationOptions]  Injectable filesystem mutation hooks.
@@ -63,6 +64,7 @@ export async function runCliInProcess(argv, options = {}) {
     promptFactory: options.promptFactory,
     ghCommandRunner: options.ghCommandRunner,
     operatorTrustRoot: options.operatorTrustRoot,
+    operatorActivationRoot: options.operatorActivationRoot,
     hostAuthority: options.hostAuthority,
     auditProvenanceVerifier: Object.hasOwn(options, 'auditProvenanceVerifier')
       ? options.auditProvenanceVerifier
