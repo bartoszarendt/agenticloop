@@ -144,11 +144,11 @@ multiline text.
 }
 ```
 
-Use `provenance: "verified"` only when the host gives this fresh Auditor
-invocation a verifiable receipt; include that receipt as `invocation.receipt`.
-A receipt merely supplied in the JSON is normalized to `asserted` when the host
-has no verifier. Do not return raw transcripts, full file dumps, or host runtime
-output.
+Use `provenance: "verified"` only when the host supplies a verifiable receipt
+for this invocation, included as `invocation.receipt`. A receipt is not
+authentication: without the packaged verifier, persistence fails closed. Never
+pre-compute a report digest; the host derives it. Do not return raw transcripts,
+file dumps, or host output.
 
 ## Before Handing Back
 

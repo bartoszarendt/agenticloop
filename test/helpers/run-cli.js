@@ -41,7 +41,7 @@ class MemoryStream {
  * @param {Function} [options.promptFactory]
  * @param {Function} [options.ghCommandRunner]  Injectable read-only GitHub command runner.
  * @param {string} [options.operatorTrustRoot]  Injectable host-owned trust registry root.
- * @param {Function} [options.hostAuthority] Protected test host-authority callback.
+ * @param {Function} [options.hostAuthority] Test transport for a signed host-boundary challenge response.
  * @param {Function|null} [options.auditProvenanceVerifier] Protected test-only Auditor receipt verifier.
  * @param {object} [options.fsMutationOptions]  Injectable filesystem mutation hooks.
  * @returns {Promise<{ status: number, stdout: string, stderr: string }>}

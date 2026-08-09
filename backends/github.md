@@ -38,8 +38,11 @@ readiness nor independently authorizes resumption, and `agent-ready` contract
 state beside a current structured runtime blocker is valid, not drift.
 
 A GitHub parallel-scan inventory reuses the repository-wide task identity
-inventory and its strict identity resolution. Truncation past the bounded issue
-page, a duplicate task identity, or a contradiction between frontmatter, title,
+inventory and its strict identity resolution. The backend-selected
+`task prepare-decomposition` path uses the injected read-only GitHub runner and
+follows every REST issue page. It excludes only entries explicitly marked as
+pull requests. A truncated or unresolved page sequence, a duplicate task
+identity, or a contradiction between frontmatter, title,
 and task label makes the inventory incomplete, and an issue whose own transport
 identity is invalid is retained as unreadable inventory evidence rather than
 dropped. An incomplete inventory yields an `incomplete` scan conclusion, never
@@ -47,15 +50,22 @@ an empty complete ready set.
 
 Completeness is derived from a typed
 `agenticloop.task-inventory-enumeration` receipt issued by
-`agenticloop.github-task-issue-inventory.v1`, whose bounded coverage carries the
-page count, truncation flag, and any unfollowed pagination cursor. A truncated or
+`agenticloop.github-task-issue-inventory.v1`, whose coverage carries the
+page count, truncation flag, and any unfollowed pagination cursor. Coverage is
+defined over the task-issue surface *after* pull-request filtering: `discovered`
+counts the issue entries that could carry a task record, not the raw REST rows
+the endpoint returned. Counting raw rows would report a complete issue inventory
+as truncated purely because GitHub also returned pull requests, which are not
+part of the surface the inventory claims to cover; `pageCount` still accounts for
+every observed REST page. A pull request never becomes a task carrier, including
+one whose body happens to parse as a task record. A truncated or
 cursor-bearing enumeration is never exhaustive, so a paginated subset cannot
 reach `no_eligible_work`, `not_currently_eligible`, or `parallel_candidates`. The
-shared producer's enumerator is injectable, so a GitHub adapter supplies that
-authoritative paginated inventory without forking any scan semantics.
-Any shared dispatch consumer must inject the authoritative complete GitHub
-inventory refetch and match its identity, membership, and task-body digests to
-the bound scan before mutation; authored decomposition JSON is not that proof.
+shared producer selects this enumerator from `task_backend: github` without
+forking scan semantics. GitHub dispatch refetches the same authoritative complete
+inventory and matches its identity, membership, task-body digests, readiness
+context, and decomposition binding before mutation; authored decomposition JSON
+is not that proof.
 
 ## Dispatch and return
 

@@ -15,7 +15,11 @@ import { dirname, join } from 'node:path';
 import { activationCapabilityInventory } from '../../src/dispatch-envelope.js';
 import {
   generateHostSigningKey,
+  HOST_TRUST_BOUNDARY_RESPONSE_KIND,
+  HOST_TRUST_BOUNDARY_SCHEMA_VERSION,
+  hostTrustBoundarySignaturePayload,
   operatorTrustStorePath,
+  signHostPayload,
   targetRepositoryIdentity,
 } from '../../src/host-trust.js';
 
@@ -72,4 +76,21 @@ export function writeHostTrustStore(operatorRoot, trust) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(trust.document, null, 2)}\n`, 'utf8');
   return path;
+}
+
+/** Return a challenge-signing host boundary backed by the fixture's private key. */
+export function protectedHostBoundary(trust, observe = () => {}) {
+  return challenge => {
+    observe(challenge);
+    const response = {
+      kind: HOST_TRUST_BOUNDARY_RESPONSE_KIND,
+      schemaVersion: HOST_TRUST_BOUNDARY_SCHEMA_VERSION,
+      adapterId: trust.adapterId,
+      keyId: trust.keyId,
+      challengeNonce: challenge.nonce,
+      signature: null,
+    };
+    response.signature = signHostPayload(hostTrustBoundarySignaturePayload(challenge, response), trust.privateKey);
+    return response;
+  };
 }

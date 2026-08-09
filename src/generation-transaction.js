@@ -339,7 +339,7 @@ function appendGitignore(path, action, priorManifest, outputRoot) {
 }
 
 function entryKey(adapter, outputRoot, relPath, kind) {
-  return [adapter, outputRoot, relPath, kind].join(' ');
+  return [adapter, outputRoot, relPath, kind].join('\u0000');
 }
 
 const FORBIDDEN_GENERATION_ROOTS = ['.github/workflows'];

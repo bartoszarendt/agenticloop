@@ -31,8 +31,8 @@ All commands:
 | `guidance` | Manage the activation-guidance block (`apply`, `check`, `remove`) |
 | `generate` | Generate adapter artifacts (`opencode`, `codex`, `claude-code`, `copilot`, `cursor`, `all`) |
 | `configure models` | Set per-host role model settings in `agenticloop.json` |
-| `task` | Files-backed task records (`list`, `lint`, `new`, `prepare-dispatch`, `verify-return`, `status`) |
-| `audit` | Work-unit audit certificates (`new`, `baseline`, `report`, `status`, `gate`, `lint`, `override`, `resolve`) |
+| `task` | Task records and read-only preparation (`list`, `lint`, `new`, `establish-baseline`, `authorize-correction`, `prepare-decomposition`, `prepare-dispatch`, `verify-return`, `status`) |
+| `audit` | Work-unit audit certificates (`new`, `baseline`, `report`, `status`, `gate`, `lint`, `repair-structure`, `disposition`, `override`, `resolve`) |
 | `closeout` | Composite closeout packets (`prepare`, `status`, `record`) |
 | `improvement` | Bounded improvement proposals (`new`, `lint`, `status`) |
 | `worktree` | Guarded worktrees (`add`, `guard`, `list`, `remove`, `cleanup`, `resolve-state`, `prune`) |
@@ -346,10 +346,11 @@ the shipped unsupported inventory; an existing malformed store remains an
 error. A well-formed store that declares a `supported` capture or return
 capability is typed negative/blocked unsupported-boundary evidence, not
 malformed input: the public and delegated in-process CLI rejects every such
-registry. Neither a callback, environment
-value, CLI option, nor same-user writable filesystem path can promote one. A
-future supported integration requires authenticated host-controlled IPC, OS
-isolation, or an equivalent boundary outside the delegated process. A
+registry. Neither a boolean callback, environment
+value, CLI option, nor same-user writable filesystem path can promote one. The
+packaged protected-host seam requires a fresh nonce-bound Ed25519 challenge
+response over authenticated host-controlled IPC, an inherited protected OS
+handle, OS isolation, or an equivalent boundary outside the delegated process. A
 repository-local
 `.agenticloop/host-trust.json` is ordinary untrusted data and cannot authorize a
 capture, packet, or return.
@@ -381,6 +382,20 @@ Prepare one exact Engineer handoff without task mutation:
 npx agenticloop task prepare-dispatch T-001 --input .agenticloop/tmp/dispatch-input.json [--host-trust-store <expected-registered-path>] --json
 ```
 
+Produce the committed decomposition source first with `task
+prepare-decomposition`. The command selects files or GitHub from
+`.agenticloop/project.md`; GitHub may use `--repo <owner/name>` and follows the
+complete issue pagination through the injected read-only transport. Both
+backends emit the same shared scan semantics and an exact enumeration receipt.
+Dispatch refetches that authoritative inventory before mutation.
+
+Both preparation subcommands validate `task_backend` before they select an
+enumerator or a transport. An unsupported value is refused with a single typed
+`verification.context.malformed` diagnostic as the root cause; no inventory is
+enumerated and no GitHub call is made. `--repo` names a GitHub repository, so
+supplying it while `task_backend: files` is configured is a usage error rather
+than a silently ignored flag.
+
 The input supplies verified activation capture, selected role/worktree facts,
 and only the source selectors from prior readiness/decomposition evidence.
 Caller-authored readiness results and decomposition claims are ignored. The
@@ -388,14 +403,20 @@ command reruns readiness from the exact Git tree and dependency snapshot, reads
 decomposition from its committed `sourceRef`, and requires the source commit to
 carry canonical `Task:` and `Agent: maintainer` attribution before emitting a versioned
 `agenticloop.role-preparation` packet only when every binding is current. The
-current packet is schema version 4 and binds the selected host, the exact closed
+current packet is schema version 5 and binds the selected host, the exact closed
 Engineer capability declaration and digest, and the canonical derived
-degraded-enforcement report inventory. The real shipped baseline was schema
+degraded-enforcement report inventory plus a constant-size decomposition binding
+to the committed scan source. The real shipped baseline was schema
 version 2. Authentic version 2 packets, and authentic transitional version 3
-packets, fail with typed `dispatch.packet.stale`; regenerate them as version 4
+and 4 packets, fail with typed `dispatch.packet.stale`; regenerate them as version 5
 instead of repairing them in place. Merely setting an old version number on
 malformed input does not classify it as a legacy packet. A missing, malformed, non-canonical, or
 implementation-denying declaration fails before dispatch.
+An otherwise-current schema-v5 packet carrying the exact former version 3
+degraded-report set is also classified as typed `dispatch.packet.stale` only
+after its original digest and complete projected-current semantics validate;
+regenerate it rather than accepting or rewriting it. A malformed v3 lookalike
+remains malformed.
 The
 Engineer revalidates it with `task prepare-dispatch T-001 --packet <packet.json>
 --role engineer [--host-trust-store <expected-registered-path>]` before
@@ -454,13 +475,13 @@ disposition records with the canonical serializers; the request shapes and
 safe key-handling procedure are documented in
 [Host Adapters](./host-adapters.md#constructing-signed-blocked-authority-records).
 
-The packet also carries the canonical version 3 degraded-enforcement report set.
+The packet also carries the canonical version 4 degraded-enforcement report set.
 `prepare-dispatch` emits `capability.enforcement.degraded` warnings through the
 repair policy, and `verify-return` performs the canonical
 packet/report/declaration check at the receive edge. A duplicate
 post-validation report branch is not counted as another enforcement layer.
 Malformed, contradictory, or declaration-drifted reports fail closed. The
-report names the deterministic recovery route. This is an
+report pins the declaration that supplies the deterministic recovery route. This is an
 Agentic Loop evidence boundary, not a claim that arbitrary external writes are
 prevented.
 

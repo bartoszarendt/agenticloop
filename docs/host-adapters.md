@@ -24,8 +24,13 @@ A registry document may describe a target-bound key and supported capabilities,
 but the current public and delegated in-process CLI always rejects such entries.
 A callback, derived filesystem path, JSON flag, environment variable visible to
 the delegated process, or same-user writable registry is not mechanical
-protection. Future support requires authenticated host-controlled IPC, OS
-isolation, or an equivalent external boundary. With no derived store, the CLI
+protection. The packaged host seam therefore treats its callback only as a
+transport: it emits a fresh random challenge binding the exact target, trust
+store, adapter inventory, and five-second liveness window, and accepts support
+only when every requested adapter returns an Ed25519 signature from its pinned
+key. A boolean return is always refused. The signing key and transport still
+require authenticated host-controlled IPC, an inherited protected OS handle,
+OS isolation, or an equivalent external boundary. With no derived store, the CLI
 safely reports shipped adapters as typed unsupported; malformed existing stores
 still fail as malformed/rejected input, while a well-formed store that declares
 dynamic supported capabilities is typed negative/blocked unsupported-boundary
@@ -232,6 +237,169 @@ cannot isolate an Ed25519 private key or cannot produce parser-controlled bytes
 reports the corresponding capability as unsupported; an Orchestrator-authored
 receipt is not a degraded substitute.
 
+### Auditor-return receipts
+
+Protected host integrations import the packaged production implementation from
+the `agenticloop/auditor-return-receipt` subpath (the deep path
+`agenticloop/src/auditor-return-receipt.js` keeps working).
+`createAuditorReturnReceipt` is the
+bounded canonical signature-payload helper for an external host signer;
+`loadAuditorReturnReceiptVerifier` loads the fixed operator-pinned trust store,
+requires the existing `returnReceipt: supported` capability, and returns the
+verifier injected as `auditProvenanceVerifier`. The receipt binds immutable role
+`auditor`, adapter/key, target repository, invocation reference and mode, work
+unit, exact candidate, canonical covered tasks, substantive report digest,
+receipt identity, and issue/expiry instants.
+
+The wrapper supplies `protectedBoundary` as transport for the loader's fresh
+nonce-bound challenge. The response must sign the exact target identity,
+trust-store path, requested adapter/key, nonce, and issue/expiry instants; returning
+`true` or replaying a response for another challenge cannot authorize the load.
+The installed regression passes a closed host-owned configuration envelope
+through an inherited OS file descriptor rather than flags or environment
+variables. The ordinary packed
+CLI supplies no signer or boundary and still fails closed. Do not expose verifier
+selection, trust root, or private key through a public flag, environment variable,
+generated prompt, or ordinary delegated callback. Receipt shape and signature are checked
+before semantic and freshness checks, so forged-and-expired data remains
+untrusted while an authentic expired receipt is stale. Private keys remain
+external; the package ships no key and no general agent-callable signing command.
+
+#### Packaged reference integration: inherited descriptor
+
+`loadAuditorReturnReceiptVerifier` is a seam. The package also ships one bounded
+reference integration that occupies it, so an operator does not have to author
+the wrapper from scratch: `agenticloop/protected-host-boundary` (deep path
+`agenticloop/src/protected-host-boundary.js`).
+
+It reads one closed JSON configuration envelope from **inherited file descriptor
+3**, exported as `PROTECTED_KEY_DESCRIPTOR`. The envelope contains exactly
+`kind`, `schemaVersion`, `adapterId`, `keyId`, `targetRepositoryIdentity`,
+`operatorTrustRoot`, `assertedPath`, and `privateKey`. The trusted parent owns all
+of those values; none can be replaced through the JavaScript API, argv, or the
+environment. The target passed by the wrapper must derive the same repository
+identity carried in the envelope.
+
+The descriptor payload is UTF-8 JSON with this closed shape (the paths must be
+absolute, and `assertedPath` may be `null` to use the store derived from the
+protected root):
+
+```json
+{
+  "kind": "agenticloop.protected-host-config",
+  "schemaVersion": 1,
+  "adapterId": "acme.parser.v1",
+  "keyId": "acme-key-1",
+  "targetRepositoryIdentity": "file:/absolute/target",
+  "operatorTrustRoot": "/absolute/operator/host-trust",
+  "assertedPath": null,
+  "privateKey": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+}
+```
+
+```js
+// host-wrapper.mjs, spawned as:
+//   spawn(process.execPath, ['host-wrapper.mjs'],
+//         { stdio: ['ignore', 'inherit', 'inherit', protectedConfigFd] })
+import { runCli } from 'agenticloop';
+import { loadProtectedAuditorReturnVerifier } from 'agenticloop/protected-host-boundary';
+
+const loaded = loadProtectedAuditorReturnVerifier({ target });
+if (!loaded.ok) throw new Error(loaded.errors.join('; '));
+
+process.exitCode = await runCli(args, { auditProvenanceVerifier: loaded.verifier });
+```
+
+The integration:
+
+- keeps the private key and trust configuration outside the package, target
+  repository, environment, CLI flags, and every generated prompt - they exist
+  only in host-owned storage and on the descriptor the host passed;
+- fixes the production channel to descriptor 3 and exposes no alternate reader,
+  descriptor, signing-callback constructor, test clock, trust-root override, or
+  adapter/key override;
+- answers the exact nonce-bound loader challenge and nothing else, so it is not
+  a general signing oracle - an unrecognized challenge shape is refused, not
+  signed;
+- loads the exact operator-pinned trust store named by the protected envelope
+  and requires its target binding and pinned public key to match;
+- registers no CLI subcommand, so no agent-callable signing command exists;
+- fails closed with a stated reason and a null verifier when the descriptor is
+  absent, empty, unreadable, malformed, target-mismatched, or does not carry an
+  Ed25519 private key matching the pinned adapter.
+
+This is a *reference* integration for an operator who already holds the key and
+spawns the CLI. Shipping it does not grant any generated host adapter the
+boundary: an adapter that runs `npx agenticloop ...` as a plain subprocess
+passes no descriptor and holds no key, so it stays fail-closed exactly as
+before. Granting the capability remains an operator act.
+
+#### Preparing a report for signing
+
+The digest a receipt authenticates is computed over the CLI's **normalized**
+report, not over the raw wire document the Auditor produced. The CLI trims
+surrounding whitespace, lower-cases severities and provenance, canonicalizes
+covered tasks, and normalizes boolean forms before it derives that identity. A
+host that digests the raw document therefore signs a different identity, and its
+genuine receipt is rejected.
+
+Import `prepareAuditorReturnReportForSigning` from
+`agenticloop/audit-report-schema` (or the deep path
+`agenticloop/src/audit-report-schema.js`) and follow exactly two steps:
+
+```js
+import { prepareAuditorReturnReportForSigning } from 'agenticloop/audit-report-schema';
+import { createAuditorReturnReceipt } from 'agenticloop/auditor-return-receipt';
+
+// 1. Normalize the Auditor's raw report and obtain the exact digest the CLI
+//    will later derive. Validation is the same closed schema as submission.
+const prepared = prepareAuditorReturnReportForSigning(rawReport);
+if (!prepared.ok) throw new Error(prepared.errors.join('; '));
+
+// 2. Sign that digest, then insert the receipt into the returned normalized
+//    report. Never re-serialize or edit any other field afterwards.
+const receipt = createAuditorReturnReceipt({
+  /* ... */ reportDigest: prepared.digest,
+}, privateKey);
+prepared.report.invocation.receipt = JSON.stringify(receipt);
+
+// 3. Submit `prepared.report`. The CLI derives the identical digest.
+```
+
+`prepared.report` is the receipt-null normalized projection: `invocation.receipt`
+is `null` until step 2 inserts the real receipt. This is the only mode in which a
+`verified` report may lack a receipt, and it exists solely because the receipt
+cannot exist before its own digest is known. Submitting that projection unsigned
+is still refused. There is no dummy-receipt convention, and mutating any
+substantive field after signing changes the digest and fails closed - which is
+the intended behavior.
+
+#### Challenge lifetime and receipt clock skew
+
+Two separate policies govern time, and they are not the same concept:
+
+- `HOST_TRUST_CHALLENGE_TTL_MS` (`agenticloop/host-trust`) bounds how long one
+  protected loader challenge stays answerable. Signed `issuedAt`/`expiresAt`
+  values use the wall clock, while callback duration uses an independent
+  monotonic clock. A response at or beyond the elapsed-time limit, a backward
+  monotonic reading, or an invalid wall-clock date is refused however well it is
+  signed. Low-level tests may inject `clock` and `monotonicClock`; the packaged
+  production wrapper exposes neither.
+- `AUDITOR_RECEIPT_FUTURE_SKEW_MS` (`agenticloop/auditor-return-receipt`) bounds
+  tolerated clock disagreement between the signing host and the verifying
+  process for a receipt's `issuedAt`.
+- `AUDITOR_RECEIPT_MAX_VALIDITY_MS` (`agenticloop/auditor-return-receipt`) bounds
+  both a receipt's observed age and the validity interval it declares for
+  itself. Without the interval bound, a receipt could name an arbitrarily
+  distant `expiresAt` and stay replayable indefinitely.
+
+`now`, `clock`, and `monotonicClock` are separate low-level test inputs and are
+never substituted for one another. `clock` supplies the challenge's wall-clock
+timestamps, `monotonicClock` measures callback duration, and `now` fixes the
+instant receipt freshness is evaluated against. Passing only `now` therefore
+leaves challenge expiry on the real monotonic clock rather than freezing it. A
+non-finite clock is refused rather than treated as "no freshness check".
+
 ## Operator Trust Stores
 
 The public CLI reads one pre-registered store from the fixed per-user operator
@@ -415,11 +583,12 @@ Auditor remains read-only. All hosts currently report role-result production as
 contains the external private-key receipt signer. Correctly authenticated
 test/integration seams remain available for contract verification.
 
-Every non-enforced action produces a closed version 3 degraded-enforcement
-report with stable code `capability.enforcement.degraded`, exact limitation,
-`role_return_receive` detection boundary, declaration digest, and recovery
-route. Generated agents carry a short human-readable summary plus the schema,
-digest, and deterministic
+Every non-enforced action produces a closed version 4 degraded-enforcement
+report with stable code `capability.enforcement.degraded`, the action,
+capability, enforcement state, and declaration digest. The exact limitation,
+`role_return_receive` detection boundary, and recovery route are resolved from
+that pinned declaration rather than repeated in every report. Generated agents
+carry a short human-readable summary plus the schema, digest, and deterministic
 `.agenticloop/host-role-capabilities/<host>.json` path. That sidecar holds the
 full canonical declaration exactly once per host; validation recomputes its
 canonical bytes and digest, so modification or prompt/sidecar drift fails

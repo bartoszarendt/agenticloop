@@ -11,6 +11,14 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runCliInProcess, scriptedStdin } from './helpers/run-cli.js';
 import { parseAuditRecord } from '../src/audit-record.js';
+import { auditorReturnReportDigest, prepareAuditorReturnReportForSigning } from '../src/audit-report-schema.js';
+import {
+  auditorReturnReceiptSignaturePayload,
+  createAuditorReturnReceipt,
+  loadAuditorReturnReceiptVerifier,
+} from '../src/auditor-return-receipt.js';
+import { signHostPayload } from '../src/host-trust.js';
+import { createTestHostTrust, protectedHostBoundary, writeHostTrustStore } from './helpers/host-trust-fixture.js';
 
 let tmpDir;
 before(() => { tmpDir = mkdtempSync(join(tmpdir(), 'al-audit-txn-')); });
@@ -341,6 +349,338 @@ describe('finding dispositions', () => {
 });
 
 describe('report ingestion modes', () => {
+  it('rejects every signed receipt mismatch before audit mutation or budget consumption', async () => {
+    const target = makeTarget('protected-auditor-negative');
+    await seedRecord(target);
+    const operatorRoot = join(tmpDir, 'protected-auditor-negative-operator');
+    mkdirSync(operatorRoot, { recursive: true });
+    const trust = createTestHostTrust({ target });
+    writeHostTrustStore(operatorRoot, trust);
+    const report = wireReport({
+      artifact: `commit:${FULL_A}`,
+      covered_tasks: ['T-041', 'T-042'],
+      invocation: { mode: 'host_subagent', reference: 'negative-auditor-ref', provenance: 'verified', receipt: null },
+    });
+    const baseInput = {
+      receiptId: 'negative-auditor-receipt', adapterId: trust.adapterId, keyId: trust.keyId,
+      targetRepository: trust.repositoryIdentity,
+      invocationReference: report.invocation.reference, invocationMode: report.invocation.mode,
+      workUnit: 'phase:4', candidateArtifact: report.artifact, coveredTasks: report.covered_tasks,
+      reportDigest: auditorReturnReportDigest(report),
+      issuedAt: '2026-08-08T11:59:00.000Z', expiresAt: '2026-08-08T12:01:00.000Z',
+    };
+    const makeReceipt = overrides => createAuditorReturnReceipt({ ...baseInput, ...overrides }, trust.privateKey);
+    const forged = structuredClone(makeReceipt({}));
+    // Corrupt a signature *data* character, not the trailing padding: the
+    // signature grammar would reject damaged padding before verification runs,
+    // so this keeps the case a genuine cryptographic forgery.
+    forged.authentication.value = (value => {
+      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+      const body = value.slice('ed25519:'.length);
+      return `ed25519:${alphabet[(alphabet.indexOf(body[0]) + 1) % 64]}${body.slice(1)}`;
+    })(forged.authentication.value);
+    const wrongRole = structuredClone(makeReceipt({}));
+    wrongRole.producerRole = 'engineer';
+    wrongRole.authentication.value = signHostPayload(auditorReturnReceiptSignaturePayload(wrongRole), trust.privateKey);
+    const receipts = [
+      forged,
+      wrongRole,
+      makeReceipt({ adapterId: 'wrong.adapter' }),
+      makeReceipt({ keyId: 'wrong-key' }),
+      makeReceipt({ targetRepository: 'file:/wrong-target' }),
+      makeReceipt({ invocationReference: 'wrong-invocation' }),
+      makeReceipt({ invocationMode: 'wrong-mode' }),
+      makeReceipt({ workUnit: 'phase:other' }),
+      makeReceipt({ candidateArtifact: `commit:${FULL_B}` }),
+      makeReceipt({ coveredTasks: ['T-041'] }),
+      makeReceipt({ reportDigest: `sha256:agenticloop.auditor-return-report.v1:${'b'.repeat(64)}` }),
+      makeReceipt({ issuedAt: '2026-08-08T11:00:00.000Z', expiresAt: '2026-08-08T11:01:00.000Z' }),
+    ];
+    const loaded = loadAuditorReturnReceiptVerifier({
+      target, operatorTrustRoot: operatorRoot, adapterId: trust.adapterId,
+      now: Date.parse('2026-08-08T12:00:00.000Z'), protectedBoundary: protectedHostBoundary(trust),
+    });
+    assert.equal(loaded.ok, true, loaded.errors?.join('; '));
+    const reportPath = join(target, '.agenticloop', 'tmp', 'negative-report.json');
+    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
+    for (const [index, receipt] of receipts.entries()) {
+      report.invocation.receipt = JSON.stringify(receipt);
+      writeFileSync(reportPath, JSON.stringify(report), 'utf8');
+      const result = await run(['report', 'AUD-001', '--file', reportPath], target, {
+        auditProvenanceVerifier: loaded.verifier,
+      });
+      assert.equal(result.status, 1, `case ${index}: ${result.stdout}${result.stderr}`);
+      const record = parseAuditRecord(readFileSync(join(target, '.agenticloop', 'audits', 'AUD-001.md'), 'utf8'));
+      assert.equal(record.history.length, 0, `case ${index} mutated audit history`);
+    }
+  });
+
+  it('persists the exact authenticated Auditor return through the production verifier', async () => {
+    const target = makeTarget('protected-auditor-return');
+    await seedRecord(target);
+    const operatorRoot = join(tmpDir, 'protected-auditor-operator');
+    mkdirSync(operatorRoot, { recursive: true });
+    const trust = createTestHostTrust({ target });
+    writeHostTrustStore(operatorRoot, trust);
+    const report = wireReport({
+      artifact: `commit:${FULL_A}`,
+      covered_tasks: ['T-041', 'T-042'],
+      invocation: { mode: 'host_subagent', reference: 'protected-auditor-ref', provenance: 'verified', receipt: null },
+    });
+    const receipt = createAuditorReturnReceipt({
+      receiptId: 'protected-auditor-receipt', adapterId: trust.adapterId, keyId: trust.keyId,
+      targetRepository: trust.repositoryIdentity,
+      invocationReference: report.invocation.reference, invocationMode: report.invocation.mode,
+      workUnit: 'phase:4', candidateArtifact: report.artifact, coveredTasks: report.covered_tasks,
+      reportDigest: auditorReturnReportDigest(report),
+      issuedAt: '2026-08-08T11:59:00.000Z', expiresAt: '2026-08-08T12:01:00.000Z',
+    }, trust.privateKey);
+    report.invocation.receipt = JSON.stringify(receipt);
+    const loaded = loadAuditorReturnReceiptVerifier({
+      target, operatorTrustRoot: operatorRoot, adapterId: trust.adapterId,
+      now: Date.parse('2026-08-08T12:00:00.000Z'), protectedBoundary: protectedHostBoundary(trust),
+    });
+    assert.equal(loaded.ok, true, loaded.errors?.join('; '));
+    const reportPath = join(target, '.agenticloop', 'tmp', 'protected-report.json');
+    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
+    writeFileSync(reportPath, JSON.stringify(report), 'utf-8');
+    const result = await run(['report', 'AUD-001', '--file', reportPath], target, {
+      auditProvenanceVerifier: loaded.verifier,
+    });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const record = parseAuditRecord(readFileSync(join(target, '.agenticloop', 'audits', 'AUD-001.md'), 'utf-8'));
+    assert.equal(record.history.length, 1);
+    assert.equal(record.history[0].reportPayload.invocation.receipt, report.invocation.receipt);
+
+    const replay = structuredClone(report);
+    replay.invocation.reference = 'protected-auditor-ref-2';
+    replay.invocation.receipt = null;
+    replay.invocation.receipt = JSON.stringify(createAuditorReturnReceipt({
+      receiptId: 'protected-auditor-receipt', adapterId: trust.adapterId, keyId: trust.keyId,
+      targetRepository: trust.repositoryIdentity,
+      invocationReference: replay.invocation.reference, invocationMode: replay.invocation.mode,
+      workUnit: 'phase:4', candidateArtifact: replay.artifact, coveredTasks: replay.covered_tasks,
+      reportDigest: auditorReturnReportDigest(replay),
+      issuedAt: '2026-08-08T11:59:10.000Z', expiresAt: '2026-08-08T12:01:10.000Z',
+    }, trust.privateKey));
+    writeFileSync(reportPath, JSON.stringify(replay), 'utf8');
+    const replayed = await run(['report', 'AUD-001', '--file', reportPath], target, {
+      auditProvenanceVerifier: loaded.verifier,
+    });
+    assert.equal(replayed.status, 1);
+    assert.match(replayed.stderr, /receipt identity.*already used/i);
+    const unchanged = parseAuditRecord(readFileSync(join(target, '.agenticloop', 'audits', 'AUD-001.md'), 'utf-8'));
+    assert.equal(unchanged.history.length, 1);
+  });
+
+  /**
+   * The pre-write guard refuses a replay twice over: byte equality and receipt
+   * identity. For identical bytes those are the same finding, so only the
+   * byte-level diagnostic is emitted. The identity diagnostic is reserved for
+   * the case byte equality cannot see - a re-minted receipt around a spent
+   * receiptId, already covered above.
+   */
+  it('emits one receipt diagnostic for a byte-identical replay and consumes nothing', async () => {
+    const target = makeTarget('identical-receipt-replay-cli');
+    await seedRecord(target);
+    const operatorRoot = join(tmpDir, 'identical-replay-operator');
+    mkdirSync(operatorRoot, { recursive: true });
+    const trust = createTestHostTrust({ target });
+    writeHostTrustStore(operatorRoot, trust);
+    const report = wireReport({
+      artifact: `commit:${FULL_A}`,
+      covered_tasks: ['T-041', 'T-042'],
+      invocation: { mode: 'host_subagent', reference: 'identical-replay-ref', provenance: 'verified', receipt: null },
+    });
+    report.invocation.receipt = JSON.stringify(createAuditorReturnReceipt({
+      receiptId: 'identical-replay-receipt', adapterId: trust.adapterId, keyId: trust.keyId,
+      targetRepository: trust.repositoryIdentity,
+      invocationReference: report.invocation.reference, invocationMode: report.invocation.mode,
+      workUnit: 'phase:4', candidateArtifact: report.artifact, coveredTasks: report.covered_tasks,
+      reportDigest: auditorReturnReportDigest(report),
+      issuedAt: '2026-08-08T11:59:00.000Z', expiresAt: '2026-08-08T12:01:00.000Z',
+    }, trust.privateKey));
+    const loaded = loadAuditorReturnReceiptVerifier({
+      target, operatorTrustRoot: operatorRoot, adapterId: trust.adapterId,
+      now: Date.parse('2026-08-08T12:00:00.000Z'), protectedBoundary: protectedHostBoundary(trust),
+    });
+    assert.equal(loaded.ok, true, loaded.errors?.join('; '));
+    const reportPath = join(target, '.agenticloop', 'tmp', 'identical-replay.json');
+    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
+    writeFileSync(reportPath, JSON.stringify(report), 'utf8');
+
+    const first = await run(['report', 'AUD-001', '--file', reportPath], target, {
+      auditProvenanceVerifier: loaded.verifier,
+    });
+    assert.equal(first.status, 0, `${first.stdout}${first.stderr}`);
+    const recordPath = join(target, '.agenticloop', 'audits', 'AUD-001.md');
+    const afterFirst = readFileSync(recordPath, 'utf8');
+    assert.equal(parseAuditRecord(afterFirst).history.length, 1);
+
+    // Resubmit the identical bytes.
+    const replayed = await run(['report', 'AUD-001', '--file', reportPath], target, {
+      auditProvenanceVerifier: loaded.verifier,
+    });
+    assert.equal(replayed.status, 1);
+    // Count the operator-facing diagnostics only; the Auditor resume packet
+    // echoes the same error list as one JSON line.
+    const diagnostics = replayed.stderr
+      .split('\n')
+      .filter(line => line.startsWith('Cannot record audit report:'));
+    const byteReplay = diagnostics.filter(line => /invocation receipt '.*' was already used/.test(line));
+    const identityReplay = diagnostics.filter(line => /return receipt identity '.*' was already used/.test(line));
+    assert.equal(byteReplay.length, 1, replayed.stderr);
+    assert.equal(identityReplay.length, 0, replayed.stderr);
+    // The reused invocation reference is a genuinely distinct identity and is
+    // still reported on its own.
+    assert.equal(
+      diagnostics.filter(line => /invocation reference '.*' was already recorded/.test(line)).length,
+      1,
+      replayed.stderr
+    );
+
+    // The refused replay leaves the durable record - history and budgets alike -
+    // byte-identical to the state the accepted run produced.
+    assert.equal(readFileSync(recordPath, 'utf8'), afterFirst, 'a refused replay must not mutate the audit record');
+  });
+
+  it('signs the prepared normalized projection of a whitespace-bearing report and persists it', async () => {
+    const target = makeTarget('prepared-auditor-return');
+    await seedRecord(target);
+    const operatorRoot = join(tmpDir, 'prepared-auditor-operator');
+    mkdirSync(operatorRoot, { recursive: true });
+    const trust = createTestHostTrust({ target });
+    writeHostTrustStore(operatorRoot, trust);
+
+    // The Auditor's raw wire document carries permitted surrounding whitespace
+    // and non-canonical forms throughout. A protected host cannot digest this
+    // document directly; it must prepare it first.
+    const raw = wireReport({
+      artifact: `  commit:${FULL_A}\n`,
+      covered_tasks: [' T-041 ', '\tT-042\n'],
+      invocation: {
+        mode: ' host_subagent ', reference: '  prepared-auditor-ref\n',
+        provenance: ' VERIFIED ',
+      },
+      assessment: '\n  Consolidated assessment with surrounding whitespace.  ',
+      evidence_checked: '\tnpm test (pass)  ',
+      perspectives: Object.fromEntries(
+        ['outcome', 'completeness', 'integration_coherence', 'engineering_quality', 'verification', 'risk']
+          .map(key => [key, `  ${key} body.\n`])
+      ),
+      findings: [{
+        id: ' A-01 ', severity: ' HIGH ', blocking: 'true',
+        claim: '  A blocking claim  ', evidenceRefs: '\tsrc/x.js:1',
+        consequence: 'Breakage  ', requiredOutcome: '  Fix it',
+        verificationRequired: ' Re-run the suite\n',
+      }],
+      verdict: 'needs_remediation',
+    });
+
+    const prepared = prepareAuditorReturnReportForSigning(raw);
+    assert.equal(prepared.ok, true, prepared.errors.join('\n'));
+    assert.notEqual(
+      prepared.digest,
+      auditorReturnReportDigest(raw),
+      'the raw document must not already equal the normalized identity'
+    );
+
+    // Step 2: the host signs exactly the digest it was handed.
+    const receipt = createAuditorReturnReceipt({
+      receiptId: 'prepared-auditor-receipt', adapterId: trust.adapterId, keyId: trust.keyId,
+      targetRepository: trust.repositoryIdentity,
+      invocationReference: prepared.report.invocation.reference,
+      invocationMode: prepared.report.invocation.mode,
+      workUnit: 'phase:4',
+      candidateArtifact: prepared.report.artifact,
+      coveredTasks: prepared.report.covered_tasks,
+      reportDigest: prepared.digest,
+      issuedAt: '2026-08-08T11:59:00.000Z', expiresAt: '2026-08-08T12:01:00.000Z',
+    }, trust.privateKey);
+
+    // Step 3: the receipt goes into the normalized report the host was handed.
+    const submitted = structuredClone(prepared.report);
+    submitted.invocation.receipt = JSON.stringify(receipt);
+
+    const loaded = loadAuditorReturnReceiptVerifier({
+      target, operatorTrustRoot: operatorRoot, adapterId: trust.adapterId,
+      now: Date.parse('2026-08-08T12:00:00.000Z'), protectedBoundary: protectedHostBoundary(trust),
+    });
+    assert.equal(loaded.ok, true, loaded.errors?.join('; '));
+    const reportPath = join(target, '.agenticloop', 'tmp', 'prepared-report.json');
+    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
+    writeFileSync(reportPath, JSON.stringify(submitted), 'utf8');
+
+    // Step 4: the CLI derives the identical digest and the genuine receipt verifies.
+    const result = await run(['report', 'AUD-001', '--file', reportPath], target, {
+      auditProvenanceVerifier: loaded.verifier,
+    });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const record = parseAuditRecord(readFileSync(join(target, '.agenticloop', 'audits', 'AUD-001.md'), 'utf-8'));
+    assert.equal(record.history.length, 1);
+    assert.equal(record.history[0].invocationProvenance, 'verified');
+    assert.equal(record.history[0].reportPayload.assessment, 'Consolidated assessment with surrounding whitespace.');
+    assert.equal(record.history[0].reportPayload.findings[0].severity, 'high');
+    assert.equal(record.history[0].reportPayload.findings[0].blocking, true);
+
+    // Mutating a substantive field after signing invalidates the binding, and
+    // the mutated report leaves no residue in durable history.
+    const mutated = structuredClone(submitted);
+    mutated.assessment = 'Rewritten after signing.';
+    mutated.invocation.reference = 'prepared-auditor-ref-2';
+    writeFileSync(reportPath, JSON.stringify(mutated), 'utf8');
+    const rejected = await run(['report', 'AUD-001', '--file', reportPath], target, {
+      auditProvenanceVerifier: loaded.verifier,
+    });
+    assert.equal(rejected.status, 1);
+    const unchanged = parseAuditRecord(readFileSync(join(target, '.agenticloop', 'audits', 'AUD-001.md'), 'utf-8'));
+    assert.equal(unchanged.history.length, 1);
+  });
+
+  it('refuses a receipt signed over the raw document instead of the prepared projection', async () => {
+    const target = makeTarget('raw-digest-auditor-return');
+    await seedRecord(target);
+    const operatorRoot = join(tmpDir, 'raw-digest-auditor-operator');
+    mkdirSync(operatorRoot, { recursive: true });
+    const trust = createTestHostTrust({ target });
+    writeHostTrustStore(operatorRoot, trust);
+    const raw = wireReport({
+      artifact: `commit:${FULL_A}`,
+      covered_tasks: ['T-041', 'T-042'],
+      invocation: { mode: 'host_subagent', reference: 'raw-digest-ref', provenance: 'verified' },
+      assessment: '  Consolidated with whitespace.  ',
+    });
+    const prepared = prepareAuditorReturnReportForSigning(raw);
+    assert.equal(prepared.ok, true, prepared.errors.join('\n'));
+    // The host takes the documented shortcut this correction exists to remove.
+    const wrongReceipt = createAuditorReturnReceipt({
+      receiptId: 'raw-digest-receipt', adapterId: trust.adapterId, keyId: trust.keyId,
+      targetRepository: trust.repositoryIdentity,
+      invocationReference: prepared.report.invocation.reference,
+      invocationMode: prepared.report.invocation.mode,
+      workUnit: 'phase:4', candidateArtifact: prepared.report.artifact,
+      coveredTasks: prepared.report.covered_tasks,
+      reportDigest: auditorReturnReportDigest(raw),
+      issuedAt: '2026-08-08T11:59:00.000Z', expiresAt: '2026-08-08T12:01:00.000Z',
+    }, trust.privateKey);
+    const submitted = structuredClone(prepared.report);
+    submitted.invocation.receipt = JSON.stringify(wrongReceipt);
+    const loaded = loadAuditorReturnReceiptVerifier({
+      target, operatorTrustRoot: operatorRoot, adapterId: trust.adapterId,
+      now: Date.parse('2026-08-08T12:00:00.000Z'), protectedBoundary: protectedHostBoundary(trust),
+    });
+    assert.equal(loaded.ok, true, loaded.errors?.join('; '));
+    const reportPath = join(target, '.agenticloop', 'tmp', 'raw-digest-report.json');
+    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
+    writeFileSync(reportPath, JSON.stringify(submitted), 'utf8');
+    const result = await run(['report', 'AUD-001', '--file', reportPath], target, {
+      auditProvenanceVerifier: loaded.verifier,
+    });
+    assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
+    const record = parseAuditRecord(readFileSync(join(target, '.agenticloop', 'audits', 'AUD-001.md'), 'utf-8'));
+    assert.equal(record.history.length, 0);
+  });
+
   async function seed(target) {
     await seedRecord(target);
   }

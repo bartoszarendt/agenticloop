@@ -417,7 +417,7 @@ export const COMMAND_REGISTRY = {
       },
       'prepare-decomposition': {
         summary: 'Enumerate the task surface, run the parallel scan, and emit a committable decomposition source. Read-only.',
-        usage: 'agenticloop task prepare-decomposition <id> --work-unit <id> --source-ref <path> --source-revision <ref> (--base <ref> | --base-paths <path>) --dependencies <path> [--route <serial|parallel>] [--observed-at <instant>] [--max-age-seconds <n>] [--rescan-trigger <text>] [--json] [--target <dir>]',
+        usage: 'agenticloop task prepare-decomposition <id> --work-unit <id> --source-ref <path> --source-revision <ref> (--base <ref> | --base-paths <path>) --dependencies <path> [--repo <owner/name>] [--route <serial|parallel>] [--observed-at <instant>] [--max-age-seconds <n>] [--rescan-trigger <text>] [--json] [--target <dir>]',
         receiptRevalidation: 'read-only',
         positionals: [{ name: 'id', required: true }],
         options: [
@@ -428,6 +428,7 @@ export const COMMAND_REGISTRY = {
           opt('base', 'string', 'Explicit Git base whose resolved tree supplies the base-path inventory.'),
           opt('base-paths', 'string', 'Explicit JSON base-tree inventory. Mutually exclusive with --base.'),
           opt('dependencies', 'string', 'Committed Maintainer-attributed dependency-status snapshot bound to the ready set. Required.'),
+          opt('repo', 'string', 'GitHub repository in owner/name form. Defaults to the authenticated current repository for the GitHub backend.'),
           opt('route', 'string', 'Requested route. A parallel route requires the scan to place the task in a candidate pair.', { enum: ['serial', 'parallel'] }),
           opt('observed-at', 'string', 'ISO-8601 UTC observation instant. Defaults to now.'),
           opt('max-age-seconds', 'string', 'Freshness policy for the observation. Bounded by the trusted maximum.'),
@@ -436,11 +437,11 @@ export const COMMAND_REGISTRY = {
         ],
       },
       'prepare-dispatch': {
-        summary: 'Refetch and bind one files-backed role dispatch without mutating the task.',
-        usage: 'agenticloop task prepare-dispatch <id> (--input <dispatch-input.json> | --packet <packet.json> --role engineer) [--host-trust-store <expected-path>] [--json] [--target <dir>]',
+        summary: 'Refetch and bind one backend-selected role dispatch without mutating the task.',
+        usage: 'agenticloop task prepare-dispatch <id> (--input <dispatch-input.json> | --packet <packet.json> --role engineer) [--repo <owner/name>] [--host-trust-store <expected-path>] [--json] [--target <dir>]',
         receiptRevalidation: 'read-only',
         positionals: [{ name: 'id', required: true }],
-        options: [targetOption(), opt('input', 'string', 'Closed dispatch input carrying activation, canonical readiness, decomposition, and assignment facts.'), opt('packet', 'string', 'Existing dispatch packet to revalidate read-only before receiver mutation.'), opt('role', 'string', 'Immutable receiving role required with --packet.', { enum: ['engineer'] }), opt('prior-receipts', 'string', 'JSON array of prior-gate or setup task-mutation receipts that must be resolved and undrifted before dispatch.'), hostTrustStoreOption, jsonOption],
+        options: [targetOption(), opt('input', 'string', 'Closed dispatch input carrying activation, canonical readiness, decomposition, and assignment facts.'), opt('packet', 'string', 'Existing dispatch packet to revalidate read-only before receiver mutation.'), opt('role', 'string', 'Immutable receiving role required with --packet.', { enum: ['engineer'] }), opt('prior-receipts', 'string', 'JSON array of prior-gate or setup task-mutation receipts that must be resolved and undrifted before dispatch.'), opt('repo', 'string', 'GitHub repository in owner/name form. Defaults to the authenticated current repository for the GitHub backend.'), hostTrustStoreOption, jsonOption],
       },
       'verify-return': {
         summary: 'Read-only role-return verifier, blocked-result resume authority gate, and exceptional-verification router.',

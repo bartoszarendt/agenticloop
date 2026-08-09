@@ -9,8 +9,13 @@
  * - When event logging is enabled, the invocation reference must match the
  *   corresponding Auditor `role.invoked` event; the event carries
  *   `data.invocation_reference` for auditor delegations.
- * - When a host exposes no verifiable receipt and no event evidence, the
- *   record says provenance is `asserted` rather than manufacturing proof.
+ * - A fresh **authoritative** Auditor return fails closed without a host
+ *   verifier. It cannot be downgraded to `asserted`: the whole point of the
+ *   authoritative path is that the return was authenticated, so an
+ *   unauthenticated one is refused rather than reclassified.
+ * - The legacy, non-authoritative path is where downgrading still applies. A
+ *   host with no verifiable receipt and no event evidence records `asserted`
+ *   provenance rather than manufacturing proof.
  */
 
 import { listEventLogFiles, loadEvents } from './event-logging.js';
@@ -33,9 +38,19 @@ export function createAuditorReportResumePacket({ errors = [], reportDigest = nu
 
 /**
  * Normalize a caller's wire claim at the one host-capability boundary.
- * A receipt string is evidence to verify, never self-authentication. Hosts
- * without a verifier retain the receipt for traceability but classify it as
- * asserted provenance.
+ *
+ * A receipt string is evidence to verify, never self-authentication.
+ *
+ * - Authoritative Auditor returns (`authoritativeAuditorReturn === true`) fail
+ *   closed without a verifier and are never downgraded to `asserted`.
+ * - Legacy non-authoritative runs without a verifier retain the receipt for
+ *   traceability and are classified as `asserted`.
+ *
+ * The digest sent to the verifier, and compared against its answer, is
+ * `auditorReturnReportDigest` - the receipt-null projection of the *normalized*
+ * report. That is the same digest domain a protected host obtains from
+ * `prepareAuditorReturnReportForSigning()` before it signs, so a genuine
+ * receipt over a valid report always matches here.
  *
  * @param {object} run
  * @param {{ verifier?: Function, workUnit: string, candidateArtifact: string, coveredTasks: string[] }} context
@@ -67,12 +82,12 @@ export async function normalizeAuditorInvocationProvenance(run, context) {
       workUnit: context.workUnit,
       candidateArtifact: context.candidateArtifact,
       coveredTasks: context.coveredTasks,
-      reportDigest: normalized.auditorReportDigest,
+      reportDigest: normalized.auditorReturnReportDigest,
     });
   } catch (error) {
     return { run: normalized, errors: [`host invocation receipt verification failed: ${error.message}`] };
   }
-  if (result?.verified !== true || (authoritative && result.reportDigest !== normalized.auditorReportDigest)) {
+  if (result?.verified !== true || (authoritative && result.reportDigest !== normalized.auditorReturnReportDigest)) {
     return { run: normalized, errors: ['host invocation receipt did not verify the Auditor role, work unit, candidate, tasks, and invocation reference'] };
   }
   return { run: normalized, errors: [] };

@@ -58,9 +58,12 @@ import {
   BaselineChangedError,
   OPERATIONAL_FAILURE_MESSAGE,
   PublicCommandError,
+  STALE_CARRIER_DIGEST_CONTEXT,
+  staleCarrierDigestMessage,
   VerificationContextError,
   VerificationContextMalformedError,
   VerificationContextStaleError,
+  TASK_TRANSITION_NEGATIVE_CONTEXT,
 } from './public-error.js';
 import {
   COMMAND_REGISTRY,
@@ -98,6 +101,7 @@ import { loadFilesTaskContractRecords } from './files-task-contract.js';
 import { canonicalJson } from './canonical-json.js';
 import { isGitObjectId } from './git-oid.js';
 import { resolveTaskBackend } from './task-backend.js';
+import { evaluateTaskRecordRoot } from './task-record-root.js';
 import { cmdTask } from './task-cli.js';
 import {
   GitHubTaskBodyError,
@@ -173,7 +177,7 @@ import {
 } from './pr-body-context.js';
 import { atomicWriteFile } from './fs-mutation-kernel.js';
 import { evaluateTaskReadiness } from './task-readiness.js';
-import { resolveCanonicalTerminalScope } from './terminal-scope.js';
+import { genericTerminalRefusalMessage, resolveCanonicalTerminalScope } from './terminal-scope.js';
 import { validateTaskStatusTransition } from './task-transition.js';
 import { parseFrontmatterStrict } from './frontmatter.js';
 import { evaluateCommitAttribution, lintAttributionRepairRecord, renderAttributionRepairRecord } from './commit-attribution.js';
@@ -1842,9 +1846,7 @@ async function cmdTaskBody(args, io) {
     const projectMapConfig = loadProjectMap(target)?.config ?? null;
     const baseContext = opts.base || opts.basePaths ? readBaseEvidence(opts, target) : null;
     const basePaths = baseContext ? baseContext.paths : undefined;
-    const dependencySnapshot = opts.dependencies
-      ? readDependencyEvidence(target, opts.dependencies, `task-body ${sub}`, `#${opts.issue}`)
-      : null;
+    let dependencySnapshot = null;
     if (sub === 'fetch') {
       if (!opts.output) throw new CliUsageError('task-body fetch requires --output <path>');
       const fetched = fetchGitHubTaskBody({ issue: opts.issue, repo: opts.repo, commandRunner, projectMapConfig });
@@ -1865,11 +1867,10 @@ async function cmdTaskBody(args, io) {
     if (sub === 'establish-baseline' || sub === 'authorize-correction') {
       if (!opts.expectDigest || !opts.authority || !opts.actor) throw new CliUsageError(`task-body ${sub} requires --expect-digest, --authority, and --actor`);
       const current = fetchGitHubTaskBody({ issue: opts.issue, repo: opts.repo, commandRunner, projectMapConfig });
-      if (current.digest !== opts.expectDigest) throw new GitHubTaskBodyError(`stale task body: expected ${opts.expectDigest}, current remote digest is ${current.digest}`, {
-        code: 'contract.baseline.stale', evidenceState: 'changed', disposition: 'superseded',
-        committedStateEvaluated: true,
-        safeRepair: 'Refetch the task body, re-evaluate the trusted baseline, and rerun with its current digest.',
-      });
+      if (current.digest !== opts.expectDigest) throw new GitHubTaskBodyError(
+        staleCarrierDigestMessage(opts.expectDigest, current.digest),
+        STALE_CARRIER_DIGEST_CONTEXT
+      );
       const currentContract = taskContractDigest(current.body);
       if (!currentContract.ok) throw new GitHubTaskBodyError(
         currentContract.error,
@@ -1934,11 +1935,10 @@ async function cmdTaskBody(args, io) {
     /** Refuse a candidate built from anything other than the exact expected remote body. */
     const assertExpectedRemoteDigest = fetched => {
       if (fetched.digest === opts.expectDigest) return fetched;
-      throw new GitHubTaskBodyError(`stale task body: expected ${opts.expectDigest}, current remote digest is ${fetched.digest}`, {
-        code: 'contract.baseline.stale', evidenceState: 'changed', disposition: 'superseded',
-        committedStateEvaluated: true,
-        safeRepair: 'Refetch the task body, re-evaluate the trusted baseline, and rerun with its current digest.',
-      });
+      throw new GitHubTaskBodyError(
+        staleCarrierDigestMessage(opts.expectDigest, fetched.digest),
+        STALE_CARRIER_DIGEST_CONTEXT
+      );
     };
 
     let bodyFile = null;
@@ -1955,10 +1955,34 @@ async function cmdTaskBody(args, io) {
       if (sub === 'transition' && value === 'agent-ready' && !Array.isArray(basePaths)) {
         throw new VerificationContextError('task-body transition --status agent-ready requires --base <ref> or --base-paths <path>; it never selects a default branch.');
       }
-      if (sub === 'transition' && value === 'agent-ready' && !dependencySnapshot) {
-        throw new VerificationContextError('task-body transition --status agent-ready requires --dependencies <path> naming an exact dependency-status snapshot.');
+      if (sub === 'transition' && value === 'agent-ready' && !opts.dependencies) {
+        // Identical wording and required context to the files carrier: the
+        // condition is the same, so the public sentence is the same.
+        throw new VerificationContextError(
+          'A transition to agent-ready requires --dependencies <path> naming the exact dependency-status snapshot.',
+          { requiredContext: ['--dependencies <path>'] }
+        );
       }
       current = assertExpectedRemoteDigest(fetchGitHubTaskBody({ issue: opts.issue, repo: opts.repo, commandRunner, projectMapConfig }));
+      const currentRoot = evaluateTaskRecordRoot(current.body);
+      if (!currentRoot.ok) {
+        return printGateResult(`task-body ${sub}`, {
+          ok: false,
+          diagnostics: currentRoot.diagnostics,
+          errors: currentRoot.diagnostics.map(item => item.message),
+          warnings: [],
+          // The root evaluator names the one safe repair for a malformed
+          // record. Dropping it here would leave the GitHub carrier reporting
+          // the same defect with no repair while the files carrier reports one.
+          firstSafeRepair: currentRoot.firstSafeRepair,
+          evidenceState: 'malformed',
+          disposition: 'rejected',
+          committedStateEvaluated: false,
+          rollbackAuthorized: false,
+          issue: current.issue,
+          carrier: `issue:${current.issue}`,
+        }, asJson, io);
+      }
       body = setTaskBodyFrontmatterField(current.body, field, value).body;
     } else if (sub === 'lint' && !opts.bodyFile && opts.expectTaskDigest) {
       // Read-only receipt revalidation: verify the live body against the exact
@@ -1979,6 +2003,14 @@ async function cmdTaskBody(args, io) {
       if (!opts.bodyFile) throw new CliUsageError(`task-body ${sub} requires --body-file <path>`);
       bodyFile = resolveCliTarget(io, opts.bodyFile);
       body = readFileSync(bodyFile, 'utf8');
+    }
+    if (opts.dependencies) {
+      dependencySnapshot = readDependencyEvidence(
+        target,
+        opts.dependencies,
+        `task-body ${sub}`,
+        `#${opts.issue}`
+      );
     }
     if (sub === 'lint') {
       let context = { trustedRecords: [], trustedRecordErrors: [], currentBody: null, warnings: [] };
@@ -2042,14 +2074,17 @@ async function cmdTaskBody(args, io) {
     let evidenceContext = null;
     if (fromStatus !== toStatus) {
       const transitionError = validateTaskStatusTransition(fromStatus, toStatus, opts.note);
-      if (transitionError) throw new GitHubTaskBodyError(transitionError, { ...TASK_BODY_NEGATIVE_EVIDENCE, committedStateEvaluated: true });
+      if (transitionError) throw new GitHubTaskBodyError(transitionError, TASK_TRANSITION_NEGATIVE_CONTEXT);
       if (toStatus === 'agent-ready') {
         assertLifecycleHandoffResolved(target);
         if (!Array.isArray(basePaths)) {
           throw new VerificationContextError(`task-body ${sub} changing status to agent-ready requires --base <ref> or --base-paths <path>; it never selects a default branch.`);
         }
         if (!dependencySnapshot) {
-          throw new VerificationContextError(`task-body ${sub} changing status to agent-ready requires --dependencies <path> naming an exact dependency-status snapshot.`);
+          throw new VerificationContextError(
+            'A transition to agent-ready requires --dependencies <path> naming the exact dependency-status snapshot.',
+            { requiredContext: ['--dependencies <path>'] }
+          );
         }
         try {
           evidenceContext = createTaskEvidenceContext({
@@ -2081,8 +2116,8 @@ async function cmdTaskBody(args, io) {
         });
         if (!scope.decision.genericTerminalAllowed) {
           throw new GitHubTaskBodyError(
-            `Generic task-body closure is refused (${scope.scopeKind}/${scope.auditMode}): ${scope.reasons[0] ?? 'canonical closeout owns this terminal transition'}. Use closeout prepare/record after repairing and re-deriving scope where required.`,
-            { ...TASK_BODY_NEGATIVE_EVIDENCE, committedStateEvaluated: true }
+            genericTerminalRefusalMessage(scope),
+            TASK_TRANSITION_NEGATIVE_CONTEXT
           );
         }
       }

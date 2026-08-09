@@ -23,7 +23,7 @@ import {
   resolveProjectAttemptBudget,
   resolveProjectReviewBudget,
 } from './project-map.js';
-import { resolveTaskBackend } from './task-backend.js';
+import { isValidTaskBackend, resolveTaskBackend, VALID_TASK_BACKENDS } from './task-backend.js';
 import {
   FILES_TASK_STATUSES,
   sectionBody,
@@ -41,6 +41,9 @@ import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.
 import {
   BaselineChangedError,
   PublicCommandError,
+  STALE_CARRIER_DIGEST_CONTEXT,
+  TASK_TRANSITION_NEGATIVE_CONTEXT,
+  staleCarrierDigestMessage,
   VerificationContextError,
   VerificationContextMalformedError,
   VerificationContextStaleError,
@@ -70,7 +73,7 @@ import { evaluateTaskReadiness } from './task-readiness.js';
 import { executeMutationBatch } from './fs-mutation-kernel.js';
 import { createTaskContractBaselineRecord, createTaskContractCorrectionRecord, taskContractDigest, trustedChainTerminal, validActivationCaptureRef, validateTaskContractBaseline } from './task-contract-baseline.js';
 import { appendFilesTaskContractRecord, loadFilesTaskContractRecords } from './files-task-contract.js';
-import { resolveCanonicalTerminalScope } from './terminal-scope.js';
+import { genericTerminalRefusalMessage, resolveCanonicalTerminalScope } from './terminal-scope.js';
 import { validateTaskStatusTransition } from './task-transition.js';
 import { assertLifecycleHandoffResolved } from './lifecycle-plan.js';
 import {
@@ -89,7 +92,12 @@ import { verifyCommittedAttributedSource } from './committed-source.js';
 import {
   createTaskInventoryEnumeration,
   normalizeFilesTaskInventory,
+  normalizeGitHubTaskInventory,
 } from './parallel-scan.js';
+import { resolveGhRunner } from './closeout-github.js';
+import { runGhJson } from './gh-helpers.js';
+import { buildGitHubTaskIdentityInventory, resolveCoveredGitHubTask } from './github-task-identity.js';
+import { fetchGitHubTaskBody } from './github-task-body.js';
 
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -110,16 +118,123 @@ function resolveProject(target) {
   };
 }
 
-function guardFilesBackend(target, io) {
+/**
+ * Backends each `task` subcommand can act under.
+ *
+ * The configured backend chooses the enumerator, the carrier, and the write
+ * transport, so it is resolved and checked against this matrix once, before any
+ * subcommand-specific routing. Previously only `prepare-decomposition` and
+ * `prepare-dispatch` validated it; every other subcommand fell through a
+ * files-only guard that emitted untyped stderr text, ignored `--json`, and gave
+ * an unrecognized backend a different diagnostic than the preparation commands
+ * gave for the identical misconfiguration.
+ *
+ * A subcommand absent from this map has no defined backend support and is
+ * refused rather than defaulted, so adding a subcommand cannot silently
+ * inherit files authority.
+ */
+const TASK_SUBCOMMAND_BACKENDS = Object.freeze({
+  list: Object.freeze(['files']),
+  lint: Object.freeze(['files']),
+  new: Object.freeze(['files']),
+  'establish-baseline': Object.freeze(['files']),
+  'authorize-correction': Object.freeze(['files']),
+  'prepare-decomposition': Object.freeze(['files', 'github']),
+  'prepare-dispatch': Object.freeze(['files', 'github']),
+  'verify-return': Object.freeze(['files']),
+  status: Object.freeze(['files']),
+});
+
+/** Backends one `task` subcommand supports, or an empty list when undeclared. */
+export function taskSubcommandBackends(sub) {
+  return TASK_SUBCOMMAND_BACKENDS[sub] ?? Object.freeze([]);
+}
+
+/**
+ * Resolve and validate the configured task backend for one subcommand.
+ *
+ * Returns either the accepted resolution or a typed refusal. Both refusals are
+ * validation results rather than free stderr text, so `--json` behaves the same
+ * for every subcommand and a caller can distinguish an unusable configuration
+ * from an unsupported-but-valid combination.
+ */
+function guardTaskBackend(sub, target, opts, io) {
   const resolution = resolveTaskBackend(target);
-  for (const warning of resolution.warnings) io.warn(`  WARN: ${warning}`);
-  if (resolution.backend !== 'files') {
-    const message = resolution.backend === 'github'
-      ? "Active task backend is 'github'. `agenticloop task` v1 supports the files backend only; " +
-        "use GitHub issues/PRs for task operations in this project."
-      : `Active task backend is '${resolution.backend}'. \`agenticloop task\` v1 supports the files backend only.`;
-    return { ok: false, message };
+  const supported = taskSubcommandBackends(sub);
+  const asJson = Boolean(opts.json);
+  const command = `task ${sub}`;
+
+  // An unrecognized value cannot be allowed to fall through to whichever branch
+  // happens to be the `else`: that silently answers a question about one
+  // backend using another's authority. This is the root diagnostic; no task
+  // inventory has been read and no backend transport has been contacted.
+  if (!isValidTaskBackend(resolution.backend)) {
+    for (const warning of resolution.warnings) io.warn(`  WARN: ${warning}`);
+    return {
+      ok: false,
+      exit: printGateResult(
+        command,
+        commandFailure(command, new VerificationContextMalformedError(
+          `Configured task backend '${String(resolution.backend)}' from ${resolution.source} is not supported; ` +
+          `supported backends: ${[...VALID_TASK_BACKENDS].join(', ')}`,
+          {
+            safeRepair: `Set task_backend to one of ${[...VALID_TASK_BACKENDS].join(' or ')} in the project map, then rerun. ` +
+              'No task inventory was enumerated and no backend transport was contacted.',
+            requiredContext: ['a project map declaring a supported task_backend'],
+          }
+        ), 'operational_error', {}, target),
+        asJson,
+        io
+      ),
+    };
   }
+
+  // A valid backend this subcommand cannot act under is a usage problem, not a
+  // configuration problem, and it is never resolved by quietly selecting the
+  // other backend.
+  if (!supported.includes(resolution.backend)) {
+    for (const warning of resolution.warnings) io.warn(`  WARN: ${warning}`);
+    const alternatives = supported.length > 0
+      ? `'agenticloop ${command}' supports the ${supported.map(name => `${name}`).join(' and ')} backend${supported.length > 1 ? 's' : ''} only`
+      : `'agenticloop ${command}' declares no supported task backend`;
+    return {
+      ok: false,
+      exit: printGateResult(
+        command,
+        commandFailure(command, new CliUsageError(
+          `Active task backend is '${resolution.backend}' (from ${resolution.source}); ${alternatives}.`,
+          {
+            hint: supported.includes('files')
+              ? "Set task_backend: files in the project map to use this subcommand, or use the GitHub task surface ('agenticloop task-body') for task operations in this project."
+              : `Set task_backend to ${supported.join(' or ')} in the project map, then rerun.`,
+          }
+        ), 'usage', {}, target),
+        asJson,
+        io,
+        EXIT_USAGE
+      ),
+    };
+  }
+
+  // `--repo` names a GitHub repository. On the files backend it can never be
+  // honored, so it is refused rather than accepted and quietly discarded.
+  if (resolution.backend === 'files' && opts.repo !== undefined) {
+    for (const warning of resolution.warnings) io.warn(`  WARN: ${warning}`);
+    return {
+      ok: false,
+      exit: printGateResult(
+        command,
+        commandFailure(command, new CliUsageError(
+          `--repo names a GitHub repository and the configured task backend is 'files'; remove --repo or configure task_backend: github`
+        ), 'usage', {}, target),
+        asJson,
+        io,
+        EXIT_USAGE
+      ),
+    };
+  }
+
+  for (const warning of resolution.warnings) io.warn(`  WARN: ${warning}`);
   return { ok: true, resolution };
 }
 
@@ -471,13 +586,90 @@ function enumerateFilesTaskInventory(target, projectConfig, options = {}) {
   return normalizeFilesTaskInventory({ inventoryId, entries, complete: true, enumeration }, { now: options.now });
 }
 
-function refetchDispatchParallelScanInventory(target, projectConfig, decomposition) {
-  if (decomposition?.scan?.workUnit?.backend !== 'files') {
+function resolveGitHubRepository(commandRunner, assertedRepo) {
+  const repo = assertedRepo
+    ? String(assertedRepo).trim()
+    : String(runGhJson(commandRunner, ['repo', 'view', '--json', 'nameWithOwner'])?.nameWithOwner ?? '').trim();
+  if (!/^[^\s/]+\/[^\s/]+$/.test(repo)) {
+    throw new VerificationContextMalformedError('GitHub task inventory requires a repository identity in owner/name form');
+  }
+  return repo;
+}
+
+/**
+ * Enumerate every GitHub issue page through the injected read-only transport.
+ *
+ * The enumeration is entirely transport-scoped: the repository identity comes
+ * from `--repo` or the authenticated `gh` context, never from the local
+ * checkout, so no target path is required or accepted here.
+ *
+ * @param {object} projectConfig  Project map config supplying `task_id_regex`.
+ * @param {object} io             Injected I/O carrying the read-only gh runner.
+ * @param {{ repo?: string, observedAt?: string, now?: number }} [options]
+ */
+function enumerateGitHubTaskInventory(projectConfig, io, options = {}) {
+  const commandRunner = resolveGhRunner(io);
+  const repo = resolveGitHubRepository(commandRunner, options.repo);
+  const pages = runGhJson(commandRunner, [
+    'api', '--paginate', '--slurp', `repos/${repo}/issues?state=all&per_page=100`,
+  ]);
+  if (!Array.isArray(pages) || pages.length === 0 || pages.some(page => !Array.isArray(page))) {
+    throw new VerificationContextMalformedError('GitHub issue pagination did not return a complete page inventory');
+  }
+  // The REST issues endpoint also returns pull requests. They are not task issue
+  // carriers and are excluded only by the API's explicit pull_request marker.
+  //
+  // Enumeration coverage is defined over the task-issue surface, *after* this
+  // filter: `discovered` counts the issue entries that could carry a task
+  // record, not the raw REST rows. Counting raw rows would make `discovered`
+  // exceed `returned` and report a complete issue inventory as truncated purely
+  // because the endpoint also returned pull requests - which are not part of the
+  // surface the inventory claims to cover. Pull requests are therefore excluded
+  // at the surface boundary rather than carried in and then excluded from the
+  // ready set; the ready-set exclusion vocabulary describes task members, and a
+  // pull request never becomes one.
+  const issues = pages.flat().filter(issue => !issue?.pull_request).map(issue => ({
+    number: issue?.number,
+    state: issue?.state,
+    title: issue?.title,
+    body: issue?.body,
+    labels: issue?.labels,
+  }));
+  const inventoryId = `github:${repo}`;
+  const observedAt = options.observedAt ?? new Date().toISOString();
+  const enumeration = createTaskInventoryEnumeration({
+    backend: 'github', inventoryId, observedAt,
+    discovered: issues.length, returned: issues.length,
+    pageCount: pages.length, truncated: false, cursor: null,
+  });
+  const identityInventory = buildGitHubTaskIdentityInventory(issues, {
+    complete: true,
+    taskIdRegex: projectConfig.task_id_regex,
+  });
+  const normalized = normalizeGitHubTaskInventory({
+    inventoryId,
+    inventory: { ...identityInventory, issues },
+    enumeration,
+  }, { now: options.now });
+  return { repo, issues, identityInventory, normalized };
+}
+
+/**
+ * Refetch the work-unit inventory only once the decomposition is known to name
+ * the selected backend. The inventory arrives as a thunk so an incompatible
+ * decomposition is rejected before any directory listing or transport read.
+ *
+ * @param {string} backend
+ * @param {() => object} enumerateInventory
+ * @param {object} decomposition
+ */
+function refetchDispatchParallelScanInventory(backend, enumerateInventory, decomposition) {
+  if (decomposition?.scan?.workUnit?.backend !== backend) {
     throw new VerificationContextMalformedError(
-      'files-backed task dispatch requires a files parallel-scan work-unit inventory'
+      `${backend}-backed task dispatch requires a ${backend} parallel-scan work-unit inventory`
     );
   }
-  return enumerateFilesTaskInventory(target, projectConfig);
+  return enumerateInventory();
 }
 
 /**
@@ -621,7 +813,10 @@ function readExplicitBaseEvidence(target, options = {}) {
 function readDependencyEvidence(target, option, taskId) {
   if (!option) {
     throw new VerificationContextError(
-      'An agent-ready transition requires --dependencies <path> naming the exact dependency-status snapshot.',
+      // One condition, one public sentence. The GitHub carrier reports the
+      // identical text for the identical condition; only the carrier identity
+      // in the surrounding envelope tells the two apart.
+      'A transition to agent-ready requires --dependencies <path> naming the exact dependency-status snapshot.',
       { requiredContext: ['--dependencies <path>'] }
     );
   }
@@ -810,11 +1005,12 @@ export async function cmdTask(args, io = createIo()) {
   }
   const { opts, positional } = parseCommandArgs(`task ${sub}`, TASK_SUBCOMMANDS[sub], args.slice(1));
   const target = resolveCliTarget(io, opts.target);
-  const guard = guardFilesBackend(target, io);
-  if (!guard.ok) {
-    io.err(guard.message);
-    return 1;
-  }
+  // One resolution, one validation, one diagnostic shape - for every
+  // subcommand, before any subcommand-specific routing chooses an enumerator or
+  // a transport.
+  const guard = guardTaskBackend(sub, target, opts, io);
+  if (!guard.ok) return guard.exit;
+  const selectedBackend = guard.resolution;
 
   const project = resolveProject(target);
   const projectConfig = project.config;
@@ -1087,12 +1283,16 @@ export async function cmdTask(args, io = createIo()) {
       // describe the same observation, so the emitted source is byte-identical
       // for identical inputs.
       const observedAt = opts.observedAt ? String(opts.observedAt) : new Date().toISOString();
+      const backend = selectedBackend.backend;
+      const enumerateInventory = backend === 'github'
+        ? () => enumerateGitHubTaskInventory(projectConfig, io, { observedAt, repo: opts.repo }).normalized
+        : () => enumerateFilesTaskInventory(target, projectConfig, { observedAt });
       const prepared = prepareDecompositionSource({
         // The producer never receives a caller-supplied inventory: it calls the
         // authoritative enumerator, which lists the configured task directory
         // and issues the typed enumeration receipt completeness derives from.
-        enumerateInventory: () => enumerateFilesTaskInventory(target, projectConfig, { observedAt }),
-        workUnit: { id: String(opts.workUnit), backend: 'files' },
+        enumerateInventory,
+        workUnit: { id: String(opts.workUnit), backend },
         taskId,
         sourceRef: String(opts.sourceRef),
         sourceRevision: String(opts.sourceRevision),
@@ -1147,16 +1347,43 @@ export async function cmdTask(args, io = createIo()) {
       } catch (error) {
         return printGateResult('task prepare-dispatch', commandFailure('task prepare-dispatch', error, 'operational_error', {}, target), asJson, io);
       }
-      const filePath = taskPathForId(target, projectConfig, taskId);
-      const carrier = relative(target, filePath).replace(/\\/g, '/');
+      const backend = selectedBackend.backend;
+      const filePath = backend === 'files' ? taskPathForId(target, projectConfig, taskId) : null;
+      const carrier = filePath ? relative(target, filePath).replace(/\\/g, '/') : null;
+      let githubSnapshot = null;
+      const currentGitHubSnapshot = () => {
+        if (!githubSnapshot) githubSnapshot = enumerateGitHubTaskInventory(projectConfig, io, { repo: opts.repo });
+        return githubSnapshot;
+      };
       const refetchTask = () => {
-        if (!existsSync(filePath)) throw new VerificationContextError(`task record not found: ${carrier}`);
-        const body = readFileSync(filePath, 'utf8');
-        const history = loadFilesTaskContractRecords(target, taskId);
+        if (backend === 'files') {
+          if (!existsSync(filePath)) throw new VerificationContextError(`task record not found: ${carrier}`);
+          const body = readFileSync(filePath, 'utf8');
+          const history = loadFilesTaskContractRecords(target, taskId);
+          return {
+            backend: 'files', taskId, carrier, body, digest: taskRecordDigest(body),
+            trustedRecords: history.trustedRecords,
+            trustedRecordErrors: history.errors,
+          };
+        }
+        const snapshot = currentGitHubSnapshot();
+        const resolvedTask = resolveCoveredGitHubTask(snapshot.identityInventory, taskId);
+        if (!resolvedTask.found) throw new VerificationContextError(resolvedTask.error);
+        const fetched = fetchGitHubTaskBody({
+          issue: resolvedTask.issue.number,
+          repo: snapshot.repo,
+          commandRunner: resolveGhRunner(io),
+          projectMapConfig: projectConfig,
+        });
+        const inventoriedIssue = snapshot.issues.find(issue => Number(issue?.number) === Number(resolvedTask.issue.number));
+        if (!inventoriedIssue || fetched.body !== String(inventoriedIssue.body ?? '')) {
+          throw new VerificationContextStaleError(`GitHub task '${taskId}' changed during authoritative inventory refetch`);
+        }
         return {
-          backend: 'files', taskId, carrier, body, digest: taskRecordDigest(body),
-          trustedRecords: history.trustedRecords,
-          trustedRecordErrors: history.errors,
+          backend: 'github', taskId, carrier: `issue:${resolvedTask.issue.number}`,
+          body: fetched.body, digest: fetched.digest,
+          trustedRecords: fetched.trustedRecords,
+          trustedRecordErrors: fetched.trustedRecordErrors,
         };
       };
       const refetchReadiness = ({ snapshot }) => refetchDispatchReadiness(
@@ -1170,9 +1397,17 @@ export async function cmdTask(args, io = createIo()) {
         input?.decomposition ?? packet?.decomposition,
         snapshot.taskId
       );
-      const refetchParallelScanInventory = ({ decomposition }) =>
-        refetchDispatchParallelScanInventory(target, projectConfig, decomposition);
+      const refetchParallelScanInventory = ({ decomposition }) => refetchDispatchParallelScanInventory(
+        backend,
+        backend === 'files'
+          ? () => enumerateFilesTaskInventory(target, projectConfig)
+          : () => currentGitHubSnapshot().normalized,
+        decomposition
+      );
       const readCarrierDigest = relPath => {
+        if (backend === 'github' && String(relPath).startsWith('issue:')) {
+          return currentGitHubSnapshot().normalized.members.find(member => member.carrier === relPath)?.digest ?? null;
+        }
         const carrierPath = resolve(target, String(relPath));
         if (!existsSync(carrierPath)) return null;
         return taskRecordDigest(readFileSync(carrierPath, 'utf8'));
@@ -1566,8 +1801,11 @@ export async function cmdTask(args, io = createIo()) {
         }, asJson, io);
       }
       if (String(opts.expectDigest) !== currentDigest) {
-        return failure(new BaselineChangedError(
-          `Stale task record: expected ${String(opts.expectDigest)}, the current digest is ${currentDigest}.`
+        // The current record was read and compared, so committed state was
+        // evaluated. Both carriers report this one condition identically.
+        return failure(new PublicCommandError(
+          staleCarrierDigestMessage(String(opts.expectDigest), currentDigest),
+          STALE_CARRIER_DIGEST_CONTEXT
         ));
       }
 
@@ -1587,8 +1825,7 @@ export async function cmdTask(args, io = createIo()) {
       const currentStatus = frontmatterString(frontmatter.status);
       const transitionError = validateTaskStatusTransition(currentStatus, nextStatus, opts.note);
       if (transitionError) {
-        io.err(transitionError);
-        return 1;
+        return failure(new PublicCommandError(transitionError, TASK_TRANSITION_NEGATIVE_CONTEXT));
       }
       // Validate the complete current record before it can authorize a change.
       const currentDiagnostics = validateTaskRecordDiagnostics(currentContent, relPath);
@@ -1688,13 +1925,10 @@ export async function cmdTask(args, io = createIo()) {
       if (nextStatus === 'closed' && currentStatus !== nextStatus) {
         const scope = resolveCanonicalTerminalScope({ target, config: projectConfig, taskId });
         if (!scope.decision.genericTerminalAllowed) {
-          const reason = scope.reasons[0] ??
-            `the task belongs to a ${scope.scopeKind} closeout scope, whose terminal transition is closeout-owned`;
-          io.err(
-            `Generic task closure is refused (${scope.scopeKind}/${scope.auditMode}): ${reason}. ` +
-            'Use closeout prepare and closeout record after repairing and re-deriving scope where required.'
-          );
-          return 1;
+          return failure(new PublicCommandError(
+            genericTerminalRefusalMessage(scope),
+            TASK_TRANSITION_NEGATIVE_CONTEXT
+          ));
         }
       }
 

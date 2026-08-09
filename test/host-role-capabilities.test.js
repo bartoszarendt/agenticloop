@@ -6,6 +6,7 @@ import {
   buildEffectiveHostRoleCapabilityInventory,
   createHostRoleCapabilitySidecar,
   createDegradedEnforcementReports,
+  degradedEnforcementDeclarationFacts,
   getHostRoleCapability,
   hostRoleCapabilityDigest,
   renderHostRoleCapabilityNotice,
@@ -143,19 +144,43 @@ describe('host-role capability declarations', () => {
     assert.equal(validateHostRoleCapabilitySidecar(tampered, { host: 'copilot' }).ok, false);
   });
 
-  it('emits closed degraded reports with the next authoritative boundary and recovery route', () => {
+  it('emits closed degraded reports that resolve the boundary and recovery route from their pinned declaration', () => {
     for (const host of SHIPPED_ADAPTER_HOSTS) {
       const declaration = getHostRoleCapability(host, 'orchestrator');
       const reports = createDegradedEnforcementReports(declaration);
       assert.ok(reports.length > 0);
       for (const report of reports) {
         assert.equal(validateDegradedEnforcementReport(report).ok, true);
-        assert.equal(report.detectionBoundary, 'role_return_receive');
         assert.equal(report.diagnosticCode, 'capability.enforcement.degraded');
-        assert.ok(report.recoveryRoute.includes('typed blocked or rejected result'));
         assert.notEqual(report.enforcement, 'enforced');
+        assert.equal(report.declarationDigest, declaration.digest);
+
+        // The declaration's prose is reached through the pinned digest, not
+        // copied into every report.
+        for (const field of ['limitation', 'detectionBoundary', 'recoveryRoute']) {
+          assert.equal(Object.hasOwn(report, field), false, `report must not restate '${field}'`);
+        }
+        const facts = degradedEnforcementDeclarationFacts(report, declaration);
+        assert.equal(facts.detectionBoundary, 'role_return_receive');
+        assert.ok(facts.recoveryRoute.includes('typed blocked or rejected result'));
+        assert.equal(facts.limitation, declaration.limitation);
+
+        // Resolution also works from the shipped inventory alone.
+        const resolvedFromInventory = degradedEnforcementDeclarationFacts(report);
+        assert.deepEqual(resolvedFromInventory, facts);
       }
     }
+  });
+
+  it('refuses to resolve declaration facts for a report whose pinned digest does not match', () => {
+    const declaration = getHostRoleCapability('codex', 'orchestrator');
+    const [report] = createDegradedEnforcementReports(declaration);
+    const repinned = { ...report, declarationDigest: `sha256:agenticloop.host-role-capability.v1:${'0'.repeat(64)}` };
+    assert.equal(validateDegradedEnforcementReport(repinned).ok, false);
+    assert.deepEqual(
+      degradedEnforcementDeclarationFacts(repinned, declaration),
+      { limitation: null, detectionBoundary: null, recoveryRoute: null }
+    );
   });
 
   it('rejects unknown, duplicate, contradictory, incomplete, and extra declaration fields', () => {

@@ -12,7 +12,7 @@ import { deriveTaskContractLifecycle, hasTaskContractRecordMarker, parseTaskCont
 import { parseAttemptBudget, parseReviewBudget } from './github-preflight.js';
 import { createDiagnostic } from './repair-policy.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
-import { PublicCommandError } from './public-error.js';
+import { PublicCommandError, staleCarrierDigestMessage } from './public-error.js';
 import { normalizeGitHubCommentCarriers } from './github-comment-carrier.js';
 import { resolveTrustedTaskContractActors, trustedActorAllowed } from './trusted-actors.js';
 import {
@@ -952,7 +952,7 @@ export function applyGitHubTaskBody({
       ok: false,
       applied: false,
       stale: true,
-      errors: [`stale task body: expected ${expectDigest}, current remote digest is ${current.digest}`],
+      errors: [staleCarrierDigestMessage(expectDigest, current.digest)],
       candidateLint: null,
       remote: current,
       recovery: null,

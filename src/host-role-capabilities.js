@@ -436,9 +436,9 @@ export function createDegradedEnforcementReports(declaration, { registry = WORKF
       action: binding.action,
       capability: binding.capability,
       enforcement: binding.enforcement,
-      limitation: declaration.limitation,
-      detectionBoundary: declaration.detectionBoundary,
-      recoveryRoute: declaration.recoveryRoute,
+      // The declaration's limitation, detection boundary, and recovery route
+      // are reached through this digest-pinned declaration, never copied per
+      // report. See TRANSITION_DEGRADED_ENFORCEMENT_REPORT.
       declarationDigest: declaration.digest,
     })));
 }
@@ -474,13 +474,40 @@ export function validateDegradedEnforcementReport(value, { declaration: expected
     errors.push('degraded-enforcement report action binding does not match the canonical declaration');
   }
   if (value.enforcement === 'enforced') errors.push('degraded-enforcement report cannot claim enforced behavior');
-  if (declaration && (
-    value.limitation !== declaration.limitation ||
-    value.detectionBoundary !== declaration.detectionBoundary ||
-    value.recoveryRoute !== declaration.recoveryRoute ||
-    value.declarationDigest !== declaration.digest
-  )) errors.push('degraded-enforcement report does not match its canonical declaration');
+  // The digest is the whole binding to the declaration: it pins the exact
+  // limitation, detection boundary, and recovery route the report refers to
+  // without restating any of them.
+  if (declaration && value.declarationDigest !== declaration.digest) {
+    errors.push('degraded-enforcement report does not match its canonical declaration');
+  }
   return { ok: errors.length === 0, errors };
+}
+
+/**
+ * Resolve the declaration-level facts a degraded-enforcement report refers to.
+ *
+ * A report names its declaration by digest rather than copying its prose, so
+ * every renderer resolves the prose here from the exact pinned declaration.
+ *
+ * @param {object} report
+ * @param {object|null} [declaration]  The bound declaration, when the caller holds one.
+ * @returns {{ limitation: string|null, detectionBoundary: string|null, recoveryRoute: string|null }}
+ */
+export function degradedEnforcementDeclarationFacts(report, declaration = null) {
+  let resolved = declaration;
+  if (!resolved || resolved.digest !== report?.declarationDigest) {
+    try {
+      const candidate = getHostRoleCapability(report?.host, report?.roleId);
+      resolved = candidate?.digest === report?.declarationDigest ? candidate : null;
+    } catch {
+      resolved = null;
+    }
+  }
+  return {
+    limitation: resolved?.limitation ?? null,
+    detectionBoundary: resolved?.detectionBoundary ?? null,
+    recoveryRoute: resolved?.recoveryRoute ?? null,
+  };
 }
 
 export function renderHostRoleCapabilityNotice(

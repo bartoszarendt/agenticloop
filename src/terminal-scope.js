@@ -325,7 +325,7 @@ function closeoutMarkerEvidence(target, taskId, carrierText) {
 
 /** Collapse same-source matches, failing closed when they disagree. */
 function reduceMatches(matches, label, taskId) {
-  const identities = new Set(matches.map(item => `${item.workUnit} ${item.tasks.join(' ')}`));
+  const identities = new Set(matches.map(item => `${item.workUnit}\u0000${item.tasks.join('\u0000')}`));
   if (identities.size !== 1) {
     return indeterminate(`multiple conflicting current ${label} cover task '${taskId}'`, {
       type: matches[0].type,
@@ -425,7 +425,7 @@ export function resolveCanonicalTerminalScope({
         type: 'configured_group_membership',
         workUnit,
         tasks: members,
-        digest: digest(inventory.entries.map(entry => `${entry.relPath}\n${entry.content}`).join('\n \n')),
+        digest: digest(inventory.entries.map(entry => `${entry.relPath}\n${entry.content}`).join('\n\u0000\n')),
       },
     });
   }
@@ -448,7 +448,7 @@ export function resolveCanonicalTerminalScope({
     return scopeResult('indeterminate', auditMode, { reasons: [blocked.reason], evidence: blocked.evidence });
   }
   if (sources.length > 0) {
-    const identities = new Set(sources.map(source => `${source.workUnit} ${source.tasks.join(' ')}`));
+    const identities = new Set(sources.map(source => `${source.workUnit}\u0000${source.tasks.join('\u0000')}`));
     if (identities.size !== 1) {
       return scopeResult('indeterminate', auditMode, {
         reasons: [`explicit scope evidence for task '${id}' is contradictory across ${sources.map(source => source.type).join(', ')}`],
@@ -473,6 +473,14 @@ export function resolveCanonicalTerminalScope({
     });
   }
   return scopeResult('none', auditMode, { tasks: [id], evidence: { type: 'no_scope', taskId: id } });
+}
+
+/** One backend-neutral refusal message for generic terminal mutation paths. */
+export function genericTerminalRefusalMessage(scope) {
+  const reason = scope?.reasons?.[0] ??
+    `the task belongs to a ${String(scope?.scopeKind ?? 'indeterminate')} closeout scope, whose terminal transition is closeout-owned`;
+  return `Generic task closure is refused (${String(scope?.scopeKind ?? 'indeterminate')}/${String(scope?.auditMode ?? 'enabled')}): ` +
+    `${reason}. Use closeout prepare/record after repairing and re-deriving scope where required.`;
 }
 
 /**

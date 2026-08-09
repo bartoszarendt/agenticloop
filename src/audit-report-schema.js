@@ -57,6 +57,25 @@ export function auditorReportDigest(report) {
 }
 
 /**
+ * Exact substantive report identity authenticated by a host return receipt.
+ * The receipt field is null in this projection because embedding a signature
+ * over a digest that includes that same signature would be circular.
+ *
+ * This digest is only meaningful over a **normalized** report - the exact
+ * projection `parseAuditorWireReport()` produces. A host must never compute it
+ * over a raw wire document it has not normalized: permitted surrounding
+ * whitespace, mixed-case severities, string booleans, and non-canonical covered
+ * task entries all change the digest. Use
+ * `prepareAuditorReturnReportForSigning()` to obtain the normalized projection
+ * and its digest together.
+ */
+export function auditorReturnReportDigest(report) {
+  const projected = structuredClone(report);
+  if (projected?.invocation) projected.invocation.receipt = null;
+  return `sha256:agenticloop.auditor-return-report.v1:${canonicalSha256(projected)}`;
+}
+
+/**
  * Validate and normalize one wire finding. Every substantive string is
  * preserved exactly after trimming outer whitespace only.
  */
@@ -109,12 +128,19 @@ function normalizeWireFinding(raw, index, errors) {
 }
 
 /**
- * Parse and validate a complete `auditor_report_v1` wire document.
+ * Validate and normalize one `auditor_report_v1` wire document.
  *
- * @param {unknown} raw  Parsed JSON value.
+ * Exactly one normalization exists. Both the submission path
+ * (`parseAuditorWireReport`) and the host pre-signing path
+ * (`prepareAuditorReturnReportForSigning`) run it, so the digest a host signs
+ * and the digest the CLI later derives are computed over identical bytes.
+ *
+ * @param {unknown} raw
+ * @param {{ preSigning?: boolean }} [mode]  `preSigning` permits an absent
+ *   receipt on a `verified` report because the receipt does not exist yet.
  * @returns {{ ok: boolean, errors: string[], report?: object }}
  */
-export function parseAuditorWireReport(raw) {
+function normalizeAuditorWireReport(raw, { preSigning = false } = {}) {
   const errors = [];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return { ok: false, errors: ['auditor report must be one JSON object'] };
@@ -161,7 +187,7 @@ export function parseAuditorWireReport(raw) {
       `invocation.provenance must be one of: ${AUDIT_INVOCATION_PROVENANCE_CLASSES.join(', ')}`
     );
   }
-  if (invocation.provenance === 'verified' && !invocation.receipt) {
+  if (!preSigning && invocation.provenance === 'verified' && !invocation.receipt) {
     errors.push("invocation.provenance 'verified' requires invocation.receipt");
   }
   let producer = null;
@@ -238,8 +264,92 @@ export function parseAuditorWireReport(raw) {
 }
 
 /**
+ * Parse and validate a complete `auditor_report_v1` wire document for
+ * submission. A `verified` report must carry a non-empty receipt here: this is
+ * the authoritative ingestion path and it is never relaxed.
+ *
+ * @param {unknown} raw  Parsed JSON value.
+ * @returns {{ ok: boolean, errors: string[], report?: object }}
+ */
+export function parseAuditorWireReport(raw) {
+  return normalizeAuditorWireReport(raw, { preSigning: false });
+}
+
+/**
+ * Host-side pre-signing preparation.
+ *
+ * A protected host cannot sign a report identity it cannot compute, and it
+ * cannot compute the CLI's identity from a raw wire document, because the CLI
+ * normalizes before it digests. This is the one supported way to obtain the
+ * exact normalized report and the exact `auditor-return-report.v1` digest the
+ * CLI will later derive - without needing a receipt that does not exist yet.
+ *
+ * Intended sequence:
+ *
+ *   1. `const prepared = prepareAuditorReturnReportForSigning(rawReport)`
+ *   2. host signs `prepared.digest` into an Auditor return receipt
+ *   3. host sets `prepared.report.invocation.receipt = JSON.stringify(receipt)`
+ *   4. the CLI parses that report and derives the identical digest
+ *
+ * The returned report is the receipt-null normalized projection: every
+ * substantive field is already trimmed, lower-cased, and canonicalized exactly
+ * as ingestion will produce it. Mutating any substantive field after step 2
+ * invalidates the signature, which is the intended fail-closed behavior.
+ *
+ * Validation is the same closed schema used by submission; only the
+ * "`verified` requires a receipt" rule is deferred to submission. There is no
+ * caller-visible dummy-receipt convention.
+ *
+ * The report's normalized `invocation.provenance` must already be `verified`.
+ * Preparing an `asserted` report produced output no one could use: submission
+ * rejects an `asserted` report that carries a receipt, so the host would sign a
+ * digest whose only destination refuses it. Preparation refuses instead, and it
+ * refuses rather than promoting the class - a caller does not acquire verified
+ * provenance by asking a formatter for it.
+ *
+ * @param {unknown} rawReport  Parsed JSON value of the Auditor's wire report.
+ * @returns {{ ok: boolean, errors: string[], report: object|null, digest: string|null }}
+ */
+export function prepareAuditorReturnReportForSigning(rawReport) {
+  const parsed = normalizeAuditorWireReport(rawReport, { preSigning: true });
+  if (!parsed.ok) return { ok: false, errors: parsed.errors, report: null, digest: null };
+  const report = parsed.report;
+  if (report.invocation.provenance !== 'verified') {
+    return {
+      ok: false,
+      errors: [
+        `invocation.provenance must be 'verified' to prepare a report for host return-receipt signing; ` +
+        `got '${report.invocation.provenance}'. Preparation never promotes asserted provenance.`,
+      ],
+      report: null,
+      digest: null,
+    };
+  }
+  // The projection a host holds is receipt-null rather than receipt-empty so
+  // inserting the receipt in step 3 is the only remaining edit, and so a report
+  // handed back unsigned still fails the submission receipt rule.
+  report.invocation.receipt = null;
+  return {
+    ok: true,
+    errors: [],
+    report,
+    digest: auditorReturnReportDigest(report),
+  };
+}
+
+/**
  * Convert a validated wire report into the shape `appendAuditReport` consumes.
  * Perspective bodies and provenance ride along for lossless durable history.
+ *
+ * Two distinct digests are carried, and they are not interchangeable:
+ *
+ * - `auditorReportDigest` covers the full normalized report *including* the
+ *   receipt text. Durable persistence and report-identity history rely on it.
+ * - `auditorReturnReportDigest` covers the receipt-null projection. It is the
+ *   only digest a host return receipt authenticates, and it is the digest
+ *   `normalizeAuditorInvocationProvenance()` sends to the verifier and compares
+ *   the verifier's answer against - the same domain
+ *   `prepareAuditorReturnReportForSigning()` hands the host.
  *
  * @param {object} report  Result of parseAuditorWireReport().report
  * @returns {object}
@@ -260,6 +370,7 @@ export function wireReportToAuditRun(report) {
     reportFormat: AUDIT_REPORT_SCHEMA_VERSION,
     wirePayload: structuredClone(report),
     auditorReportDigest: auditorReportDigest(report),
+    auditorReturnReportDigest: auditorReturnReportDigest(report),
     authoritativeAuditorReturn: true,
   };
 }

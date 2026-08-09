@@ -216,10 +216,26 @@ discarded. Multiline substantive text persists in the fenced JSON payload.
 
 Persistence appends one history entry and rewrites only derived certification
 fields. It never edits an earlier history entry or alters report substance. A
-host verifier can classify provenance as `verified`; without one, even a supplied
-receipt remains `asserted`. Invocation references and receipts are unique across
-every audit record before a write, so a successful mutation leaves audit lint
-clean. `legacy_inline_v1` remains compatible but is not lossless wire provenance.
+fresh authoritative return requires the packaged production verifier injected by
+an authenticated protected host boundary. The verifier consumes the fixed
+operator-pinned trust store and authenticates a closed Ed25519 receipt binding
+the Auditor role, adapter/key, target, invocation, work unit, candidate, canonical
+task inventory, exact substantive report digest, receipt identity, and liveness.
+Shape and signature are checked before semantic or freshness classification.
+Without that protected boundary the ordinary CLI fails closed; a supplied opaque
+receipt is not degraded proof.
+
+The signed report digest covers the CLI's *normalized* report, so a protected
+host prepares the report before it signs: it calls
+`prepareAuditorReturnReportForSigning(rawReport)`, signs the returned digest,
+inserts the receipt into the returned normalized report, and submits that. A
+digest taken over the raw wire document is a different identity and is refused
+even when the signature itself is genuine. The loader challenge that admits the
+verifier is itself time-bounded: a response returned at or after the challenge's
+`expiresAt` is refused however well it is signed. Invocation references, receipt bytes, and receipt
+identities are unique across every audit record before a write, so a successful
+mutation leaves audit lint clean. `legacy_inline_v1` remains compatible but is
+not lossless wire provenance.
 
 ## 9. Remediation routing
 

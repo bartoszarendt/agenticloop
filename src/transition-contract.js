@@ -418,6 +418,19 @@ const DEFINITION = {
         schemaVersion: 1,
       },
     },
+    /**
+     * One report per non-enforced action binding.
+     *
+     * The report names the binding it describes and pins the exact declaration
+     * it came from through `declarationDigest`. It deliberately does **not**
+     * repeat the declaration's own prose - `limitation`, `detectionBoundary`,
+     * and `recoveryRoute` are properties of the declaration, not of an
+     * individual binding, and every consumer that has a report also has the
+     * digest-pinned declaration those fields live on. Carrying them per report
+     * duplicated the same few hundred bytes once per degraded action inside a
+     * single dispatch packet without adding any fact the declaration did not
+     * already state.
+     */
     degradedReport: {
       requiredFields: [
         'kind',
@@ -428,14 +441,11 @@ const DEFINITION = {
         'action',
         'capability',
         'enforcement',
-        'limitation',
-        'detectionBoundary',
-        'recoveryRoute',
         'declarationDigest',
       ],
       constants: {
         kind: 'agenticloop.degraded-enforcement-report',
-        schemaVersion: 3,
+        schemaVersion: 4,
       },
     },
     authorityRecords: {
@@ -614,7 +624,7 @@ const EXPECTED = deepFreeze({
   envelopeConstants: ['kind', 'schemaVersion', 'digest.algorithm', 'digest.format', 'digest.canonicalization', 'validation.resultKind'],
   hostRoleDeclarationFields: ['kind', 'schemaVersion', 'host', 'roleId', 'defaultLabel', 'allowedActions', 'deniedActions', 'humanDispositionActions', 'actionBindings', 'detectionBoundary', 'limitation', 'recoveryRoute', 'digest'],
   hostRoleActionBindingFields: ['action', 'capability', 'policy', 'enforcement', 'mechanism'],
-  degradedFields: ['kind', 'schemaVersion', 'host', 'roleId', 'diagnosticCode', 'action', 'capability', 'enforcement', 'limitation', 'detectionBoundary', 'recoveryRoute', 'declarationDigest'],
+  degradedFields: ['kind', 'schemaVersion', 'host', 'roleId', 'diagnosticCode', 'action', 'capability', 'enforcement', 'declarationDigest'],
   degradedConstants: ['kind', 'schemaVersion'],
   blockedFields: ['kind', 'schemaVersion', 'returnId', 'producer.role', 'consumedTransition.id', 'consumedTransition.digest', 'disposition', 'blocker.category', 'blocker.evidence', 'resume.owner', 'resume.transition', 'resume.preconditions'],
   blockedConstants: ['kind', 'schemaVersion', 'disposition'],
@@ -994,7 +1004,7 @@ export function validateTransitionContractDefinition(candidate = TRANSITION_CONT
   }
   validateShape(capability?.degradedReport, 'degraded-enforcement report', EXPECTED.degradedFields, EXPECTED.degradedConstants, errors);
   if (capability?.degradedReport?.constants?.kind !== 'agenticloop.degraded-enforcement-report' ||
-      capability?.degradedReport?.constants?.schemaVersion !== 3) {
+      capability?.degradedReport?.constants?.schemaVersion !== 4) {
     errors.push('degraded-enforcement report identity is invalid');
   }
   if (!exactKeys(capability?.authorityRecords, EXPECTED.authorityRecordKeys) ||

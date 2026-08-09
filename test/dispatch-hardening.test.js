@@ -72,7 +72,7 @@ import {
   readyReturn,
   repositoryEvidence,
 } from './helpers/dispatch-fixture.js';
-import { createTestHostTrust, writeHostTrustStore } from './helpers/host-trust-fixture.js';
+import { createTestHostTrust, protectedHostBoundary as signedHostBoundary, writeHostTrustStore } from './helpers/host-trust-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 
 let temp;
@@ -1192,13 +1192,7 @@ describe('role-return core boundary authenticates evidence itself', () => {
   }
 
   function protectedHostBoundary(fixture, calls) {
-    return context => {
-      calls.push(context);
-      return context.kind === 'agenticloop.protected-host-trust-boundary' &&
-        context.schemaVersion === 1 &&
-        context.trustStorePath === fixture.trustStorePath &&
-        context.supportedAdapterIds.includes(fixture.trust.adapterId);
-    };
+    return signedHostBoundary(fixture.trust, context => calls.push(context));
   }
 
   it('accepts the valid signed fixture through the explicitly trusted test seam', async () => {

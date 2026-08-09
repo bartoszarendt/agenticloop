@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { executeGenerationPlan } from '../src/generation-transaction.js';
+import { executeGenerationPlan, replaceMutationIdentity } from '../src/generation-transaction.js';
 import { generateAdapterArtifacts } from '../src/adapter-generation.js';
 import { createManifest, loadManifest, saveManifest, createFileEntry } from '../src/generated-artifacts.js';
 import { executeRemovalPlan, removeAgenticLoop } from '../src/remove.js';
@@ -26,6 +26,49 @@ function writeManifest(root, entries) {
   manifest.entries = entries;
   saveManifest(root, manifest);
 }
+
+/**
+ * The identity delimiter is a NUL character, written as a `\u0000` escape so
+ * ordinary text tooling can still read the source. These cases pin the value
+ * and the separation property the escape must preserve: no rearrangement of
+ * field boundaries may produce the same key.
+ */
+describe('mutation identity delimiter', () => {
+  const NUL = String.fromCharCode(0);
+
+  it('joins identity fields on a literal NUL that no field can contain', () => {
+    const identity = replaceMutationIdentity({
+      adapter: 'opencode',
+      outputRoot: '.',
+      relPath: 'opencode.json',
+      pointer: '/agent',
+      matchKey: 'name',
+      matchValue: 'engineer',
+    });
+    assert.equal(identity, ['opencode', '.', 'opencode.json', '/agent', 'name', '"engineer"'].join(NUL));
+    assert.equal(identity.split(NUL).length, 6);
+  });
+
+  it('keeps shifted field boundaries distinct', () => {
+    const left = replaceMutationIdentity({
+      adapter: 'opencode',
+      outputRoot: 'a',
+      relPath: 'b',
+      pointer: '/agent',
+      matchKey: 'name',
+      matchValue: 'engineer',
+    });
+    const right = replaceMutationIdentity({
+      adapter: 'opencode',
+      outputRoot: 'a/b',
+      relPath: '',
+      pointer: '/agent',
+      matchKey: 'name',
+      matchValue: 'engineer',
+    });
+    assert.notEqual(left, right, 'a delimiter a field can contain would collide these identities');
+  });
+});
 
 describe('generation transaction ownership regressions', () => {
   it('rejects writes whose resolved output root is under .github/workflows', () => {

@@ -56,6 +56,7 @@ import {
 } from './audit-report-schema.js';
 import { resolveCandidateArtifact } from './candidate.js';
 import { createAuditorReportResumePacket, findAuditorInvocationEvent, normalizeAuditorInvocationProvenance } from './audit-provenance.js';
+import { auditorReturnReceiptIdentity } from './auditor-return-receipt.js';
 import { executeMutationBatch } from './fs-mutation-kernel.js';
 import { AUDITS_DIRECTORY_RELATIVE_PATH } from './layout.js';
 import {
@@ -199,6 +200,7 @@ function auditInvocationReuseErrors(target, incoming) {
   const errors = [];
   const reference = String(incoming?.invocationReference ?? '').trim();
   const receipt = String(incoming?.invocationReceipt ?? '').trim();
+  const receiptId = auditorReturnReceiptIdentity(receipt);
   for (const entry of listAuditRecordFiles(target)) {
     const record = parseAuditRecord(entry.content);
     for (const prior of record.history ?? []) {
@@ -206,8 +208,13 @@ function auditInvocationReuseErrors(target, incoming) {
         errors.push(`invocation reference '${reference}' was already recorded by ${record.auditId}/run:${prior.runNumber}; every re-audit requires a fresh Auditor invocation`);
       }
       const priorReceipt = String(prior.reportPayload?.invocation?.receipt ?? '').trim();
+      // One replay, one diagnostic. Identical bytes always share a receiptId,
+      // so the identity message only adds information when the bytes differ -
+      // a receipt re-minted around a spent receiptId.
       if (receipt && priorReceipt === receipt) {
         errors.push(`invocation receipt '${receipt}' was already used by ${record.auditId}/run:${prior.runNumber}`);
+      } else if (receiptId && auditorReturnReceiptIdentity(priorReceipt) === receiptId) {
+        errors.push(`Auditor return receipt identity '${receiptId}' was already used by ${record.auditId}/run:${prior.runNumber}`);
       }
     }
   }

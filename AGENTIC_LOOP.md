@@ -291,6 +291,11 @@ than reinterpreting or repairing an earlier version in place. Version 4 is not
 migrated: its decomposition field carries the version 1 caller-asserted
 completeness token, and no migration can supply the scan proof version 5
 requires.
+An otherwise-current version 5 packet carrying the exact former version 3
+degraded-enforcement report set is likewise rejected as
+`dispatch.packet.stale` only after its original digest and complete
+projected-current semantics validate. It is never migrated or accepted in
+place, and malformed v3 lookalikes remain malformed.
 
 Decomposition provenance is `agenticloop.decomposition-provenance`, schema
 version `2`. Version 1 declared completeness as a caller-supplied token beside a
@@ -552,15 +557,22 @@ them.
 `npx agenticloop task prepare-decomposition <task-id> --work-unit <id>
 --source-ref <path> --source-revision <ref> (--base <ref> | --base-paths <path>)
 --dependencies <path> [--route serial|parallel] [--observed-at <instant>]
-[--max-age-seconds <n>] [--rescan-trigger <text>]` is the production path. It
+[--max-age-seconds <n>] [--rescan-trigger <text>] [--repo <owner/name>]` is the
+production path. It
 lives inside the existing `task` command family, enumerates the configured task
 surface itself, evaluates the scan, validates the emitted record with the same
 validator its consumers run, constructs and validates the decomposition
 provenance, and prints the committable source as deterministic canonical JSON.
 It performs no task, Git, filesystem, GitHub, or lifecycle mutation, and returns
 canonical `agenticloop.validation-result` diagnostics on failure. The inventory
-enumerator is injectable, so a GitHub adapter can supply an authoritative
-paginated inventory without forking scan semantics.
+enumerator is selected from `.agenticloop/project.md`. Files retain the exact
+configured-directory enumeration. GitHub uses the injected read-only command
+runner, follows every issue page, excludes only explicit pull-request carriers,
+and records exact discovered/returned counts, page count, truncation, and any
+unresolved cursor before shared normalization. Invalid issue identities remain
+evidence. Dispatch repeats the same authoritative backend enumeration and
+compares membership, carrier digests, readiness context, and decomposition
+binding before mutation.
 
 Construction and validation agree by contract: the evaluator runs the closed
 validator on the record it just built and refuses to return a successful scan
@@ -805,11 +817,16 @@ for Orchestrator/Auditor. Maintainer implementation denial remains advisory on
 every host because legitimate workflow mutation must remain reachable.
 
 Advisory or unavailable enforcement emits a closed
-`agenticloop.degraded-enforcement-report` version 3 record with diagnostic code
-`capability.enforcement.degraded`, the declaration digest, next authoritative
-boundary, limitation, and deterministic recovery route. `task
-prepare-dispatch` binds the canonical reports into the packet and emits the
-repair-policy warnings. `task verify-return` / `role_return_receive` runs
+`agenticloop.degraded-enforcement-report` version 4 record with diagnostic code
+`capability.enforcement.degraded`, the degraded action and capability, and the
+declaration digest. The next authoritative boundary, limitation, and
+deterministic recovery route are properties of the capability declaration, so
+the report pins that declaration by digest instead of restating its text: every
+consumer that holds a report also holds the declaration it names, and repeating
+those fields once per degraded action only enlarged the dispatch packet. `task
+prepare-dispatch` binds the canonical reports into the packet, resolves the
+declaration facts from the bound declaration, and emits the repair-policy
+warnings unchanged. `task verify-return` / `role_return_receive` runs
 canonical packet validation, including report/declaration compatibility, at the
 receive edge before accepting the return. There is no second nominal report
 check counted as an independent enforcement layer; contradictory or fabricated
@@ -879,10 +896,11 @@ after that authentication. A forged producer role therefore produces the
 generic authentication failure, while an authentically signed wrong producer
 produces `role_return.producer_mismatch`.
 
-Dispatch packet schema version 4 is current. The shipped pre-P35-05 dispatch
-baseline was schema version 2; an authentic version 2 packet receives typed
+Dispatch packet schema version 5 is current and carries a constant-size
+decomposition binding to the committed scan source. The shipped pre-capability
+dispatch baseline was schema version 2; an authentic version 2 packet receives typed
 `dispatch.packet.stale` upgrade guidance and is never accepted as current.
-Authentic transitional version 3 packets receive the same fail-closed treatment.
+Authentic transitional versions 3 and 4 receive the same fail-closed treatment.
 The shipped host-receipt baseline was schema version 1; an authentic version 1
 receipt receives typed `role_return.receipt_stale` reissue guidance. Malformed
 inputs do not become legacy packets or receipts merely by carrying an old
@@ -1669,6 +1687,20 @@ or `npx agenticloop audit report ...` persists it into the audit record without
 altering the substantive findings. Persistence validates the input and the
 fully rendered record before writing; malformed finding fields, stale baselines,
 or structurally invalid packets are rejected.
+
+A fresh authoritative report additionally requires the shipped production
+Auditor-return verifier through the protected host I/O seam. Its closed
+schema-version-1 Ed25519 receipt binds immutable producer `auditor`, the pinned
+adapter/key, canonical target repository, invocation reference and mode, work
+unit, exact candidate, canonical covered-task inventory, substantive report
+digest, receipt identity, and issue/expiry instants. Closed shape and signature
+validation precede semantic and freshness checks. The ordinary CLI has no
+authenticated host boundary and therefore still fails closed; a supported host
+wrapper imports the packaged verifier, answers its fresh exact-context loader
+challenge with the pinned adapter's Ed25519 key over a host-controlled IPC or
+protected OS-handle boundary, and injects that verifier. A boolean callback,
+environment assertion, or replayed challenge response grants no authority. Neither an opaque
+receipt string nor Orchestrator reconstruction authenticates a report.
 
 A `needs_human_decision` report moves the record to
 `audit_state: awaiting_human`. Another Auditor report is inadmissible until a

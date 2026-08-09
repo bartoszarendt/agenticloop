@@ -307,6 +307,24 @@ function identityFromBody(body, carrier) {
  * the bounded task surface was fully observed, so it names the enumerator, the
  * exact inventory identity, and the pagination evidence behind its claim.
  *
+ * Schema v1 coverage semantics, retained unchanged and stated here so a reader
+ * of a serialized receipt does not have to infer them:
+ *
+ * - `discovered` and `returned` are *producer-derived over the enumerator's own
+ *   task surface*, not raw transport rows. The GitHub REST issues endpoint also
+ *   returns pull requests; those are excluded at the surface boundary, so a
+ *   response carrying two pull requests and one issue records
+ *   `discovered: 1, returned: 1`, not `discovered: 3`. Reinterpreting these as
+ *   raw-row counts would change the meaning of already-serialized v1 receipts
+ *   and would require a schema version, so v1 keeps the producer-derived
+ *   meaning.
+ * - `pageCount` *is* the raw transport page count, so the raw transport shape
+ *   and the normalized surface size stay independently visible.
+ * - `truncated` is set only from evidence the transport itself supplies. A page
+ *   shorter than the requested size is not such evidence: the API may return a
+ *   short page at any position, so treating it as truncation would report
+ *   complete inventories as incomplete.
+ *
  * @param {{ backend: string, inventoryId: string, observedAt: string, discovered: number, returned: number, pageCount?: number, truncated?: boolean, cursor?: string|null, completion?: string }} input
  */
 export function createTaskInventoryEnumeration(input = {}) {

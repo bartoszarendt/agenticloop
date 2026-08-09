@@ -11,6 +11,16 @@
   "bin": {
     "agenticloop": "./bin/agenticloop.js"
   },
+  "exports": {
+    ".": "./src/cli-main.js",
+    "./auditor-return-receipt": "./src/auditor-return-receipt.js",
+    "./audit-report-schema": "./src/audit-report-schema.js",
+    "./host-trust": "./src/host-trust.js",
+    "./protected-host-boundary": "./src/protected-host-boundary.js",
+    "./package.json": "./package.json",
+    "./src/*": "./src/*",
+    "./*": "./*"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/bartoszarendt/agenticloop.git"

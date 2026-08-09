@@ -15,6 +15,7 @@ import {
   prepareDecompositionSource,
 } from '../src/dispatch-envelope.js';
 import { createDispatchFixture, git, gitTreeBaseEvidence, prepare } from './helpers/dispatch-fixture.js';
+import { protectedHostBoundary } from './helpers/host-trust-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 import { COMMAND_REGISTRY } from '../src/cli-registry.js';
 import { verifyCommittedAttributedSource } from '../src/committed-source.js';
@@ -37,8 +38,15 @@ import {
   validateParallelScanRecord,
   validateTaskInventoryEnumeration,
 } from '../src/parallel-scan.js';
-import { parseDependencySnapshot } from '../src/task-evidence-contract.js';
+import { createTaskReadinessEvidence, parseDependencySnapshot } from '../src/task-evidence-contract.js';
 import { buildGitHubTaskIdentityInventory } from '../src/github-task-identity.js';
+import { evaluateTaskReadiness } from '../src/task-readiness.js';
+import { createValidationResult, validationResultDigest } from '../src/result-envelope.js';
+import {
+  createTaskContractBaselineRecord,
+  renderTaskContractRecord,
+  taskContractDigest,
+} from '../src/task-contract-baseline.js';
 
 const TEMPLATE = readFileSync(fileURLToPath(new URL('../memory/task-record.md', import.meta.url)), 'utf8');
 const OBSERVED_AT = '2026-08-07T10:00:00.000Z';
@@ -1398,11 +1406,180 @@ describe('production decomposition producer', () => {
       '--source-revision', `git-commit:${git(fixture.root, ['rev-parse', 'HEAD'])}`,
       '--base', baseTree,
       '--dependencies', 'dependencies.json',
+      ...(patch.repo ? ['--repo', patch.repo] : []),
       ...(patch.route ? ['--route', patch.route] : []),
       ...(patch.observedAt ? ['--observed-at', patch.observedAt] : []),
       '--json', '--target', fixture.root,
-    ]);
+    ], patch.io ?? {});
   }
+
+  it('uses the configured GitHub backend and exhausts the injected paginated transport', async () => {
+    const fixture = await createDispatchFixture(temp, 'produce-github');
+    const projectPath = join(fixture.root, '.agenticloop', 'project.md');
+    writeFileSync(
+      projectPath,
+      readFileSync(projectPath, 'utf8').replace('task_backend: files', 'task_backend: github'),
+      'utf8'
+    );
+    const task = readFileSync(join(fixture.root, '.agenticloop', 'tasks', 'T-001.md'), 'utf8');
+    const calls = [];
+    const ghCommandRunner = (_command, args) => {
+      calls.push(args);
+      if (args[0] === 'api' && args.includes('--paginate') && args.includes('--slurp')) {
+        return {
+          status: 0,
+          stdout: JSON.stringify([
+            [{ number: 101, state: 'open', title: 'Task T-001', body: task, labels: [{ name: 'task:T-001' }] }],
+            [],
+          ]),
+          stderr: '',
+        };
+      }
+      return { status: 1, stdout: '', stderr: `unexpected fake GitHub call: ${args.join(' ')}` };
+    };
+    const produced = await produce(fixture, {
+      repo: 'owner/repository',
+      io: { ghCommandRunner },
+    });
+    assert.equal(produced.status, 0, `${produced.stdout}${produced.stderr}`);
+    const decomposition = JSON.parse(produced.stdout);
+    assert.equal(decomposition.scan.workUnit.backend, 'github');
+    assert.equal(decomposition.scan.inventory.id, 'github:owner/repository');
+    assert.equal(decomposition.scan.inventory.enumeration.enumerator, 'agenticloop.github-task-issue-inventory.v1');
+    assert.equal(decomposition.scan.inventory.enumeration.coverage.pageCount, 2);
+    assert.equal(decomposition.scan.inventory.enumeration.coverage.discovered, 1);
+    assert.equal(decomposition.scan.inventory.enumeration.coverage.returned, 1);
+    assert.equal(decomposition.scan.inventory.enumeration.coverage.truncated, false);
+    assert.equal(decomposition.scan.inventory.enumeration.coverage.cursor, null);
+    assert.ok(calls.some(args => args[0] === 'api' && args.includes('--paginate') && args.includes('--slurp')));
+  });
+
+  it('runs GitHub prepare-dispatch through authoritative refetch and blocks membership drift', async () => {
+    const fixture = await createDispatchFixture(temp, 'dispatch-github');
+    const projectPath = join(fixture.root, '.agenticloop', 'project.md');
+    writeFileSync(
+      projectPath,
+      readFileSync(projectPath, 'utf8').replace('task_backend: files', 'task_backend: github'),
+      'utf8'
+    );
+    writeFileSync(
+      join(fixture.root, 'agenticloop.json'),
+      readFileSync(fileURLToPath(new URL('../config.json', import.meta.url)), 'utf8'),
+      'utf8'
+    );
+    git(fixture.root, ['add', '.agenticloop/project.md', 'agenticloop.json']);
+    git(fixture.root, ['commit', '-m', 'select GitHub task backend\n\nTask: T-001\nAgent: maintainer']);
+    const githubTask = `${readFileSync(fixture.taskPath, 'utf8').replace(/^backend: files$/m, 'backend: github').trimEnd()}\n\n[[agent: maintainer]]\n`;
+    const githubContract = taskContractDigest(githubTask);
+    assert.equal(githubContract.ok, true, githubContract.error);
+    const baselineAt = new Date().toISOString();
+    const baselineRecord = createTaskContractBaselineRecord({
+      recordId: 'github-comment:501', taskId: 'T-001', digest: githubContract.digest,
+      projection: githubContract.projection, authority: 'maintainer:dispatch', actor: 'maintainer',
+      timestamp: baselineAt, affectedArtifact: 'issue:101',
+    });
+    const comments = [{
+      id: 501, html_url: 'https://example.test/issues/101#issuecomment-501',
+      user: { login: 'maintainer' }, author_association: 'MEMBER',
+      created_at: baselineAt, updated_at: baselineAt, body: renderTaskContractRecord(baselineRecord),
+    }];
+    const issues = [{
+      number: 101, state: 'open', title: 'Task T-001', body: githubTask,
+      labels: [{ name: 'task:T-001' }],
+    }];
+    const calls = [];
+    const ghCommandRunner = (_command, args) => {
+      calls.push(args);
+      if (args[0] === 'api' && args.includes('--paginate') && args.includes('--slurp')) {
+        const endpoint = args.find(value => String(value).startsWith('repos/')) ?? '';
+        return endpoint.includes('/comments')
+          ? { status: 0, stdout: JSON.stringify([comments]), stderr: '' }
+          : { status: 0, stdout: JSON.stringify([[...issues], []]), stderr: '' };
+      }
+      if (args[0] === 'issue' && args[1] === 'view') {
+        return { status: 0, stdout: JSON.stringify({ number: 101, body: issues[0].body }), stderr: '' };
+      }
+      return { status: 1, stdout: '', stderr: `unexpected fake GitHub call: ${args.join(' ')}` };
+    };
+    const produced = await produce(fixture, {
+      repo: 'owner/repository',
+      io: { ghCommandRunner },
+    });
+    assert.equal(produced.status, 0, produced.stdout + produced.stderr);
+    const decomposition = JSON.parse(produced.stdout);
+    mkdirSync(join(fixture.root, '.agenticloop', 'decompositions'), { recursive: true });
+    writeFileSync(join(fixture.root, PRODUCED_REF), `${produced.stdout.trim()}\n`, 'utf8');
+    git(fixture.root, ['add', PRODUCED_REF]);
+    git(fixture.root, ['commit', '-m', 'record GitHub decomposition\n\nTask: T-001\nAgent: maintainer']);
+
+    const baseTree = decomposition.scan.readinessContext.base.identity.slice('git-tree:'.length);
+    const basePaths = git(fixture.root, ['ls-tree', '-r', '--name-only', baseTree]).split(/\r?\n/).filter(Boolean);
+    const rawReadiness = evaluateTaskReadiness({
+      taskBody: githubTask,
+      basePaths,
+      mode: 'authoring',
+      dependencies: {},
+    });
+    assert.equal(rawReadiness.ok, true, rawReadiness.errors.join('\n'));
+    const readinessResult = createValidationResult({
+      command: 'task-readiness',
+      ok: rawReadiness.ok,
+      evidenceState: rawReadiness.evidenceState,
+      disposition: rawReadiness.disposition,
+      errors: rawReadiness.errors,
+      warnings: rawReadiness.warnings,
+      diagnostics: rawReadiness.diagnostics,
+    });
+    const readiness = {
+      evidence: createTaskReadinessEvidence({
+        backend: 'github',
+        task: { id: 'T-001', carrier: 'issue:101', expectedDigest: digestOf(githubTask) },
+        base: fixture.readiness.evidence.base,
+        dependencies: fixture.readiness.evidence.dependencies,
+        trustedRecordCount: 1,
+        trustedRecordErrors: [],
+      }),
+      result: readinessResult,
+      resultDigest: validationResultDigest(readinessResult),
+    };
+    mkdirSync(join(fixture.root, '.agenticloop', 'tmp'), { recursive: true });
+    const inputPath = join(fixture.root, '.agenticloop', 'tmp', 'github-dispatch-input.json');
+    writeFileSync(inputPath, JSON.stringify({
+      readiness,
+      decomposition: { sourceRef: PRODUCED_REF },
+      assignment: {
+        ...fixture.assignment,
+        canonicalReferences: ['agents/engineer.md', 'skills/role-delegation/SKILL.md', 'backends/github.md'],
+      },
+    }), 'utf8');
+    const command = () => runCliInProcess([
+      'task', 'prepare-dispatch', 'T-001', '--input', '.agenticloop/tmp/github-dispatch-input.json',
+      '--host-trust-store', fixture.trustStorePath, '--repo', 'owner/repository',
+      '--json', '--target', fixture.root,
+    ], {
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      hostAuthority: protectedHostBoundary(fixture.trust),
+      ghCommandRunner,
+    });
+    const prepared = await command();
+    assert.equal(prepared.status, 0, prepared.stdout + prepared.stderr);
+    const packet = JSON.parse(prepared.stdout);
+    assert.equal(packet.backend, 'github');
+    assert.equal(packet.task.carrier, 'issue:101');
+    assert.equal(packet.decomposition.sourceRef, PRODUCED_REF);
+    assert.ok(calls.some(args => args[0] === 'issue' && args[1] === 'view'));
+    assert.ok(calls.some(args => args[0] === 'api' && args.some(value => String(value).includes('/comments'))));
+
+    issues.push({
+      number: 102, state: 'open', title: 'Task T-002',
+      body: githubTask.replaceAll('T-001', 'T-002'), labels: [{ name: 'task:T-002' }],
+    });
+    const drifted = await command();
+    assert.equal(drifted.status, 1);
+    const rejected = JSON.parse(drifted.stdout);
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.errors.join('\n'), /inventory|membership|decomposition/i);
+  });
 
   it('produces a committable source that dispatch accepts unchanged', async () => {
     const fixture = await createDispatchFixture(temp, 'produce-accept');
@@ -1562,5 +1739,297 @@ describe('production decomposition producer', () => {
     const refused = await produce(fixture, { route: 'parallel' });
     assert.equal(refused.status, 1);
     assert.match(JSON.parse(refused.stdout).errors.join('\n'), /parallel candidate pair|parallel route is blocked/i);
+  });
+
+  it('excludes explicit pull-request entries from the GitHub task-issue surface', async () => {
+    const fixture = await createDispatchFixture(temp, 'produce-github-prs');
+    const projectPath = join(fixture.root, '.agenticloop', 'project.md');
+    writeFileSync(
+      projectPath,
+      readFileSync(projectPath, 'utf8').replace('task_backend: files', 'task_backend: github'),
+      'utf8'
+    );
+    const task = readFileSync(join(fixture.root, '.agenticloop', 'tasks', 'T-001.md'), 'utf8');
+    // The REST issues endpoint returns pull requests interleaved with issues,
+    // including one whose body would otherwise parse as a task record.
+    const pages = [
+      [
+        { number: 100, state: 'open', title: 'Fix T-001', body: task, labels: [{ name: 'task:T-001' }],
+          pull_request: { url: 'https://api.github.test/repos/owner/repository/pulls/100' } },
+        { number: 101, state: 'open', title: 'Task T-001', body: task, labels: [{ name: 'task:T-001' }] },
+      ],
+      [
+        { number: 102, state: 'closed', title: 'Old PR', body: task.replaceAll('T-001', 'T-002'), labels: [],
+          pull_request: { url: 'https://api.github.test/repos/owner/repository/pulls/102', merged_at: null } },
+      ],
+    ];
+    const ghCommandRunner = (_command, args) => {
+      if (args[0] === 'api' && args.includes('--paginate') && args.includes('--slurp')) {
+        return { status: 0, stdout: JSON.stringify(pages), stderr: '' };
+      }
+      return { status: 1, stdout: '', stderr: `unexpected fake GitHub call: ${args.join(' ')}` };
+    };
+    const produced = await produce(fixture, { repo: 'owner/repository', io: { ghCommandRunner } });
+    assert.equal(produced.status, 0, `${produced.stdout}${produced.stderr}`);
+    const decomposition = JSON.parse(produced.stdout);
+
+    // Exactly one task carrier exists: the issue. Neither pull request became
+    // one, and the PR that carries a task-shaped body did not smuggle T-002 in.
+    const carriers = decomposition.scan.inventory.members.map(member => member.carrier);
+    assert.deepEqual(carriers, ['issue:101']);
+    assert.equal(carriers.includes('issue:100'), false, 'a pull request must never become a task carrier');
+    assert.equal(carriers.includes('issue:102'), false, 'a pull request must never become a task carrier');
+    assert.equal(
+      decomposition.scan.inventory.members.some(member => member.taskId === 'T-002'),
+      false,
+      'a task-shaped pull-request body must not enter the task inventory'
+    );
+
+    // Enumeration coverage is defined over the task-issue surface *after* PR
+    // filtering: `discovered` counts entries that could carry a task record,
+    // not raw REST rows. Counting raw rows here would report discovered=3 for a
+    // returned=1 inventory and make a complete issue inventory look truncated.
+    const coverage = decomposition.scan.inventory.enumeration.coverage;
+    // Raw transport rows and normalized task-issue count are distinguishable
+    // here: the transport returned three rows across two pages, and exactly one
+    // of them is a task carrier.
+    assert.equal(pages.flat().length, 3, 'the transport returned three raw REST rows');
+    assert.equal(pages.length, 2, 'across two pages');
+    assert.equal(coverage.discovered, 1);
+    assert.equal(coverage.returned, 1);
+    assert.equal(coverage.pageCount, 2, 'every observed REST page is still accounted for');
+    assert.equal(coverage.truncated, false);
+    assert.equal(coverage.cursor, null);
+    assert.equal(decomposition.scan.inventory.enumeration.completion, 'exhaustive');
+    assert.equal(decomposition.scan.inventory.complete, true,
+      'pull requests on the issues endpoint must not make a complete issue inventory incomplete');
+  });
+
+  /**
+   * The transport-completion boundary.
+   *
+   * `gh api --paginate --slurp` returning successfully is the *only* evidence
+   * the enumeration treats as proof that pagination was exhausted. A short
+   * non-final page is deliberately not read as truncation: the REST API is free
+   * to return fewer than `per_page` items on any page, so that heuristic would
+   * report false truncation on ordinary complete inventories. Everything the
+   * boundary can genuinely tell us - the command failed, or its output is not a
+   * page inventory - fails closed instead.
+   */
+  describe('GitHub enumeration transport boundary', () => {
+    async function enumerateWith(name, ghCommandRunner) {
+      const fixture = await createDispatchFixture(temp, name);
+      const projectPath = join(fixture.root, '.agenticloop', 'project.md');
+      writeFileSync(
+        projectPath,
+        readFileSync(projectPath, 'utf8').replace('task_backend: files', 'task_backend: github'),
+        'utf8'
+      );
+      return produce(fixture, { repo: 'owner/repository', io: { ghCommandRunner } });
+    }
+
+    it('fails closed when the paginated command itself fails', async () => {
+      let paginateCalls = 0;
+      const produced = await enumerateWith('enum-command-failure', (_command, args) => {
+        if (args[0] === 'api' && args.includes('--paginate') && args.includes('--slurp')) {
+          paginateCalls += 1;
+          return { status: 1, stdout: '', stderr: 'gh: API rate limit exceeded' };
+        }
+        return { status: 1, stdout: '', stderr: `unexpected fake GitHub call: ${args.join(' ')}` };
+      });
+      assert.equal(paginateCalls, 1, 'the enumeration must actually attempt the paginated command');
+      assert.equal(produced.status, 1, produced.stdout + produced.stderr);
+      assert.doesNotMatch(
+        produced.stdout,
+        /"complete"\s*:\s*true/,
+        'a failed transport must never yield a complete inventory'
+      );
+    });
+
+    const MALFORMED = [
+      ['a bare object instead of pages', JSON.stringify({ number: 101 })],
+      ['a flat issue array instead of pages', JSON.stringify([{ number: 101 }])],
+      ['an empty page inventory', JSON.stringify([])],
+      ['a page inventory containing a non-array page', JSON.stringify([[], { number: 101 }])],
+      ['a null page', JSON.stringify([null])],
+      ['a JSON scalar', '42'],
+      ['unparseable output', 'not json at all'],
+    ];
+
+    for (const [label, stdout] of MALFORMED) {
+      it(`fails closed on ${label}`, async () => {
+        const produced = await enumerateWith(
+          `enum-malformed-${label.replace(/[^a-z0-9]+/gi, '-').slice(0, 20)}`,
+          (_command, args) => {
+            if (args[0] === 'api' && args.includes('--paginate') && args.includes('--slurp')) {
+              return { status: 0, stdout, stderr: '' };
+            }
+            return { status: 1, stdout: '', stderr: `unexpected fake GitHub call: ${args.join(' ')}` };
+          }
+        );
+        assert.equal(produced.status, 1, produced.stdout + produced.stderr);
+        assert.doesNotMatch(produced.stdout, /"complete"\s*:\s*true/);
+      });
+    }
+
+    it('processes every returned page, including carriers on a later page', async () => {
+      const fixture = await createDispatchFixture(temp, 'enum-all-pages');
+      const projectPath = join(fixture.root, '.agenticloop', 'project.md');
+      writeFileSync(
+        projectPath,
+        readFileSync(projectPath, 'utf8').replace('task_backend: files', 'task_backend: github'),
+        'utf8'
+      );
+      const task = readFileSync(join(fixture.root, '.agenticloop', 'tasks', 'T-001.md'), 'utf8');
+      // A carrier on the first page, an empty middle page, and a carrier on the
+      // last page. A reader that stopped at the first short page would miss the
+      // third page entirely.
+      const pages = [
+        [{ number: 101, state: 'open', title: 'Task T-001', body: task, labels: [{ name: 'task:T-001' }] }],
+        [],
+        [{
+          number: 103, state: 'open', title: 'Task T-002',
+          body: task.replaceAll('T-001', 'T-002'), labels: [{ name: 'task:T-002' }],
+        }],
+      ];
+      const produced = await produce(fixture, {
+        repo: 'owner/repository',
+        io: {
+          ghCommandRunner: (_command, args) => {
+            if (args[0] === 'api' && args.includes('--paginate') && args.includes('--slurp')) {
+              return { status: 0, stdout: JSON.stringify(pages), stderr: '' };
+            }
+            return { status: 1, stdout: '', stderr: `unexpected fake GitHub call: ${args.join(' ')}` };
+          },
+        },
+      });
+      assert.equal(produced.status, 0, produced.stdout + produced.stderr);
+      const decomposition = JSON.parse(produced.stdout);
+      const carriers = decomposition.scan.inventory.members.map(member => member.carrier).sort();
+      assert.deepEqual(carriers, ['issue:101', 'issue:103'], 'a carrier on the last page must be enumerated');
+      const coverage = decomposition.scan.inventory.enumeration.coverage;
+      assert.equal(coverage.pageCount, 3);
+      assert.equal(coverage.discovered, 2);
+      assert.equal(coverage.returned, 2);
+      assert.equal(coverage.truncated, false, 'a short middle page is not truncation evidence');
+      assert.equal(decomposition.scan.inventory.enumeration.completion, 'exhaustive');
+    });
+  });
+});
+
+describe('task backend selection', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'scan-backend-'));
+  after(() => rmSync(temp, { recursive: true, force: true }));
+
+  function selectBackend(root, backend) {
+    const projectPath = join(root, '.agenticloop', 'project.md');
+    writeFileSync(
+      projectPath,
+      readFileSync(projectPath, 'utf8').replace('task_backend: files', `task_backend: ${backend}`),
+      'utf8'
+    );
+  }
+
+  /** A gh runner that fails the test if the CLI reaches the GitHub transport. */
+  function forbiddenGhRunner(calls) {
+    return (_command, args) => {
+      calls.push(args);
+      return { status: 1, stdout: '', stderr: 'the GitHub transport must not be reached' };
+    };
+  }
+
+  function decompositionArgs(fixture) {
+    return [
+      'task', 'prepare-decomposition', 'T-001',
+      '--work-unit', 'fixture-work-unit',
+      '--source-ref', '.agenticloop/decompositions/T-001-produced.json',
+      '--source-revision', `git-commit:${git(fixture.root, ['rev-parse', 'HEAD'])}`,
+      '--base', fixture.readiness.evidence.base.identity.slice('git-tree:'.length),
+      '--dependencies', 'dependencies.json',
+      '--json', '--target', fixture.root,
+    ];
+  }
+
+  function dispatchArgs(fixture) {
+    writeFileSync(
+      join(fixture.root, 'dispatch-input.json'),
+      JSON.stringify({
+        readiness: fixture.readiness,
+        decomposition: fixture.decomposition,
+        assignment: fixture.assignment,
+      }),
+      'utf8'
+    );
+    return [
+      'task', 'prepare-dispatch', 'T-001',
+      '--input', 'dispatch-input.json',
+      '--json', '--target', fixture.root,
+    ];
+  }
+
+  for (const [subcommand, buildArgs] of [
+    ['prepare-decomposition', decompositionArgs],
+    ['prepare-dispatch', dispatchArgs],
+  ]) {
+    it(`refuses an unsupported task backend at the root of ${subcommand}`, async () => {
+      const fixture = await createDispatchFixture(temp, `unsupported-${subcommand}`);
+      selectBackend(fixture.root, 'jira');
+      // The command inputs themselves are written first, so the comparison
+      // isolates mutation caused by the command from fixture setup.
+      const args = buildArgs(fixture);
+      const before = git(fixture.root, ['status', '--porcelain']);
+      const calls = [];
+      const result = await runCliInProcess(args, {
+        ghCommandRunner: forbiddenGhRunner(calls),
+      });
+      assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
+      const value = JSON.parse(result.stdout);
+
+      // One typed diagnostic in the existing public vocabulary, and it is the
+      // root cause: no derivative inventory or backend-mismatch diagnostic is
+      // emitted ahead of it.
+      assert.equal(value.kind, 'agenticloop.validation-result');
+      assert.equal(value.ok, false);
+      assert.equal(value.diagnostics.length, 1);
+      assert.equal(value.diagnostics[0].code, 'verification.context.malformed');
+      assert.equal(value.evidenceState, 'malformed');
+      assert.equal(value.disposition, 'rejected');
+      assert.equal(value.rollbackAuthorized, false);
+      assert.match(value.errors.join('\n'), /task backend 'jira'.*not supported/i);
+      assert.match(value.errors.join('\n'), /github/);
+      assert.match(value.errors.join('\n'), /files/);
+      assert.equal(
+        value.errors.some(error => /inventory|enumeration|parallel[- ]scan|membership/i.test(error)),
+        false,
+        'no derivative inventory diagnostic may precede the unsupported-backend root cause'
+      );
+
+      // Nothing was enumerated and no transport was contacted.
+      assert.deepEqual(calls, [], 'no GitHub runner invocation may occur');
+      assert.equal(git(fixture.root, ['status', '--porcelain']), before, 'no filesystem mutation may occur');
+    });
+  }
+
+  it('refuses --repo on the files backend rather than silently ignoring it', async () => {
+    const fixture = await createDispatchFixture(temp, 'files-repo-usage');
+    const calls = [];
+    const result = await runCliInProcess([
+      ...decompositionArgs(fixture), '--repo', 'owner/repository',
+    ], { ghCommandRunner: forbiddenGhRunner(calls) });
+    assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
+    const value = JSON.parse(result.stdout);
+    assert.equal(value.ok, false);
+    assert.equal(value.diagnostics[0].code, 'cli.usage');
+    assert.match(value.errors.join('\n'), /--repo names a GitHub repository/);
+    assert.deepEqual(calls, []);
+  });
+
+  it('keeps the valid files backend behavior unchanged', async () => {
+    const fixture = await createDispatchFixture(temp, 'files-still-valid');
+    const result = await runCliInProcess(decompositionArgs(fixture));
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const decomposition = JSON.parse(result.stdout);
+    assert.equal(decomposition.scan.workUnit.backend, 'files');
+    assert.equal(decomposition.scan.inventory.enumeration.enumerator, 'agenticloop.files-task-directory.v1');
   });
 });

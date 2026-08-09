@@ -3,6 +3,33 @@
 ## Unreleased
 
 ### Added
+- `prepareAuditorReturnReportForSigning()` gives a protected host the exact
+  normalized Auditor report and the exact `auditor-return-report.v1` digest the
+  CLI will later derive, without needing a receipt that does not exist yet. The
+  CLI normalizes a report before it digests it, so a host that signed the raw
+  wire document produced a different identity and its genuine receipt was
+  rejected whenever the report carried permitted surrounding whitespace,
+  mixed-case severities, string booleans, or uncanonicalized covered tasks. The
+  supported sequence is now: prepare, sign the returned digest, insert the
+  receipt into the returned normalized report, submit. Normal submission is
+  unchanged - a `verified` report still requires a non-empty receipt - and there
+  is no dummy-receipt convention.
+- The package declares stable subpath exports for the host integration surface:
+  `agenticloop/auditor-return-receipt`, `agenticloop/audit-report-schema`,
+  `agenticloop/host-trust`, and the package root. Existing
+  `agenticloop/src/...` deep imports and shipped data files remain reachable.
+- Protected host integrations can import the packaged production Auditor-return
+  verifier. Its closed Ed25519 receipt binds the pinned adapter/key, target,
+  immutable Auditor role, invocation, work unit, candidate, covered tasks,
+  substantive report digest, receipt identity, and strictly positive liveness.
+  Loader authorization requires a fresh exact-context nonce challenge signed by
+  the pinned adapter key; boolean callbacks and replayed responses are refused,
+  and the ordinary CLI still fails closed without an authenticated host boundary.
+- `task prepare-decomposition` and `task prepare-dispatch` now select their
+  read-only inventory adapter from the configured backend. GitHub enumeration
+  follows the complete injected paginated issue transport and dispatch refetches
+  the authoritative inventory, task carrier, trusted history, and readiness
+  evidence before accepting scan/decomposition bindings.
 - Guarded dispatch/return public commands now bind the complete current task
   carrier and material contract, preserve primary plus independent structured
   diagnostics, and support one canonical command/manual required-check model.
@@ -163,6 +190,32 @@
   candidate rather than silently accepted.
 
 ### Changed
+- **Breaking:** `agenticloop.degraded-enforcement-report` is now schema version
+  4 and no longer restates its declaration's `limitation`, `detectionBoundary`,
+  and `recoveryRoute`. Those are properties of the capability declaration, not
+  of one action binding, and the report already pins the exact declaration by
+  digest - so repeating them once per degraded action only enlarged every
+  dispatch packet. Rendered warnings are unchanged: the declaration facts are
+  resolved from the pinned declaration through the new
+  `degradedEnforcementDeclarationFacts()` helper. A canonical schema-v5 dispatch
+  packet drops from 15,988 to 12,201 bytes against the 16,384-byte regression
+  benchmark. Packets prepared before this change carry version-3 reports and are
+  routed to typed regeneration rather than accepted.
+- Both task carriers now report identical public text for identical conditions.
+  A stale expected digest reports one message, one safe repair, and
+  `committedStateEvaluated: true` on files and GitHub alike; a transition to
+  `agent-ready` without `--dependencies` reports one message and one required
+  context on both. Only the carrier identity in the surrounding envelope
+  distinguishes them. Illegal transitions and closeout-owned generic terminal
+  refusals now also share the canonical validation-result envelope, diagnostic
+  classification, safe repair, and backend-neutral terminal message.
+- **Breaking:** `task prepare-decomposition` and `task prepare-dispatch` now
+  reject an unsupported `task_backend` at the root, before selecting an
+  enumerator or a transport, with a single typed
+  `verification.context.malformed` diagnostic. Previously an unrecognized value
+  was only warned about and then fell through to the files enumerator or to
+  GitHub behavior. Passing `--repo` while `task_backend: files` is configured is
+  now a usage error rather than a silently ignored flag.
 - **Breaking:** `task new` now requires either `--scaffold` or a supported
   host-produced v2 `--activation-input`. Supported v1 captures are rejected,
   prospective auto IDs are resolved before capture verification, and
@@ -205,6 +258,16 @@
   freeze, then certifies the resulting exact candidate before publishing complete.
 
 ### Fixed
+- The protected loader challenge now enforces the expiry it states. The loader
+  reads an injectable clock when it issues the challenge and again after the
+  host callback returns, and refuses a response that arrives at or after
+  `challenge.expiresAt` however well it is signed. Challenge lifetime and
+  receipt clock skew are separate named policies
+  (`HOST_TRUST_CHALLENGE_TTL_MS` and `AUDITOR_RECEIPT_FUTURE_SKEW_MS`); they were
+  previously one unenforced literal.
+- `task-body transition` now reports the safe repair for a root-malformed task
+  record, which the files carrier already reported and the GitHub carrier
+  dropped.
 - Dispatch and return hardening corrective pass: the Claude Code production
   planner (init/setup/generate) now fills the canonical activation slots
   through the same single rendering as direct generation, so every shipped

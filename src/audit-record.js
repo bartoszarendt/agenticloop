@@ -31,6 +31,7 @@ import { markdownLines, markdownSection, parseAtxHeading, topLevelListItems } fr
 import { decisionReferenceId } from './verification-learning.js';
 import { isValidTaskId } from './task-id.js';
 import { canonicalSha256 } from './canonical-json.js';
+import { auditorReturnReceiptIdentity } from './auditor-return-receipt.js';
 import {
   AUDIT_DISPOSITION_TYPES,
   AUDIT_PERSPECTIVES,
@@ -1383,6 +1384,7 @@ export function validateAuditRecords(repoRoot, options = {}) {
   // invocation reference can never be reused within or across audit records.
   const seenInvocationRefs = new Map();
   const seenReceipts = new Map();
+  const seenReceiptIds = new Map();
 
   for (const entry of entries) {
     errors.push(...validateAuditRecord(entry.content, entry.relPath, options));
@@ -1417,12 +1419,27 @@ export function validateAuditRecords(repoRoot, options = {}) {
       }
       const receipt = String(run.reportPayload?.invocation?.receipt ?? '').trim();
       if (receipt) {
+        // Byte-identical replay and receipt-identity reuse are one refusal with
+        // two granularities, not two problems. Identical bytes necessarily
+        // carry an identical receiptId, so reporting both named a single root
+        // cause twice. The identity check is what catches the case byte
+        // equality cannot see: a re-minted receipt reusing a spent receiptId.
         if (seenReceipts.has(receipt)) {
           errors.push(
             `Audit record '${entry.relPath}' reuses invocation receipt '${receipt}' already recorded in '${seenReceipts.get(receipt)}'`
           );
         } else {
           seenReceipts.set(receipt, entry.relPath);
+          const receiptId = auditorReturnReceiptIdentity(receipt);
+          if (receiptId) {
+            if (seenReceiptIds.has(receiptId)) {
+              errors.push(
+                `Audit record '${entry.relPath}' reuses Auditor return receipt identity '${receiptId}' already recorded in '${seenReceiptIds.get(receiptId)}'`
+              );
+            } else {
+              seenReceiptIds.set(receiptId, entry.relPath);
+            }
+          }
         }
       }
     }

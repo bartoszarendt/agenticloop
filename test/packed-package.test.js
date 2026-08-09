@@ -12,10 +12,12 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -24,7 +26,7 @@ import {
 import { dirname, join, delimiter, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createDispatchFixture,
@@ -32,6 +34,10 @@ import {
   readyReturn,
   repositoryEvidence,
 } from './helpers/dispatch-fixture.js';
+import { createTestHostTrust, writeHostTrustStore } from './helpers/host-trust-fixture.js';
+import { generateHostSigningKey, targetRepositoryIdentity } from '../src/host-trust.js';
+import { createAuditorReturnReceipt } from '../src/auditor-return-receipt.js';
+import { auditorReturnReportDigest } from '../src/audit-report-schema.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -106,6 +112,189 @@ function runPackedWithHostContext(args, operatorTrustRoot) {
 }
 
 /**
+ * Run an installed command behind a real protected host boundary.
+ *
+ * The boundary's private key is handed to the child on file descriptor 3 and
+ * never appears in the environment, the argv, or the target repository - the
+ * same discipline a real host wrapper must follow.
+ */
+function runPackedWithBoundary(args, { operatorTrustRoot, adapterId, keyId, privateKey }) {
+  const wrapper = join(tmpBase, 'packed-boundary-wrapper.mjs');
+  if (!existsSync(wrapper)) {
+    writeFileSync(wrapper, [
+      `import { runCli } from ${JSON.stringify(pathToFileURL(join(packedRoot, 'src', 'cli-main.js')).href)};`,
+      `import { HOST_TRUST_BOUNDARY_RESPONSE_KIND, HOST_TRUST_BOUNDARY_SCHEMA_VERSION, hostTrustBoundarySignaturePayload, signHostPayload } from ${JSON.stringify(pathToFileURL(join(packedRoot, 'src', 'host-trust.js')).href)};`,
+      'import { createPrivateKey } from "node:crypto";',
+      'import { readFileSync } from "node:fs";',
+      'const boundaryKey = createPrivateKey({ key: readFileSync(3), format: "der", type: "pkcs8" });',
+      'process.exitCode = await runCli(JSON.parse(process.env.AGENTICLOOP_TEST_ARGS), {',
+      '  operatorTrustRoot: process.env.AGENTICLOOP_TEST_OPERATOR_ROOT,',
+      '  hostAuthority: challenge => {',
+      '    const response = {',
+      '      kind: HOST_TRUST_BOUNDARY_RESPONSE_KIND,',
+      '      schemaVersion: HOST_TRUST_BOUNDARY_SCHEMA_VERSION,',
+      '      adapterId: process.env.AGENTICLOOP_TEST_ADAPTER,',
+      '      keyId: process.env.AGENTICLOOP_TEST_KEY_ID,',
+      '      challengeNonce: challenge.nonce,',
+      '      signature: null,',
+      '    };',
+      '    response.signature = signHostPayload(hostTrustBoundarySignaturePayload(challenge, response), boundaryKey);',
+      '    return response;',
+      '  },',
+      '});',
+      '',
+    ].join('\n'), 'utf8');
+  }
+  const keyPath = join(tmpBase, 'packed-boundary.pk8');
+  writeFileSync(keyPath, privateKey.export({ format: 'der', type: 'pkcs8' }), { mode: 0o600 });
+  const keyDescriptor = openSync(keyPath, 'r');
+  try {
+    return spawnSync(process.execPath, [wrapper], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe', keyDescriptor],
+      env: {
+        ...process.env,
+        AGENTICLOOP_TEST_ARGS: JSON.stringify(args),
+        AGENTICLOOP_TEST_OPERATOR_ROOT: operatorTrustRoot,
+        AGENTICLOOP_TEST_ADAPTER: adapterId,
+        AGENTICLOOP_TEST_KEY_ID: keyId,
+      },
+    });
+  } finally {
+    closeSync(keyDescriptor);
+  }
+}
+
+/**
+ * Run an installed command through the *packaged* reference host integration.
+ *
+ * Unlike `runPackedWithAuditorVerifier`, this wrapper writes no signing logic of
+ * its own: it imports `agenticloop/protected-host-boundary` from the installed
+ * tarball and hands it only the target being operated on. Descriptor 3 carries
+ * the closed host-owned configuration envelope, including the signing key,
+ * pinned trust root, adapter registration, and target identity. None of those
+ * security inputs appears in argv or the environment.
+ *
+ * `withKey: false` spawns the identical wrapper with no descriptor 3 at all, so
+ * the negative case exercises the real missing-channel path.
+ */
+function runPackedThroughPackagedBoundary(args, {
+  target, operatorTrustRoot, adapterId, keyId, privateKey,
+  withKey = true, configBytes = null, configOverrides = {},
+}) {
+  const wrapper = join(tmpBase, 'packed-packaged-boundary-wrapper.mjs');
+  if (!existsSync(wrapper)) {
+    writeFileSync(wrapper, [
+      `import { runCli } from ${JSON.stringify(pathToFileURL(join(packedRoot, 'src', 'cli-main.js')).href)};`,
+      `import { loadProtectedAuditorReturnVerifier } from ${JSON.stringify(pathToFileURL(join(packedRoot, 'src', 'protected-host-boundary.js')).href)};`,
+      'const loaded = loadProtectedAuditorReturnVerifier({',
+      '  target: process.env.AGENTICLOOP_TEST_TARGET,',
+      '});',
+      'if (!loaded.ok) {',
+      '  process.stderr.write(`boundary unavailable: ${loaded.errors.join("; ")}\\n`);',
+      '  process.exit(9);',
+      '}',
+      'process.exitCode = await runCli(JSON.parse(process.env.AGENTICLOOP_TEST_ARGS), {',
+      '  auditProvenanceVerifier: loaded.verifier,',
+      '});',
+      '',
+    ].join('\n'), 'utf8');
+  }
+  const env = {
+    ...process.env,
+    AGENTICLOOP_TEST_ARGS: JSON.stringify(args),
+    AGENTICLOOP_TEST_TARGET: target,
+  };
+  if (!withKey) {
+    return spawnSync(process.execPath, [wrapper], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env,
+    });
+  }
+  const configPath = join(tmpBase, `packed-packaged-boundary-${withKey === true ? 'valid' : 'variant'}.json`);
+  const config = {
+    kind: 'agenticloop.protected-host-config',
+    schemaVersion: 1,
+    adapterId,
+    keyId,
+    targetRepositoryIdentity: targetRepositoryIdentity(target),
+    operatorTrustRoot,
+    assertedPath: null,
+    privateKey: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+    ...configOverrides,
+  };
+  writeFileSync(configPath, configBytes ?? JSON.stringify(config), { mode: 0o600 });
+  const configDescriptor = openSync(configPath, 'r');
+  try {
+    return spawnSync(process.execPath, [wrapper], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe', configDescriptor],
+      env,
+    });
+  } finally {
+    closeSync(configDescriptor);
+  }
+}
+
+function runPackedWithAuditorVerifier(args, { target, operatorTrustRoot, adapterId, keyId, now, privateKey }) {
+  const wrapper = join(tmpBase, 'packed-auditor-host-wrapper.mjs');
+  if (!existsSync(wrapper)) {
+    writeFileSync(wrapper, [
+      `import { runCli } from ${JSON.stringify(pathToFileURL(join(packedRoot, 'src', 'cli-main.js')).href)};`,
+      `import { loadAuditorReturnReceiptVerifier } from ${JSON.stringify(pathToFileURL(join(packedRoot, 'src', 'auditor-return-receipt.js')).href)};`,
+      `import { HOST_TRUST_BOUNDARY_RESPONSE_KIND, HOST_TRUST_BOUNDARY_SCHEMA_VERSION, hostTrustBoundarySignaturePayload, signHostPayload } from ${JSON.stringify(pathToFileURL(join(packedRoot, 'src', 'host-trust.js')).href)};`,
+      'import { createPrivateKey } from "node:crypto";',
+      'import { readFileSync } from "node:fs";',
+      'const boundaryKey = createPrivateKey({ key: readFileSync(3), format: "der", type: "pkcs8" });',
+      'const loaded = loadAuditorReturnReceiptVerifier({',
+      '  target: process.env.AGENTICLOOP_TEST_TARGET,',
+      '  operatorTrustRoot: process.env.AGENTICLOOP_TEST_OPERATOR_ROOT,',
+      '  adapterId: process.env.AGENTICLOOP_TEST_ADAPTER,',
+      '  now: Number(process.env.AGENTICLOOP_TEST_NOW),',
+      '  protectedBoundary: challenge => {',
+      '    const response = {',
+      '      kind: HOST_TRUST_BOUNDARY_RESPONSE_KIND,',
+      '      schemaVersion: HOST_TRUST_BOUNDARY_SCHEMA_VERSION,',
+      '      adapterId: process.env.AGENTICLOOP_TEST_ADAPTER,',
+      '      keyId: process.env.AGENTICLOOP_TEST_KEY_ID,',
+      '      challengeNonce: challenge.nonce,',
+      '      signature: null,',
+      '    };',
+      '    response.signature = signHostPayload(hostTrustBoundarySignaturePayload(challenge, response), boundaryKey);',
+      '    return response;',
+      '  },',
+      '});',
+      'if (!loaded.ok) throw new Error(loaded.errors.join("; "));',
+      'process.exitCode = await runCli(JSON.parse(process.env.AGENTICLOOP_TEST_ARGS), {',
+      '  auditProvenanceVerifier: loaded.verifier,',
+      '});',
+      '',
+    ].join('\n'), 'utf8');
+  }
+  const keyPath = join(tmpBase, 'packed-auditor-boundary.pk8');
+  writeFileSync(keyPath, privateKey.export({ format: 'der', type: 'pkcs8' }), { mode: 0o600 });
+  const keyDescriptor = openSync(keyPath, 'r');
+  try {
+    return spawnSync(process.execPath, [wrapper], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe', keyDescriptor],
+      env: {
+        ...process.env,
+        AGENTICLOOP_TEST_ARGS: JSON.stringify(args),
+        AGENTICLOOP_TEST_TARGET: target,
+        AGENTICLOOP_TEST_OPERATOR_ROOT: operatorTrustRoot,
+        AGENTICLOOP_TEST_ADAPTER: adapterId,
+        AGENTICLOOP_TEST_KEY_ID: keyId,
+        AGENTICLOOP_TEST_NOW: String(now),
+      },
+    });
+  } finally {
+    closeSync(keyDescriptor);
+  }
+}
+
+/**
  * Read-only fake `gh` responder shared by the PATH shim. It runs either as the
  * shim's main script (POSIX) or as a NODE_OPTIONS preload inside a renamed
  * node binary (Windows, where spawnSync cannot execute .cmd shims).
@@ -129,6 +318,7 @@ if (isMain || isGhBinary) {
   if (args[0] === 'api') {
     if (args[1] === 'user') out(fx.account);
     const endpoint = args.find(item => typeof item === 'string' && item.startsWith('repos/')) || '';
+    if (endpoint.includes('/issues?')) out(fx.issuePages || [fx.issues || []]);
     if (endpoint.includes('/issues/') && endpoint.includes('/comments')) {
       const number = Number((endpoint.match(/issues\\/(\\d+)\\/comments/) || [])[1]);
       out([number === fx.issueData.number ? fx.issueComments : []]);
@@ -261,6 +451,251 @@ describe('packed package smoke tests', () => {
     );
   });
 
+  /**
+   * Adversarial cases run against the *installed* modules.
+   *
+   * Each corresponds to a defect the source-tree regressions cover; repeating
+   * them here proves the shipped tarball carries the corrected behavior rather
+   * than only the working tree.
+   */
+  describe('installed adversarial boundary and freshness cases', () => {
+    it('does not freeze challenge expiry for a now-only verifier caller', async () => {
+      const trustModule = await import(pathToFileURL(join(packedRoot, 'src', 'host-trust.js')).href);
+      const target = mkdtempSync(join(tmpBase, 'packed-nowonly-target-'));
+      const operatorRoot = mkdtempSync(join(tmpBase, 'packed-nowonly-operator-'));
+      const trust = createTestHostTrust({ target });
+      const storePath = writeHostTrustStore(operatorRoot, trust);
+
+      const pinned = Date.parse('2020-01-01T00:00:00.000Z');
+      let observed = null;
+      const loaded = trustModule.loadHostTrustStore(target, {
+        operatorTrustRoot: operatorRoot,
+        assertedPath: storePath,
+        now: pinned,
+        protectedBoundary: challenge => {
+          observed = challenge;
+          const response = {
+            kind: trustModule.HOST_TRUST_BOUNDARY_RESPONSE_KIND,
+            schemaVersion: trustModule.HOST_TRUST_BOUNDARY_SCHEMA_VERSION,
+            adapterId: trust.adapterId, keyId: trust.keyId,
+            challengeNonce: challenge.nonce, signature: null,
+          };
+          response.signature = trustModule.signHostPayload(
+            trustModule.hostTrustBoundarySignaturePayload(challenge, response), trust.privateKey
+          );
+          return response;
+        },
+      });
+      assert.equal(loaded.ok, true, loaded.errors?.join('; '));
+      assert.notEqual(Date.parse(observed.issuedAt), pinned, 'the freshness instant must not become the loader clock');
+    });
+
+    it('refuses a delayed challenge response through the installed loader', async () => {
+      const trustModule = await import(pathToFileURL(join(packedRoot, 'src', 'host-trust.js')).href);
+      const target = mkdtempSync(join(tmpBase, 'packed-delayed-target-'));
+      const operatorRoot = mkdtempSync(join(tmpBase, 'packed-delayed-operator-'));
+      const trust = createTestHostTrust({ target });
+      const storePath = writeHostTrustStore(operatorRoot, trust);
+      const issuedAt = Date.parse('2026-08-08T12:00:00.000Z');
+      let reads = 0;
+      const loaded = trustModule.loadHostTrustStore(target, {
+        operatorTrustRoot: operatorRoot,
+        assertedPath: storePath,
+        clock: () => issuedAt,
+        monotonicClock: () => (reads++ === 0 ? 1_000 : 1_000 + trustModule.HOST_TRUST_CHALLENGE_TTL_MS),
+        protectedBoundary: challenge => {
+          const response = {
+            kind: trustModule.HOST_TRUST_BOUNDARY_RESPONSE_KIND,
+            schemaVersion: trustModule.HOST_TRUST_BOUNDARY_SCHEMA_VERSION,
+            adapterId: trust.adapterId, keyId: trust.keyId,
+            challengeNonce: challenge.nonce, signature: null,
+          };
+          response.signature = trustModule.signHostPayload(
+            trustModule.hostTrustBoundarySignaturePayload(challenge, response), trust.privateKey
+          );
+          return response;
+        },
+      });
+      assert.equal(loaded.ok, false);
+      assert.equal(loaded.state, 'unsupported_boundary');
+    });
+
+    it('refuses a non-finite receipt verification clock', async () => {
+      const receipts = await import(pathToFileURL(join(packedRoot, 'src', 'auditor-return-receipt.js')).href);
+      const schema = await import(pathToFileURL(join(packedRoot, 'src', 'audit-report-schema.js')).href);
+      const target = mkdtempSync(join(tmpBase, 'packed-nanclock-target-'));
+      const trust = createTestHostTrust({ target });
+      const report = {
+        report_schema: 'auditor_report_v1', producer: { roleId: 'auditor' },
+        artifact: `commit:${'a'.repeat(40)}`, covered_tasks: ['T-001'],
+        invocation: { mode: 'host_subagent', reference: 'packed-nanclock-ref', provenance: 'verified', receipt: null },
+        perspectives: Object.fromEntries(
+          ['outcome', 'completeness', 'integration_coherence', 'engineering_quality', 'verification', 'risk']
+            .map(key => [key, `${key} body.`])
+        ),
+        assessment: 'Consolidated.', evidence_checked: 'npm test', verdict: 'certified', findings: [],
+      };
+      const context = {
+        target, trustedAdapter: trust.adapter, role: 'auditor',
+        invocationReference: report.invocation.reference, invocationMode: report.invocation.mode,
+        workUnit: 'milestone:M00', candidateArtifact: report.artifact,
+        coveredTasks: report.covered_tasks, reportDigest: schema.auditorReturnReportDigest(report),
+      };
+      const stale = receipts.createAuditorReturnReceipt({
+        receiptId: 'packed-nanclock-receipt', adapterId: trust.adapterId, keyId: trust.keyId,
+        targetRepository: trust.repositoryIdentity,
+        invocationReference: context.invocationReference, invocationMode: context.invocationMode,
+        workUnit: context.workUnit, candidateArtifact: context.candidateArtifact,
+        coveredTasks: context.coveredTasks, reportDigest: context.reportDigest,
+        issuedAt: '2020-01-01T00:00:00.000Z', expiresAt: '2020-01-01T00:01:00.000Z',
+      }, trust.privateKey);
+      for (const clock of [Number.NaN, Number.POSITIVE_INFINITY, 'not-a-time']) {
+        const result = receipts.verifyAuditorReturnReceipt(stale, { ...context, now: clock });
+        assert.equal(result.verified, false, String(clock));
+        assert.equal(result.state, 'stale', String(clock));
+      }
+
+      // An old receipt whose expiry was pushed far into the future is refused
+      // by the declared-validity policy, not admitted because it "has not
+      // expired yet".
+      const farFuture = receipts.createAuditorReturnReceipt({
+        receiptId: 'packed-farfuture-receipt', adapterId: trust.adapterId, keyId: trust.keyId,
+        targetRepository: trust.repositoryIdentity,
+        invocationReference: context.invocationReference, invocationMode: context.invocationMode,
+        workUnit: context.workUnit, candidateArtifact: context.candidateArtifact,
+        coveredTasks: context.coveredTasks, reportDigest: context.reportDigest,
+        issuedAt: '2026-08-01T12:00:00.000Z', expiresAt: '2099-01-01T00:00:00.000Z',
+      }, trust.privateKey);
+      const refused = receipts.verifyAuditorReturnReceipt(farFuture, {
+        ...context, now: Date.parse('2026-08-08T12:00:00.000Z'),
+      });
+      assert.equal(refused.verified, false);
+      assert.equal(refused.state, 'stale');
+      assert.equal(typeof receipts.AUDITOR_RECEIPT_MAX_VALIDITY_MS, 'number');
+    });
+
+    it('refuses noncanonical and suffixed signature encodings', async () => {
+      const trustModule = await import(pathToFileURL(join(packedRoot, 'src', 'host-trust.js')).href);
+      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+      const { privateKey, publicKey } = trustModule.generateHostSigningKey();
+      const payload = { probe: true };
+      const signature = trustModule.signHostPayload(payload, privateKey);
+      const body = signature.slice('ed25519:'.length);
+      assert.equal(trustModule.verifyHostPayload(payload, signature, publicKey), true);
+      assert.equal(body.length, 88);
+
+      const tailIndex = alphabet.indexOf(body[85]);
+      const noncanonical = `ed25519:${body.slice(0, 85)}${alphabet[tailIndex + 1]}==`;
+      for (const [label, text] of [
+        ['suffixed', `${signature}:ignored`],
+        ['noncanonical', noncanonical],
+        ['unpadded', `ed25519:${body.slice(0, 86)}`],
+        ['over-padded', `${signature}=`],
+        ['wrong length', `ed25519:${Buffer.from(body, 'base64').subarray(0, 63).toString('base64')}`],
+        ['wrong algorithm', `ed448:${body}`],
+      ]) {
+        assert.equal(trustModule.verifyHostPayload(payload, text, publicKey), false, label);
+      }
+    });
+
+    it('refuses to prepare an asserted report for host signing', async () => {
+      const schema = await import(pathToFileURL(join(packedRoot, 'src', 'audit-report-schema.js')).href);
+      const base = {
+        report_schema: 'auditor_report_v1', producer: { roleId: 'auditor' },
+        artifact: `commit:${'a'.repeat(40)}`, covered_tasks: ['T-001'],
+        perspectives: Object.fromEntries(
+          ['outcome', 'completeness', 'integration_coherence', 'engineering_quality', 'verification', 'risk']
+            .map(key => [key, `${key} body.`])
+        ),
+        assessment: 'Consolidated.', evidence_checked: 'npm test', verdict: 'certified', findings: [],
+      };
+      const asserted = schema.prepareAuditorReturnReportForSigning({
+        ...base,
+        invocation: { mode: 'host_subagent', reference: 'packed-asserted-ref', provenance: 'asserted' },
+      });
+      assert.equal(asserted.ok, false);
+      assert.equal(asserted.report, null);
+      assert.equal(asserted.digest, null);
+      assert.match(asserted.errors[0], /invocation\.provenance must be 'verified'/);
+
+      const verified = schema.prepareAuditorReturnReportForSigning({
+        ...base,
+        invocation: { mode: 'host_subagent', reference: 'packed-verified-ref', provenance: 'verified' },
+      });
+      assert.equal(verified.ok, true, verified.errors.join('; '));
+      assert.equal(verified.report.invocation.receipt, null);
+    });
+
+    it('returns one canonical typed envelope for an unsupported installed task backend', () => {
+      const target = mkdtempSync(join(tmpBase, 'packed-unsupported-backend-'));
+      const scaffolded = runPacked(['init', '--target', target, '--adapter', 'opencode']);
+      assert.equal(scaffolded.status, 0, `${scaffolded.stdout}${scaffolded.stderr}`);
+      const projectPath = join(target, '.agenticloop', 'project.md');
+      writeFileSync(
+        projectPath,
+        readFileSync(projectPath, 'utf8').replace(/^task_backend:.*$/m, 'task_backend: jira'),
+        'utf8'
+      );
+      for (const sub of [['list'], ['lint'], ['status', 'T-001', 'blocked']]) {
+        const result = runPacked(['task', ...sub, '--json', '--target', target]);
+        assert.notEqual(result.status, 0, `${sub[0]}: ${result.stdout}${result.stderr}`);
+        const envelope = JSON.parse(result.stdout);
+        assert.equal(envelope.kind, 'agenticloop.validation-result', sub[0]);
+        assert.equal(envelope.command, `task ${sub[0]}`, sub[0]);
+        assert.equal(envelope.diagnostics[0].code, 'verification.context.malformed', sub[0]);
+        assert.match(envelope.diagnostics[0].message, /task backend 'jira'.*is not supported/, sub[0]);
+      }
+    });
+  });
+
+  it('rejects installed Auditor receipt tampering and liveness after signature-first verification', async () => {
+    const verifierModule = await import(pathToFileURL(join(packedRoot, 'src', 'auditor-return-receipt.js')).href);
+    const target = join(tmpBase, 'packed-auditor-verifier-target');
+    mkdirSync(target, { recursive: true });
+    const trust = createTestHostTrust({ target });
+    const report = {
+      report_schema: 'auditor_report_v1', producer: { roleId: 'auditor' },
+      artifact: `commit:${'a'.repeat(40)}`, covered_tasks: ['T-001'],
+      invocation: { mode: 'host_subagent', reference: 'packed-verifier-ref', provenance: 'verified', receipt: null },
+      perspectives: Object.fromEntries(
+        ['outcome', 'completeness', 'integration_coherence', 'engineering_quality', 'verification', 'risk']
+          .map(key => [key, `${key} body.`])
+      ),
+      assessment: 'Consolidated.', evidence_checked: 'npm test', verdict: 'certified', findings: [],
+    };
+    const context = {
+      target, trustedAdapter: trust.adapter, role: 'auditor',
+      invocationReference: report.invocation.reference, invocationMode: report.invocation.mode,
+      workUnit: 'milestone:M00', candidateArtifact: report.artifact,
+      coveredTasks: report.covered_tasks, reportDigest: auditorReturnReportDigest(report),
+      now: Date.parse('2026-08-08T12:00:00.000Z'),
+    };
+    const receipt = createAuditorReturnReceipt({
+      receiptId: 'packed-verifier-receipt', adapterId: trust.adapterId, keyId: trust.keyId,
+      targetRepository: trust.repositoryIdentity,
+      invocationReference: context.invocationReference, invocationMode: context.invocationMode,
+      workUnit: context.workUnit, candidateArtifact: context.candidateArtifact,
+      coveredTasks: context.coveredTasks, reportDigest: context.reportDigest,
+      issuedAt: '2026-08-08T11:59:00.000Z', expiresAt: '2026-08-08T12:01:00.000Z',
+    }, trust.privateKey);
+    assert.equal(verifierModule.verifyAuditorReturnReceipt(receipt, context).verified, true);
+    for (const patch of [
+      { adapterId: 'wrong.adapter' },
+      { targetRepository: 'file:/wrong-target' },
+      { producerRole: 'engineer' },
+      { reportDigest: `sha256:agenticloop.auditor-return-report.v1:${'b'.repeat(64)}` },
+    ]) {
+      const tampered = { ...structuredClone(receipt), ...patch };
+      const result = verifierModule.verifyAuditorReturnReceipt(tampered, context);
+      assert.equal(result.verified, false);
+      assert.equal(result.state, 'untrusted');
+    }
+    const forgedExpired = structuredClone(receipt);
+    forgedExpired.expiresAt = '2026-08-08T11:00:00.000Z';
+    const forged = verifierModule.verifyAuditorReturnReceipt(forgedExpired, context);
+    assert.equal(forged.state, 'untrusted', 'forged expiry must not be classified as authentic stale evidence');
+  });
+
   it('keeps installed public dispatch fail-closed for a caller-supplied supported registry', async () => {
     const fixture = await createDispatchFixture(tmpBase, 'packed-dispatch');
     writeFileSync(
@@ -318,6 +753,37 @@ describe('packed package smoke tests', () => {
     // The installed validator accepts the source the installed producer emitted.
     const scan = await import(pathToFileURL(join(packedRoot, 'src', 'parallel-scan.js')).href);
     assert.equal(scan.validateParallelScanRecord(decomposition.scan).ok, true);
+  });
+
+  it('produces an authoritative paginated GitHub inventory through the installed task family', async () => {
+    const fixture = await createDispatchFixture(tmpBase, 'packed-github-decomposition');
+    const projectPath = join(fixture.root, '.agenticloop', 'project.md');
+    writeFileSync(projectPath, readFileSync(projectPath, 'utf8').replace('task_backend: files', 'task_backend: github'), 'utf8');
+    const task = readFileSync(fixture.taskPath, 'utf8');
+    const fake = installFakeGh(tmpBase, {
+      repo: 'owner/repository',
+      issuePages: [
+        [{ number: 71, state: 'open', title: 'Task T-001', body: task, labels: [{ name: 'task:T-001' }] }],
+        [],
+      ],
+    });
+    const baseTree = fixture.readiness.evidence.base.identity.slice('git-tree:'.length);
+    const head = git(fixture.root, ['rev-parse', 'HEAD']);
+    const produced = runPacked([
+      'task', 'prepare-decomposition', 'T-001', '--work-unit', 'packed-github-work-unit',
+      '--source-ref', '.agenticloop/decompositions/T-001-packed-github.json',
+      '--source-revision', `git-commit:${head}`, '--base', baseTree,
+      '--dependencies', 'dependencies.json', '--repo', 'owner/repository',
+      '--json', '--target', fixture.root,
+    ], { env: fake.env });
+    assert.equal(produced.status, 0, `${produced.stdout}${produced.stderr}`);
+    const decomposition = JSON.parse(produced.stdout);
+    assert.equal(decomposition.scan.workUnit.backend, 'github');
+    assert.equal(decomposition.scan.inventory.enumeration.coverage.pageCount, 2);
+    assert.equal(decomposition.scan.inventory.enumeration.coverage.discovered, 1);
+    assert.equal(decomposition.scan.inventory.enumeration.coverage.returned, 1);
+    const calls = readFileSync(fake.logPath, 'utf8').trim().split(/\r?\n/).map(line => JSON.parse(line));
+    assert.ok(calls.some(args => args[0] === 'api' && args.includes('--paginate') && args.includes('--slurp')));
   });
 
   it('exercises installed corrective capture, drift, diagnostic, and required-check contracts', async () => {
@@ -747,6 +1213,76 @@ describe('packed package smoke tests', () => {
       'src/transition-contract.js must be shipped in the packed package');
   });
 
+  it('resolves the documented verifier subpaths and keeps deep imports and data files reachable', async () => {
+    // The package declares `exports`, so this proves the stable subpaths
+    // resolve *and* that declaring them did not restrict anything that already
+    // worked: the documented `agenticloop/src/...` deep imports, arbitrary
+    // shipped modules, and non-code data files must all stay reachable.
+    const prefix = join(tmpBase, 'prefix');
+    const consumer = join(tmpBase, 'exports-consumer');
+    mkdirSync(consumer, { recursive: true });
+    writeFileSync(join(consumer, 'package.json'), JSON.stringify({
+      name: 'exports-consumer', private: true, type: 'module',
+    }), 'utf8');
+    const installed = npm([
+      'install', '--prefix', consumer, '--ignore-scripts', '--no-audit', '--no-fund',
+      '--offline', join(prefix, 'node_modules', 'agenticloop'),
+    ]);
+    assert.equal(installed.status, 0, `${installed.stdout}${installed.stderr}`);
+
+    const probe = join(consumer, 'probe.mjs');
+    writeFileSync(probe, [
+      'import assert from "node:assert/strict";',
+      'import { readFileSync } from "node:fs";',
+      'import { createRequire } from "node:module";',
+      '// Stable documented subpaths.',
+      'const receipts = await import("agenticloop/auditor-return-receipt");',
+      'const schema = await import("agenticloop/audit-report-schema");',
+      'const trust = await import("agenticloop/host-trust");',
+      'assert.equal(typeof receipts.createAuditorReturnReceipt, "function");',
+      'assert.equal(typeof receipts.loadAuditorReturnReceiptVerifier, "function");',
+      'assert.equal(typeof receipts.verifyAuditorReturnReceipt, "function");',
+      'assert.equal(typeof receipts.AUDITOR_RECEIPT_FUTURE_SKEW_MS, "number");',
+      'assert.equal(typeof schema.prepareAuditorReturnReportForSigning, "function");',
+      'assert.equal(typeof schema.parseAuditorWireReport, "function");',
+      'assert.equal(typeof receipts.AUDITOR_RECEIPT_MAX_VALIDITY_MS, "number");',
+      'assert.equal(typeof trust.HOST_TRUST_CHALLENGE_TTL_MS, "number");',
+      'assert.equal(typeof trust.HOST_SIGNATURE_BYTE_LENGTH, "number");',
+      '// The shipped reference host integration for the protected boundary.',
+      'const boundary = await import("agenticloop/protected-host-boundary");',
+      'assert.equal(typeof boundary.loadProtectedAuditorReturnVerifier, "function");',
+      'assert.equal(boundary.createInheritedDescriptorHostBoundary, undefined);',
+      'assert.equal(boundary.readProtectedHostSigningKey, undefined);',
+      'assert.equal(boundary.PROTECTED_KEY_DESCRIPTOR, 3);',
+      'assert.equal(boundary.PROTECTED_HOST_CONFIG_SCHEMA_VERSION, 1);',
+      'const deepBoundary = await import("agenticloop/src/protected-host-boundary.js");',
+      'assert.equal(deepBoundary.loadProtectedAuditorReturnVerifier, boundary.loadProtectedAuditorReturnVerifier);',
+      '// The package root entry.',
+      'const root = await import("agenticloop");',
+      'assert.equal(typeof root.runCli, "function");',
+      '// Previously documented deep imports still resolve.',
+      'const deep = await import("agenticloop/src/auditor-return-receipt.js");',
+      'assert.equal(deep.createAuditorReturnReceipt, receipts.createAuditorReturnReceipt);',
+      'const deepSchema = await import("agenticloop/src/audit-report-schema.js");',
+      'assert.equal(deepSchema.prepareAuditorReturnReportForSigning, schema.prepareAuditorReturnReportForSigning);',
+      'await import("agenticloop/src/transition-contract.js");',
+      'await import("agenticloop/src/cli-main.js");',
+      '// Shipped data files and Markdown assets stay reachable.',
+      'const require_ = createRequire(import.meta.url);',
+      'const configPath = require_.resolve("agenticloop/config.json");',
+      'assert.ok(JSON.parse(readFileSync(configPath, "utf8")).adapters);',
+      'assert.ok(readFileSync(require_.resolve("agenticloop/AGENTIC_LOOP.md"), "utf8").length > 0);',
+      'assert.ok(readFileSync(require_.resolve("agenticloop/agents/engineer.md"), "utf8").length > 0);',
+      'assert.ok(readFileSync(require_.resolve("agenticloop/package.json"), "utf8").length > 0);',
+      'console.log("ok");',
+      '',
+    ].join('\n'), 'utf8');
+
+    const ran = spawnSync(process.execPath, [probe], { encoding: 'utf8', cwd: consumer });
+    assert.equal(ran.status, 0, `${ran.stdout}${ran.stderr}`);
+    assert.match(ran.stdout, /ok/);
+  });
+
   it('runs setup --dry-run --json with zero writes from the packed package', () => {
     const target = mkdtempSync(join(tmpBase, 'target-'));
     const result = runPacked(['setup', '--target', target, '--adapter', 'opencode', '--dry-run', '--json']);
@@ -957,6 +1493,9 @@ describe('packed package smoke tests', () => {
 });
 
 describe('packed audit, closeout, and improvement flows', () => {
+  /** The real installed packet, shared by the budget and measurement tests. */
+  let packetBudget = null;
+
   const FULL = 'a'.repeat(40);
 
   function git(target, args) {
@@ -1049,6 +1588,215 @@ describe('packed audit, closeout, and improvement flows', () => {
     assert.equal(JSON.parse(status.stdout).completed_audits, 0);
   });
 
+  it('persists a genuine signed Auditor return through the installed production verifier', () => {
+    const target = makeFlowTarget('protected-packed-report-flow');
+    const artifact = `commit:${git(target, 'rev-parse HEAD')}`;
+    assert.equal(runPacked([
+      'audit', 'new', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
+      '--artifact', artifact, '--goal', 'g', '--completion-oracle', 'o',
+      '--evidence', 'npm test', '--target', target,
+    ]).status, 0);
+    const operatorTrustRoot = join(tmpBase, 'packed-auditor-operator');
+    mkdirSync(operatorTrustRoot, { recursive: true });
+    const trust = createTestHostTrust({ target });
+    writeHostTrustStore(operatorTrustRoot, trust);
+    const report = wireReport(artifact, ['T-001'], 'packed-protected-ref');
+    report.invocation.receipt = null;
+    const receipt = createAuditorReturnReceipt({
+      receiptId: 'packed-protected-receipt', adapterId: trust.adapterId, keyId: trust.keyId,
+      targetRepository: trust.repositoryIdentity,
+      invocationReference: report.invocation.reference, invocationMode: report.invocation.mode,
+      workUnit: 'milestone:M00', candidateArtifact: artifact, coveredTasks: report.covered_tasks,
+      reportDigest: auditorReturnReportDigest(report),
+      issuedAt: '2026-08-08T11:59:00.000Z', expiresAt: '2026-08-08T12:01:00.000Z',
+    }, trust.privateKey);
+    report.invocation.receipt = JSON.stringify(receipt);
+    const reportFile = join(target, '.agenticloop', 'tmp', 'protected-run.json');
+    writeFileSync(reportFile, JSON.stringify(report), 'utf8');
+    const result = runPackedWithAuditorVerifier([
+      'audit', 'report', 'AUD-001', '--file', reportFile, '--target', target,
+    ], {
+      target, operatorTrustRoot, adapterId: trust.adapterId, privateKey: trust.privateKey,
+      keyId: trust.keyId,
+      now: Date.parse('2026-08-08T12:00:00.000Z'),
+    });
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const status = runPacked(['audit', 'status', 'AUD-001', '--json', '--target', target]);
+    assert.equal(JSON.parse(status.stdout).completed_audits, 1);
+  });
+
+  /**
+   * The packaged reference host integration.
+   *
+   * `loadAuditorReturnReceiptVerifier()` is a seam; until now nothing in the
+   * package occupied it, so "install/wire the production packed verifier" had
+   * no shipped answer and every operator had to author the wrapper themselves.
+   * These cases drive the shipped `agenticloop/protected-host-boundary` module
+   * from a clean installed tarball: one genuine signed Auditor return persists,
+   * and every way the protected channel can be absent or wrong fails closed.
+   */
+  describe('packaged protected-host reference integration', () => {
+    function setup(name) {
+      const target = makeFlowTarget(name);
+      const artifact = `commit:${git(target, 'rev-parse HEAD')}`;
+      assert.equal(runPacked([
+        'audit', 'new', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
+        '--artifact', artifact, '--goal', 'g', '--completion-oracle', 'o',
+        '--evidence', 'npm test', '--target', target,
+      ]).status, 0);
+      const operatorTrustRoot = join(tmpBase, `${name}-operator`);
+      mkdirSync(operatorTrustRoot, { recursive: true });
+      const trust = createTestHostTrust({ target });
+      writeHostTrustStore(operatorTrustRoot, trust);
+      const report = wireReport(artifact, ['T-001'], `${name}-ref`);
+      report.invocation.receipt = null;
+      const receiptNow = Date.now();
+      const receipt = createAuditorReturnReceipt({
+        receiptId: `${name}-receipt`, adapterId: trust.adapterId, keyId: trust.keyId,
+        targetRepository: trust.repositoryIdentity,
+        invocationReference: report.invocation.reference, invocationMode: report.invocation.mode,
+        workUnit: 'milestone:M00', candidateArtifact: artifact, coveredTasks: report.covered_tasks,
+        reportDigest: auditorReturnReportDigest(report),
+        issuedAt: new Date(receiptNow - 60_000).toISOString(),
+        expiresAt: new Date(receiptNow + 300_000).toISOString(),
+      }, trust.privateKey);
+      report.invocation.receipt = JSON.stringify(receipt);
+      const reportFile = join(target, '.agenticloop', 'tmp', `${name}.json`);
+      writeFileSync(reportFile, JSON.stringify(report), 'utf8');
+      return {
+        target, operatorTrustRoot, trust, reportFile,
+        run: overrides => runPackedThroughPackagedBoundary([
+          'audit', 'report', 'AUD-001', '--file', reportFile, '--target', target,
+        ], {
+          target, operatorTrustRoot, adapterId: trust.adapterId, keyId: trust.keyId,
+          privateKey: trust.privateKey,
+          ...overrides,
+        }),
+      };
+    }
+
+    it('persists one genuine signed Auditor return through the shipped integration', () => {
+      const fx = setup('packaged-boundary-positive');
+      const result = fx.run({});
+      assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+      const status = runPacked(['audit', 'status', 'AUD-001', '--json', '--target', fx.target]);
+      assert.equal(JSON.parse(status.stdout).completed_audits, 1);
+
+      // The key never appears in the child's own environment or arguments.
+      assert.doesNotMatch(result.stdout + result.stderr, /BEGIN (?:EC |RSA )?PRIVATE KEY/);
+    });
+
+    it('refuses a byte-identical replay without mutating audit history or budget', () => {
+      const fx = setup('packaged-boundary-replay');
+      const first = fx.run({});
+      assert.equal(first.status, 0, `${first.stdout}${first.stderr}`);
+      const recordPath = join(fx.target, '.agenticloop', 'audits', 'AUD-001.md');
+      const afterFirst = readFileSync(recordPath, 'utf8');
+      const statusAfterFirst = runPacked(['audit', 'status', 'AUD-001', '--json', '--target', fx.target]).stdout;
+
+      const replayed = fx.run({});
+      assert.equal(replayed.status, 1, `${replayed.stdout}${replayed.stderr}`);
+      const diagnostics = replayed.stderr
+        .split('\n')
+        .filter(line => line.startsWith('Cannot record audit report:'));
+      assert.equal(diagnostics.filter(line => /invocation receipt '.*' was already used/.test(line)).length, 1);
+      assert.equal(diagnostics.filter(line => /return receipt identity '.*' was already used/.test(line)).length, 0);
+
+      // The durable record - history and budgets alike - is byte-identical.
+      assert.equal(readFileSync(recordPath, 'utf8'), afterFirst);
+      assert.equal(
+        runPacked(['audit', 'status', 'AUD-001', '--json', '--target', fx.target]).stdout,
+        statusAfterFirst
+      );
+    });
+
+    it('fails closed when the protected channel is absent', () => {
+      const fx = setup('packaged-boundary-absent');
+      const result = fx.run({ withKey: false });
+      assert.equal(result.status, 9, `${result.stdout}${result.stderr}`);
+      assert.match(result.stderr, /boundary unavailable/);
+      assert.match(result.stderr, /no readable configuration on file descriptor 3/);
+      const status = runPacked(['audit', 'status', 'AUD-001', '--json', '--target', fx.target]);
+      assert.equal(JSON.parse(status.stdout).completed_audits, 0);
+    });
+
+    const MALFORMED_CHANNELS = [
+      ['an empty descriptor', Buffer.alloc(0), /carried no configuration/],
+      ['arbitrary bytes', Buffer.from('not json'), /not valid JSON/],
+      ['an open schema', Buffer.from('{"kind":"agenticloop.protected-host-config","schemaVersion":1,"extra":true}'), /closed schema/],
+    ];
+
+    it('fails closed for every malformed protected channel', () => {
+      const fx = setup('packaged-boundary-malformed');
+      for (const [label, bytes, pattern] of MALFORMED_CHANNELS) {
+        const result = fx.run({ withKey: 'variant', configBytes: bytes });
+        assert.equal(result.status, 9, `${label}: ${result.stdout}${result.stderr}`);
+        assert.match(result.stderr, /boundary unavailable/, label);
+        assert.match(result.stderr, pattern, label);
+      }
+      const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 });
+      const wrongAlgorithm = fx.run({
+        withKey: 'variant',
+        configOverrides: { privateKey: rsa.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString() },
+      });
+      assert.equal(wrongAlgorithm.status, 9, `${wrongAlgorithm.stdout}${wrongAlgorithm.stderr}`);
+      assert.match(wrongAlgorithm.stderr, /must be an ed25519 private key/);
+      const status = runPacked(['audit', 'status', 'AUD-001', '--json', '--target', fx.target]);
+      assert.equal(JSON.parse(status.stdout).completed_audits, 0);
+    });
+
+    it('refuses a key the operator never pinned for the named adapter', () => {
+      const fx = setup('packaged-boundary-stranger');
+      const stranger = generateHostSigningKey();
+      const result = fx.run({
+        withKey: 'variant',
+        configOverrides: { privateKey: stranger.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString() },
+      });
+      assert.equal(result.status, 9, `${result.stdout}${result.stderr}`);
+      assert.match(result.stderr, /boundary unavailable/);
+      const status = runPacked(['audit', 'status', 'AUD-001', '--json', '--target', fx.target]);
+      assert.equal(JSON.parse(status.stdout).completed_audits, 0);
+    });
+
+    it('registers no agent-callable signing command', () => {
+      const help = runPacked(['help']);
+      assert.equal(help.status, 0, help.stderr);
+      const surface = help.stdout + runPacked(['--help']).stdout;
+      for (const forbidden of [/\bsign\b/i, /protected-host/i, /host-boundary/i]) {
+        assert.doesNotMatch(surface, forbidden, 'the protected boundary must not be reachable as a CLI subcommand');
+      }
+      const attempted = runPacked(['protected-host-boundary']);
+      assert.notEqual(attempted.status, 0);
+    });
+
+    it('does not export alternate descriptor, key-reader, or signing-callback seams', async () => {
+      const boundaryModule = await import(pathToFileURL(join(packedRoot, 'src', 'protected-host-boundary.js')).href);
+      assert.equal(typeof boundaryModule.loadProtectedAuditorReturnVerifier, 'function');
+      assert.equal(boundaryModule.PROTECTED_KEY_DESCRIPTOR, 3);
+      assert.equal(boundaryModule.readProtectedHostSigningKey, undefined);
+      assert.equal(boundaryModule.createInheritedDescriptorHostBoundary, undefined);
+    });
+
+    it('refuses caller-selected security configuration and a cross-target protected envelope', async () => {
+      const boundaryModule = await import(pathToFileURL(join(packedRoot, 'src', 'protected-host-boundary.js')).href);
+      const injected = boundaryModule.loadProtectedAuditorReturnVerifier({
+        target: join(tmpBase, 'caller-selected-target'),
+        operatorTrustRoot: join(tmpBase, 'caller-selected-root'),
+        readKey: () => generateHostSigningKey().privateKey,
+      });
+      assert.equal(injected.ok, false);
+      assert.match(injected.errors.join('\n'), /accepts only the target option/);
+
+      const fx = setup('packaged-boundary-cross-target');
+      const result = fx.run({
+        withKey: 'variant',
+        configOverrides: { targetRepositoryIdentity: targetRepositoryIdentity(join(tmpBase, 'different-target')) },
+      });
+      assert.equal(result.status, 9, `${result.stdout}${result.stderr}`);
+      assert.match(result.stderr, /does not match the target repository/);
+    });
+  });
+
   it('refuses packed closeout when no verified Auditor report exists', () => {
     const target = makeFlowTarget('closeout-flow');
     const artifact = `commit:${git(target, 'rev-parse HEAD')}`;
@@ -1134,12 +1882,111 @@ describe('packed audit, closeout, and improvement flows', () => {
       `GitHub audit must only read the issue inventory, got: ${invocations.join('; ')}`);
   });
 
+  /**
+   * The dispatch-packet byte budget, measured on installed code.
+   *
+   * 16,384 bytes is a **regression benchmark for the canonical fixture**, not a
+   * runtime protocol maximum. Nothing in the dispatch contract rejects a larger
+   * packet, and nothing here adds such a rejection: the threshold exists so an
+   * unnoticed growth in the canonical acting context fails a test rather than
+   * quietly enlarging every role invocation. The source suite measures the same
+   * budget against a packet built in-process; this measures the packet the
+   * installed package actually emits.
+   */
+  const DISPATCH_PACKET_BUDGET_BYTES = 16_384;
+
+  it('keeps a real installed schema-v5 packet inside the canonical byte budget', async () => {
+    const envelope = await import(pathToFileURL(join(packedRoot, 'src', 'dispatch-envelope.js')).href);
+    const canonical = await import(pathToFileURL(join(packedRoot, 'src', 'canonical-json.js')).href);
+    // A stable, realistically sized target directory name, so the measurement
+    // is comparable between runs rather than varying with a random suffix.
+    const fixture = await createDispatchFixture(tmpBase, 'packed-packet-budget');
+    // The installed package's own adapter configuration, so the bound
+    // host-role capability declaration is the shipped one.
+    writeFileSync(
+      join(fixture.root, 'agenticloop.json'),
+      readFileSync(join(packedRoot, 'config.json'), 'utf8'),
+      'utf8'
+    );
+    writeFileSync(
+      join(fixture.root, 'dispatch-input.json'),
+      JSON.stringify({
+        readiness: fixture.readiness,
+        decomposition: fixture.decomposition,
+        assignment: fixture.assignment,
+      }),
+      'utf8'
+    );
+    const prepared = runPackedWithBoundary([
+      'task', 'prepare-dispatch', 'T-001',
+      '--input', 'dispatch-input.json',
+      '--host-trust-store', fixture.trustStorePath,
+      '--json', '--target', fixture.root,
+    ], {
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      adapterId: fixture.trust.adapterId,
+      keyId: fixture.trust.keyId,
+      privateKey: fixture.trust.privateKey,
+    });
+    assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
+    const packet = JSON.parse(prepared.stdout);
+
+    // A real current packet from installed code, not a synthetic stand-in.
+    assert.equal(packet.kind, 'agenticloop.role-preparation');
+    assert.equal(packet.schemaVersion, envelope.DISPATCH_PREPARATION_SCHEMA_VERSION);
+    assert.equal(packet.schemaVersion, 5);
+    const validated = envelope.validateDispatchPreparation(packet, { capabilities: fixture.trust.capabilities });
+    assert.equal(validated.ok, true, JSON.stringify(validated.findings ?? validated.errors ?? null));
+
+    const packetBytes = Buffer.byteLength(canonical.canonicalJson(packet), 'utf8');
+    assert.ok(
+      packetBytes <= DISPATCH_PACKET_BUDGET_BYTES,
+      `installed dispatch packet is ${packetBytes} bytes, above the ${DISPATCH_PACKET_BUDGET_BYTES}-byte regression benchmark`
+    );
+    assert.ok(packetBytes > 0);
+
+    // The measured packet is available to the measurement smoke test below.
+    packetBudget = {
+      packet,
+      packetBytes,
+      path: join(fixture.root, 'measured-packet.json'),
+      validationOptions: { capabilities: fixture.trust.capabilities },
+    };
+    writeFileSync(packetBudget.path, JSON.stringify(packet), 'utf8');
+  });
+
+  it('classifies an installed schema-v5 packet carrying canonical v3 degraded reports as typed stale', async () => {
+    assert.ok(packetBudget, 'the real installed packet must be prepared first');
+    const envelope = await import(pathToFileURL(join(packedRoot, 'src', 'dispatch-envelope.js')).href);
+    const legacy = structuredClone(packetBudget.packet);
+    const declaration = legacy.assignment.hostRoleCapability;
+    legacy.assignment.degradedEnforcementReports = legacy.assignment.degradedEnforcementReports.map(report => ({
+      ...report,
+      schemaVersion: 3,
+      limitation: declaration.limitation,
+      detectionBoundary: declaration.detectionBoundary,
+      recoveryRoute: declaration.recoveryRoute,
+    }));
+    legacy.digest = envelope.dispatchPreparationDigest(legacy);
+
+    const checked = envelope.validateDispatchPreparation(legacy, packetBudget.validationOptions);
+    assert.equal(checked.ok, false);
+    assert.deepEqual(checked.findings, [{
+      code: 'dispatch.packet.stale',
+      evidenceState: 'changed',
+      disposition: 'superseded',
+      message: 'dispatch preparation degraded-enforcement report schemaVersion 3 is stale; regenerate the packet before dispatch or return import',
+    }]);
+  });
+
   it('ships and runs the installed acting-context measurement script', () => {
     const scriptPath = join(packedRoot, 'scripts', 'measure-dispatch-context.mjs');
     assert.ok(existsSync(scriptPath), 'packed package must ship scripts/measure-dispatch-context.mjs');
-    const work = mkdtempSync(join(tmpBase, 'measure-'));
-    const packetPath = join(work, 'packet.json');
-    writeFileSync(packetPath, JSON.stringify({ kind: 'agenticloop.role-preparation', schemaVersion: 4 }), 'utf8');
+    assert.ok(packetBudget, 'the real installed packet must be measured first');
+    // The measurement runs against the real corrected schema-v5 packet, not a
+    // synthetic stand-in, so `canonical_packet` reports the bytes a role
+    // invocation actually carries.
+    const packetPath = packetBudget.path;
     const measured = spawnSync(process.execPath, [
       scriptPath,
       '--packet', packetPath,
@@ -1159,6 +2006,14 @@ describe('packed audit, closeout, and improvement flows', () => {
     for (const component of result.components) {
       assert.ok(component.bytes > 0, `${component.kind} must carry real bytes`);
     }
+    // The measured canonical packet is the real one, and its component byte
+    // count is the same number the budget regression above asserted.
+    const packetComponent = result.components.find(component => component.kind === 'canonical_packet');
+    assert.equal(packetComponent.bytes, packetBudget.packetBytes);
+    assert.ok(
+      packetComponent.bytes <= DISPATCH_PACKET_BUDGET_BYTES,
+      `measured canonical packet is ${packetComponent.bytes} bytes`
+    );
     // Duplicate components are rejected, and the canonical packet count is a
     // distinct field from the wrapper and reference bytes.
     const duplicate = spawnSync(process.execPath, [

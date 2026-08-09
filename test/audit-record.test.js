@@ -36,6 +36,10 @@ import {
   workUnitIdentityForGroup,
 } from '../src/audit-record.js';
 import { DEFAULT_AUDIT_BUDGET } from '../src/layout.js';
+import { parseAuditorWireReport, wireReportToAuditRun } from '../src/audit-report-schema.js';
+import { createAuditorReturnReceipt } from '../src/auditor-return-receipt.js';
+import { canonicalJson } from '../src/canonical-json.js';
+import { createTestHostTrust } from './helpers/host-trust-fixture.js';
 
 let tmpDir;
 before(() => { tmpDir = mkdtempSync(join(tmpdir(), 'al-audit-record-')); });
@@ -277,6 +281,171 @@ describe('audit record validation', () => {
     const content = baseRecord({ coveredTasks: ['nope'] });
     const errors = validateAuditRecord(content, 'AUD-001.md', { taskIdRegex: '^T-\\d{3,}$' });
     assert.ok(errors.some(e => e.includes("covered task 'nope'")), errors.join('\n'));
+  });
+
+  it('rejects a reused Auditor return receipt identity across already-persisted records', () => {
+    const target = makeTarget('duplicate-receipt-identity');
+    const trust = createTestHostTrust({ target });
+
+    /**
+     * Two receipts sharing one receiptId but differing in every other byte.
+     * Byte-equality alone cannot catch this, so the cross-record check must
+     * compare the stable receipt identity - and it must do so in the durable
+     * validator, not only in the pre-write guard, so a record pair that reached
+     * disk by any route is still rejected on read.
+     */
+    function receipt(reportDigest, issuedAt, expiresAt) {
+      return canonicalJson(createAuditorReturnReceipt({
+        receiptId: 'shared-return-receipt',
+        adapterId: trust.adapterId, keyId: trust.keyId,
+        targetRepository: trust.repositoryIdentity,
+        invocationReference: `invoke-${issuedAt}`, invocationMode: 'host_subagent',
+        workUnit: 'phase:4', candidateArtifact: 'commit:abc123',
+        coveredTasks: ['T-041', 'T-042'],
+        reportDigest, issuedAt, expiresAt,
+      }, trust.privateKey));
+    }
+
+    function recordWith(auditId, workUnit, invocationReference, receiptWire) {
+      const wire = parseAuditorWireReport({
+        report_schema: 'auditor_report_v1',
+        producer: { roleId: 'auditor' },
+        artifact: 'commit:abc123',
+        covered_tasks: ['T-041', 'T-042'],
+        invocation: {
+          mode: 'host_subagent', reference: invocationReference,
+          provenance: 'verified', receipt: receiptWire,
+        },
+        perspectives: Object.fromEntries(
+          ['outcome', 'completeness', 'integration_coherence', 'engineering_quality', 'verification', 'risk']
+            .map(key => [key, `${key} body.`])
+        ),
+        assessment: 'Consolidated assessment across all six perspectives.',
+        evidence_checked: 'npm test (pass)',
+        verdict: 'needs_remediation',
+        findings: [],
+      });
+      assert.equal(wire.ok, true, wire.errors?.join('\n'));
+      const appended = appendAuditReport(baseRecord({ auditId, workUnit }), wireReportToAuditRun(wire.report));
+      assert.ok(appended.ok, appended.errors.join('; '));
+      return appended.content;
+    }
+
+    const digest = `sha256:agenticloop.auditor-return-report.v1:${'c'.repeat(64)}`;
+    writeAudit(target, 'AUD-001', recordWith(
+      'AUD-001', 'phase:4', 'invoke-first',
+      receipt(digest, '2026-08-08T11:59:00.000Z', '2026-08-08T12:01:00.000Z')
+    ));
+    writeAudit(target, 'AUD-002', recordWith(
+      'AUD-002', 'phase:5', 'invoke-second',
+      receipt(digest, '2026-08-08T12:05:00.000Z', '2026-08-08T12:07:00.000Z')
+    ));
+
+    const { errors } = validateAuditRecords(target);
+    assert.ok(
+      errors.some(error => /reuses Auditor return receipt identity 'shared-return-receipt'/.test(error)),
+      errors.join('\n')
+    );
+    // The two receipt payloads genuinely differ, so byte-equality alone would
+    // have missed this.
+    assert.equal(
+      errors.some(error => /reuses invocation receipt/.test(error)),
+      false,
+      'the two receipts differ byte-for-byte; only the identity check can catch the replay'
+    );
+  });
+
+  /**
+   * A byte-identical replay and a receipt-identity reuse are the same refusal
+   * seen at two granularities: identical bytes always carry an identical
+   * receiptId. Emitting both named one root cause twice and left a reader
+   * guessing whether two separate problems existed.
+   */
+  it('emits one root diagnostic for a byte-identical receipt replay', () => {
+    const target = makeTarget('identical-receipt-replay');
+    const trust = createTestHostTrust({ target });
+    const digest = `sha256:agenticloop.auditor-return-report.v1:${'e'.repeat(64)}`;
+    const receiptWire = canonicalJson(createAuditorReturnReceipt({
+      receiptId: 'replayed-return-receipt',
+      adapterId: trust.adapterId, keyId: trust.keyId,
+      targetRepository: trust.repositoryIdentity,
+      invocationReference: 'invoke-original', invocationMode: 'host_subagent',
+      workUnit: 'phase:4', candidateArtifact: 'commit:abc123',
+      coveredTasks: ['T-041', 'T-042'], reportDigest: digest,
+      issuedAt: '2026-08-08T11:59:00.000Z', expiresAt: '2026-08-08T12:01:00.000Z',
+    }, trust.privateKey));
+
+    const make = (auditId, workUnit, reference) => {
+      const wire = parseAuditorWireReport({
+        report_schema: 'auditor_report_v1', producer: { roleId: 'auditor' },
+        artifact: 'commit:abc123', covered_tasks: ['T-041', 'T-042'],
+        invocation: { mode: 'host_subagent', reference, provenance: 'verified', receipt: receiptWire },
+        perspectives: Object.fromEntries(
+          ['outcome', 'completeness', 'integration_coherence', 'engineering_quality', 'verification', 'risk']
+            .map(key => [key, `${key} body.`])
+        ),
+        assessment: 'Consolidated assessment across all six perspectives.',
+        evidence_checked: 'npm test (pass)', verdict: 'needs_remediation', findings: [],
+      });
+      assert.equal(wire.ok, true, wire.errors?.join('\n'));
+      const appended = appendAuditReport(baseRecord({ auditId, workUnit }), wireReportToAuditRun(wire.report));
+      assert.ok(appended.ok, appended.errors.join('; '));
+      return appended.content;
+    };
+
+    writeAudit(target, 'AUD-001', make('AUD-001', 'phase:4', 'invoke-a'));
+    writeAudit(target, 'AUD-002', make('AUD-002', 'phase:5', 'invoke-b'));
+
+    const { errors } = validateAuditRecords(target);
+    const byteReplay = errors.filter(error => /reuses invocation receipt/.test(error));
+    const identityReplay = errors.filter(error => /reuses Auditor return receipt identity/.test(error));
+    assert.equal(byteReplay.length, 1, errors.join('\n'));
+    assert.equal(
+      identityReplay.length,
+      0,
+      'identical bytes trivially share a receiptId; the identity message would repeat one root cause'
+    );
+    assert.match(byteReplay[0], /^Audit record '[^']*AUD-002\.md'/);
+    assert.match(byteReplay[0], /already recorded in '[^']*AUD-001\.md'$/);
+  });
+
+  it('accepts distinct Auditor return receipt identities across records', () => {
+    const target = makeTarget('distinct-receipt-identity');
+    const trust = createTestHostTrust({ target });
+    const digest = `sha256:agenticloop.auditor-return-report.v1:${'d'.repeat(64)}`;
+    const make = (auditId, workUnit, receiptId, reference) => {
+      const receiptWire = canonicalJson(createAuditorReturnReceipt({
+        receiptId, adapterId: trust.adapterId, keyId: trust.keyId,
+        targetRepository: trust.repositoryIdentity,
+        invocationReference: reference, invocationMode: 'host_subagent',
+        workUnit: 'phase:4', candidateArtifact: 'commit:abc123',
+        coveredTasks: ['T-041', 'T-042'], reportDigest: digest,
+        issuedAt: '2026-08-08T11:59:00.000Z', expiresAt: '2026-08-08T12:01:00.000Z',
+      }, trust.privateKey));
+      const wire = parseAuditorWireReport({
+        report_schema: 'auditor_report_v1', producer: { roleId: 'auditor' },
+        artifact: 'commit:abc123', covered_tasks: ['T-041', 'T-042'],
+        invocation: { mode: 'host_subagent', reference, provenance: 'verified', receipt: receiptWire },
+        perspectives: Object.fromEntries(
+          ['outcome', 'completeness', 'integration_coherence', 'engineering_quality', 'verification', 'risk']
+            .map(key => [key, `${key} body.`])
+        ),
+        assessment: 'Consolidated assessment across all six perspectives.',
+        evidence_checked: 'npm test (pass)', verdict: 'needs_remediation', findings: [],
+      });
+      assert.equal(wire.ok, true, wire.errors?.join('\n'));
+      const appended = appendAuditReport(baseRecord({ auditId, workUnit }), wireReportToAuditRun(wire.report));
+      assert.ok(appended.ok, appended.errors.join('; '));
+      return appended.content;
+    };
+    writeAudit(target, 'AUD-001', make('AUD-001', 'phase:4', 'return-receipt-a', 'invoke-a'));
+    writeAudit(target, 'AUD-002', make('AUD-002', 'phase:5', 'return-receipt-b', 'invoke-b'));
+    const { errors } = validateAuditRecords(target);
+    assert.equal(
+      errors.some(error => /reuses Auditor return receipt identity|reuses invocation receipt/.test(error)),
+      false,
+      errors.join('\n')
+    );
   });
 });
 

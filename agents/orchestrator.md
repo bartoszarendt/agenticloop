@@ -116,15 +116,18 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   single-agent fallback; if no real delegation mechanism exists, record a blocked
    condition instead of auditing inline. Persist the returned `auditor_report_v1`
    JSON unchanged with `npx agenticloop audit report <AUD-ID> --file <path>` or
-   `--stdin`, then route a
+   `--stdin` through the protected packaged verifier. Otherwise fail closed;
+   opaque receipts and reconstructed reports do not substitute.
+   Then route a
   non-certifying report to maintainer for disposition and to engineer for
   ordinary remediation tasks. Work-unit audit is enabled unless
   `.agenticloop/project.md` explicitly records `work_unit_audit: disabled`; see
   [[work-unit-audit]].
 - Coordinate serially by default. Every authorized multi-task unit receives a
   current [[parallel-delegation]] Parallel Opportunity Scan after decomposition.
-  With fewer than two ready tasks, record not-currently-eligible status and a
-  rescan trigger; otherwise use Maintainer-supplied `## Parallel Safety`
+  Count ready tasks only after authoritative completeness. With fewer than two,
+  record not-currently-eligible status and a rescan
+  trigger; otherwise use Maintainer-supplied `## Parallel Safety`
   classifications as input, reassess source proposals against current records
   and repository state, and verify artifact, host, liveness, and join facts.
   Orchestrator does not originate or override Maintainer's code/collision

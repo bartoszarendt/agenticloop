@@ -456,7 +456,127 @@ describe('task CLI', () => {
     const result = await run(['task', 'list', '--target', target]);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Unsupported task backend 'jira'/);
-    assert.match(result.stderr, /supports the files backend only/);
+    assert.match(result.stderr, /Configured task backend 'jira' from project\.md is not supported/);
+  });
+
+  /**
+   * Backend resolution is centralized ahead of subcommand routing, so every
+   * `task` subcommand must answer an unusable or incompatible backend the same
+   * way. Before that, only `prepare-decomposition` and `prepare-dispatch`
+   * validated the configured value; the rest fell through a files-only guard
+   * that wrote untyped stderr text and ignored `--json`, so the same
+   * misconfiguration produced two different diagnostics depending on which
+   * subcommand happened to observe it.
+   */
+  describe('task backend routing matrix', () => {
+    // Minimal argument sets: enough to parse, so the backend gate - not
+    // argument validation - is what the case observes.
+    const SUBCOMMANDS = [
+      ['list', []],
+      ['lint', []],
+      ['new', ['Backend matrix task', '--scaffold']],
+      ['establish-baseline', ['T-001']],
+      ['authorize-correction', ['T-001']],
+      ['prepare-decomposition', ['T-001']],
+      ['prepare-dispatch', ['T-001']],
+      ['verify-return', ['T-001']],
+      ['status', ['T-001', 'blocked']],
+    ];
+    // The declared support matrix, mirrored here so a change to it is a
+    // deliberate test edit rather than a silent behavior drift.
+    const SUPPORTED = {
+      list: ['files'],
+      lint: ['files'],
+      new: ['files'],
+      'establish-baseline': ['files'],
+      'authorize-correction': ['files'],
+      'prepare-decomposition': ['files', 'github'],
+      'prepare-dispatch': ['files', 'github'],
+      'verify-return': ['files'],
+      status: ['files'],
+    };
+
+    function targetWithBackend(name, backend) {
+      const target = makeTarget(name);
+      const projectPath = join(target, '.agenticloop', 'project.md');
+      writeFileSync(
+        projectPath,
+        readFileSync(projectPath, 'utf-8').replace('task_backend: files', `task_backend: ${backend}`),
+        'utf-8'
+      );
+      return target;
+    }
+
+    for (const [sub, args] of SUBCOMMANDS) {
+      it(`returns one canonical typed envelope for an unsupported backend: task ${sub}`, async () => {
+        const target = targetWithBackend(`matrix-unsupported-${sub}`, 'jira');
+
+        const human = await run(['task', sub, ...args, '--target', target]);
+        assert.notEqual(human.status, 0, human.stdout + human.stderr);
+        assert.match(human.stderr, /Configured task backend 'jira' from project\.md is not supported/);
+        assert.match(human.stderr, /supported backends: github, files/);
+        // The root diagnostic is emitted before any enumeration or transport.
+        assert.match(
+          human.stdout + human.stderr,
+          /No task inventory was enumerated and no backend transport was contacted/
+        );
+
+        const json = await run(['task', sub, ...args, '--json', '--target', target]);
+        assert.notEqual(json.status, 0, json.stdout + json.stderr);
+        const envelope = JSON.parse(json.stdout);
+        assert.equal(envelope.kind, 'agenticloop.validation-result');
+        assert.equal(envelope.command, `task ${sub}`);
+        assert.equal(envelope.evidenceState, 'malformed');
+        assert.equal(envelope.disposition, 'rejected');
+        assert.equal(envelope.diagnostics[0].code, 'verification.context.malformed');
+        assert.match(
+          envelope.diagnostics[0].message,
+          /Configured task backend 'jira' from project\.md is not supported/
+        );
+      });
+    }
+
+    for (const [sub, args] of SUBCOMMANDS.filter(([name]) => !SUPPORTED[name].includes('github'))) {
+      it(`returns a typed usage result for an incompatible backend: task ${sub}`, async () => {
+        const target = targetWithBackend(`matrix-github-${sub}`, 'github');
+
+        const human = await run(['task', sub, ...args, '--target', target]);
+        assert.notEqual(human.status, 0, human.stdout + human.stderr);
+        assert.match(human.stderr, /Active task backend is 'github' \(from project\.md\)/);
+        assert.match(human.stderr, /supports the files backend only/);
+
+        const json = await run(['task', sub, ...args, '--json', '--target', target]);
+        assert.notEqual(json.status, 0, json.stdout + json.stderr);
+        const envelope = JSON.parse(json.stdout);
+        assert.equal(envelope.kind, 'agenticloop.validation-result');
+        assert.equal(envelope.command, `task ${sub}`);
+        assert.equal(envelope.diagnostics[0].code, 'cli.usage');
+        assert.match(envelope.diagnostics[0].message, /Active task backend is 'github'/);
+      });
+    }
+
+    for (const [sub, args] of SUBCOMMANDS.filter(([name]) => SUPPORTED[name].includes('github'))) {
+      it(`admits the github backend past the gate: task ${sub}`, async () => {
+        const target = targetWithBackend(`matrix-github-ok-${sub}`, 'github');
+        const result = await run(['task', sub, ...args, '--json', '--target', target]);
+        // The command still fails on its own missing evidence, but never on the
+        // backend gate: no backend diagnostic appears.
+        const text = result.stdout + result.stderr;
+        assert.doesNotMatch(text, /Active task backend is 'github'/);
+        assert.doesNotMatch(text, /is not supported; supported backends/);
+      });
+    }
+
+    it('never silently selects another backend for a files-only subcommand', async () => {
+      const target = targetWithBackend('matrix-no-fallback', 'github');
+      const before = existsSync(join(target, '.agenticloop', 'tasks'))
+        ? readFileSync(join(target, '.agenticloop', 'project.md'), 'utf-8')
+        : null;
+      const result = await run(['task', 'new', 'Should not be created', '--scaffold', '--target', target]);
+      assert.notEqual(result.status, 0);
+      assert.equal(existsSync(taskPath(target, 'T-001')), false, 'a refused subcommand must not write a files-backend record');
+      assert.equal(readFileSync(join(target, '.agenticloop', 'project.md'), 'utf-8'), before);
+    });
   });
 
   it('requires block category for blocked status and lint catches missing block_category', async () => {

@@ -289,7 +289,7 @@ describe('every GitHub task-body status change passes the transition gates', () 
       '--expect-digest', taskBodyDigest(state.body), '--yes', '--target', target,
     ], { ghCommandRunner: runner });
     assert.equal(result.status, 1);
-    assert.match(`${result.stderr}${result.stdout}`, /Generic task-body closure is refused/);
+    assert.match(`${result.stderr}${result.stdout}`, /Generic task closure is refused/);
     assert.equal(state.bodyWrites, 0);
     assert.match(state.body, /status: accepted/);
   });

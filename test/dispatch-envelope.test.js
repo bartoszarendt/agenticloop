@@ -1310,12 +1310,25 @@ describe('authoritative blocked-return receive path', () => {
     assert.ok(prepared.packet.assignment.degradedEnforcementReports.length > 0);
     assert.ok(prepared.packet.assignment.degradedEnforcementReports.every(report =>
       report.diagnosticCode === 'capability.enforcement.degraded' &&
-      report.detectionBoundary === 'role_return_receive' &&
       report.declarationDigest === prepared.packet.assignment.hostRoleCapability.digest
     ));
-    assert.ok(prepared.validation.warningDiagnostics.some(diagnostic =>
+    // Each report pins its declaration rather than restating it, and the
+    // declaration it pins is carried once in the same packet.
+    assert.equal(prepared.packet.assignment.hostRoleCapability.detectionBoundary, 'role_return_receive');
+    for (const report of prepared.packet.assignment.degradedEnforcementReports) {
+      for (const field of ['limitation', 'detectionBoundary', 'recoveryRoute']) {
+        assert.equal(Object.hasOwn(report, field), false, `report must not restate '${field}'`);
+      }
+    }
+    // The rendered warning still names the boundary and the recovery route,
+    // resolved from the pinned declaration.
+    const degradedWarning = prepared.validation.warningDiagnostics.find(diagnostic =>
       diagnostic.code === 'capability.enforcement.degraded'
-    ));
+    );
+    assert.ok(degradedWarning);
+    assert.equal(degradedWarning.evidence.detectionBoundary, 'role_return_receive');
+    assert.match(degradedWarning.message, /role_return_receive must evaluate/);
+    assert.match(degradedWarning.message, /Recovery: /);
 
     const fabricated = structuredClone(prepared.packet);
     fabricated.assignment.degradedEnforcementReports[0].enforcement = 'enforced';
@@ -1720,6 +1733,53 @@ describe('documented envelope identity contract', () => {
       disposition: 'superseded',
       message: 'dispatch preparation schemaVersion 4 is stale; regenerate the packet as schemaVersion 5 before dispatch or return import',
     }]);
+  });
+
+  it('classifies an authentic schema-v5 packet with canonical v3 degraded reports as typed stale', async () => {
+    const fixture = await currentFilesTask('nested-v3-contract');
+    const prepared = prepare(fixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    const legacy = structuredClone(prepared.packet);
+    const declaration = legacy.assignment.hostRoleCapability;
+    legacy.assignment.degradedEnforcementReports = legacy.assignment.degradedEnforcementReports.map(report => ({
+      ...report,
+      schemaVersion: 3,
+      limitation: declaration.limitation,
+      detectionBoundary: declaration.detectionBoundary,
+      recoveryRoute: declaration.recoveryRoute,
+    }));
+    legacy.digest = dispatchPreparationDigest(legacy);
+
+    const checked = validateDispatchPreparation(legacy, fixture.options);
+    assert.equal(checked.ok, false);
+    assert.deepEqual(checked.findings, [{
+      code: 'dispatch.packet.stale',
+      evidenceState: 'changed',
+      disposition: 'superseded',
+      message: 'dispatch preparation degraded-enforcement report schemaVersion 3 is stale; regenerate the packet before dispatch or return import',
+    }]);
+  });
+
+  it('does not classify a malformed nested-v3 report lookalike as trusted stale', async () => {
+    const fixture = await currentFilesTask('nested-v3-lookalike');
+    const prepared = prepare(fixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    const malformed = structuredClone(prepared.packet);
+    const declaration = malformed.assignment.hostRoleCapability;
+    malformed.assignment.degradedEnforcementReports = malformed.assignment.degradedEnforcementReports.map(report => ({
+      ...report,
+      schemaVersion: 3,
+      limitation: declaration.limitation,
+      detectionBoundary: declaration.detectionBoundary,
+      recoveryRoute: declaration.recoveryRoute,
+    }));
+    malformed.assignment.degradedEnforcementReports[0].unexpected = true;
+    malformed.digest = dispatchPreparationDigest(malformed);
+
+    const checked = validateDispatchPreparation(malformed, fixture.options);
+    assert.equal(checked.ok, false);
+    assert.equal(checked.findings.some(item => item.code === 'dispatch.packet.stale'), false);
+    assert.ok(checked.findings.some(item => item.code === 'capability.declaration.invalid'));
   });
 
   it('does not promote malformed or current packets into a legacy version class', async () => {

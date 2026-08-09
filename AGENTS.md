@@ -69,6 +69,9 @@ beside them.
 - Revisit when: a stable compatibility/support policy is adopted, or the
   role/skill/adapter surface is treated as feature-complete and work shifts to
   stabilization or maintenance.
+- Release, compatibility, deprecation, and adoption decisions are owned and
+  recorded in [RELEASING.md](RELEASING.md). They do not change the current
+  expansion stage.
 
 ## Core Rules
 

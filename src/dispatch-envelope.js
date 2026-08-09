@@ -73,6 +73,7 @@ import { WORKFLOW_ROLE_REGISTRY } from './transition-contract.js';
 import {
   HOST_ROLE_CAPABILITIES,
   createDegradedEnforcementReports,
+  degradedEnforcementDeclarationFacts,
   validateDegradedEnforcementReport,
   validateHostRoleCapabilityDeclaration,
   validateHostRoleCapabilityInventory,
@@ -422,24 +423,38 @@ function validation(command, ok, evidenceState, disposition, findings, domain = 
   });
 }
 
-function degradedWarningDiagnostics(reports) {
-  return (reports ?? []).map(report => createDiagnostic({
-    level: 'warning',
-    code: report.diagnosticCode,
-    message: `${report.host}/${report.roleId} action '${report.action}' is ${report.enforcement}; ${report.detectionBoundary} must evaluate compatible authenticated actor/evidence. Recovery: ${report.recoveryRoute}`,
-    evidence: {
-      state: 'current',
-      supplied: true,
-      rollbackAuthorized: false,
-      host: report.host,
-      roleId: report.roleId,
-      action: report.action,
-      enforcement: report.enforcement,
-      declarationDigest: report.declarationDigest,
-      detectionBoundary: report.detectionBoundary,
-      recoveryRoute: report.recoveryRoute,
-    },
-  }));
+/**
+ * Render one warning per degraded action.
+ *
+ * The declaration-level prose is resolved from the digest-pinned declaration
+ * rather than read off the report, so the rendered warning is unchanged while
+ * the packet stops carrying the same few hundred bytes once per degraded
+ * action.
+ *
+ * @param {object[]} reports
+ * @param {object|null} [declaration]  The bound host-role capability declaration.
+ */
+function degradedWarningDiagnostics(reports, declaration = null) {
+  return (reports ?? []).map(report => {
+    const facts = degradedEnforcementDeclarationFacts(report, declaration);
+    return createDiagnostic({
+      level: 'warning',
+      code: report.diagnosticCode,
+      message: `${report.host}/${report.roleId} action '${report.action}' is ${report.enforcement}; ${facts.detectionBoundary} must evaluate compatible authenticated actor/evidence. Recovery: ${facts.recoveryRoute}`,
+      evidence: {
+        state: 'current',
+        supplied: true,
+        rollbackAuthorized: false,
+        host: report.host,
+        roleId: report.roleId,
+        action: report.action,
+        enforcement: report.enforcement,
+        declarationDigest: report.declarationDigest,
+        detectionBoundary: facts.detectionBoundary,
+        recoveryRoute: facts.recoveryRoute,
+      },
+    });
+  });
 }
 
 /** Build a failure envelope from typed findings; nothing is reclassified here. */
@@ -1673,7 +1688,10 @@ export function prepareRoleDispatch(input = {}, options = {}) {
       ok: true,
       packet: frozenClone(packet),
       validation: validation(command, true, 'current', 'proceed', null, {
-        warningDiagnostics: degradedWarningDiagnostics(boundAssignment.degradedEnforcementReports),
+        warningDiagnostics: degradedWarningDiagnostics(
+          boundAssignment.degradedEnforcementReports,
+          boundAssignment.hostRoleCapability
+        ),
         degradedEnforcementReports: boundAssignment.degradedEnforcementReports,
       }),
     };
@@ -1754,6 +1772,48 @@ function staleDispatchVersionResult(observedVersion) {
   return { ok: false, errors: findings.messages, findings: findings.items };
 }
 
+const LEGACY_DEGRADED_ENFORCEMENT_REPORT_SCHEMA_VERSION = 3;
+
+/** Reconstruct the exact v3 reports emitted by schema-v5 packets before the compact v4 report schema. */
+function legacyV3DegradedEnforcementReports(declaration) {
+  return createDegradedEnforcementReports(declaration).map(report => ({
+    ...report,
+    schemaVersion: LEGACY_DEGRADED_ENFORCEMENT_REPORT_SCHEMA_VERSION,
+    limitation: declaration.limitation,
+    detectionBoundary: declaration.detectionBoundary,
+    recoveryRoute: declaration.recoveryRoute,
+  }));
+}
+
+/**
+ * Classify only an authentic current-envelope packet whose nested degraded
+ * reports are the exact canonical v3 projection. The projected packet must
+ * pass every current semantic check; malformed lookalikes are never promoted
+ * into the trusted stale class.
+ */
+function legacyNestedDegradedReportCandidate(packet, options = {}) {
+  if (packet?.kind !== DISPATCH_PREPARATION_KIND ||
+      packet?.schemaVersion !== DISPATCH_PREPARATION_SCHEMA_VERSION ||
+      packet?.digest !== dispatchPreparationDigest(packet)) return false;
+  const declaration = packet?.assignment?.hostRoleCapability;
+  const reports = packet?.assignment?.degradedEnforcementReports;
+  if (!Array.isArray(reports) || !sameCanonical(reports, legacyV3DegradedEnforcementReports(declaration))) return false;
+  const projected = structuredClone(packet);
+  projected.assignment.degradedEnforcementReports = createDegradedEnforcementReports(declaration);
+  projected.digest = dispatchPreparationDigest(projected);
+  return validateCurrentDispatchPreparation(projected, options).ok;
+}
+
+function staleNestedDegradedReportResult() {
+  const findings = findingSet('task prepare-dispatch');
+  findings.changed(
+    `dispatch preparation degraded-enforcement report schemaVersion ${LEGACY_DEGRADED_ENFORCEMENT_REPORT_SCHEMA_VERSION} is stale; ` +
+    'regenerate the packet before dispatch or return import',
+    { code: 'dispatch.packet.stale', disposition: 'superseded' }
+  );
+  return { ok: false, errors: findings.messages, findings: findings.items };
+}
+
 function validateCurrentDispatchPreparation(packet, options = {}) {
   const findings = findingSet('task prepare-dispatch');
   try {
@@ -1825,6 +1885,12 @@ function validateCurrentDispatchPreparation(packet, options = {}) {
 }
 
 export function validateDispatchPreparation(packet, options = {}) {
+  try {
+    if (legacyNestedDegradedReportCandidate(packet, options)) return staleNestedDegradedReportResult();
+  } catch {
+    // A structurally plausible but semantically malformed nested report is not
+    // promoted into the trusted stale class.
+  }
   for (const version of LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSIONS) {
     if (!legacyDispatchCandidate(packet, version)) continue;
     try {
@@ -2473,7 +2539,10 @@ export function receiveRoleReturn(input = {}, options = {}) {
         'role_return.invalid'
       );
     }
-    const warningDiagnostics = degradedWarningDiagnostics(degradedReports);
+    const warningDiagnostics = degradedWarningDiagnostics(
+      degradedReports,
+      packet.assignment.hostRoleCapability
+    );
     return {
       ok: true,
       roleReturn: deepFreeze(wire),

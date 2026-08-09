@@ -5,6 +5,36 @@ import { dispositionForEvidenceState, evidenceStateRank, normalizeEvidenceState 
 export const OPERATIONAL_FAILURE_MESSAGE =
   'The command could not complete because required operational context is unavailable.';
 
+/**
+ * One public sentence and one safe repair for "the expected carrier digest is
+ * not the current carrier digest".
+ *
+ * Both task carriers evaluate committed state to reach this conclusion - each
+ * reads the current record and compares it - so both report the same message,
+ * the same repair, and `committedStateEvaluated: true`. Only the surrounding
+ * envelope's carrier identity distinguishes them.
+ */
+export function staleCarrierDigestMessage(expected, current) {
+  return `Stale task record: expected ${expected}, the current digest is ${current}.`;
+}
+
+export const STALE_CARRIER_DIGEST_CONTEXT = Object.freeze({
+  code: 'contract.baseline.stale',
+  evidenceState: 'changed',
+  disposition: 'superseded',
+  committedStateEvaluated: true,
+  safeRepair: 'Refetch the task record, re-evaluate the trusted baseline, and rerun with its current digest.',
+});
+
+/** Shared files/GitHub classification for a semantically refused task transition. */
+export const TASK_TRANSITION_NEGATIVE_CONTEXT = Object.freeze({
+  code: 'evidence.negative',
+  evidenceState: 'negative',
+  disposition: 'blocked',
+  committedStateEvaluated: true,
+  safeRepair: 'Repair the reported task-transition condition, then rerun the operation.',
+});
+
 const FINDING_REPAIR = Object.freeze({
   'activation.capture.expired': 'Obtain a fresh supported host capture and create or dispatch a fresh activation-bound task as applicable; do not mutate or silently rebind the expired task.',
   'activation.capture.unsupported': 'Use a host integration with a resolved supported parser-owned capture capability; a scaffold or unsupported capture cannot dispatch.',
