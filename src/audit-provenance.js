@@ -9,17 +9,19 @@
  * - When event logging is enabled, the invocation reference must match the
  *   corresponding Auditor `role.invoked` event; the event carries
  *   `data.invocation_reference` for auditor delegations.
- * - A fresh **authoritative** Auditor return fails closed without a host
- *   verifier. It cannot be downgraded to `asserted`: the whole point of the
- *   authoritative path is that the return was authenticated, so an
- *   unauthenticated one is refused rather than reclassified.
- * - The legacy, non-authoritative path is where downgrading still applies. A
- *   host with no verifiable receipt and no event evidence records `asserted`
- *   provenance rather than manufacturing proof.
+ * - A fresh Auditor return is graded under the effective policy. An honestly
+ *   asserted, receipt-free return is `session_reported`; a verified protected
+ *   host receipt is `host_receipt`.
+ * - A report claiming verified provenance never degrades to session-reported.
+ *   Without the protected verifier it fails closed instead.
+ * - Legacy inline history remains distinct from a fresh wire-format return. A
+ *   record with no verifiable receipt records `asserted` provenance rather
+ *   than manufacturing proof.
  */
 
 import { listEventLogFiles, loadEvents } from './event-logging.js';
 import { canonicalSha256 } from './canonical-json.js';
+import { returnAssuranceMeets, RETURN_ASSURANCE_VALUES } from './activation-grant.js';
 
 /** Typed fail-closed return for an invalid fresh Auditor payload. */
 export function createAuditorReportResumePacket({ errors = [], reportDigest = null, evidenceState = 'malformed' } = {}) {
@@ -41,10 +43,10 @@ export function createAuditorReportResumePacket({ errors = [], reportDigest = nu
  *
  * A receipt string is evidence to verify, never self-authentication.
  *
- * - Authoritative Auditor returns (`authoritativeAuditorReturn === true`) fail
- *   closed without a verifier and are never downgraded to `asserted`.
- * - Legacy non-authoritative runs without a verifier retain the receipt for
- *   traceability and are classified as `asserted`.
+ * - Fresh wire-format returns resolve to `session_reported` or `host_receipt`
+ *   and must meet `minimumReturnAssurance`.
+ * - Legacy runs retain their historical asserted/verified classification but
+ *   receive an honest assurance grade when canonicalized.
  *
  * The digest sent to the verifier, and compared against its answer, is
  * `auditorReturnReportDigest` - the receipt-null projection of the *normalized*
@@ -53,24 +55,35 @@ export function createAuditorReportResumePacket({ errors = [], reportDigest = nu
  * receipt over a valid report always matches here.
  *
  * @param {object} run
- * @param {{ verifier?: Function, workUnit: string, candidateArtifact: string, coveredTasks: string[] }} context
+ * @param {{ verifier?: Function, workUnit: string, candidateArtifact: string, coveredTasks: string[], minimumReturnAssurance?: string }} context
  * @returns {Promise<{ run: object, errors: string[] }>}
  */
 export async function normalizeAuditorInvocationProvenance(run, context) {
   const normalized = { ...run };
-  const authoritative = normalized.authoritativeAuditorReturn === true;
-  if (authoritative && normalized.invocationProvenance !== 'verified') {
-    return { run: normalized, errors: ['a fresh authoritative Auditor return requires verified invocation provenance'] };
-  }
-  if (normalized.invocationProvenance !== 'verified') {
+  const minimum = RETURN_ASSURANCE_VALUES.has(context?.minimumReturnAssurance)
+    ? context.minimumReturnAssurance
+    : 'host_receipt';
+  const receipt = String(normalized.invocationReceipt ?? '').trim();
+
+  if (normalized.invocationProvenance === 'asserted') {
+    if (receipt) {
+      return {
+        run: normalized,
+        errors: ['asserted Auditor invocation provenance cannot carry an opaque receipt; use verified provenance with the protected verifier or omit the receipt'],
+      };
+    }
+    normalized.auditorReturnAssurance = 'session_reported';
+    normalized.producerAuthenticated = false;
+    if (!returnAssuranceMeets(normalized.auditorReturnAssurance, minimum)) {
+      return {
+        run: normalized,
+        errors: [`Auditor return assurance 'session_reported' is below the effective minimum '${minimum}'`],
+      };
+    }
     return { run: normalized, errors: [] };
   }
   if (typeof context?.verifier !== 'function') {
-    if (normalized.authoritativeAuditorReturn === true) {
-      return { run: normalized, errors: ['a verified Auditor invocation requires a host receipt verifier; asserted provenance cannot satisfy a fresh authoritative Auditor return'] };
-    }
-    normalized.invocationProvenance = 'asserted';
-    return { run: normalized, errors: [] };
+    return { run: normalized, errors: ['a verified Auditor invocation requires a protected host receipt verifier; it cannot be downgraded to session_reported'] };
   }
   let result;
   try {
@@ -87,8 +100,16 @@ export async function normalizeAuditorInvocationProvenance(run, context) {
   } catch (error) {
     return { run: normalized, errors: [`host invocation receipt verification failed: ${error.message}`] };
   }
-  if (result?.verified !== true || (authoritative && result.reportDigest !== normalized.auditorReturnReportDigest)) {
+  if (result?.verified !== true || result.reportDigest !== normalized.auditorReturnReportDigest) {
     return { run: normalized, errors: ['host invocation receipt did not verify the Auditor role, work unit, candidate, tasks, and invocation reference'] };
+  }
+  normalized.auditorReturnAssurance = 'host_receipt';
+  normalized.producerAuthenticated = true;
+  if (!returnAssuranceMeets(normalized.auditorReturnAssurance, minimum)) {
+    return {
+      run: normalized,
+      errors: [`Auditor return assurance 'host_receipt' is below the effective minimum '${minimum}'`],
+    };
   }
   return { run: normalized, errors: [] };
 }

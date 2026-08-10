@@ -216,14 +216,24 @@ discarded. Multiline substantive text persists in the fenced JSON payload.
 
 Persistence appends one history entry and rewrites only derived certification
 fields. It never edits an earlier history entry or alters report substance. A
-fresh authoritative return requires the packaged production verifier injected by
-an authenticated protected host boundary. The verifier consumes the fixed
-operator-pinned trust store and authenticates a closed Ed25519 receipt binding
-the Auditor role, adapter/key, target, invocation, work unit, candidate, canonical
-task inventory, exact substantive report digest, receipt identity, and liveness.
-Shape and signature are checked before semantic or freshness classification.
-Without that protected boundary the ordinary CLI fails closed; a supplied opaque
-receipt is not degraded proof.
+fresh return is graded under the effective assurance policy. Standard mode
+accepts an honestly receipt-free, separately invoked Auditor report as
+`session_reported` and persists `Producer authenticated: false`. Hardened mode
+requires the packaged production verifier injected by an authenticated protected
+host boundary. The verifier consumes the fixed operator-pinned trust store and
+authenticates a closed Ed25519 receipt binding the Auditor role, adapter/key,
+target, invocation, work unit, candidate, canonical task inventory, exact
+substantive report digest, receipt identity, and liveness. Shape and signature
+are checked before semantic or freshness classification. A supplied opaque
+receipt is never degraded proof.
+
+Both grades bind the exact invocation reference and mode, work unit, candidate,
+covered tasks, normalized report digest, and repository state revalidated at
+persistence and closeout. Audit schema version 3 stores the grade and producer
+authentication boolean; the audit gate, closeout packet, and final closeout
+marker carry them and enforce the current policy minimum. Same-session audit is
+invalid in both modes. Standard mode does not cryptographically establish the
+Auditor identity, so every human and JSON surface must preserve that limitation.
 
 The signed report digest covers the CLI's *normalized* report, so a protected
 host prepares the report before it signs: it calls

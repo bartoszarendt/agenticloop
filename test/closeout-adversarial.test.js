@@ -262,7 +262,7 @@ describe('invocation provenance registry', () => {
     assert.equal(lint.status, 0, `${lint.stdout}${lint.stderr}`);
   });
 
-  it('rejects an unverifiable fresh Auditor report without consuming audit budget', async () => {
+  it('accepts a separate asserted Auditor in standard mode but rejects a false verified claim', async () => {
     const target = makeTarget('asserted');
     writeTask(target, 'T-001', 'accepted', 'milestone:M00');
     const artifact = commitAll(target, 'integrate');
@@ -274,9 +274,13 @@ describe('invocation provenance registry', () => {
     writeFileSync(reportPath, JSON.stringify(wireReport(artifact, ['T-001'], {
       invocation: { mode: 'host_subagent', reference: 'ref-asserted', provenance: 'asserted' },
     })), 'utf-8');
-    assert.equal((await run(['audit', 'report', 'AUD-001', '--file', reportPath], target)).status, 1);
+    const asserted = await run(['audit', 'report', 'AUD-001', '--file', reportPath], target);
+    assert.equal(asserted.status, 0, `${asserted.stdout}${asserted.stderr}`);
     const status = await run(['audit', 'status', 'AUD-001', '--json'], target);
-    assert.equal(JSON.parse(status.stdout).completed_audits, 0);
+    const statusPayload = JSON.parse(status.stdout);
+    assert.equal(statusPayload.completed_audits, 1);
+    assert.equal(statusPayload.auditor_return_assurance, 'session_reported');
+    assert.equal(statusPayload.auditor_producer_authenticated, false);
     // A verified claim without a receipt is rejected.
     writeFileSync(join(target, 'app.js'), 'export const v = 2;\n', 'utf-8');
     const artifact2 = commitAll(target, 'remediation');

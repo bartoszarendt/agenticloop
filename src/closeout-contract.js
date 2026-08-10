@@ -28,6 +28,7 @@ import {
   CLOSEOUT_PACKET_SCHEMA_VERSION,
 } from './layout.js';
 import { canonicalJson, canonicalSha256 } from './canonical-json.js';
+import { RETURN_ASSURANCE_VALUES } from './activation-grant.js';
 
 export {
   CLOSEOUT_MARKER_SCHEMA_VERSION,
@@ -76,6 +77,9 @@ export function closeoutProvenanceProjection(packet) {
           run: packet.audit.run ?? null,
           verdict: String(packet.audit.verdict ?? ''),
           report_format: String(packet.audit.report_format ?? ''),
+          return_assurance: String(packet.audit.return_assurance ?? ''),
+          producer_authenticated: packet.audit.producer_authenticated === true,
+          report_digest: String(packet.audit.report_digest ?? ''),
         }
       : null,
     audit_opt_out: packet?.audit_opt_out === true,
@@ -164,6 +168,26 @@ export function validateCloseoutPacket(packet) {
     // completion never can.
     errors.push('a completion-eligible closeout packet requires candidate_artifact');
   }
+  if (packet.audit !== null && packet.audit !== undefined) {
+    const audit = packet.audit;
+    if (!audit || typeof audit !== 'object' || Array.isArray(audit) ||
+        typeof audit.audit_id !== 'string' || !audit.audit_id ||
+        !Number.isSafeInteger(audit.audit_schema_version) ||
+        !Number.isSafeInteger(audit.run) || audit.run < 1 ||
+        typeof audit.verdict !== 'string' || !audit.verdict ||
+        typeof audit.report_format !== 'string' || !audit.report_format ||
+        !RETURN_ASSURANCE_VALUES.has(audit.return_assurance) ||
+        typeof audit.producer_authenticated !== 'boolean' ||
+        typeof audit.report_digest !== 'string' ||
+        (audit.report_format === AUDIT_REPORT_SCHEMA_VERSION &&
+          !/^sha256:agenticloop\.auditor-report\.v1:[a-f0-9]{64}$/.test(audit.report_digest))) {
+      errors.push('closeout packet audit binding must include id, schema, run, verdict, report format, return assurance, producer authentication, and report digest');
+    } else if (audit.return_assurance === 'host_receipt' && audit.producer_authenticated !== true) {
+      errors.push('closeout packet host_receipt audit assurance requires producer_authenticated true');
+    } else if (audit.return_assurance === 'session_reported' && audit.producer_authenticated !== false) {
+      errors.push('closeout packet session_reported audit assurance requires producer_authenticated false');
+    }
+  }
   if (typeof packet.publishable !== 'boolean') {
     errors.push('closeout packet requires a boolean publishable flag');
   }
@@ -220,6 +244,8 @@ export const CLOSEOUT_MARKER_KEYS = Object.freeze({
   workUnit: 'AGENT_CLOSEOUT_WORK_UNIT',
   artifact: 'AGENT_CLOSEOUT_ARTIFACT',
   audit: 'AGENT_CLOSEOUT_AUDIT',
+  auditAssurance: 'AGENT_CLOSEOUT_AUDIT_ASSURANCE',
+  auditProducerAuthenticated: 'AGENT_CLOSEOUT_AUDIT_PRODUCER_AUTHENTICATED',
   predecessor: 'AGENT_CLOSEOUT_PREDECESSOR',
   planSync: 'AGENT_CLOSEOUT_PLAN_SYNC',
   improvements: 'AGENT_CLOSEOUT_IMPROVEMENTS',
@@ -243,6 +269,8 @@ const MARKER_GATE_PATTERN = /^sha256:[0-9a-f]{64}$/;
  * @param {string} fields.workUnit
  * @param {string} fields.artifact
  * @param {string} [fields.auditRef]      e.g. 'AUD-001/run:3' or 'none'.
+ * @param {string} [fields.auditAssurance] Observed Auditor return grade or 'none'.
+ * @param {boolean|null} [fields.auditProducerAuthenticated]
  * @param {string} [fields.predecessor]   predecessor marker ref or 'none'.
  * @param {string} [fields.gateDigest]    'sha256:<hex>' or 'none'.
  * @param {string} [fields.supersedes]    superseded marker ref or ''.
@@ -259,6 +287,8 @@ export function renderCloseoutMarker(fields) {
     `${CLOSEOUT_MARKER_KEYS.workUnit}: ${String(fields?.workUnit ?? '')}`,
     `${CLOSEOUT_MARKER_KEYS.artifact}: ${String(fields?.artifact ?? '').trim() || 'none'}`,
     `${CLOSEOUT_MARKER_KEYS.audit}: ${fields?.auditRef ? String(fields.auditRef) : 'none'}`,
+    `${CLOSEOUT_MARKER_KEYS.auditAssurance}: ${fields?.auditAssurance ? String(fields.auditAssurance) : 'none'}`,
+    `${CLOSEOUT_MARKER_KEYS.auditProducerAuthenticated}: ${fields?.auditProducerAuthenticated === null || fields?.auditProducerAuthenticated === undefined ? 'none' : String(fields.auditProducerAuthenticated === true)}`,
     `${CLOSEOUT_MARKER_KEYS.predecessor}: ${fields?.predecessor ? String(fields.predecessor) : 'none'}`,
     `${CLOSEOUT_MARKER_KEYS.planSync}: ${fields?.planSync ? String(fields.planSync) : 'none'}`,
     `${CLOSEOUT_MARKER_KEYS.improvements}: ${Array.isArray(fields?.improvementRefs) && fields.improvementRefs.length > 0 ? fields.improvementRefs.join(',') : 'none'}`,
@@ -325,6 +355,8 @@ export function parseCloseoutMarkers(text) {
         CLOSEOUT_MARKER_KEYS.workUnit,
         CLOSEOUT_MARKER_KEYS.artifact,
         CLOSEOUT_MARKER_KEYS.audit,
+        CLOSEOUT_MARKER_KEYS.auditAssurance,
+        CLOSEOUT_MARKER_KEYS.auditProducerAuthenticated,
         CLOSEOUT_MARKER_KEYS.predecessor,
         CLOSEOUT_MARKER_KEYS.planSync,
         CLOSEOUT_MARKER_KEYS.improvements,
@@ -338,6 +370,18 @@ export function parseCloseoutMarkers(text) {
       }
       if (!MARKER_GATE_PATTERN.test(String(marker.fields[CLOSEOUT_MARKER_KEYS.gate] ?? ''))) {
         errors.push('closeout marker gate digest must be sha256:<64 lowercase hex characters>');
+      }
+      const auditRef = String(marker.fields[CLOSEOUT_MARKER_KEYS.audit] ?? '');
+      const auditAssurance = String(marker.fields[CLOSEOUT_MARKER_KEYS.auditAssurance] ?? '');
+      const auditAuthenticated = String(marker.fields[CLOSEOUT_MARKER_KEYS.auditProducerAuthenticated] ?? '');
+      if (auditRef === 'none') {
+        if (auditAssurance !== 'none' || auditAuthenticated !== 'none') {
+          errors.push('closeout marker without an audit must record audit assurance and producer authentication as none');
+        }
+      } else if (!RETURN_ASSURANCE_VALUES.has(auditAssurance) ||
+          !['true', 'false'].includes(auditAuthenticated) ||
+          (auditAssurance === 'host_receipt') !== (auditAuthenticated === 'true')) {
+        errors.push('closeout marker audit assurance and producer authentication are inconsistent');
       }
     }
     return {

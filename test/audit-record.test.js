@@ -18,6 +18,7 @@ import {
   applyAuditHumanResolution,
   applyAuditBudgetOverride,
   auditBudgetState,
+  canonicalizeAuditRecord,
   certificationStatus,
   completedAuditRuns,
   coveredTaskSetsEqual,
@@ -81,6 +82,14 @@ function report(overrides = {}) {
   };
 }
 
+function authenticatedWireRun(wireReport) {
+  return {
+    ...wireReportToAuditRun(wireReport),
+    auditorReturnAssurance: 'host_receipt',
+    producerAuthenticated: true,
+  };
+}
+
 function blockingFinding(id = 'A-01') {
   return {
     id,
@@ -141,6 +150,49 @@ describe('work-unit identity', () => {
 describe('audit record validation', () => {
   it('accepts a canonical record', () => {
     assert.deepEqual(validateAuditRecord(baseRecord(), '.agenticloop/audits/AUD-001.md'), []);
+  });
+
+  it('migrates schema v2 assurance conservatively without discarding current certification', () => {
+    const artifact = `commit:${'a'.repeat(40)}`;
+    const wire = parseAuditorWireReport({
+      report_schema: 'auditor_report_v1',
+      producer: { roleId: 'auditor' },
+      artifact,
+      covered_tasks: ['T-041', 'T-042'],
+      invocation: { mode: 'host_subagent', reference: 'schema-v2-run', provenance: 'asserted' },
+      perspectives: Object.fromEntries(
+        ['outcome', 'completeness', 'integration_coherence', 'engineering_quality', 'verification', 'risk']
+          .map(key => [key, `${key} body.`])
+      ),
+      assessment: 'Consolidated assessment.',
+      evidence_checked: 'npm test (pass)',
+      verdict: 'certified',
+      findings: [],
+    });
+    assert.equal(wire.ok, true, wire.errors.join('; '));
+    const current = appendAuditReport(
+      baseRecord({ candidateArtifact: artifact }),
+      {
+        ...wireReportToAuditRun(wire.report),
+        auditorReturnAssurance: 'session_reported',
+        producerAuthenticated: false,
+      }
+    );
+    assert.equal(current.ok, true, current.errors.join('; '));
+    const prior = current.content
+      .replace('audit_schema_version: 3', 'audit_schema_version: 2')
+      .replace(/- Auditor return assurance:.*\n/g, '')
+      .replace(/- Producer authenticated:.*\n/g, '');
+    const migrated = canonicalizeAuditRecord(prior, {
+      evidence: 'Fresh integrated evidence for the same full candidate.',
+      resolveArtifact: () => ({ ok: true, canonical: artifact }),
+    });
+    assert.equal(migrated.ok, true, migrated.errors.join('; '));
+    const record = parseAuditRecord(migrated.content);
+    assert.equal(record.auditSchemaVersion, 3);
+    assert.equal(record.history[0].auditorReturnAssurance, 'session_reported');
+    assert.equal(record.history[0].producerAuthenticated, 'false');
+    assert.equal(certificationStatus(record).current, true);
   });
 
   it('rejects a missing required heading', () => {
@@ -326,7 +378,7 @@ describe('audit record validation', () => {
         findings: [],
       });
       assert.equal(wire.ok, true, wire.errors?.join('\n'));
-      const appended = appendAuditReport(baseRecord({ auditId, workUnit }), wireReportToAuditRun(wire.report));
+      const appended = appendAuditReport(baseRecord({ auditId, workUnit }), authenticatedWireRun(wire.report));
       assert.ok(appended.ok, appended.errors.join('; '));
       return appended.content;
     }
@@ -388,7 +440,7 @@ describe('audit record validation', () => {
         evidence_checked: 'npm test (pass)', verdict: 'needs_remediation', findings: [],
       });
       assert.equal(wire.ok, true, wire.errors?.join('\n'));
-      const appended = appendAuditReport(baseRecord({ auditId, workUnit }), wireReportToAuditRun(wire.report));
+      const appended = appendAuditReport(baseRecord({ auditId, workUnit }), authenticatedWireRun(wire.report));
       assert.ok(appended.ok, appended.errors.join('; '));
       return appended.content;
     };
@@ -434,7 +486,7 @@ describe('audit record validation', () => {
         evidence_checked: 'npm test (pass)', verdict: 'needs_remediation', findings: [],
       });
       assert.equal(wire.ok, true, wire.errors?.join('\n'));
-      const appended = appendAuditReport(baseRecord({ auditId, workUnit }), wireReportToAuditRun(wire.report));
+      const appended = appendAuditReport(baseRecord({ auditId, workUnit }), authenticatedWireRun(wire.report));
       assert.ok(appended.ok, appended.errors.join('; '));
       return appended.content;
     };
@@ -911,6 +963,27 @@ describe('closeout gate', () => {
     assert.equal(gate.allowed, true, gate.reasons.join('; '));
     assert.equal(gate.state, 'certified');
     assert.equal(gate.auditId, 'AUD-001');
+  });
+
+  it('enforces the effective Auditor-return minimum independently at closeout', () => {
+    const target = makeTarget('audit-return-minimum');
+    seedCertified(target);
+    const standard = evaluateAuditCloseoutGate(target, {
+      workUnit: 'phase:4',
+      workUnitAudit: 'enabled',
+      minimumAuditorReturnAssurance: 'session_reported',
+    });
+    assert.equal(standard.allowed, true, standard.reasons.join('; '));
+    assert.equal(standard.auditorReturnAssurance, 'session_reported');
+    assert.equal(standard.producerAuthenticated, false);
+
+    const hardened = evaluateAuditCloseoutGate(target, {
+      workUnit: 'phase:4',
+      workUnitAudit: 'enabled',
+      minimumAuditorReturnAssurance: 'host_receipt',
+    });
+    assert.equal(hardened.allowed, false);
+    assert.match(hardened.reasons.join('\n'), /session_reported.*below the effective minimum 'host_receipt'/);
   });
 
   it('fails closed when a structurally invalid record claims certification', () => {

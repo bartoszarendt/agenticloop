@@ -881,15 +881,20 @@ Mutable Markdown records follow one canonical rendering rule:
 ### Audit budget and state provenance
 
 A fresh schema-valid substantive Auditor report carries the closed producer
-identity `{ roleId: "auditor" }` and a host-authenticated canonical digest of its
-complete normalized payload. The audit CLI persists that payload losslessly; its
-visible invocation provenance and embedded JSON provenance must agree. A fresh
-schema-valid report consumes one audit run and records its cause. An unavailable
-invocation, rejected or malformed report, or report-validation failure returns a
-typed Auditor-owned resume/redelegation result and consumes neither audit budget
-nor recovery allowance; the ordinary attempt budget still bounds equivalent
-failures. Explicit `legacy_inline_v1` reports remain historical compatibility
-data and cannot satisfy the fresh authoritative-Auditor boundary.
+identity `{ roleId: "auditor" }` and the canonical digest of its complete
+normalized payload. The audit CLI persists that payload losslessly; its visible
+invocation provenance and embedded JSON provenance must agree. In `standard`
+mode a distinct, receipt-free Auditor invocation is graded `session_reported`
+with `Producer authenticated: false`. In `hardened` mode the exact same report
+must carry a verified protected-host receipt and is graded `host_receipt` with
+`Producer authenticated: true`. A fresh schema-valid report that meets the
+effective policy consumes one audit run and records its cause. An unavailable
+invocation, rejected or malformed report, policy-insufficient return, or
+report-validation failure returns a typed Auditor-owned resume/redelegation
+result and consumes neither audit budget nor recovery allowance; the ordinary
+attempt budget still bounds equivalent failures. Explicit `legacy_inline_v1`
+reports remain historical compatibility data; they do not establish a fresh
+wire-format Auditor return.
 
 One bounded `product_invalidation_recovery` allowance is declared per audit
 record, with required `typed_cause`, `invalidation_reference`,
@@ -1815,19 +1820,34 @@ altering the substantive findings. Persistence validates the input and the
 fully rendered record before writing; malformed finding fields, stale baselines,
 or structurally invalid packets are rejected.
 
-A fresh authoritative report additionally requires the shipped production
-Auditor-return verifier through the protected host I/O seam. Its closed
-schema-version-1 Ed25519 receipt binds immutable producer `auditor`, the pinned
-adapter/key, canonical target repository, invocation reference and mode, work
-unit, exact candidate, canonical covered-task inventory, substantive report
-digest, receipt identity, and issue/expiry instants. Closed shape and signature
-validation precede semantic and freshness checks. The ordinary CLI has no
-authenticated host boundary and therefore still fails closed; a supported host
-wrapper imports the packaged verifier, answers its fresh exact-context loader
-challenge with the pinned adapter's Ed25519 key over a host-controlled IPC or
-protected OS-handle boundary, and injects that verifier. A boolean callback,
-environment assertion, or replayed challenge response grants no authority. Neither an opaque
-receipt string nor Orchestrator reconstruction authenticates a report.
+A fresh report resolves Auditor-return assurance under the same effective policy
+minimum as other role returns. In `standard` mode, an honestly receipt-free
+return from a fresh, separate Auditor invocation is accepted as
+`session_reported`; the audit record states `Producer authenticated: false`, and
+no output may describe the Auditor identity as host-authenticated. The exact work
+unit, candidate, covered tasks, invocation reference and mode, normalized report
+digest, and freshly revalidated repository state remain bound to the run.
+
+In `hardened` mode, the shipped production Auditor-return verifier remains
+required through the protected host I/O seam. Its closed schema-version-1
+Ed25519 receipt binds immutable producer `auditor`, the pinned adapter/key,
+canonical target repository, invocation reference and mode, work unit, exact
+candidate, canonical covered-task inventory, substantive report digest, receipt
+identity, and issue/expiry instants. Closed shape and signature validation
+precede semantic and freshness checks. A supported host wrapper imports the
+packaged verifier, answers its fresh exact-context loader challenge with the
+pinned adapter's Ed25519 key over a host-controlled IPC or protected OS-handle
+boundary, and injects that verifier. A boolean callback, environment assertion,
+opaque receipt, replayed challenge response, or Orchestrator reconstruction
+grants no authority.
+
+Both grades are persisted in audit schema version 3 and carried through the
+audit gate, closeout packet, and final closeout marker. Closeout enforces the
+current effective minimum: a later hardened policy therefore refuses an earlier
+`session_reported` certification until a fresh protected Auditor return is
+recorded. `single_agent_fallback` remains invalid in both modes. Standard mode
+can require and record a distinct invocation reference, but it cannot
+cryptographically prove the producing identity; that limitation is explicit.
 
 A `needs_human_decision` report moves the record to
 `audit_state: awaiting_human`. Another Auditor report is inadmissible until a

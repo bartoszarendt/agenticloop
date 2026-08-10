@@ -98,18 +98,17 @@ or caller-selected external adapter/key data cannot authorize it. The packet ref
 backend documents; it does not copy their procedures or select a solution.
 
 The Engineer invokes the read-only packet verifier before its first mutation.
-The result is raw `agenticloop.role-return` JSON from that role, bound to the
-exact packet digest. A successful result uses canonical `disposition: proceed`
-with a separate non-authoritative implementation outcome, never a fake review
-receipt or completion claim. The orchestrator validates/reroutes invalid returns;
-it does not rewrite, summarize, or reconstruct them. Authenticated host producer
-provenance bound to the target repository, adapter/key identity, invocation,
-packet, return, liveness, and exact repository evidence is mandatory at the
-handoff edge. The verifier selects the adapter/key from the verified packet, not
-the receipt; replayed, unsigned, or repository-self-attested receipts fail
-closed. The receipt's host-observed producer must equal both the assigned
-`roleId` and the raw return's producer. Cooperative commit or comment trailers
-cannot repair a mismatch.
+The result is raw `agenticloop.role-return` JSON bound to the exact packet
+digest. Success uses canonical `disposition: proceed` with a separate
+non-authoritative implementation outcome, never a fake review or completion
+claim. The orchestrator validates or reroutes invalid returns; it never
+reconstructs them. Standard mode may persist a fully revalidated return as
+`session_reported`; its producer is not host-authenticated. Hardened mode
+requires host provenance bound to repository, adapter/key, invocation, packet,
+return, liveness, and repository evidence. The verifier selects the adapter/key
+from the verified packet, not the receipt; replayed, unsigned, or self-attested
+receipts fail closed. Its observed producer must match both the assigned
+`roleId` and raw producer; trailers cannot repair a mismatch.
 
 `task verify-return` / `role_return_receive` also gates blocked resume and
 recovery before state change. Normal resume uses the authenticated producer;

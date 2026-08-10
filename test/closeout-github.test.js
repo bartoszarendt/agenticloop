@@ -279,10 +279,12 @@ describe('digest-idempotent marker publication', () => {
   const digest = 'sha256:' + 'd'.repeat(64);
   const markerBody = [
     'AGENT_CLOSEOUT_STATUS: complete',
-    'AGENT_CLOSEOUT_SCHEMA: 1',
+    'AGENT_CLOSEOUT_SCHEMA: 2',
     'AGENT_CLOSEOUT_WORK_UNIT: milestone:M00',
     'AGENT_CLOSEOUT_ARTIFACT: commit:' + 'a'.repeat(40),
     'AGENT_CLOSEOUT_AUDIT: AUD-001/run:1',
+    'AGENT_CLOSEOUT_AUDIT_ASSURANCE: session_reported',
+    'AGENT_CLOSEOUT_AUDIT_PRODUCER_AUTHENTICATED: false',
     'AGENT_CLOSEOUT_PREDECESSOR: none',
     'AGENT_CLOSEOUT_PLAN_SYNC: none',
     'AGENT_CLOSEOUT_IMPROVEMENTS: none',

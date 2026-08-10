@@ -144,11 +144,14 @@ multiline text.
 }
 ```
 
-Use `provenance: "verified"` only when the host supplies a verifiable receipt
-for this invocation, included as `invocation.receipt`. A receipt is not
-authentication: without the packaged verifier, persistence fails closed. Never
-pre-compute a report digest; the host derives it. Do not return raw transcripts,
-file dumps, or host output.
+The receipt-free `provenance: "asserted"` form is the standard-mode return. It
+will be persisted as `session_reported` with `producerAuthenticated: false` only
+when the effective policy permits it. Use `provenance: "verified"` only when the
+host supplies a verifiable receipt for this invocation, included as
+`invocation.receipt`; hardened mode requires that `host_receipt` path. A receipt
+is not authentication until the packaged verifier accepts it. Never pre-compute
+a report digest; the host derives it. Do not return raw transcripts, file dumps,
+or host output.
 
 ## Before Handing Back
 

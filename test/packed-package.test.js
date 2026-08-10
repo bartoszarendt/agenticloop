@@ -1626,14 +1626,14 @@ describe('packed audit, closeout, and improvement flows', () => {
     }), 'utf-8');
     const fromFile = runPacked(['audit', 'report', 'AUD-001', '--file', reportFile, '--target', target]);
     assert.equal(fromFile.status, 1);
-    assert.match(fromFile.stderr, /requires a host receipt verifier/);
+    assert.match(fromFile.stderr, /requires a protected host receipt verifier/);
     assert.match(fromFile.stderr, /Auditor resume packet:/);
 
     const fromStdin = spawnSync(process.execPath, [
       packedBin, 'audit', 'report', 'AUD-001', '--stdin', '--target', target,
     ], { encoding: 'utf-8', input: JSON.stringify(wireReport(artifact, ['T-001'], 'packed-ref-2')) });
     assert.equal(fromStdin.status, 1);
-    assert.match(fromStdin.stderr, /requires a host receipt verifier/);
+    assert.match(fromStdin.stderr, /requires a protected host receipt verifier/);
 
     const status = runPacked(['audit', 'status', 'AUD-001', '--json', '--target', target]);
     assert.equal(JSON.parse(status.stdout).completed_audits, 0);
@@ -1862,7 +1862,7 @@ describe('packed audit, closeout, and improvement flows', () => {
     writeFileSync(reportFile, JSON.stringify(wireReport(artifact, ['T-001'], 'packed-closeout-ref')), 'utf-8');
     const report = runPacked(['audit', 'report', 'AUD-001', '--file', reportFile, '--target', target]);
     assert.equal(report.status, 1);
-    assert.match(report.stderr, /requires a host receipt verifier/);
+    assert.match(report.stderr, /requires a protected host receipt verifier/);
 
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     const prepared = runPacked([

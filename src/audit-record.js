@@ -49,8 +49,10 @@ import {
   CERTIFYING_AUDIT_VERDICTS,
   DEFAULT_AUDIT_BUDGET,
   LEGACY_AUDIT_SCHEMA_VERSION,
+  PRIOR_AUDIT_SCHEMA_VERSIONS,
   LEGACY_INLINE_REPORT_VERSION,
 } from './layout.js';
+import { RETURN_ASSURANCE_VALUES, returnAssuranceMeets } from './activation-grant.js';
 
 /**
  * Frontmatter keys that must never appear on an audit record. `model`,
@@ -91,6 +93,8 @@ export const AUDIT_RUN_LABELS = Object.freeze([
   'Invocation reference',
   'Invocation mode',
   'Invocation provenance',
+  'Auditor return assurance',
+  'Producer authenticated',
   'Audited artifact',
   'Covered tasks',
   'Verdict',
@@ -505,6 +509,8 @@ export function parseAuditRecord(content) {
         invocationReference: fields.get('invocation reference') ?? '',
         invocationMode: fields.get('invocation mode') ?? '',
         invocationProvenance: fields.get('invocation provenance') ?? '',
+        auditorReturnAssurance: fields.get('auditor return assurance') ?? '',
+        producerAuthenticated: fields.get('producer authenticated') ?? '',
         auditorReportDigest: fields.get('auditor report digest') ?? '',
         auditedArtifact: fields.get('audited artifact') ?? '',
         coveredTasks: (fields.get('covered tasks') ?? '')
@@ -657,6 +663,10 @@ export function isLegacyAuditRecord(record) {
   return record?.auditSchemaVersion !== AUDIT_SCHEMA_VERSION;
 }
 
+function usesLegacyAuditStructure(record) {
+  return record?.auditSchemaVersion === null || record?.auditSchemaVersion === LEGACY_AUDIT_SCHEMA_VERSION;
+}
+
 /**
  * Derive per-finding disposition state. Identity is run-qualified so a later
  * `A-01` can never overwrite an earlier run's `A-01`. The last disposition for
@@ -787,7 +797,7 @@ export function parseKnownLimitations(content) {
 // ---------------------------------------------------------------------------
 
 function validateOrderedAuditHeadings(content, label, errors, record) {
-  const headings = isLegacyAuditRecord(record)
+  const headings = usesLegacyAuditStructure(record)
     ? LEGACY_AUDIT_REQUIRED_SECTION_HEADINGS
     : AUDIT_REQUIRED_SECTION_HEADINGS;
   const lines = markdownLines(content);
@@ -814,7 +824,8 @@ function validateOrderedAuditHeadings(content, label, errors, record) {
 function validateAuditHistoryEntries(record, label, errors) {
   const seenReferences = new Set();
   const seenReceipts = new Set();
-  const requirePhase34Labels = !isLegacyAuditRecord(record);
+  const requireWireProvenanceLabels = Number(record.auditSchemaVersion) >= 2;
+  const requireAssuranceLabels = record.auditSchemaVersion === AUDIT_SCHEMA_VERSION;
   record.history.forEach((entry, index) => {
     const entryLabel = `Audit record '${label}' history entry ${index + 1}`;
     const labelCounts = new Map();
@@ -873,7 +884,7 @@ function validateAuditHistoryEntries(record, label, errors) {
       errors.push(`${entryLabel} is missing 'Evidence checked'`);
     }
 
-    if (requirePhase34Labels) {
+    if (requireWireProvenanceLabels) {
       if (!entry.reportFormat) {
         errors.push(`${entryLabel} is missing 'Report format'`);
       } else if (!AUDIT_REPORT_FORMATS.includes(entry.reportFormat)) {
@@ -887,6 +898,25 @@ function validateAuditHistoryEntries(record, label, errors) {
         errors.push(
           `${entryLabel} invocation provenance '${entry.invocationProvenance}' must be 'verified' or 'asserted'`
         );
+      }
+      if (requireAssuranceLabels) {
+        if (!RETURN_ASSURANCE_VALUES.has(entry.auditorReturnAssurance)) {
+          errors.push(
+            `${entryLabel} Auditor return assurance '${entry.auditorReturnAssurance || '(missing)'}' must be 'session_reported' or 'host_receipt'`
+          );
+        }
+        if (!['true', 'false'].includes(entry.producerAuthenticated)) {
+          errors.push(`${entryLabel} Producer authenticated must be 'true' or 'false'`);
+        }
+        const receipt = String(entry.reportPayload?.invocation?.receipt ?? '').trim();
+        if (entry.auditorReturnAssurance === 'host_receipt' &&
+            (entry.producerAuthenticated !== 'true' || entry.invocationProvenance !== 'verified' || !receipt)) {
+          errors.push(`${entryLabel} host_receipt assurance requires verified invocation provenance, a protected receipt, and Producer authenticated: true`);
+        }
+        if (entry.auditorReturnAssurance === 'session_reported' &&
+            (entry.producerAuthenticated !== 'false' || entry.invocationProvenance !== 'asserted' || receipt)) {
+          errors.push(`${entryLabel} session_reported assurance requires asserted invocation provenance, no receipt, and Producer authenticated: false`);
+        }
       }
       if (!entry.consumptionCause) {
         // One explicit, non-destructive migration route: an audit history
@@ -1129,13 +1159,13 @@ export function validateAuditRecord(content, label, options = {}) {
       );
     }
   } else if (!Number.isSafeInteger(record.auditSchemaVersion) ||
-      (record.auditSchemaVersion !== AUDIT_SCHEMA_VERSION && record.auditSchemaVersion !== LEGACY_AUDIT_SCHEMA_VERSION)) {
+      (record.auditSchemaVersion !== AUDIT_SCHEMA_VERSION && !PRIOR_AUDIT_SCHEMA_VERSIONS.includes(record.auditSchemaVersion))) {
     errors.push(
       `Audit record '${label}' has unsupported audit_schema_version '${record.frontmatter?.audit_schema_version}'; expected ${AUDIT_SCHEMA_VERSION}`
     );
-  } else if (record.auditSchemaVersion === LEGACY_AUDIT_SCHEMA_VERSION && options.allowLegacy !== true) {
+  } else if (PRIOR_AUDIT_SCHEMA_VERSIONS.includes(record.auditSchemaVersion) && options.allowLegacy !== true) {
     errors.push(
-      `Audit record '${label}' is a legacy record (audit_schema_version: ${LEGACY_AUDIT_SCHEMA_VERSION}); ` +
+      `Audit record '${label}' is a prior-schema record (audit_schema_version: ${record.auditSchemaVersion}); ` +
       `migrate it with 'agenticloop audit baseline ${record.auditId || '<AUD-ID>'} --canonicalize ` +
       `--evidence "<current integrated evidence for the resolved full candidate>"'`
     );
@@ -1217,7 +1247,7 @@ export function validateAuditRecord(content, label, options = {}) {
   validateOrderedAuditHeadings(content, label, errors, record);
   validateAuditHistoryEntries(record, label, errors);
   validateAuditFindings(record, label, errors);
-  if (!isLegacyAuditRecord(record)) {
+  if (!usesLegacyAuditStructure(record)) {
     validateAuditDispositions(record, label, errors);
   }
   validateConcreteAuditPacket(record, label, errors);
@@ -1485,7 +1515,7 @@ function evaluateCanonicalAuditStructure(content, record = parseAuditRecord(cont
   if (titleIndexes.length !== 1) {
     return { ok: false, message: `expected exactly one '# ${expectedTitle}' heading`, lines };
   }
-  const requiredHeadings = isLegacyAuditRecord(record)
+  const requiredHeadings = usesLegacyAuditStructure(record)
     ? LEGACY_AUDIT_REQUIRED_SECTION_HEADINGS
     : AUDIT_REQUIRED_SECTION_HEADINGS;
   const firstSectionIndex = headings.find(item => item.heading.level === 2)?.index ?? lines.length;
@@ -2026,6 +2056,8 @@ function renderHistoryBlock(entry, runNumber) {
     `- Invocation reference: ${entry.invocationReference}`,
     `- Invocation mode: ${entry.invocationMode}`,
     `- Invocation provenance: ${entry.invocationProvenance || 'asserted'}`,
+    `- Auditor return assurance: ${entry.auditorReturnAssurance || 'session_reported'}`,
+    `- Producer authenticated: ${entry.producerAuthenticated === true || entry.producerAuthenticated === 'true'}`,
     `- Audited artifact: ${entry.auditedArtifact}`,
     `- Covered tasks: ${normalizeCoveredTasks(entry.coveredTasks).join(', ')}`,
     `- Verdict: ${entry.verdict}`,
@@ -2191,8 +2223,17 @@ export function appendAuditReport(content, report, validationOptions = {}) {
   if (invocationProvenance === 'verified' && !invocationReceipt) {
     errors.push("invocation provenance 'verified' requires a host receipt");
   }
-  if (report?.authoritativeAuditorReturn === true && invocationProvenance !== 'verified') {
-    errors.push('a fresh authoritative Auditor return requires verified invocation provenance');
+  const auditorReturnAssurance = RETURN_ASSURANCE_VALUES.has(report?.auditorReturnAssurance)
+    ? report.auditorReturnAssurance
+    : invocationProvenance === 'verified' ? 'host_receipt' : 'session_reported';
+  const producerAuthenticated = report?.producerAuthenticated === true;
+  if (auditorReturnAssurance === 'host_receipt' &&
+      (invocationProvenance !== 'verified' || !invocationReceipt || !producerAuthenticated)) {
+    errors.push('host_receipt Auditor assurance requires verified invocation provenance, a protected receipt, and authenticated producer identity');
+  }
+  if (auditorReturnAssurance === 'session_reported' &&
+      (invocationProvenance !== 'asserted' || invocationReceipt || producerAuthenticated)) {
+    errors.push('session_reported Auditor assurance requires asserted invocation provenance, no receipt, and unauthenticated producer identity');
   }
   const consumptionCause = String(report?.consumptionCause ?? 'substantive_audit').trim();
   const consumptionAuthority = String(report?.consumptionAuthority ?? '').trim();
@@ -2264,6 +2305,8 @@ export function appendAuditReport(content, report, validationOptions = {}) {
     invocationReference: reference,
     invocationProvenance,
     invocationReceipt,
+    auditorReturnAssurance,
+    producerAuthenticated,
     auditedArtifact,
     coveredTasks: reportCoveredTasks,
     assessment,
@@ -2615,6 +2658,13 @@ export function canonicalizeAuditRecord(content, options, validationOptions = {}
           ? entry.invocationProvenance
           : 'asserted',
         invocationReceipt: String(entry.reportPayload?.invocation?.receipt ?? ''),
+        auditorReturnAssurance: entry.auditorReturnAssurance ||
+          (entry.invocationProvenance === 'verified' && entry.reportPayload?.invocation?.receipt
+            ? 'host_receipt'
+            : 'session_reported'),
+        producerAuthenticated: entry.producerAuthenticated
+          ? entry.producerAuthenticated === 'true'
+          : Boolean(entry.invocationProvenance === 'verified' && entry.reportPayload?.invocation?.receipt),
         auditedArtifact: entry.auditedArtifact,
         coveredTasks: entry.coveredTasks,
         verdict: entry.verdict,
@@ -2624,6 +2674,7 @@ export function canonicalizeAuditRecord(content, options, validationOptions = {}
         reportFindings: Array.isArray(entry.reportPayload?.findings) ? entry.reportPayload.findings : [],
         perspectives: entry.reportPayload?.perspectives ?? null,
         reportFormat,
+        auditorReportDigest: entry.auditorReportDigest || '',
         consumptionCause: entry.consumptionCause || LEGACY_CONSUMPTION_CAUSE,
         consumptionAuthority: entry.consumptionAuthority || '',
         consumptionReason: entry.consumptionReason || '',
@@ -2637,15 +2688,25 @@ export function canonicalizeAuditRecord(content, options, validationOptions = {}
     parts.sections['## Audit History'] = blocks.join('\n\n');
   }
 
-  // Legacy certification predates digest-bound provenance: clear it.
-  parts.fields.certifiedArtifact = '';
-  parts.fields.certifiedCoveredTasks = [];
-  if (parts.fields.auditState === 'certified' || parts.fields.auditState === 'awaiting_human') {
-    parts.fields.auditState = 'active';
-    parts.fields.auditBlockedReason = '';
+  // Schema v2 already carried digest-bound lossless report provenance. Its
+  // certification may survive the additive assurance migration because the
+  // observed grade is derived conservatively from the existing verified or
+  // asserted record. Schema v1/absent records predate that boundary and still
+  // clear certification during canonicalization.
+  const priorLatestRun = record.history.at(-1) ?? null;
+  const canPreserveCertification = record.auditSchemaVersion === 2 &&
+    priorLatestRun?.reportFormat === AUDIT_REPORT_SCHEMA_VERSION &&
+    Boolean(priorLatestRun?.auditorReportDigest);
+  if (!canPreserveCertification) {
+    parts.fields.certifiedArtifact = '';
+    parts.fields.certifiedCoveredTasks = [];
+    if (parts.fields.auditState === 'certified' || parts.fields.auditState === 'awaiting_human') {
+      parts.fields.auditState = 'active';
+      parts.fields.auditBlockedReason = '';
+    }
+    parts.fields.humanResolutionRef = '';
+    parts.sections['## Final Certification'] = AUDIT_CERTIFICATION_EMPTY_STATE;
   }
-  parts.fields.humanResolutionRef = '';
-  parts.sections['## Final Certification'] = AUDIT_CERTIFICATION_EMPTY_STATE;
   const budget = auditBudgetState(record);
   if (budget.exhausted && parts.fields.auditState === 'active') {
     parts.fields.auditState = 'blocked';
@@ -2689,6 +2750,9 @@ export function canonicalizeAuditRecord(content, options, validationOptions = {}
 export function evaluateAuditCloseoutGate(repoRoot, params) {
   const workUnit = String(params?.workUnit ?? '').trim();
   const mode = params?.workUnitAudit === 'disabled' ? 'disabled' : 'enabled';
+  const minimumAuditorReturnAssurance = RETURN_ASSURANCE_VALUES.has(params?.minimumAuditorReturnAssurance)
+    ? params.minimumAuditorReturnAssurance
+    : 'session_reported';
 
   if (mode === 'disabled') {
     const existing = findAuditRecord(repoRoot, workUnit);
@@ -2698,6 +2762,8 @@ export function evaluateAuditCloseoutGate(repoRoot, params) {
       reasons: [],
       auditId: existing?.record?.auditId ?? null,
       optOut: true,
+      auditorReturnAssurance: null,
+      producerAuthenticated: null,
     };
   }
 
@@ -2713,6 +2779,8 @@ export function evaluateAuditCloseoutGate(repoRoot, params) {
       ],
       auditId: null,
       optOut: false,
+      auditorReturnAssurance: null,
+      producerAuthenticated: null,
     };
   }
   if (matches.length > 1) {
@@ -2724,6 +2792,8 @@ export function evaluateAuditCloseoutGate(repoRoot, params) {
       ],
       auditId: null,
       optOut: false,
+      auditorReturnAssurance: null,
+      producerAuthenticated: null,
     };
   }
 
@@ -2744,10 +2814,20 @@ export function evaluateAuditCloseoutGate(repoRoot, params) {
       auditId: record.auditId || null,
       optOut: false,
       budget: auditBudgetState(record),
+      auditorReturnAssurance: record.history.at(-1)?.auditorReturnAssurance || null,
+      producerAuthenticated: record.history.at(-1)?.producerAuthenticated === 'true',
     };
   }
   const status = certificationStatus(record);
   const reasons = [...status.reasons];
+  const lastRun = record.history.at(-1) ?? null;
+  const auditorReturnAssurance = lastRun?.auditorReturnAssurance || null;
+  const producerAuthenticated = lastRun ? lastRun.producerAuthenticated === 'true' : null;
+  if (status.current && !returnAssuranceMeets(auditorReturnAssurance, minimumAuditorReturnAssurance)) {
+    reasons.push(
+      `Auditor return assurance '${auditorReturnAssurance ?? 'missing'}' is below the effective minimum '${minimumAuditorReturnAssurance}'`
+    );
+  }
 
   if (typeof params?.taskStatus === 'function') {
     for (const taskId of normalizeCoveredTasks(record.coveredTasks)) {
@@ -2769,6 +2849,8 @@ export function evaluateAuditCloseoutGate(repoRoot, params) {
       auditId: record.auditId,
       optOut: false,
       budget: budgetState,
+      auditorReturnAssurance,
+      producerAuthenticated,
     };
   }
   if (record.auditState === 'blocked') {
@@ -2781,6 +2863,8 @@ export function evaluateAuditCloseoutGate(repoRoot, params) {
       auditId: record.auditId,
       optOut: false,
       budget: budgetState,
+      auditorReturnAssurance,
+      producerAuthenticated,
     };
   }
 
@@ -2791,5 +2875,7 @@ export function evaluateAuditCloseoutGate(repoRoot, params) {
     auditId: record.auditId,
     optOut: false,
     budget: budgetState,
+    auditorReturnAssurance,
+    producerAuthenticated,
   };
 }

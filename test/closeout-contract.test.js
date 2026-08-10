@@ -23,16 +23,19 @@ import { validateEvent } from '../src/event-logging.js';
 
 function basePacket(overrides = {}) {
   return {
-    packet_schema: 1,
+    packet_schema: 2,
     work_unit: 'milestone:M00',
     covered_tasks: ['T-002', 'T-001'],
     candidate_artifact: 'commit:' + 'a'.repeat(40),
     audit: {
       audit_id: 'AUD-001',
-      audit_schema_version: 2,
+      audit_schema_version: 3,
       run: 3,
       verdict: 'certified',
       report_format: 'auditor_report_v1',
+      return_assurance: 'session_reported',
+      producer_authenticated: false,
+      report_digest: `sha256:agenticloop.auditor-report.v1:${'d'.repeat(64)}`,
     },
     audit_opt_out: false,
     backend: 'files',
@@ -208,6 +211,8 @@ describe('closeout markers', () => {
         workUnit: 'milestone:M00',
         artifact: 'commit:' + 'a'.repeat(40),
         auditRef: 'AUD-001/run:3',
+        auditAssurance: 'session_reported',
+        auditProducerAuthenticated: false,
         predecessor: 'none',
         gateDigest: digest,
       });

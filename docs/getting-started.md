@@ -574,6 +574,13 @@ against refetched repository evidence, but the producing role identity was not
 host-authenticated. Neither is cryptographically host-authenticated, and no
 output will tell you otherwise.
 
+The same return policy applies to work-unit audit. A fresh report from a
+separate Auditor invocation is accepted in standard mode as
+`session_reported`; hardened mode requires the protected Auditor receipt and
+records `host_receipt`. A same-session audit is invalid in both modes. The audit
+record, gate, closeout packet, and final marker all preserve the observed grade
+and producer-authentication state.
+
 To require the stronger grades, register a protected host adapter
 (`npx agenticloop host-trust register ...`) and set hardened mode. See
 [Host Adapters](host-adapters.md#universal-activation).

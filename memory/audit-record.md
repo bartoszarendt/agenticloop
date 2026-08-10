@@ -1,5 +1,5 @@
 ---
-audit_schema_version: 2
+audit_schema_version: 3
 audit_id: AUD-001
 work_unit: phase:1
 audit_state: active
@@ -78,6 +78,8 @@ Entry shape:
 - Invocation reference: 9f1c2c8e-2c53-4c0b-9a2f-4c2b9f9c2a11
 - Invocation mode: host_subagent
 - Invocation provenance: asserted
+- Auditor return assurance: session_reported
+- Producer authenticated: false
 - Audited artifact: commit:0000000000000000000000000000000000000000
 - Covered tasks: T-001
 - Verdict: needs_remediation
@@ -91,11 +93,13 @@ Entry shape:
 A wire-format run (`Report format: auditor_report_v1`) additionally persists
 the complete normalized report - all six perspective bodies, invocation
 provenance, and every finding field - as a fenced JSON payload inside the run
-block, so the durable record reparses losslessly. `verified` provenance means a
-host verifier checked the role, work unit, artifact, task set, reference, and
-receipt. Without that capability, receipt claims are stored as `asserted`; they
-are never described as verified. Invocation references and receipts are globally
-unique across audit records.
+block, so the durable record reparses losslessly. `host_receipt` means a protected
+host verifier checked the role, work unit, artifact, task set, reference, report
+digest, and receipt, with `Producer authenticated: true`. Standard mode may
+instead persist an honestly receipt-free `session_reported` return with
+`Producer authenticated: false`; it is never described as verified or
+host-authenticated. Invocation references and receipts are globally unique
+across audit records.
 
 No audit runs are currently recorded.
 

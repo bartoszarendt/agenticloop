@@ -646,6 +646,7 @@ export function evaluateCloseout(target, params) {
     taskIdRegex: params?.validationOptions?.taskIdRegex ?? config.task_id_regex,
     taskExists: params?.validationOptions?.taskExists,
     decisionAccepted: params?.validationOptions?.decisionAccepted,
+    minimumAuditorReturnAssurance: params?.assurance?.minimumReturn,
     ...(backend === 'files'
       ? { taskStatus: taskId => filesTaskInfo(target, config, taskId).status }
       : {}),
@@ -997,6 +998,9 @@ export function evaluateCloseout(target, params) {
           run: auditRecord.history?.length ?? 0,
           verdict: auditRecord.latestVerdict ?? '',
           report_format: auditRecord.history?.[auditRecord.history.length - 1]?.reportFormat ?? '',
+          return_assurance: auditRecord.history?.[auditRecord.history.length - 1]?.auditorReturnAssurance ?? '',
+          producer_authenticated: auditRecord.history?.[auditRecord.history.length - 1]?.producerAuthenticated === 'true',
+          report_digest: auditRecord.history?.[auditRecord.history.length - 1]?.auditorReportDigest ?? '',
         }
       : null,
     audit_opt_out: workUnitAudit === 'disabled',
@@ -1177,12 +1181,18 @@ export function verifyCloseoutStatus(target, params) {
   const expectedAudit = packet.audit
     ? `${packet.audit.audit_id}/run:${packet.audit.run}`
     : 'none';
+  const expectedAuditAssurance = packet.audit?.return_assurance ?? 'none';
+  const expectedAuditProducerAuthenticated = packet.audit
+    ? String(packet.audit.producer_authenticated === true)
+    : 'none';
   const matches =
     marker.knownStatus &&
     markerDigest === expectedDigest &&
     String(marker.fields?.AGENT_CLOSEOUT_WORK_UNIT ?? '') === packet.work_unit &&
     markerArtifact === (packet.candidate_artifact || 'none') &&
     String(marker.fields?.AGENT_CLOSEOUT_AUDIT ?? '') === expectedAudit &&
+    String(marker.fields?.AGENT_CLOSEOUT_AUDIT_ASSURANCE ?? '') === expectedAuditAssurance &&
+    String(marker.fields?.AGENT_CLOSEOUT_AUDIT_PRODUCER_AUTHENTICATED ?? '') === expectedAuditProducerAuthenticated &&
     marker.status === packet.recommended_status &&
     String(marker.fields?.AGENT_CLOSEOUT_PREDECESSOR ?? '') &&
     String(marker.fields?.AGENT_CLOSEOUT_PLAN_SYNC ?? '') &&
@@ -1234,6 +1244,8 @@ export function renderMarkerForPacket(packet, options = {}) {
     workUnit: packet.work_unit,
     artifact: packet.candidate_artifact,
     auditRef: packet.audit ? `${packet.audit.audit_id}/run:${packet.audit.run}` : 'none',
+    auditAssurance: packet.audit?.return_assurance ?? 'none',
+    auditProducerAuthenticated: packet.audit ? packet.audit.producer_authenticated === true : null,
     predecessor: packet.predecessor_marker,
     planSync: packet.plan_sync,
     improvementRefs: packet.improvement_refs,

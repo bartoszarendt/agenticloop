@@ -58,6 +58,19 @@
   with the protected host key.
 
 ### Changed
+- Fresh separate Auditor returns now use the same effective return-assurance
+  policy as ordinary role returns. Standard mode accepts a fully revalidated,
+  receipt-free `auditor_report_v1` as `session_reported` with
+  `producerAuthenticated: false`; hardened mode still requires the protected
+  verifier and `host_receipt`. Same-session audit remains invalid. Audit record
+  schema version 3, closeout packet schema version 2, and closeout marker schema
+  version 2 carry the observed grade, authentication state, and exact report
+  digest through certification and closeout. Version 2 audit records have an
+  explicit conservative canonicalization path.
+- `audit report --repository-evidence` and `--producer-receipt` help now
+  describe the real contract: repository evidence is always refetched and
+  revalidated, while a producer receipt is required only when the effective
+  policy minimum is `host_receipt`.
 - `agenticloop.role-preparation` is schema version 6. A packet now binds exactly
   one activation model - the legacy host-signed capture in `activation`, or the
   new `activationBinding` authenticated envelope containing the complete signed
@@ -128,7 +141,9 @@
   substantive report digest, receipt identity, and strictly positive liveness.
   Loader authorization requires a fresh exact-context nonce challenge signed by
   the pinned adapter key; boolean callbacks and replayed responses are refused,
-  and the ordinary CLI still fails closed without an authenticated host boundary.
+  and a report claiming `verified`/`host_receipt` still fails closed without an
+  authenticated host boundary; standard receipt-free reports use the distinct
+  `session_reported` path described above.
 - `task prepare-decomposition` and `task prepare-dispatch` now select their
   read-only inventory adapter from the configured backend. GitHub enumeration
   follows the complete injected paginated issue transport and dispatch refetches

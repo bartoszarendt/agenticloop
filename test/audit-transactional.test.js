@@ -259,7 +259,7 @@ describe('legacy record migration', () => {
     ], target);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     const record = parseAuditRecord(readFileSync(join(target, '.agenticloop', 'audits', 'AUD-001.md'), 'utf-8'));
-    assert.equal(record.auditSchemaVersion, 2);
+    assert.equal(record.auditSchemaVersion, 3);
     assert.equal(record.candidateArtifact, `commit:${FULL_A}`);
     assert.equal((await run(['lint'], target)).status, 0);
   });

@@ -969,7 +969,8 @@ describe('complete terminal-scope derivation', () => {
       const root = scopeFixture(`scope-marker-${auditMode}`);
       const marker = renderCloseoutMarker({
         status: 'complete', workUnit: 'work-unit:manual', artifact: 'commit:abc123',
-        auditRef: 'AUD-701/run:1', predecessor: 'none', planSync: 'none',
+        auditRef: 'AUD-701/run:1', auditAssurance: 'session_reported',
+        auditProducerAuthenticated: false, predecessor: 'none', planSync: 'none',
         improvementRefs: [], gateDigest: `sha256:${'f'.repeat(64)}`,
       });
       writeScopeTask(root, 'T-701', { extra: marker });
@@ -1414,7 +1415,15 @@ describe('audit budget provenance and migration', () => {
     const json = await runCliInProcess(['audit', 'status', 'AUD-901', '--target', root, '--json']);
     const payload = JSON.parse(json.stdout);
     assert.deepEqual(payload.budget_consumption, [
-      { run: 1, cause: 'unrecorded_legacy', authority: null, reason: null, plan: null },
+      {
+        run: 1,
+        cause: 'unrecorded_legacy',
+        authority: null,
+        reason: null,
+        plan: null,
+        auditor_return_assurance: 'session_reported',
+        producer_authenticated: false,
+      },
     ]);
 
     const human = await runCliInProcess(['audit', 'status', 'AUD-901', '--target', root]);

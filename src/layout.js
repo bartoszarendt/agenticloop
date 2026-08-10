@@ -344,11 +344,13 @@ export const AUDIT_INVOCATION_MODES = Object.freeze([
 
 export const AUDIT_BLOCKED_REASON_BUDGET_EXHAUSTED = 'audit_budget_exhausted';
 
-// Current audit-record shape. Legacy records carry no audit_schema_version
-// and are parsed with an explicit migration diagnostic; they are never
-// silently reinterpreted as current-schema records.
-export const AUDIT_SCHEMA_VERSION = 2;
+// Current audit-record shape. Version 3 adds the observed Auditor-return
+// assurance and the explicit producer-authentication boolean to every run.
+// Prior records remain parseable but require the explicit canonicalization
+// route before they can satisfy current closeout.
+export const AUDIT_SCHEMA_VERSION = 3;
 export const LEGACY_AUDIT_SCHEMA_VERSION = 1;
+export const PRIOR_AUDIT_SCHEMA_VERSIONS = Object.freeze([1, 2]);
 
 // Versioned Auditor report wire format (auditor -> CLI). One schema is emitted
 // by the Auditor role and consumed by `audit report --file|--stdin` without
@@ -391,8 +393,8 @@ export const CLOSEOUT_MARKER_STATUSES = Object.freeze([
   'needs_context',
   'blocked',
 ]);
-export const CLOSEOUT_MARKER_SCHEMA_VERSION = 1;
-export const CLOSEOUT_PACKET_SCHEMA_VERSION = 1;
+export const CLOSEOUT_MARKER_SCHEMA_VERSION = 2;
+export const CLOSEOUT_PACKET_SCHEMA_VERSION = 2;
 
 // Workflow defaults are centralized here so task validation, GitHub preflight,
 // telemetry, and record creation cannot drift from one another.

@@ -931,10 +931,22 @@ perspectives, and every finding field (`id`, `severity`,
 receipt is `verified` only when an available host verifier validates the exact
 canonical digest of the complete normalized report, including producer,
 invocation, artifact, covered tasks, verdict, findings, perspectives, evidence,
-and assessment. A fresh authoritative Auditor return without that verification is
-rejected and returned to Auditor without consuming budget. Legacy inline reports
-remain explicitly `legacy_inline_v1`; they cannot certify a fresh Auditor return.
-Visible and embedded report provenance must agree.
+and assessment. In `standard` mode a distinct invocation may omit the receipt;
+the accepted run is graded `session_reported` and records
+`Producer authenticated: false`. In `hardened` mode that return is below policy
+and is returned to Auditor without consuming budget; a verified protected-host
+receipt is required and produces `host_receipt` with
+`Producer authenticated: true`. Same-session audit remains invalid in both
+modes. Legacy inline reports remain explicitly `legacy_inline_v1`; they do not
+establish a fresh wire-format Auditor return. Visible and embedded report
+provenance must agree.
+
+Audit schema version 3 persists the observed Auditor-return grade and producer
+authentication state on every run. Audit gate output, closeout packet schema
+version 2, and closeout marker schema version 2 carry those values and enforce
+the effective minimum again at closeout. Canonicalizing a version 2 wire-format
+run derives the grade conservatively from its existing provenance and receipt;
+older or inline history does not gain fresh-return authority through migration.
 
 Each accepted audit report records a budget-consumption cause. Use
 `--cause substantive_audit` (the default), `human_authorized_retry`, or

@@ -376,7 +376,12 @@ describe('closeout resume compares every authoritative provenance fact', () => {
       work_unit: 'milestone:M01',
       covered_tasks: ['T-002'],
       candidate_artifact: `commit:${'b'.repeat(40)}`,
-      audit: { audit_id: 'AUD-001', audit_schema_version: 2, run: 1, verdict: 'pass', report_format: 'markdown' },
+      audit: {
+        audit_id: 'AUD-001', audit_schema_version: 3, run: 1, verdict: 'certified',
+        report_format: 'auditor_report_v1', return_assurance: 'session_reported',
+        producer_authenticated: false,
+        report_digest: `sha256:agenticloop.auditor-report.v1:${'e'.repeat(64)}`,
+      },
       audit_opt_out: false,
       backend: 'files',
       carrier: { kind: 'issue', reference: 'issue:1', revision: D('b') },

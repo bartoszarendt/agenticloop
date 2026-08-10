@@ -190,6 +190,9 @@ function normalizeAuditorWireReport(raw, { preSigning = false } = {}) {
   if (!preSigning && invocation.provenance === 'verified' && !invocation.receipt) {
     errors.push("invocation.provenance 'verified' requires invocation.receipt");
   }
+  if (invocation.provenance === 'asserted' && invocation.receipt) {
+    errors.push("invocation.provenance 'asserted' cannot carry invocation.receipt; an opaque receipt is not producer authentication");
+  }
   let producer = null;
   if (!raw.producer || typeof raw.producer !== 'object' || Array.isArray(raw.producer) ||
       Object.keys(raw.producer).length !== 1 || raw.producer.roleId !== 'auditor') {
@@ -371,7 +374,7 @@ export function wireReportToAuditRun(report) {
     wirePayload: structuredClone(report),
     auditorReportDigest: auditorReportDigest(report),
     auditorReturnReportDigest: auditorReturnReportDigest(report),
-    authoritativeAuditorReturn: true,
+    freshAuditorReturn: true,
   };
 }
 

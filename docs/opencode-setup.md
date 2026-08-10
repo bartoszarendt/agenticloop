@@ -200,7 +200,10 @@ subagent execution and accepts a role, agent, type, mode, or `subagent_type`
 argument as real delegation. In OpenCode, the normal examples are Task-tool
 subagent invocation and explicit `@maintainer`, `@engineer`, or `@auditor`
 invocation. Auditor has no inline fallback: a same-session audit does not satisfy
-work-unit auditing, so record a blocked condition instead.
+work-unit auditing, so record a blocked condition instead. A fresh separate
+Auditor return may be recorded without a host receipt in standard mode, where it
+is explicitly graded `session_reported` and not producer-authenticated.
+Hardened mode still requires the protected host verifier and a `host_receipt`.
 
 ### Expected delegation behavior
 

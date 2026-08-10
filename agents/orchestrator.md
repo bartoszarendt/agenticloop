@@ -116,8 +116,10 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   single-agent fallback; if no real delegation mechanism exists, record a blocked
    condition instead of auditing inline. Persist the returned `auditor_report_v1`
    JSON unchanged with `npx agenticloop audit report <AUD-ID> --file <path>` or
-   `--stdin` through the protected packaged verifier. Otherwise fail closed;
-   opaque receipts and reconstructed reports do not substitute.
+   `--stdin`. Standard mode records an honestly receipt-free return as
+   `session_reported` with unauthenticated producer identity; hardened mode
+   requires the protected packaged verifier and `host_receipt`. Opaque receipts
+   and reconstructed reports do not substitute in either mode.
    Then route a
   non-certifying report to maintainer for disposition and to engineer for
   ordinary remediation tasks. Work-unit audit is enabled unless

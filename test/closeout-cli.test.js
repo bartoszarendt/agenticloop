@@ -123,14 +123,19 @@ async function closeout(args, target, options = {}) {
   });
 }
 
-async function audit(args, target) {
-  return runCliInProcess(['audit', ...args, '--target', target]);
+async function audit(args, target, options = {}) {
+  return runCliInProcess(['audit', ...args, '--target', target], options);
 }
 
 /**
  * Drive one work unit to a certified audit and return the candidate artifact.
  */
-async function certify(target, { tasks = ['T-001', 'T-002'], grouping = 'milestone:M00' } = {}) {
+async function certify(target, {
+  tasks = ['T-001', 'T-002'],
+  grouping = 'milestone:M00',
+  reportOverrides = {},
+  auditOptions = {},
+} = {}) {
   for (const taskId of tasks) writeTask(target, taskId, 'accepted', grouping);
   const artifact = commitAll(target, 'integrate candidate');
   const created = await audit([
@@ -146,8 +151,8 @@ async function certify(target, { tasks = ['T-001', 'T-002'], grouping = 'milesto
   // the allowed audit-metadata delta and must not invalidate the certificate.
   commitAll(target, 'record audit');
   const reportPath = join(target, '.agenticloop', 'tmp', 'run-1.json');
-  writeFileSync(reportPath, JSON.stringify(wireReport(artifact, tasks)), 'utf-8');
-  const reported = await audit(['report', 'AUD-001', '--file', reportPath], target);
+  writeFileSync(reportPath, JSON.stringify(wireReport(artifact, tasks, reportOverrides)), 'utf-8');
+  const reported = await audit(['report', 'AUD-001', '--file', reportPath], target, auditOptions);
   assert.equal(reported.status, 0, `${reported.stdout}${reported.stderr}`);
   return artifact;
 }
@@ -166,6 +171,29 @@ describe('closeout prepare', () => {
     assert.equal(packet.recommended_status, 'complete');
     assert.equal(packet.publishable, true);
     assert.match(packet.digest, /^sha256:[0-9a-f]{64}$/);
+  });
+
+  it('completes standard-mode audit with a session-reported Auditor return', async () => {
+    const target = makeGitTarget('standard-auditor-return');
+    const artifact = await certify(target, {
+      reportOverrides: {
+        invocation: {
+          mode: 'host_subagent',
+          reference: 'fresh-standard-auditor',
+          provenance: 'asserted',
+        },
+      },
+      auditOptions: { auditProvenanceVerifier: null },
+    });
+    const packetPath = join(target, '.agenticloop', 'tmp', 'standard-packet.json');
+    const result = await closeout([
+      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--output', packetPath,
+    ], target);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    const packet = JSON.parse(readFileSync(packetPath, 'utf-8'));
+    assert.equal(packet.audit.return_assurance, 'session_reported');
+    assert.equal(packet.audit.producer_authenticated, false);
+    assert.equal(packet.completion_eligible, true, JSON.stringify(packet.reasons));
   });
 
   it('reports audit due and refuses completion when no audit exists', async () => {
@@ -284,6 +312,8 @@ describe('closeout record and status', () => {
     const carrierAfter = readFileSync(join(target, '.agenticloop', 'tasks', 'T-002.md'), 'utf-8');
     assert.ok(carrierAfter.includes('AGENT_CLOSEOUT_STATUS: complete'));
     assert.ok(carrierAfter.includes(`AGENT_CLOSEOUT_WORK_UNIT: milestone:M00`));
+    assert.ok(carrierAfter.includes('AGENT_CLOSEOUT_AUDIT_ASSURANCE: host_receipt'));
+    assert.ok(carrierAfter.includes('AGENT_CLOSEOUT_AUDIT_PRODUCER_AUTHENTICATED: true'));
 
     // Delete the transient packet: provenance must still reconstruct.
     unlinkSync(packetPath);

@@ -68,7 +68,7 @@ import {
 import { createLocalVerificationContext } from './verification-context.js';
 import { fetchGitHubTaskInventory, resolveGhRunner } from './closeout-github.js';
 import { resolveCoveredGitHubTask } from './github-task-identity.js';
-import { ACTIVATION_ASSURANCE_LIMITATIONS } from './activation-grant.js';
+import { ACTIVATION_ASSURANCE_LIMITATIONS, RETURN_ASSURANCE_LIMITATIONS, returnAssuranceMeets } from './activation-grant.js';
 import {
   loadTaskActivationEvidence,
   resolveEffectiveActivationPolicy,
@@ -244,7 +244,7 @@ function auditInvocationReuseErrors(target, incoming) {
  * role claim can inflate it. A resolution failure is reported as unknown
  * rather than assumed favourable.
  */
-function auditAssuranceReport(target, io, config, coveredTasks) {
+function auditAssuranceReport(target, io, config, coveredTasks, auditRecord = null) {
   const tasks = normalizeCoveredTasks(coveredTasks ?? []);
   const backend = String(config?.task_backend ?? 'files') === 'github' ? 'github' : 'files';
   let policy;
@@ -294,12 +294,23 @@ function auditAssuranceReport(target, io, config, coveredTasks) {
     if (limitation && !limitations.includes(limitation)) limitations.push(limitation);
   }
   limitations.push(returnCapability);
+  const latestRun = auditRecord?.history?.at(-1) ?? null;
+  const auditorReturnAssurance = latestRun?.auditorReturnAssurance || null;
+  const auditorProducerAuthenticated = latestRun
+    ? latestRun.producerAuthenticated === 'true'
+    : null;
+  if (auditorReturnAssurance && RETURN_ASSURANCE_LIMITATIONS[auditorReturnAssurance]) {
+    limitations.push(RETURN_ASSURANCE_LIMITATIONS[auditorReturnAssurance]);
+  }
   return {
     mode: policy.mode,
     policy_source: policy.source,
     minimum_activation: policy.minimumActivation,
     minimum_return: policy.minimumReturn,
     return_capability_limitation: returnCapability,
+    auditor_return_assurance: auditorReturnAssurance,
+    auditor_producer_authenticated: auditorProducerAuthenticated,
+    auditor_return_meets_policy: returnAssuranceMeets(auditorReturnAssurance, policy.minimumReturn),
     tasks: taskReport,
     limitations,
   };
@@ -313,6 +324,7 @@ function printAuditAssurance(assurance, io) {
     return;
   }
   io.out(`    minimum activation: ${assurance.minimum_activation}; minimum return: ${assurance.minimum_return}`);
+  io.out(`    Auditor return assurance: ${assurance.auditor_return_assurance ?? 'missing'}; producer authenticated: ${assurance.auditor_producer_authenticated ?? 'unknown'}`);
   io.out(`    return capability limitation: ${assurance.return_capability_limitation}`);
   for (const task of assurance.tasks) {
     io.out(`    ${task.task_id}: activation ${task.activation ?? 'unknown'}${task.note ? ` (${task.note})` : ''}`);
@@ -329,7 +341,7 @@ function printAuditorResume(errors, run, io) {
   const packet = createAuditorReportResumePacket({
     errors,
     reportDigest: run?.auditorReportDigest ?? null,
-    evidenceState: run?.authoritativeAuditorReturn === true ? 'negative' : 'malformed',
+    evidenceState: run?.freshAuditorReturn === true ? 'negative' : 'malformed',
   });
   io.err(`Auditor resume packet: ${JSON.stringify(packet)}`);
   return packet;
@@ -413,6 +425,7 @@ function statusPayload(entry, target, validation) {
     );
   }
   const blockingReasons = [...new Set([...validationErrors, ...status.reasons])];
+  const latestRun = record.history.at(-1) ?? null;
   return {
     audit_id: record.auditId,
     work_unit: record.workUnit,
@@ -427,6 +440,8 @@ function statusPayload(entry, target, validation) {
     audit_budget: budget.budget,
     budget_remaining: budget.remaining,
     budget_exhausted: budget.exhausted,
+    auditor_return_assurance: latestRun?.auditorReturnAssurance || null,
+    auditor_producer_authenticated: latestRun ? latestRun.producerAuthenticated === 'true' : null,
     // Every consumed run names why it consumed budget, so an exhausted budget
     // always has provenance rather than an unexplained count.
     budget_consumption: record.history.map(entry => ({
@@ -435,6 +450,8 @@ function statusPayload(entry, target, validation) {
       authority: entry.consumptionAuthority || null,
       reason: entry.consumptionReason || null,
       plan: entry.consumptionPlan || null,
+      auditor_return_assurance: entry.auditorReturnAssurance || null,
+      producer_authenticated: entry.producerAuthenticated === 'true',
     })),
     open_blocking_findings: openBlockingFindings(record).map(finding => finding.id),
     undisposed_findings: findingDispositionState(record).undisposed
@@ -455,6 +472,7 @@ function printStatus(payload, io) {
   io.out(`  certified_artifact:  ${payload.certified_artifact ?? '(none)'}`);
   io.out(`  covered_tasks:       ${payload.covered_tasks.join(', ') || '(none)'}`);
   io.out(`  completed audits:    ${payload.completed_audits}/${payload.audit_budget}`);
+  io.out(`  Auditor return:      ${payload.auditor_return_assurance ?? '(none)'} (producer authenticated: ${payload.auditor_producer_authenticated ?? 'unknown'})`);
   // An exhausted budget must never be an unexplained count: name the cause of
   // every consumed run.
   for (const consumed of payload.budget_consumption) {
@@ -863,11 +881,22 @@ export async function cmdAudit(args, io = createIo()) {
       run.consumptionReason = optionString(opts.consumptionReason);
       run.consumptionPlan = optionString(opts.consumptionPlan);
 
+      let auditReturnPolicy;
+      try {
+        auditReturnPolicy = resolveEffectiveActivationPolicy(target, io);
+      } catch (error) {
+        const message = `effective assurance policy could not be resolved: ${error.publicMessage ?? error.message}`;
+        io.err(`Cannot record audit report: ${message}`);
+        printAuditorResume([message], run, io);
+        return 1;
+      }
+
       const normalizedProvenance = await normalizeAuditorInvocationProvenance(run, {
         verifier: io.auditProvenanceVerifier,
         workUnit: entry.record.workUnit,
         candidateArtifact: entry.record.candidateArtifact,
         coveredTasks: normalizeCoveredTasks(entry.record.coveredTasks),
+        minimumReturnAssurance: auditReturnPolicy.minimumReturn,
       });
       if (normalizedProvenance.errors.length > 0) {
         for (const error of normalizedProvenance.errors) io.err(`Cannot record audit report: ${error}`);
@@ -946,6 +975,8 @@ export async function cmdAudit(args, io = createIo()) {
       const receipt = {
         ...auditMutationReceipt({ entry, before: entry.content, after: finalContent, disposition: 'committed', cause: run.consumptionCause }),
         ...(run.wirePayload ? { auditorReturnDigest: run.auditorReportDigest } : {}),
+        auditorReturnAssurance: run.auditorReturnAssurance,
+        producerAuthenticated: run.producerAuthenticated,
       };
       if (opts.json) {
         io.out(JSON.stringify({
@@ -955,6 +986,10 @@ export async function cmdAudit(args, io = createIo()) {
         }, null, 2));
       } else {
         io.out(`Recorded run ${result.runNumber} in ${relDisplay(record.auditId)} (${record.latestVerdict})`);
+        io.out(`  Auditor return assurance: ${run.auditorReturnAssurance}; producer authenticated: ${run.producerAuthenticated}`);
+        if (run.auditorReturnAssurance === 'session_reported') {
+          io.warn(`  WARN: ${RETURN_ASSURANCE_LIMITATIONS.session_reported}`);
+        }
         const budget = auditBudgetState(record);
         if (record.auditState === 'blocked') {
           io.out(`  audit_budget ${budget.budget} exhausted; a human-approved override is required for another report.`);
@@ -1032,6 +1067,13 @@ export async function cmdAudit(args, io = createIo()) {
         return EXIT_USAGE;
       }
       const gateOptions = commandValidation();
+      const assurance = auditAssuranceReport(
+        target,
+        io,
+        config,
+        selected?.record?.coveredTasks ?? [],
+        selected?.record ?? null
+      );
       const result = evaluateAuditCloseoutGate(target, {
         workUnit: identity.canonical,
         workUnitAudit: resolveWorkUnitAudit(config),
@@ -1040,15 +1082,13 @@ export async function cmdAudit(args, io = createIo()) {
         decisionExists: gateOptions.decisionExists,
         decisionAccepted: gateOptions.decisionAccepted,
         inventoryError: gateOptions.inventoryError,
+        minimumAuditorReturnAssurance: assurance.minimum_return ?? 'host_receipt',
         ...(config.task_backend === 'files'
           ? { taskStatus: taskId => filesTaskStatus(target, config, taskId) }
           : { taskStatus: gateOptions.taskStatus }),
       });
-      // The audit gate is the audit-only subset closeout composes, so it
-      // reports the same two assurance dimensions rather than leaving them to
-      // be discovered at the closeout boundary. It never gates on them: the
-      // composite closeout gate owns that decision.
-      const assurance = auditAssuranceReport(target, io, config, selected?.record?.coveredTasks ?? []);
+      // The audit gate enforces the Auditor-return minimum and also reports the
+      // task activation/return dimensions that composite closeout evaluates.
       if (opts.json) {
         io.out(JSON.stringify({ ...result, assurance }, null, 2));
       } else if (result.allowed) {

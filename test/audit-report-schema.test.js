@@ -168,6 +168,53 @@ describe('auditor wire report schema', () => {
   });
 });
 
+describe('policy-aware Auditor return assurance', () => {
+  it('accepts an asserted receipt-free return in standard mode and records its limitation', async () => {
+    const parsed = parseAuditorWireReport(wireReport({
+      invocation: {
+        mode: 'host_subagent',
+        reference: 'standard-auditor-invocation',
+        provenance: 'asserted',
+      },
+    }));
+    assert.equal(parsed.ok, true, parsed.errors.join('\n'));
+    const checked = await normalizeAuditorInvocationProvenance(
+      wireReportToAuditRun(parsed.report),
+      {
+        verifier: null,
+        workUnit: 'phase:4',
+        candidateArtifact: parsed.report.artifact,
+        coveredTasks: parsed.report.covered_tasks,
+        minimumReturnAssurance: 'session_reported',
+      }
+    );
+    assert.deepEqual(checked.errors, []);
+    assert.equal(checked.run.auditorReturnAssurance, 'session_reported');
+    assert.equal(checked.run.producerAuthenticated, false);
+  });
+
+  it('keeps hardened mode fail-closed for the same asserted return', async () => {
+    const parsed = parseAuditorWireReport(wireReport({
+      invocation: {
+        mode: 'explicit_agent_invocation',
+        reference: 'hardened-auditor-invocation',
+        provenance: 'asserted',
+      },
+    }));
+    const checked = await normalizeAuditorInvocationProvenance(
+      wireReportToAuditRun(parsed.report),
+      {
+        verifier: null,
+        workUnit: 'phase:4',
+        candidateArtifact: parsed.report.artifact,
+        coveredTasks: parsed.report.covered_tasks,
+        minimumReturnAssurance: 'host_receipt',
+      }
+    );
+    assert.match(checked.errors.join('\n'), /session_reported.*below the effective minimum 'host_receipt'/);
+  });
+});
+
 describe('host-side pre-signing report preparation', () => {
   /**
    * A host holds the Auditor's raw wire report, not the CLI's normalized
@@ -300,6 +347,10 @@ describe('host-side pre-signing report preparation', () => {
       assert.equal(prepared.report, null, label);
       assert.equal(prepared.digest, null, label);
       assert.equal(prepared.errors.length, 1, label);
+      if (label === 'asserted with a receipt') {
+        assert.match(prepared.errors[0], /asserted.*cannot carry invocation\.receipt/, label);
+        continue;
+      }
       assert.match(prepared.errors[0], /invocation\.provenance must be 'verified'/, label);
       assert.match(prepared.errors[0], /got 'asserted'/, label);
       assert.match(prepared.errors[0], /never promotes asserted provenance/, label);
@@ -449,7 +500,11 @@ describe('lossless durable history', () => {
       verdict: 'certified',
     }));
     assert.equal(wire.ok, true, wire.errors.join('\n'));
-    const run = wireReportToAuditRun(wire.report);
+    const run = {
+      ...wireReportToAuditRun(wire.report),
+      auditorReturnAssurance: 'host_receipt',
+      producerAuthenticated: true,
+    };
     const result = appendAuditReport(seedRecord(), run);
     assert.equal(result.ok, true, result.errors.join('\n'));
 
