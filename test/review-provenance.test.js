@@ -533,11 +533,12 @@ function seedNeedsRevisionTask(target, {
 }
 
 describe('task status acceptance gate: review provenance', () => {
-  it('accepts single_agent_fallback for an ordinary task', () => {
+  it('accepts single_agent_fallback provenance but still requires the canonical handoff chain', () => {
     const target = initTarget('cli-fallback-ok');
     seedInProgressTask(target, { reviewMode: 'single_agent_fallback' });
     const res = run(['task', 'status', 'T-001', 'accepted', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
-    assert.equal(res.status, 0, res.stderr);
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /canonical verified return/);
   });
 
   it('rejects single_agent_fallback when independent review is required', () => {
@@ -548,24 +549,28 @@ describe('task status acceptance gate: review provenance', () => {
     assert.match(res.stderr, /requires independent review/);
   });
 
-  it('accepts host_subagent when independent review is required', () => {
+  it('accepts host_subagent provenance but still requires the canonical handoff chain', () => {
     const target = initTarget('cli-hostsub-ok');
     seedInProgressTask(target, { reviewMode: 'host_subagent', independent: true });
     const res = run(['task', 'status', 'T-001', 'accepted', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
-    assert.equal(res.status, 0, res.stderr);
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /canonical verified return/);
   });
 
-  it('accepts explicit_agent_invocation when independent review is required', () => {
+  it('accepts explicit_agent_invocation provenance but still requires the canonical handoff chain', () => {
     const target = initTarget('cli-explicit-ok');
     seedInProgressTask(target, { reviewMode: 'explicit_agent_invocation', independent: true });
     const res = run(['task', 'status', 'T-001', 'accepted', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
-    assert.equal(res.status, 0, res.stderr);
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /canonical verified return/);
   });
 
   it('accepts independent_human with a present reference; rejects without one', () => {
     const withRef = initTarget('cli-human-ok');
     seedInProgressTask(withRef, { reviewMode: 'independent_human', independent: true, humanRef: 'https://x/review/1' });
-    assert.equal(run(['task', 'status', 'T-001', 'accepted', '--expect-digest', currentDigest(withRef, 'T-001'), '--target', withRef]).status, 0);
+    const withRefResult = run(['task', 'status', 'T-001', 'accepted', '--expect-digest', currentDigest(withRef, 'T-001'), '--target', withRef]);
+    assert.notEqual(withRefResult.status, 0);
+    assert.match(withRefResult.stderr, /canonical verified return/);
 
     const withoutRef = initTarget('cli-human-noref');
     seedInProgressTask(withoutRef, { reviewMode: 'independent_human', independent: true });
@@ -590,12 +595,9 @@ describe('task status acceptance gate: review provenance', () => {
     assert.match(accepted.stderr, /stale/);
 
     seedInProgressTask(target, { artifact: 'commit:b', reviewedArtifact: 'commit:b', reviewMode: 'host_subagent' });
-    assert.equal(run(['task', 'status', 'T-001', 'accepted', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]).status, 0);
-    const stale = readFileSync(join(target, '.agenticloop', 'tasks', 'T-001.md'), 'utf-8').replace('reviewed_artifact: commit:b', 'reviewed_artifact: commit:a');
-    writeFileSync(join(target, '.agenticloop', 'tasks', 'T-001.md'), stale, 'utf-8');
-    const closed = run(['task', 'status', 'T-001', 'closed', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
-    assert.notEqual(closed.status, 0);
-    assert.match(closed.stderr, /stale/);
+    const current = run(['task', 'status', 'T-001', 'accepted', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
+    assert.notEqual(current.status, 0);
+    assert.match(current.stderr, /canonical verified return/);
   });
 
   it('exposes review_mode in task list --json', () => {
@@ -618,13 +620,14 @@ describe('task status revision checkpoint gate', () => {
     assert.match(result.stderr, /checkpoint.*required|budget.*exhausted/i);
   });
 
-  it('authorizes the next revision with a fresh checkpoint', () => {
+  it('passes the checkpoint gate but still refuses a revision without a fresh dispatch', () => {
     const target = initTarget('cli-revision-checkpoint');
     seedNeedsRevisionTask(target, { checkpoint: true });
     const result = run(['task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
-    assert.equal(result.status, 0, result.stderr);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /canonical prepared dispatch/);
     const content = readFileSync(join(target, '.agenticloop', 'tasks', 'T-001.md'), 'utf-8');
-    assert.match(content, /^status: in-progress$/m);
+    assert.match(content, /^status: needs_revision$/m);
   });
 
   it('rejects replay after the checkpoint was consumed by another review outcome', () => {

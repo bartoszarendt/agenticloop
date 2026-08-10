@@ -257,7 +257,9 @@ incomplete. Use `lintReady` and `publicationReady` for readiness.
 `github-preflight` remains the low-level live evidence gate. Run
 `github-review-prepare --pr <n>` only after it passes. Preparation emits a
 schema-v3 Maintainer packet only when `result.ok === true` for one final complete
-snapshot. The packet requires a closed, digest-bound review-entry receipt for
+snapshot and a current verified Engineer return is bound to the exact durable
+dispatch consumption. No return chain means no packet and no lifecycle-bearing
+receipt. The packet requires a closed, digest-bound review-entry receipt for
 that task, contract, checks, review history, attribution, workspace, and exact
 head, plus an exact immutable read-only lease and whole-packet digest; a
 matching head never overrides a failed result. Failed preparation emits
@@ -286,6 +288,7 @@ repository state:
   pre-dispatch consumer. It applies the structural check, refetches the complete
   current PR/task state, re-evaluates preflight, revalidates the complete
   receipt against that state, compares the evaluated head with the current head,
+  re-recognizes the current stored return against its consumed dispatch,
   and rejects stale, missing, malformed, fabricated, and self-contradictory
   packets. When the packet records a workspace, this level also reruns Git
   identity verification at that exact path and rejects path or HEAD
@@ -519,7 +522,14 @@ identity and cannot dispatch in that state; activate the existing task with
 
 Packet v6 embeds the complete signed grant and binding and independently binds a
 nullable return adapter (`--return-adapter <adapter-id>`). Packet digests are
-integrity only. `task verify-return` persists observed version-1 evidence under
+integrity only. The in-process prepared-dispatch validation result is likewise
+an unkeyed, exact-packet/result-bound integrity record: it detects alteration and
+substitution but does not authenticate the validator or prove canonical origin.
+Public files and GitHub mutation commands accept the prepared-dispatch packet,
+not a validation-receipt option, and rerun the complete current
+`canonicalDispatchValidator` immediately before mutation. A persisted receipt
+or verdict crossing a process or trust boundary must be rederived from its
+underlying packet or verified return. `task verify-return` persists observed version-1 evidence under
 `.agenticloop/returns/verifications/`; closeout revalidates it and never treats a
 registered capability as proof an event happened. Standard plugin-free operation
 uses `operator_confirmed` activation and freshly revalidated `session_reported`
@@ -533,8 +543,14 @@ closeout refetch the live PR identity. Git rederives the exact returned commit
 range and requires its head to remain an ancestor of the current checkout, so
 later contract-preserving workflow commits do not erase valid return evidence.
 `closeout prepare --legacy-unactivated --legacy-reason <text>` is the interactive,
-standard-only, exact-work-unit compatibility exception. Its signed scope names
-missing activation and/or return evidence explicitly; it never hides revoked,
+standard-only, exact-work-unit compatibility exception. New waivers name only
+missing activation evidence. An authentic, unexpired schema-v1 waiver that also
+contains the retired `return_evidence_absent` scope is verified against its
+original signed fields, then projected to activation-only behavior with
+`compatibility.waiver_scope_retired`; dispatch consumption and canonical
+verified-return evidence remain mandatory. Both JSON and human-readable
+closeout preparation expose that diagnostic, while the assurance report retains
+the unchanged signed source record as `compatibility_waiver`. It never hides revoked,
 stale, malformed, conflicting, mismatched, or cryptographically invalid evidence,
 and hardened mode rejects it.
 
@@ -642,7 +658,9 @@ snapshot, and `closed` must pass the terminal-scope decision. There is no
 subcommand that reaches a protected status change unguarded. `set-field` and
 `apply` therefore accept `--dependencies` whenever their candidate becomes
 `agent-ready`. They also accept `--note` for a real status change. A note is
-rejected for a non-status update rather than silently discarded.
+rejected for a non-status update rather than silently discarded, except that an
+already-current `in-progress` request is explicitly a new role start rather than
+a note-only update and requires a fresh dispatch packet.
 
 A transition may also reconcile the projections it owns. `--note <text>` is
 persisted as an identified issue comment rather than accepted and discarded, and repeated
@@ -735,7 +753,31 @@ npx agenticloop task status T-001 in-progress --expect-digest sha256:<digest>
 `--expect-digest` is required for every task-status transition, including
 records with no `task_contract_schema`. An `agent-ready` transition additionally
 requires exactly one of `--base <ref>` or `--base-paths <inventory.json>`, plus
-`--dependencies <snapshot.json>`. Supplying both base forms is refused. The CLI
+`--dependencies <snapshot.json>`. Supplying both base forms is refused.
+
+An `in-progress` transition is the role start, and it accepts
+`--dispatch-packet <packet.json>` naming a canonical `task prepare-dispatch`
+result. With a packet that binds the current task, contract generation, carrier
+digest, and Engineer role, the start is recognized and the JSON payload carries
+the closed `agenticloop.handoff-recognition` verdict and records a durable
+single-use dispatch consumption. Without a packet, with a consumed packet, or
+with a packet that does not bind, the transition is refused, typed `handoff.*`
+diagnostics are reported, and the task record is left unchanged. The complete
+current-state `task prepare-dispatch --packet` verifier is rerun immediately
+before mutation, including task, readiness, repository, decomposition,
+inventory, activation, and current operator policy; a recomputed digest or a
+packet made stale by a later repository-head change does not pass.
+
+The requested target status defines the role-start boundary. Requesting
+`in-progress` when the carrier already says `in-progress` still requires fresh
+recognition and consumes the packet exactly once before returning a validated
+no-op. Adding `--note` makes the note part of that new start; there is no
+note-only route that can claim a role start. The 24-hour verified-return
+transition-use ceiling is immutable v1 policy, not operator configurable.
+
+`agenticloop task-body transition --issue <n> --status in-progress` is the same
+boundary on the GitHub carrier and accepts the same `--dispatch-packet` option
+with the same fail-closed outcomes. A refusal happens before any issue edit. The CLI
 never selects `HEAD`, a default branch, or a dependency disposition on the
 author's behalf, and it resolves `--base <ref>` to that ref's exact Git tree
 object id so a later branch move cannot redefine the recorded baseline.

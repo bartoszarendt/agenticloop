@@ -219,7 +219,7 @@ Implemented the scoped task.
 }
 
 describe('task CLI', () => {
-  it('creates, lists, lints, and updates a files-backed task', async () => {
+  it('creates, lists, lints, and refuses an unprepared role start', async () => {
     const target = makeTarget('happy');
 
     const created = await run(['task', 'new', 'Add CLI support', '--scaffold', '--target', target]);
@@ -242,10 +242,11 @@ describe('task CLI', () => {
     const status = await run(['task', 'status', 'T-001', 'agent-ready', '--expect-digest', currentDigest(target, 'T-001'), '--base', baseTree(target), '--dependencies', dependencySnapshot(target), '--target', target]);
     assertOk(status);
     const status2 = await run(['task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(target, 'T-001'), '--note', 'Started implementation', '--target', target]);
-    assertOk(status2);
+    assert.notEqual(status2.status, 0);
+    assert.match(status2.stderr, /canonical prepared dispatch/);
     const content = readFileSync(taskPath(target, 'T-001'), 'utf-8');
-    assert.match(content, /^status: in-progress$/m);
-    assert.match(content, /Started implementation/);
+    assert.match(content, /^status: agent-ready$/m);
+    assert.doesNotMatch(content, /Started implementation/);
     assert.match(content, /## Verification Attempts\n\nNo verification attempts are currently recorded\./);
   });
 
@@ -402,13 +403,13 @@ describe('task CLI', () => {
     const target = makeTarget('comments-fence');
     writeAcceptedTask(target, 'T-001', { reviewStatus: 'accepted' });
     const path = taskPath(target, 'T-001');
-    const original = readFileSync(path, 'utf-8').replace(
+    const original = readFileSync(path, 'utf-8').replace(/^status: accepted$/m, 'status: in-progress').replace(
       '## Outcome\n',
       '## Outcome\n\n```md\n## Comments\nexample only\n```\n'
     );
     writeFileSync(path, original, 'utf-8');
 
-    const result = await run(['task', 'status', 'T-001', 'closed', '--expect-digest', currentDigest(target, 'T-001'), '--note', 'Live note', '--target', target]);
+    const result = await run(['task', 'status', 'T-001', 'blocked', '--block-category', 'dependency', '--expect-digest', currentDigest(target, 'T-001'), '--note', 'Live note', '--target', target]);
     assertOk(result);
     const content = readFileSync(path, 'utf-8');
     assert.match(content, /```md\n## Comments\nexample only\n```/);
@@ -694,21 +695,26 @@ describe('task CLI', () => {
     assert.notEqual(result.status, 0);
   });
 
-  it('allows agent-ready -> in-progress', async () => {
+  it('rejects agent-ready -> in-progress without a canonical dispatch', async () => {
     const target = makeTarget('trans-ar-ip');
     assertOk(await run(['task', 'new', 'Test', '--scaffold', '--target', target]));
     await establishBaseline(target);
     assertOk(await run(['task', 'status', 'T-001', 'agent-ready', '--expect-digest', currentDigest(target, 'T-001'), '--base', baseTree(target), '--dependencies', dependencySnapshot(target), '--target', target]));
     const result = await run(['task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(target, 'T-001'), '--note', 'Starting', '--target', target]);
-    assertOk(result);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /canonical prepared dispatch/);
   });
 
-  it('allows in-progress -> accepted with proper evidence', async () => {
+  it('rejects in-progress -> accepted without the canonical handoff chain', async () => {
     const target = makeTarget('trans-ip-ac');
     assertOk(await run(['task', 'new', 'Test', '--scaffold', '--target', target]));
     await establishBaseline(target);
     assertOk(await run(['task', 'status', 'T-001', 'agent-ready', '--expect-digest', currentDigest(target, 'T-001'), '--base', baseTree(target), '--dependencies', dependencySnapshot(target), '--target', target]));
-    assertOk(await run(['task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]));
+    writeFileSync(
+      taskPath(target, 'T-001'),
+      readFileSync(taskPath(target, 'T-001'), 'utf-8').replace(/^status: agent-ready$/m, 'status: in-progress'),
+      'utf-8'
+    );
 
     // Write required evidence into the task record
     let content = readFileSync(taskPath(target, 'T-001'), 'utf-8');
@@ -722,7 +728,8 @@ describe('task CLI', () => {
     writeFileSync(taskPath(target, 'T-001'), content, 'utf-8');
 
     const result = await run(['task', 'status', 'T-001', 'accepted', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
-    assertOk(result);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /canonical verified return|canonical dispatch consumption/);
   });
 
   it('rejects accepted -> in-progress (terminal without reopen)', async () => {
@@ -733,7 +740,7 @@ describe('task CLI', () => {
     assert.match(result.stderr, /Cannot transition from 'accepted' to 'in-progress'/);
   });
 
-  it('allows accepted -> closed', async () => {
+  it('rejects generic accepted -> closed without the canonical handoff chain', async () => {
     const target = makeTarget('trans-ac-cl');
     writeAcceptedTask(target, 'T-001');
     // accepted -> closed revalidates acceptance gate: review_status must be 'accepted'
@@ -741,7 +748,8 @@ describe('task CLI', () => {
     content = content.replace('review_status: needs_revision', 'review_status: accepted');
     writeFileSync(taskPath(target, 'T-001'), content, 'utf-8');
     const result = await run(['task', 'status', 'T-001', 'closed', '--expect-digest', currentDigest(target, 'T-001'), '--target', target]);
-    assertOk(result);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /canonical verified return|canonical dispatch consumption/);
   });
 
   it('rejects accepted -> closed when review_status is not accepted', async () => {

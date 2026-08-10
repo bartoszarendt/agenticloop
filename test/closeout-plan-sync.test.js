@@ -12,6 +12,19 @@ import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { runCliInProcess } from './helpers/run-cli.js';
+import {
+  createDispatchFixture,
+  git as fixtureGit,
+  prepare,
+  readyReturn,
+  repositoryEvidence,
+  sha256,
+} from './helpers/dispatch-fixture.js';
+import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
+import { protectedHostBoundary } from './helpers/host-trust-fixture.js';
+import { recognizeHandoff } from '../src/handoff-recognition.js';
+import { createDispatchConsumption, dispatchConsumptionRelativePath } from '../src/handoff-consumption.js';
+import { createTaskReadinessEvidence } from '../src/task-evidence-contract.js';
 
 let tmpDir;
 before(() => { tmpDir = mkdtempSync(join(tmpdir(), 'al-plansync-')); });
@@ -49,20 +62,28 @@ function git(target, args) {
   return execSync(`git ${args}`, { cwd: target, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
-function makeGitTarget(name, { withPlan = true, plan = planContent() } = {}) {
-  const target = mkdtempSync(join(tmpDir, `${name}-`));
-  mkdirSync(join(target, '.agenticloop', 'audits'), { recursive: true });
-  mkdirSync(join(target, '.agenticloop', 'tasks'), { recursive: true });
+const dispatchFixtures = new Map();
+
+async function makeGitTarget(name, { withPlan = true, plan = planContent() } = {}) {
+  const fixture = await createDispatchFixture(tmpDir, name, {
+    workUnit: 'milestone:M00',
+    projectMapContent: projectMap(withPlan), additionalAllowedPaths: ['.agenticloop/audits/**', 'PLAN.md'],
+  });
+  const target = fixture.root;
   mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
-  writeFileSync(join(target, '.agenticloop', 'project.md'), projectMap(withPlan), 'utf-8');
   if (plan != null) writeFileSync(join(target, 'PLAN.md'), plan, 'utf-8');
-  git(target, 'init -q');
-  git(target, 'config user.email test@example.com');
-  git(target, 'config user.name Test');
   writeFileSync(join(target, 'app.js'), 'export const v = 1;\n', 'utf-8');
-  writeFileSync(join(target, '.gitignore'), '.agenticloop/tmp/\n', 'utf-8');
+  writeFileSync(join(target, '.gitignore'), '.agenticloop/tmp/\n.agenticloop/handoffs/\n', 'utf-8');
   git(target, 'add -A');
-  git(target, 'commit -qm init');
+  git(target, 'commit -qm "configure plan-sync fixture"');
+  const repository = fixture.repository;
+  const head = fixtureGit(target, ['rev-parse', 'HEAD']);
+  for (const taskFixture of fixture.taskFixtures.values()) {
+    taskFixture.repository = () => ({ ...repository(), head, baseHead: head });
+    taskFixture.refetchRepository = taskFixture.repository;
+    taskFixture.closeoutScanInventory = taskFixture.refetchParallelScanInventory();
+  }
+  dispatchFixtures.set(target, fixture);
   return target;
 }
 
@@ -107,34 +128,105 @@ async function audit(args, target) {
 }
 
 async function closeout(args, target) {
-  const compatibility = args[0] === 'prepare'
-    ? ['--legacy-unactivated', '--legacy-reason', 'historical unactivated plan-sync fixture']
-    : [];
-  return runCliInProcess(['closeout', ...args, ...compatibility, '--target', target], {
+  const fixture = dispatchFixtures.get(target);
+  return runCliInProcess(['closeout', ...args, '--target', target], {
+    operatorTrustRoot: fixture.operatorTrustRoot,
     operatorActivationRoot: join(tmpDir, 'operator-activation'),
-    stdinIsTTY: true, isTTY: true, ci: false,
-    promptFactory: () => ({ ask: async () => 'waive', close() {} }),
+    hostAuthority: protectedHostBoundary(fixture.trust),
   });
 }
 
 async function certify(target) {
-  writeTask(target, 'T-001', 'accepted');
-  writeTask(target, 'T-002', 'accepted');
-  const artifact = commitAll(target, 'integrate candidate');
+  const fixture = dispatchFixtures.get(target);
+  const packets = new Map();
+  for (const [taskId, taskFixture] of fixture.taskFixtures) {
+    writeFileSync(taskFixture.taskPath, readFileSync(taskFixture.taskPath, 'utf8').replace(/^status: .*$/m, 'status: accepted'), 'utf8');
+  }
+  let artifact = commitAll(target, 'integrate candidate');
+  for (const [taskId, taskFixture] of fixture.taskFixtures) {
+    const snapshot = taskFixture.snapshot;
+    taskFixture.snapshot = () => {
+      const value = snapshot();
+      const body = readFileSync(taskFixture.taskPath, 'utf8');
+      return { ...value, body, digest: sha256(body) };
+    };
+    taskFixture.refetchTask = taskFixture.snapshot;
+    taskFixture.readiness = {
+      ...taskFixture.readiness,
+      evidence: createTaskReadinessEvidence({
+        ...taskFixture.readiness.evidence,
+        task: { ...taskFixture.readiness.evidence.task, expectedDigest: taskFixture.snapshot().digest },
+      }),
+    };
+    taskFixture.refetchReadiness = () => taskFixture.readiness;
+    taskFixture.refetchParallelScanInventory = () => taskFixture.closeoutScanInventory;
+    const repository = taskFixture.repository;
+    const head = fixtureGit(target, ['rev-parse', 'HEAD']);
+    taskFixture.repository = () => ({ ...repository(), head, baseHead: head });
+    taskFixture.refetchRepository = taskFixture.repository;
+    const prepared = prepare(taskFixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    const packet = prepared.packet;
+    packets.set(taskId, packet);
+    const packetPath = join(target, '.agenticloop', 'tmp', `${taskId}-dispatch.json`);
+    writeFileSync(packetPath, JSON.stringify(packet, null, 2), 'utf8');
+  }
+  for (const [taskId, packet] of packets) {
+    const taskFixture = fixture.taskFixtures.get(taskId);
+    const recognition = recognizeHandoff({
+      transition: 'role_start',
+      expectation: {
+        backend: 'files', taskId, roleId: 'engineer', taskContractDigest: packet.task.contractDigest,
+        carrierDigest: packet.task.digest, packetId: packet.packetId, packetDigest: packet.digest,
+        workUnitIdentity: packet.decomposition.workUnitId, artifactHead: packet.repository.head,
+        worktreeRoot: packet.repository.worktree, minimumActivationAssurance: 'operator_confirmed',
+      },
+      preparedDispatch: packet, validatePreparedDispatch: fixtureDispatchValidator(taskFixture),
+    });
+    assert.equal(recognition.recognized, true, JSON.stringify(recognition.diagnostics));
+    const consumption = createDispatchConsumption({ backend: 'files', taskId, recognition });
+    const consumptionPath = join(target, dispatchConsumptionRelativePath(consumption));
+    mkdirSync(join(consumptionPath, '..'), { recursive: true });
+    writeFileSync(consumptionPath, `${JSON.stringify(consumption, null, 2)}\n`, 'utf8');
+  }
+  writeFileSync(join(target, 'src', 'existing.js'), 'export const current = "closeout-ready";\n', 'utf8');
+  fixtureGit(target, ['add', 'src/existing.js']);
+  fixtureGit(target, ['commit', '-m', 'record closeout candidate\n\nTask: T-001\nAgent: engineer']);
+  const returnHead = fixtureGit(target, ['rev-parse', 'HEAD']);
+  artifact = `commit:${returnHead}`;
   assert.equal((await audit([
-    'new', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001,T-002',
+    'new', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
     '--artifact', artifact, '--goal', 'g', '--completion-oracle', 'o', '--evidence', 'npm test',
   ], target)).status, 0);
-  commitAll(target, 'record audit');
+  fixtureGit(target, ['add', '.agenticloop/audits']);
+  fixtureGit(target, ['commit', '-m', 'record audit\n\nTask: T-001\nAgent: engineer']);
   const reportPath = join(target, '.agenticloop', 'tmp', 'run-1.json');
-  writeFileSync(reportPath, JSON.stringify(wireReport(artifact, ['T-001', 'T-002'])), 'utf-8');
+  writeFileSync(reportPath, JSON.stringify(wireReport(artifact, ['T-001'])), 'utf-8');
   assert.equal((await audit(['report', 'AUD-001', '--file', reportPath], target)).status, 0);
+  fixtureGit(target, ['add', '.agenticloop/audits']);
+  fixtureGit(target, ['commit', '-m', 'record audit report\n\nTask: T-001\nAgent: engineer']);
+  const verifiedHead = fixtureGit(target, ['rev-parse', 'HEAD']);
+  for (const [taskId, packet] of packets) {
+    const changedPaths = fixtureGit(target, ['diff', '--name-only', `${packet.repository.head}..${verifiedHead}`]).split(/\r?\n/).filter(Boolean);
+    const commits = fixtureGit(target, ['rev-list', '--reverse', `${packet.repository.head}..${verifiedHead}`]).split(/\r?\n/).filter(Boolean);
+    const evidence = repositoryEvidence(packet, { head: verifiedHead, changedPaths });
+    evidence.attribution = { range: { base: packet.repository.head, head: verifiedHead }, commits };
+    const returnPath = join(target, '.agenticloop', 'tmp', `${taskId}-return.json`);
+    const evidencePath = join(target, '.agenticloop', 'tmp', `${taskId}-evidence.json`);
+    writeFileSync(returnPath, JSON.stringify(readyReturn(packet, evidence), null, 2), 'utf8');
+    writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), 'utf8');
+    const verified = await runCliInProcess([
+      'task', 'verify-return', taskId, '--packet', join(target, '.agenticloop', 'tmp', `${taskId}-dispatch.json`),
+      '--return', returnPath, '--repository-evidence', evidencePath, '--target', target,
+    ], { operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: protectedHostBoundary(fixture.trust) });
+    assert.equal(verified.status, 0, `${verified.stdout}${verified.stderr}`);
+  }
   return artifact;
 }
 
 describe('plan-sync gate', () => {
   it('refuses completion when a plan applies and plan-sync evidence is omitted', async () => {
-    const target = makeGitTarget('omitted');
+    const target = await makeGitTarget('omitted');
     const artifact = await certify(target);
     const result = await closeout(['prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--json'], target);
     assert.equal(result.status, 1);
@@ -146,7 +238,7 @@ describe('plan-sync gate', () => {
   });
 
   it('passes with an explicit not_required recorded visibly in the marker', async () => {
-    const target = makeGitTarget('not-required');
+    const target = await makeGitTarget('not-required');
     const artifact = await certify(target);
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     const prepared = await closeout([
@@ -158,12 +250,12 @@ describe('plan-sync gate', () => {
     assert.equal(packet.plan_sync, 'not_required');
     const recorded = await closeout(['record', '--packet', packetPath, '--yes'], target);
     assert.equal(recorded.status, 0, `${recorded.stdout}${recorded.stderr}`);
-    const carrier = readFileSync(join(target, '.agenticloop', 'tasks', 'T-002.md'), 'utf-8');
+    const carrier = readFileSync(join(target, '.agenticloop', 'tasks', 'T-001.md'), 'utf-8');
     assert.match(carrier, /AGENT_CLOSEOUT_PLAN_SYNC: not_required/);
   });
 
   it('verifies synced mechanically and binds the exact plan revision', async () => {
-    const target = makeGitTarget('synced');
+    const target = await makeGitTarget('synced');
     const artifact = await certify(target);
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     const prepared = await closeout([
@@ -190,7 +282,7 @@ describe('plan-sync gate', () => {
       '',
       planContent(),
     ].join('\n');
-    const target = makeGitTarget('synced-multi-table', { plan: multiTablePlan });
+    const target = await makeGitTarget('synced-multi-table', { plan: multiTablePlan });
     const artifact = await certify(target);
     const result = await closeout([
       'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact,
@@ -202,19 +294,19 @@ describe('plan-sync gate', () => {
   });
 
   it('fails synced when the plan still marks covered work items planned or in-progress', async () => {
-    const target = makeGitTarget('synced-open', { plan: planContent('complete', 'planned') });
+    const target = await makeGitTarget('synced-open', { plan: planContent('planned', 'complete') });
     const artifact = await certify(target);
     const result = await closeout([
       'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--plan-sync', 'synced', '--json',
     ], target);
     assert.equal(result.status, 1);
     const packet = JSON.parse(result.stdout);
-    assert.ok(packet.reasons.some(item => item.gate === 'plan_sync' && /T-002/.test(item.message)));
+    assert.ok(packet.reasons.some(item => item.gate === 'plan_sync' && /T-001/.test(item.message)));
   });
 
   it('fails synced for a missing plan, an unverifiable plan, or a stale revision', async () => {
     // Missing plan reference.
-    const missing = makeGitTarget('synced-missing', { plan: null });
+    const missing = await makeGitTarget('synced-missing', { plan: null });
     let artifact = await certify(missing);
     let result = await closeout([
       'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact,
@@ -224,7 +316,7 @@ describe('plan-sync gate', () => {
     assert.ok(JSON.parse(result.stdout).reasons.some(item => /missing plan/.test(item.message)));
 
     // No recognizable task table.
-    const unverifiable = makeGitTarget('synced-unverifiable', { plan: '# Plan\n\nfree prose only\n' });
+    const unverifiable = await makeGitTarget('synced-unverifiable', { plan: '# Plan\n\nfree prose only\n' });
     artifact = await certify(unverifiable);
     result = await closeout([
       'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--plan-sync', 'synced', '--json',
@@ -233,7 +325,7 @@ describe('plan-sync gate', () => {
     assert.ok(JSON.parse(result.stdout).reasons.some(item => /cannot be verified mechanically/.test(item.message)));
 
     // Internally incomplete: the table exists but covers none of the tasks.
-    const incomplete = makeGitTarget('synced-incomplete', {
+    const incomplete = await makeGitTarget('synced-incomplete', {
       plan: ['# Plan', '', '| ID | Status | Task |', '|---|---|---|', '| T-099 | complete | other |', ''].join('\n'),
     });
     artifact = await certify(incomplete);
@@ -244,7 +336,7 @@ describe('plan-sync gate', () => {
     assert.ok(JSON.parse(result.stdout).reasons.some(item => /internally incomplete/.test(item.message)));
 
     // Stale caller-cited revision.
-    const stale = makeGitTarget('synced-stale-rev');
+    const stale = await makeGitTarget('synced-stale-rev');
     artifact = await certify(stale);
     result = await closeout([
       'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact,
@@ -255,7 +347,7 @@ describe('plan-sync gate', () => {
   });
 
   it('rejects plan references that resolve outside the target repository', async () => {
-    const target = makeGitTarget('synced-outside');
+    const target = await makeGitTarget('synced-outside');
     const outsidePlan = join(tmpDir, 'outside-plan.md');
     writeFileSync(outsidePlan, planContent(), 'utf-8');
     const artifact = await certify(target);
@@ -270,7 +362,7 @@ describe('plan-sync gate', () => {
   });
 
   it('a plan edit after certification makes the packet and marker stale', async () => {
-    const target = makeGitTarget('plan-drift');
+    const target = await makeGitTarget('plan-drift');
     const artifact = await certify(target);
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     assert.equal((await closeout([
@@ -291,7 +383,7 @@ describe('plan-sync gate', () => {
   });
 
   it('skipped remains non-passing', async () => {
-    const target = makeGitTarget('skipped');
+    const target = await makeGitTarget('skipped');
     const artifact = await certify(target);
     const result = await closeout([
       'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--plan-sync', 'skipped', '--json',
@@ -301,7 +393,7 @@ describe('plan-sync gate', () => {
   });
 
   it('no applicable plan keeps none and not_required passing', async () => {
-    const target = makeGitTarget('no-plan', { withPlan: false, plan: null });
+    const target = await makeGitTarget('no-plan', { withPlan: false, plan: null });
     const artifact = await certify(target);
     const result = await closeout(['prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--json'], target);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);

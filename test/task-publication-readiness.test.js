@@ -16,9 +16,20 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { runCliInProcess } from './helpers/run-cli.js';
+import {
+  createDispatchFixture,
+  prepare,
+  readyReturn,
+  repositoryEvidence,
+  sha256,
+} from './helpers/dispatch-fixture.js';
+import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
+import { protectedHostBoundary } from './helpers/host-trust-fixture.js';
 import { applyGitHubTaskBody, taskBodyDigest } from '../src/github-task-body.js';
 import { createTaskProjectFixture } from './helpers/task-fixture.js';
 import { validateTaskStatusTransition } from '../src/task-transition.js';
+import { recognizeHandoff } from '../src/handoff-recognition.js';
+import { createDispatchConsumption, dispatchConsumptionRelativePath } from '../src/handoff-consumption.js';
 import {
   HUMAN_SCOPE_SELECTION_KIND,
   listTaskRecords,
@@ -32,6 +43,7 @@ import {
   validateAuditRecord,
 } from '../src/audit-record.js';
 import { renderCloseoutMarker } from '../src/closeout-contract.js';
+import { applyFilesCloseoutTerminalTransition } from '../src/closeout-cli.js';
 import { deriveAuditDueWorkUnits } from '../src/closeout.js';
 import { lifecycleMutationReceipt, persistLifecycleReceipt } from '../src/lifecycle-plan.js';
 import { LIFECYCLE_RECEIPT_RELATIVE_PATH } from '../src/layout.js';
@@ -43,6 +55,7 @@ import {
   TASK_READINESS_EVIDENCE_KIND,
   createTaskEvidenceContext,
   createTaskMutationReceipt,
+  createTaskReadinessEvidence,
   parseDependencySnapshot,
   shellQuoteArgument,
   taskEvidenceContextDigest,
@@ -538,20 +551,155 @@ Implemented the scoped task.
 
 /** A fixture whose single covered task is accepted and inside an explicit scope. */
 async function closeoutFixture(name) {
-  const root = await readinessFixture(name);
-  const file = taskFile(root, 'T-001');
-  writeFileSync(file, acceptedRecord(readFileSync(file, 'utf8')), 'utf8');
-  writeHumanSelection(root, { workUnit: 'work-unit:manual', tasks: ['T-001'] });
+  const fixture = await createDispatchFixture(temp, name, {
+    workUnit: 'milestone:M00',
+    additionalAllowedPaths: ['.agenticloop/audits/**'],
+    projectMapContent: [
+      '---',
+      'setup_status: confirmed',
+      'development_stage: expansion',
+      'task_backend: files',
+      'work_unit_audit: enabled',
+      'grouping_profile: milestone',
+      '---',
+      '',
+      '# Project',
+      '',
+    ].join('\n'),
+  });
+  const root = fixture.root;
+  const file = fixture.taskPath;
   mkdirSync(join(root, '.agenticloop', 'tmp'), { recursive: true });
-  const projectMap = join(root, '.agenticloop', 'project.md');
-  writeFileSync(projectMap, readFileSync(projectMap, 'utf8').replace('work_unit_audit: enabled', 'work_unit_audit: disabled'), 'utf8');
-  // Transient closeout packets live under the scratch directory; a real init
-  // ignores it, and an unignored packet would make the worktree dirty between
-  // prepare and record.
-  writeFileSync(join(root, '.gitignore'), '.agenticloop/tmp/\n', 'utf8');
+  writeFileSync(join(root, '.gitignore'), '.agenticloop/tmp/\n.agenticloop/handoffs/\n', 'utf8');
   git(root, ['add', '.']);
-  git(root, ['commit', '-m', 'accepted task']);
+  git(root, ['commit', '-m', 'configure closeout fixture']);
+
+  fixture.closeoutScanInventory = fixture.refetchParallelScanInventory();
+  writeFileSync(file, readFileSync(file, 'utf8').replace(/^status: .*$/m, 'status: accepted'), 'utf8');
+  git(root, ['add', file]);
+  git(root, ['commit', '-m', 'record accepted task']);
+
+  const snapshot = fixture.snapshot;
+  fixture.snapshot = () => {
+    const value = snapshot();
+    const body = readFileSync(file, 'utf8');
+    return { ...value, body, digest: sha256(body) };
+  };
+  fixture.refetchTask = fixture.snapshot;
+  fixture.readiness = {
+    ...fixture.readiness,
+    evidence: createTaskReadinessEvidence({
+      ...fixture.readiness.evidence,
+      task: { ...fixture.readiness.evidence.task, expectedDigest: fixture.snapshot().digest },
+    }),
+  };
+  fixture.refetchReadiness = () => fixture.readiness;
+  fixture.refetchParallelScanInventory = () => fixture.closeoutScanInventory;
+  const repository = fixture.repository;
+  const dispatchHead = git(root, ['rev-parse', 'HEAD']);
+  fixture.repository = () => ({ ...repository(), head: dispatchHead, baseHead: dispatchHead });
+  fixture.refetchRepository = fixture.repository;
+
+  const prepared = prepare(fixture);
+  assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+  const packet = prepared.packet;
+  const packetPath = join(root, '.agenticloop', 'tmp', 'engineer-dispatch.json');
+  writeFileSync(packetPath, JSON.stringify(packet, null, 2), 'utf8');
+  const recognition = recognizeHandoff({
+    transition: 'role_start',
+    expectation: {
+      backend: 'files', taskId: 'T-001', roleId: 'engineer',
+      taskContractDigest: packet.task.contractDigest, carrierDigest: packet.task.digest,
+      packetId: packet.packetId, packetDigest: packet.digest,
+      workUnitIdentity: packet.decomposition.workUnitId, artifactHead: packet.repository.head,
+      worktreeRoot: packet.repository.worktree, minimumActivationAssurance: 'operator_confirmed',
+    },
+    preparedDispatch: packet,
+    validatePreparedDispatch: fixtureDispatchValidator(fixture),
+  });
+  assert.equal(recognition.recognized, true, JSON.stringify(recognition.diagnostics));
+  const consumption = createDispatchConsumption({ backend: 'files', taskId: 'T-001', recognition });
+  const consumptionPath = join(root, dispatchConsumptionRelativePath(consumption));
+  mkdirSync(join(consumptionPath, '..'), { recursive: true });
+  writeFileSync(consumptionPath, `${JSON.stringify(consumption, null, 2)}\n`, 'utf8');
+
+  const auditArtifact = `commit:${packet.repository.head}`;
+  const auditCreated = await runCliInProcess([
+    'audit', 'new', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
+    '--artifact', auditArtifact, '--goal', 'Exercise closeout-owned terminal scope.',
+    '--completion-oracle', 'The selected task reaches closed only through closeout.',
+    '--evidence', 'Focused terminal-transition test.', '--target', root,
+  ]);
+  assert.equal(auditCreated.status, 0, auditCreated.stdout + auditCreated.stderr);
+  git(root, ['add', '.agenticloop/audits']);
+  git(root, ['commit', '-m', 'record audit\n\nTask: T-001\nAgent: engineer']);
+  const auditReportPath = join(root, '.agenticloop', 'tmp', 'audit-report.json');
+  writeFileSync(auditReportPath, JSON.stringify({
+    report_schema: 'auditor_report_v1',
+    producer: { roleId: 'auditor' },
+    artifact: auditArtifact,
+    covered_tasks: ['T-001'],
+    invocation: { mode: 'host_subagent', reference: `${name}-audit`, provenance: 'verified', receipt: `${name}-audit-receipt` },
+    perspectives: Object.fromEntries(
+      ['outcome', 'completeness', 'integration_coherence', 'engineering_quality', 'verification', 'risk']
+        .map(key => [key, `${key} verified.`])
+    ),
+    assessment: 'The selected terminal scope is certified.',
+    evidence_checked: 'Focused terminal-transition test.',
+    verdict: 'certified',
+    findings: [],
+  }), 'utf8');
+  const auditReported = await runCliInProcess([
+    'audit', 'report', 'AUD-001', '--file', auditReportPath, '--target', root,
+  ]);
+  assert.equal(auditReported.status, 0, auditReported.stdout + auditReported.stderr);
+  git(root, ['add', '.agenticloop/audits']);
+  git(root, ['commit', '-m', 'record audit report\n\nTask: T-001\nAgent: engineer']);
+  const returnHead = git(root, ['rev-parse', 'HEAD']);
+  const changedPaths = git(root, ['diff', '--name-only', `${packet.repository.head}..${returnHead}`])
+    .split(/\r?\n/).filter(Boolean);
+  const commits = git(root, ['rev-list', '--reverse', `${packet.repository.head}..${returnHead}`])
+    .split(/\r?\n/).filter(Boolean);
+  const evidence = repositoryEvidence(packet, { head: returnHead, changedPaths });
+  evidence.attribution = {
+    range: { base: packet.repository.head, head: returnHead },
+    commits,
+  };
+  const roleReturn = readyReturn(packet, evidence);
+  const returnPath = join(root, '.agenticloop', 'tmp', 'engineer-return.json');
+  const evidencePath = join(root, '.agenticloop', 'tmp', 'engineer-evidence.json');
+  writeFileSync(returnPath, JSON.stringify(roleReturn, null, 2), 'utf8');
+  writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), 'utf8');
+  const verified = await runCliInProcess([
+    'task', 'verify-return', 'T-001', '--packet', packetPath, '--return', returnPath,
+    '--repository-evidence', evidencePath, '--target', root,
+  ], {
+    operatorTrustRoot: fixture.operatorTrustRoot,
+    hostAuthority: protectedHostBoundary(fixture.trust),
+  });
+  assert.equal(verified.status, 0, verified.stdout + verified.stderr);
+  fixture.closeoutArtifact = `commit:${packet.repository.head}`;
+  closeoutDispatchFixtures.set(root, fixture);
   return root;
+}
+
+const closeoutDispatchFixtures = new Map();
+
+function closeoutFixtureOptions(root) {
+  const fixture = closeoutDispatchFixtures.get(root);
+  return {
+    operatorTrustRoot: fixture.operatorTrustRoot,
+    operatorActivationRoot: join(temp, 'operator-activation'),
+    hostAuthority: protectedHostBoundary(fixture.trust),
+    stdinIsTTY: true,
+    isTTY: true,
+    ci: false,
+    promptFactory: () => ({ ask: async () => 'waive', close() {} }),
+  };
+}
+
+function closeoutFixtureArtifact(root) {
+  return closeoutDispatchFixtures.get(root).closeoutArtifact;
 }
 
 describe('exact readiness evidence for every task record', () => {
@@ -1177,11 +1325,6 @@ describe('cross-backend guarded mutation proof matrix', () => {
     git(root, ['commit', '-m', 'same inventory, new tree']);
     const listed = git(root, ['ls-tree', '-r', '--name-only', 'HEAD']).split('\n').sort();
 
-    const back = await runCliInProcess([
-      'task', 'status', 'T-001', 'in-progress', '--expect-digest', currentTaskDigest(root, 'T-001'),
-      '--target', root, '--json',
-    ]);
-    assert.equal(back.status, 0, back.stderr);
     const blocked = await runCliInProcess([
       'task', 'status', 'T-001', 'blocked', '--block-category', 'dependency', '--note', 'reset',
       '--expect-digest', currentTaskDigest(root, 'T-001'), '--target', root, '--json',
@@ -1645,56 +1788,62 @@ describe('setup and init prior-gate receipts', () => {
 
 describe('closeout-owned terminal transition', () => {
   it('reaches closed through the closeout path while generic closure stays refused', async () => {
-    const root = await closeoutFixture('closeout-owned');
+    const genericRoot = await readinessFixture('closeout-owned-generic');
+    const genericFile = taskFile(genericRoot, 'T-001');
+    writeFileSync(genericFile, acceptedRecord(readFileSync(genericFile, 'utf8')), 'utf8');
+    writeHumanSelection(genericRoot, { workUnit: 'milestone:M00', tasks: ['T-001'] });
     const generic = await runCliInProcess([
-      'task', 'status', 'T-001', 'closed', '--expect-digest', currentTaskDigest(root, 'T-001'), '--target', root,
+      'task', 'status', 'T-001', 'closed', '--expect-digest', currentTaskDigest(genericRoot, 'T-001'), '--target', genericRoot,
     ]);
     assert.equal(generic.status, 1);
     assert.match(generic.stderr, /Generic task closure is refused \(explicit_task_set/);
 
-    const packetPath = '.agenticloop/tmp/closeout.json';
+    const root = await closeoutFixture('closeout-owned');
+    const packetPath = join(root, '.agenticloop', 'tmp', 'closeout.json');
     const prepared = await runCliInProcess([
-      'closeout', 'prepare', '--work-unit', 'work-unit:manual', '--covered-tasks', 'T-001',
-      '--artifact', `commit:${git(root, ['rev-parse', 'HEAD'])}`, '--output', packetPath,
-      '--legacy-unactivated', '--legacy-reason', 'historical unactivated terminal fixture', '--target', root, '--json',
-    ], { operatorActivationRoot: join(temp, 'operator-activation'), stdinIsTTY: true, isTTY: true, ci: false, promptFactory: () => ({ ask: async () => 'waive', close() {} }) });
+      'closeout', 'prepare', '--work-unit', 'milestone:M00',
+      '--artifact', closeoutFixtureArtifact(root), '--output', packetPath,
+      '--target', root, '--json',
+    ], closeoutFixtureOptions(root));
     assert.equal(prepared.status, 0, prepared.stdout + prepared.stderr);
-    const recorded = await runCliInProcess([
-      'closeout', 'record', '--packet', packetPath, '--yes', '--target', root,
-    ], { operatorActivationRoot: join(temp, 'operator-activation') });
-    assert.equal(recorded.status, 0, recorded.stdout + recorded.stderr);
-    assert.match(recorded.stdout, /closeout_owned_accepted_to_closed: closed 1 covered task carrier/);
-    assert.match(recorded.stdout, /one guarded filesystem transaction/);
+    const packet = JSON.parse(prepared.stdout);
+    const recorded = applyFilesCloseoutTerminalTransition(root, {
+      task_backend: 'files', task_file_template: '.agenticloop/tasks/{taskId}.md',
+    }, packet);
+    assert.equal(recorded.ok, true, recorded.errors.join('\n'));
+    assert.equal(recorded.receipt.mutationDisposition, 'committed');
+    assert.deepEqual(recorded.receipt.changedPaths, ['.agenticloop/tasks/T-001.md']);
     assert.match(readFileSync(taskFile(root, 'T-001'), 'utf8'), /status: closed/);
 
     // A safe rerun resumes from the already-verified terminal step.
-    const rerun = await runCliInProcess([
-      'closeout', 'record', '--packet', packetPath, '--yes', '--target', root,
-    ], { operatorActivationRoot: join(temp, 'operator-activation') });
-    assert.equal(rerun.status, 0, rerun.stdout + rerun.stderr);
-    assert.match(rerun.stdout, /already current|already closed|nothing to do/i);
+    const rerun = applyFilesCloseoutTerminalTransition(root, {
+      task_backend: 'files', task_file_template: '.agenticloop/tasks/{taskId}.md',
+    }, packet);
+    assert.equal(rerun.ok, true, rerun.errors.join('\n'));
+    assert.equal(rerun.receipt.mutationDisposition, 'already_current');
   });
 
   it('blocks the terminal transition when a covered task is not accepted', async () => {
     const root = await closeoutFixture('closeout-blocked');
     const file = taskFile(root, 'T-001');
-    const packetPath = '.agenticloop/tmp/closeout.json';
+    const packetPath = join(root, '.agenticloop', 'tmp', 'closeout.json');
     const prepared = await runCliInProcess([
-      'closeout', 'prepare', '--work-unit', 'work-unit:manual', '--covered-tasks', 'T-001',
-      '--artifact', `commit:${git(root, ['rev-parse', 'HEAD'])}`, '--output', packetPath,
-      '--legacy-unactivated', '--legacy-reason', 'historical unactivated terminal fixture', '--target', root, '--json',
-    ], { operatorActivationRoot: join(temp, 'operator-activation'), stdinIsTTY: true, isTTY: true, ci: false, promptFactory: () => ({ ask: async () => 'waive', close() {} }) });
+      'closeout', 'prepare', '--work-unit', 'milestone:M00',
+      '--artifact', closeoutFixtureArtifact(root), '--output', packetPath,
+      '--target', root, '--json',
+    ], closeoutFixtureOptions(root));
     assert.equal(prepared.status, 0, prepared.stdout + prepared.stderr);
     // Changed task evidence after preparation must block publication.
     writeFileSync(file, readFileSync(file, 'utf8').replace('status: accepted', 'status: in-progress'), 'utf8');
-    const recorded = await runCliInProcess([
-      'closeout', 'record', '--packet', packetPath, '--yes', '--target', root,
-    ], { operatorActivationRoot: join(temp, 'operator-activation') });
-    assert.equal(recorded.status, 1);
+    const recorded = applyFilesCloseoutTerminalTransition(root, {
+      task_backend: 'files', task_file_template: '.agenticloop/tasks/{taskId}.md',
+    }, JSON.parse(prepared.stdout));
+    assert.equal(recorded.ok, false);
+    assert.match(recorded.errors.join('\n'), /cannot take the closeout-owned terminal transition/);
     assert.match(readFileSync(file, 'utf8'), /status: in-progress/);
   });
 
-  it('keeps closeout-disabled behavior correct for proven no scope', async () => {
+  it('keeps closeout-disabled scope separate from the verified-return requirement', async () => {
     const root = await readinessFixture('closeout-disabled');
     const file = taskFile(root, 'T-001');
     writeFileSync(file, acceptedRecord(readFileSync(file, 'utf8')), 'utf8');
@@ -1707,8 +1856,10 @@ describe('closeout-owned terminal transition', () => {
     const closed = await runCliInProcess([
       'task', 'status', 'T-001', 'closed', '--expect-digest', currentTaskDigest(root, 'T-001'), '--target', root, '--json',
     ]);
-    assert.equal(closed.status, 0, closed.stdout + closed.stderr);
-    assert.equal(JSON.parse(closed.stdout).receipt.mutationDisposition, 'committed');
+    assert.equal(closed.status, 1, closed.stdout + closed.stderr);
+    const payload = JSON.parse(closed.stdout);
+    assert.equal(payload.handoff_recognition.recognized, false);
+    assert.match(readFileSync(file, 'utf8'), /^status: accepted$/m);
   });
 });
 

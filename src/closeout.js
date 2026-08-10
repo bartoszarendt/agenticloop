@@ -50,6 +50,7 @@ import {
   returnAssuranceMeets,
 } from './activation-grant.js';
 import { ACTIVATION_MODES, MODE_MINIMUMS } from './activation-policy.js';
+import { HANDOFF_RETURN_MAX_AGE_SECONDS, recognizeHandoff } from './handoff-recognition.js';
 import { evaluatePullRequestLifecycle } from './closeout-github.js';
 import { validateEvent, DEFAULT_LOG_DIR } from './event-logging.js';
 import { deriveConfiguredGroupScopes, deriveExplicitScopes } from './terminal-scope.js';
@@ -500,9 +501,11 @@ export function summarizeCloseoutAssurance(input, coveredTasks = []) {
         return_capability_limitation: null,
         returns: [],
         compatibility_waiver: null,
+        compatibility_diagnostics: [],
         tasks: [],
         limitations: ['activation and return assurance could not be evaluated'],
       },
+      recognition: [],
     };
   }
 
@@ -551,22 +554,86 @@ export function summarizeCloseoutAssurance(input, coveredTasks = []) {
   }
 
   const returnReports = [];
+  /**
+   * The closeout handoff verdicts, carried beside the report rather than inside
+   * it: the packet is transport and its provenance projection is a fixed
+   * whitelist, so the verdicts travel to the lifecycle-claim boundary directly
+   * instead of being reconstructed from a serialized summary.
+   * @type {object[]}
+   */
+  const recognition = [];
   let observedReturn = 'host_receipt';
   for (const taskId of coveredTasks) {
     const observed = typeof input.resolveReturns === 'function' ? input.resolveReturns(taskId) : null;
-    const records = observed?.usable ? observed.records ?? [] : [];
+    const consumptionRequired = typeof input.resolveDispatchConsumption === 'function';
+    const dispatch = consumptionRequired
+      ? input.resolveDispatchConsumption(taskId)
+      : null;
+    const consumed = dispatch?.ok === true ? dispatch.record : null;
+    const records = observed?.usable && (!consumptionRequired || consumed) ? observed.records ?? [] : [];
+    if (consumptionRequired && !consumed) {
+      reasons.push({
+        category: 'return_evidence_absent',
+        message: `covered task ${taskId} has no usable durable canonical dispatch consumption`,
+        repair: `npx agenticloop task prepare-dispatch ${taskId} ...`,
+      });
+    }
     const grades = records.map(record => record.observedReturnGrade);
-    returnReports.push({ task_id: taskId, observed_grades: grades, records: records.map(record => record.recordId), current: observed?.usable === true });
+    // Closeout is a protected transition, so a persisted verification is not
+    // enough on its own: each record goes back through the one shared
+    // recognition seam, bound to this work unit and this task, before it can
+    // support a completion claim. A record that is intact but describes another
+    // task, contract generation, or work unit is refused here rather than
+    // counted as evidence for this closeout.
+    const taskRecognition = records.map(record => recognizeHandoff({
+      transition: 'closeout',
+      expectation: {
+        backend: input.backend ?? null,
+        taskId,
+        roleId: input.expectedProducerRole ?? 'engineer',
+        taskContractDigest: observed?.taskContractDigest ?? null,
+        carrierDigest: consumed?.carrierDigest ?? null,
+        packetId: consumed?.packetId ?? null,
+        packetDigest: consumed?.packetDigest ?? null,
+        workUnitIdentity: consumed?.workUnitIdentity ?? input.workUnitIdentity ?? null,
+        artifactHead: observed?.artifactHead ?? null,
+        worktreeRoot: consumed?.worktreeRoot ?? null,
+        repositoryIdentity: consumed?.repositoryIdentity ?? input.repositoryIdentity ?? null,
+        minimumReturnAssurance: minimumReturn,
+      },
+      verifiedReturn: record,
+      validatePreparedDispatch: input.validatePreparedDispatch ?? null,
+      maxEvidenceAgeSeconds: HANDOFF_RETURN_MAX_AGE_SECONDS,
+    }));
+    recognition.push(...taskRecognition);
+    const unrecognized = taskRecognition.filter(verdict => !verdict.recognized);
+    returnReports.push({
+      task_id: taskId,
+      observed_grades: grades,
+      records: records.map(record => record.recordId),
+      current: observed?.usable === true,
+      handoff_recognition: taskRecognition.map(verdict => verdict.digest),
+      handoff_recognized: records.length > 0 && unrecognized.length === 0,
+    });
+    if (unrecognized.length > 0) {
+      reasons.push({
+        category: 'return_verification_failed',
+        message:
+          `covered task ${taskId} has return verification evidence the canonical handoff seam does not recognize: ` +
+          unrecognized.flatMap(verdict => verdict.diagnostics.map(item => item.message)).join('; '),
+        repair: `npx agenticloop task verify-return ${taskId} --packet <packet.json> --return <role-return.json>`,
+      });
+    }
     if (records.length === 0) {
       observedReturn = null;
       const failureCategory = observed?.failureCategory ?? 'return_evidence_absent';
-      if (!waivedScopes.has(failureCategory)) reasons.push({ category: failureCategory, message: `covered task ${taskId} has no current successful role-return verification${observed?.reasons?.length ? `: ${observed.reasons.join('; ')}` : ''}`, repair: `npx agenticloop task verify-return ${taskId} ...` });
+      reasons.push({ category: failureCategory, message: `covered task ${taskId} has no current successful role-return verification${observed?.reasons?.length ? `: ${observed.reasons.join('; ')}` : ''}`, repair: `npx agenticloop task verify-return ${taskId} ...` });
     } else if (grades.some(grade => grade === 'session_reported')) {
       if (observedReturn !== null) observedReturn = 'session_reported';
     }
   }
   if (observedReturn && !limitations.includes(RETURN_ASSURANCE_LIMITATIONS[observedReturn])) limitations.push(RETURN_ASSURANCE_LIMITATIONS[observedReturn]);
-  if (!returnAssuranceMeets(observedReturn, minimumReturn) && !(observedReturn === null && waivedScopes.has('return_evidence_absent'))) {
+  if (!returnAssuranceMeets(observedReturn, minimumReturn)) {
     reasons.push({
       category: 'assurance_below_policy',
       message: `observed return assurance '${observedReturn ?? 'missing'}' is below the effective minimum '${minimumReturn}' required by ${mode} mode (policy source: ${policySource})`,
@@ -584,6 +651,7 @@ export function summarizeCloseoutAssurance(input, coveredTasks = []) {
   return {
     ok: reasons.length === 0,
     reasons,
+    recognition,
     report: {
       mode,
       policy_source: policySource,
@@ -592,7 +660,10 @@ export function summarizeCloseoutAssurance(input, coveredTasks = []) {
       observed_return_assurance: observedReturn,
       return_capability_limitation: input.returnCapabilityLimitation ?? null,
       returns: returnReports,
-      compatibility_waiver: compatibilityWaiver,
+      // Persist the authentic signed record, not the in-process effective
+      // projection used to ignore retired scope semantics.
+      compatibility_waiver: compatibilityWaiver?.sourceRecord ?? compatibilityWaiver,
+      compatibility_diagnostics: compatibilityWaiver?.diagnostics ?? [],
       tasks: taskReport,
       limitations,
     },
@@ -1031,6 +1102,9 @@ export function evaluateCloseout(target, params) {
     packet,
     reasons,
     gates,
+    // Not part of the packet: closeout is a protected transition, and these are
+    // the verdicts that let the terminal boundary claim completion at all.
+    handoffRecognition: assurance.recognition ?? [],
     markerState: {
       markers,
       current: markerResolution.current,

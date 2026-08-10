@@ -469,12 +469,92 @@ match both. Commit attribution is reconstructed from durable full identities
 and one final contiguous `Task: <resolved task id>` / `Agent: <immutable role
 id>` pair, but those cooperative trailers cannot repair a producer mismatch.
 
+### Canonical handoff recognition
+
+Publishing `task prepare-dispatch` and `task verify-return` is not the same as
+requiring them. A handoff mechanism is authoritative only where it is actually
+consumed, so one shared host-neutral seam - `agenticloop.handoff-recognition`,
+schema version `1`, defined in the bundled `src/handoff-recognition.js` module -
+decides whether presented evidence may authorize a protected lifecycle
+transition. Files and GitHub supply the same normalized evidence and receive the
+same verdict; installed host adapters project that verdict and never define
+their own.
+
+The protected transitions form a closed inventory. `role_start` requires a fresh
+canonical prepared dispatch. `review_entry`, `acceptance`, `integration`, and
+`closeout` each require a canonical verified return. Recognition binds the exact
+task, dispatch packet, task/carrier identity and digest, artifact head and
+worktree, role, return schema, and assurance result; a supplied expectation the
+evidence does not satisfy is a refusal, never a warning. Every expectation is
+assembled from durable state and current operator policy, never read back out of
+the evidence under judgement, and the packet itself is checked by the same
+canonical validator `prepare-dispatch` and `verify-return` run - a digest that
+matches its own projection proves internal consistency and nothing more.
+`createPreparedDispatchValidation` therefore produces an unkeyed,
+exact-packet-bound validation-result record: its digest detects alteration and
+packet substitution but does not authenticate the validator or prove canonical
+origin. `recognizeHandoff` is a trusted in-process evaluator, not a standalone
+authority boundary. Authoritative files and GitHub commands rerun
+`canonicalDispatchValidator` over the complete current packet before mutation;
+no public CLI option accepts a caller-authored validation receipt. Persisted
+receipts or verdicts crossing a process or trust boundary are rederived from
+their underlying prepared dispatch or verified return.
+
+All five transitions are consumed today: `task status`
+and `task-body transition` decide the role start on the files and GitHub
+carriers through one shared path; review preparation emits neither a reviewer
+packet nor a lifecycle-bearing receipt without a recognized verified return;
+files/GitHub acceptance and GitHub `integrated_by` mutation consume the same
+chain; and closeout refuses completion the same way. The files role-start write
+atomically records a closed, digest-bound dispatch-consumption record. GitHub
+records the same receipt after the guarded remote edit; cross-transport atomic
+recovery remains part of the lifecycle-mutation transaction work.
+
+Refusals stay distinct rather than collapsing into one "invalid" state:
+`handoff.evidence.missing`, `.malformed`, `.stale`, `.replayed`, `.mismatched`,
+`.unsupported`, and `.unauthenticated`, plus
+`handoff.transition.unsupported` and `handoff.expectation.malformed`.
+`.replayed` is backed by the durable dispatch-consumption inventory under
+`.agenticloop/handoffs/dispatch/`; a packet already consumed by either carrier
+cannot start the role again. Role start also reruns the complete canonical
+current-state dispatch verifier immediately before mutation, so task,
+readiness, repository head/worktree, decomposition, inventory, activation, or
+operator-policy drift supersedes the packet. Later transitions bind the return
+to the exact consumption record and enforce a 24-hour transition-use freshness
+ceiling in addition to canonical live return revalidation. That ceiling is an
+immutable v1 recognition policy, not an operator-configurable setting. A verdict
+that recognizes a handoff carries no diagnostics, reports evidence state
+`current` and disposition `proceed`, and names the grade it consumed; the two
+grade ladders never mix, so only `host_signed` activation or a `host_receipt`
+return is authenticated recognition.
+
+Agentic Loop cannot prevent a host or operator from invoking a role by hand.
+Such an invocation, a model-authored return, and any narration of either remain
+observable evidence graded exactly `session_reported`, recorded with
+`authoritative: false`. A claimed higher grade is normalized back and the claim
+is reported rather than honored. `agenticloop task status <id> in-progress`
+requires `--dispatch-packet <path>` for an authoritative status mutation: with a
+fresh binding packet the role start is recognized and its single-use
+consumption is recorded; without one, with a replay, or with a packet that is no
+longer current, the transition is refused with no durable lifecycle change.
+Raw host observations remain reportable as `session_reported`; they are not a
+route to `in-progress` state.
+
+Requesting target status `in-progress` always requests a new role start, even
+when the carrier already holds that status. Recognition runs before deciding
+whether the carrier write is a validated no-op, and the fresh packet is consumed
+exactly once. Supplying a note with that request is part of the new start and
+does not create a note-only bypass; it therefore also requires a fresh packet.
+
 ### Lifecycle and source of truth
 
 #### Lifecycle claims
 
-Free-form progress text is advisory and never completion authority. Lifecycle
-claims are authoritative only under this exact evidence mapping:
+Free-form progress text is advisory and never completion authority. The derived
+`implementation_ready_for_review` and `closeout_complete` claims additionally
+require a recognized canonical handoff for their own protected transition:
+without one the claim is not weakened or annotated, it is simply not made.
+Claims are authoritative only under this exact evidence mapping:
 
 | Claim | Authoritative evidence | Producer / evidence authority / work owner | Exact binding and invalidation | Without current valid evidence |
 | --- | --- | --- | --- | --- |

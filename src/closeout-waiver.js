@@ -11,7 +11,12 @@ export const LEGACY_UNACTIVATED_WAIVER_SCHEMA_VERSION = 1;
 export const LEGACY_UNACTIVATED_WAIVER_ROOT = '.agenticloop/closeout-waivers';
 export const LEGACY_WAIVER_MAX_TTL_SECONDS = 3600;
 export const LEGACY_WAIVER_CLOCK_SKEW_MS = 1000;
-export const LEGACY_WAIVER_SCOPES = Object.freeze(['activation_evidence_absent', 'return_evidence_absent']);
+export const LEGACY_WAIVER_SCOPES = Object.freeze(['activation_evidence_absent']);
+const HISTORICAL_LEGACY_WAIVER_SCOPES = Object.freeze([
+  'activation_evidence_absent',
+  'return_evidence_absent',
+]);
+export const RETIRED_WAIVER_SCOPE_DIAGNOSTIC = 'compatibility.waiver_scope_retired';
 
 function digest(record) {
   const { digest: ignoredDigest, authentication: ignoredAuthentication, ...projection } = record;
@@ -88,7 +93,13 @@ export function verifyLegacyUnactivatedWaiver(record, { target, workUnit, tasks,
   if (!Array.isArray(record?.tasks) || record.tasks.some(item => !item || Object.keys(item).length !== 2 || !Object.hasOwn(item, 'taskId') || !Object.hasOwn(item, 'taskContractDigest') || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(item.taskId) || !/^sha256:v1:[a-f0-9]{64}$/.test(item.taskContractDigest))) errors.push('compatibility waiver task bindings are invalid');
   if (canonicalSha256(record?.tasks) !== canonicalSha256(expectedTasks)) errors.push('compatibility waiver covered task contracts changed');
   const scopes = Array.isArray(record?.waivedDimensions) ? record.waivedDimensions : [];
-  if (scopes.length === 0 || new Set(scopes).size !== scopes.length || scopes.some(scope => !LEGACY_WAIVER_SCOPES.includes(scope)) || canonicalSha256(scopes) !== canonicalSha256([...scopes].sort())) errors.push('compatibility waiver scopes are invalid');
+  const canonicalScopes = canonicalSha256(scopes) === canonicalSha256([...scopes].sort());
+  const activeScopes = scopes.length === 1 && scopes[0] === 'activation_evidence_absent';
+  const authenticHistoricalScopes = scopes.length === HISTORICAL_LEGACY_WAIVER_SCOPES.length &&
+    HISTORICAL_LEGACY_WAIVER_SCOPES.every(scope => scopes.includes(scope));
+  if (new Set(scopes).size !== scopes.length || !canonicalScopes || (!activeScopes && !authenticHistoricalScopes)) {
+    errors.push('compatibility waiver scopes are invalid');
+  }
   if (record?.reason !== normalizedReason(record?.reason) || !record?.reason || record.reason.length > 500) errors.push('compatibility waiver reason must be normalized and contain 1-500 characters');
   if (record?.statement !== canonicalStatement(record) || record?.digest !== digest(record)) errors.push('compatibility waiver statement or digest is invalid');
   const issuedAt = Date.parse(record?.issuedAt);
@@ -96,7 +107,22 @@ export function verifyLegacyUnactivatedWaiver(record, { target, workUnit, tasks,
   if (!Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || issuedAt >= expiresAt || issuedAt > now + LEGACY_WAIVER_CLOCK_SKEW_MS || expiresAt <= now || expiresAt - issuedAt > LEGACY_WAIVER_MAX_TTL_SECONDS * 1000) errors.push('compatibility waiver timestamps are invalid, expired, future-issued, or exceed the maximum TTL');
   if (path !== null && path.replaceAll('\\', '/') !== legacyWaiverPath(record?.workUnit)) errors.push('compatibility waiver canonical path does not match its signed identity');
   if (typeof verify !== 'function' || !verify(legacyWaiverSignaturePayload(record), record?.authentication, 'operator_confirmed')) errors.push('compatibility waiver signature does not verify against the external operator-confirmation key');
-  return { ok: errors.length === 0, errors, record: errors.length === 0 ? record : null };
+  const historical = errors.length === 0 && authenticHistoricalScopes;
+  const diagnostics = historical ? [{
+    code: RETIRED_WAIVER_SCOPE_DIAGNOSTIC,
+    message: "the signed schema-v1 'return_evidence_absent' scope is retired and ignored; canonical dispatch consumption and canonical verified-return evidence remain mandatory",
+  }] : [];
+  return {
+    ok: errors.length === 0,
+    errors,
+    diagnostics,
+    record: errors.length === 0 ? record : null,
+    effectiveWaiver: errors.length === 0 ? Object.freeze({
+      waivedDimensions: Object.freeze(['activation_evidence_absent']),
+      sourceRecord: record,
+      diagnostics: Object.freeze(diagnostics),
+    }) : null,
+  };
 }
 
 export function writeLegacyUnactivatedWaiver(target, record) {

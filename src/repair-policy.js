@@ -153,6 +153,19 @@ export const REPAIR_POLICY = Object.freeze({
   'parallel_scan.record.invalid': policy('parallel_scan', 'repair_evidence', 'none', 'The parallel-scan record is malformed, mis-digested, or does not account for its inventory.'),
   'parallel_scan.evidence.stale': policy('parallel_scan', 'repair_evidence', 'none', 'The parallel-scan observation is outside its declared freshness policy.'),
   'parallel_scan.decomposition.invalid': policy('parallel_scan', 'repair_evidence', 'contract_reconciliation', 'The decomposition source, attribution, or completeness declaration is invalid.'),
+  // Canonical handoff recognition. These reuse the existing repair and
+  // escalation kinds: the operator- or role-facing repair is always to produce
+  // the canonical artifact - a fresh `task prepare-dispatch` packet or a
+  // persisted `task verify-return` result - never to relax the boundary.
+  'handoff.transition.unsupported': policy('handoff', 'repair_evidence', 'none', 'The requested transition is not a protected lifecycle transition this seam recognizes.'),
+  'handoff.expectation.malformed': policy('handoff', 'repair_evidence', 'none', 'The supplied handoff expectation is malformed or does not bind a task and role.'),
+  'handoff.evidence.missing': policy('handoff', 'repair_evidence', 'none', 'The canonical prepared dispatch or verified return required by this transition was not supplied.'),
+  'handoff.evidence.malformed': policy('handoff', 'repair_evidence', 'none', 'Supplied handoff evidence is malformed or is not the canonical record kind.'),
+  'handoff.evidence.stale': policy('handoff', 'repair_evidence', 'none', 'Supplied handoff evidence is outside its freshness policy or no longer matches current state.'),
+  'handoff.evidence.replayed': policy('handoff', 'repair_evidence', 'none', 'The prepared dispatch was already consumed; an authoritative role start requires a fresh packet.'),
+  'handoff.evidence.mismatched': policy('handoff', 'repair_evidence', 'none', 'Supplied handoff evidence binds a different task, role, packet, artifact, or worktree.'),
+  'handoff.evidence.unsupported': policy('handoff', 'repair_evidence', 'none', 'Supplied handoff evidence declares a schema or assurance grade this boundary cannot evaluate.'),
+  'handoff.evidence.unauthenticated': policy('handoff', 'repair_evidence', 'human_authority_review', 'Handoff evidence is session-reported or below the required assurance minimum and cannot authorize a protected transition.'),
 });
 
 function policy(category, repairKind, escalationKind, description) {

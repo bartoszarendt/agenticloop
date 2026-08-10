@@ -115,7 +115,7 @@ function wireReport(artifact, coveredTasks, overrides = {}) {
 }
 
 describe('reproduced closeout-integrity failure sequence', () => {
-  it('stops at the first invalid transition, then completes through the corrected workflow', async () => {
+  it('stops at the first invalid transition and refuses legacy closeout without a return chain', async () => {
     const target = makeTarget('incident');
     writeTask(target, 'T-001', 'accepted', 'milestone:M00');
     writeTask(target, 'T-002', 'accepted', 'milestone:M00');
@@ -208,27 +208,19 @@ describe('reproduced closeout-integrity failure sequence', () => {
     assert.equal(disposed.status, 0, `${disposed.stdout}${disposed.stderr}`);
     commitAll(target, 'record disposition');
 
-    // 9. Full prepare -> record -> status cycle with the improvement reference.
+    // 9. The activation-only compatibility waiver cannot replace dispatch
+    //    consumption or a verified Engineer return.
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     const prepared = await run([
       'closeout', 'prepare', '--work-unit', 'milestone:M00',
       '--artifact', artifact, '--improvement-ref', proposalId, '--output', packetPath,
     ], target);
-    assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
+    assert.equal(prepared.status, 1, `${prepared.stdout}${prepared.stderr}`);
     const packet = JSON.parse(readFileSync(packetPath, 'utf-8'));
-    assert.equal(packet.completion_eligible, true);
+    assert.equal(packet.completion_eligible, false);
     assert.deepEqual(packet.improvement_refs, [proposalId]);
-
-    const recorded = await run(['closeout', 'record', '--packet', packetPath, '--yes'], target);
-    assert.equal(recorded.status, 0, `${recorded.stdout}${recorded.stderr}`);
-    const finalCarrier = readFileSync(carrierFile, 'utf-8');
-    assert.ok(finalCarrier.includes('AGENT_CLOSEOUT_STATUS: complete'));
-
-    // 10. Delete the transient packet: status still verifies by digest.
-    unlinkSync(packetPath);
-    const finalStatus = await run(['closeout', 'status', '--work-unit', 'milestone:M00'], target);
-    assert.equal(finalStatus.status, 0, `${finalStatus.stdout}${finalStatus.stderr}`);
-    assert.match(finalStatus.stdout, /complete \(current\)/);
+    assert.ok(packet.reasons.some(item => /dispatch consumption/.test(item.message)));
+    assert.ok(packet.reasons.some(item => /role-return verification/.test(item.message)));
   });
 });
 

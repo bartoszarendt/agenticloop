@@ -52,6 +52,8 @@ import { atomicWriteFile, executeMutationBatch } from './fs-mutation-kernel.js';
 import { SCRATCH_DIRECTORY_RELATIVE_PATH } from './layout.js';
 import { canonicalJson } from './canonical-json.js';
 import { deriveLifecycleClaims } from './lifecycle-claims.js';
+import { canonicalDispatchValidator } from './handoff-binding.js';
+import { refetchFilesReturnEvidence } from './files-return-evidence.js';
 import { loadProjectMap, PROJECT_MAP_DEFAULTS } from './project-map.js';
 import { parseFrontmatter } from './frontmatter.js';
 import { createLocalVerificationContext } from './verification-context.js';
@@ -89,6 +91,7 @@ import {
 import { loadFilesTaskContractRecords } from './files-task-contract.js';
 import { provisionOperatorActivationKey, readExternalActivationRevocations } from './activation-trust.js';
 import { refetchGitHubReturnEvidence } from './github-return-evidence.js';
+import { currentDispatchConsumption } from './handoff-consumption.js';
 import {
   createLegacyUnactivatedWaiver,
   readLegacyUnactivatedWaiver,
@@ -179,6 +182,19 @@ export function resolveCloseoutAssuranceContext(target, io, backend, params) {
     minimumActivation: policy.minimumActivation,
     minimumReturn: policy.minimumReturn,
     returnCapabilityLimitation,
+    // External context for the shared handoff seam, so a return verification is
+    // judged against the closeout's own facts rather than against values read
+    // back out of the record under judgement.
+    workUnitIdentity: params?.workUnit ?? null,
+    backend,
+    repositoryIdentity,
+    // Return verifications carry implementation results, and a dispatch
+    // assignment is always the immutable Engineer role.
+    expectedProducerRole: 'engineer',
+    resolveDispatchConsumption: taskId => currentDispatchConsumption(target, taskId, { backend }),
+    // The packet each verification consumed is revalidated against operator-owned
+    // trust, so an intact-looking record whose packet was never prepared fails.
+    validatePreparedDispatch: canonicalDispatchValidator({ target, io }),
     resolveTask: taskId => resolveCoveredTaskAssurance(target, io, {
       backend,
       taskId,
@@ -198,6 +214,7 @@ export function resolveCloseoutAssuranceContext(target, io, backend, params) {
         backend, taskId, params, projectConfig: projectConfigForTasks, repositoryIdentity, verify: verification.verify,
       });
       if (!identity) return { taskId, usable: false, records: [], failureCategory: 'return_verification_failed', reasons: [`task '${taskId}' could not be read for return evaluation`] };
+      const expectedContractDigest = identity.contract.digest;
       const listed = listReturnVerifications(target, taskId, {
         taskContractDigest: identity.contract.digest,
         activationAuthorityDigest: activation?.authorityDigest ?? null,
@@ -229,13 +246,17 @@ export function resolveCloseoutAssuranceContext(target, io, backend, params) {
               commandRunner: params.ghRunner ?? defaultGhCommandRunner,
               repo: params.repo,
             })
-          : structuredClone(record.evidence.repositoryEvidence),
+          : refetchFilesReturnEvidence(target, record.evidence.packet, record.evidence.repositoryEvidence, {
+              historicalCloseout: true,
+            }),
         runGit: args => spawnSync('git', args, { cwd: target, encoding: 'utf8' }),
         minimumReturnAssurance: policy.minimumReturn,
       }));
       const valid = checked.filter(item => item.ok).map(item => item.record);
       return {
         taskId,
+        taskContractDigest: expectedContractDigest,
+        artifactHead: closeoutTaskArtifactHead(identity, backend),
         usable: checked.length > 0 && checked.every(item => item.ok),
         records: valid,
         failureCategory: checked.length === 0
@@ -256,7 +277,7 @@ export function resolveCloseoutAssuranceContext(target, io, backend, params) {
       const checked = verifyLegacyUnactivatedWaiver(read.record, {
         target, workUnit, tasks, verify: verification.verify, path: read.path,
       });
-      return checked.ok ? checked.record : null;
+      return checked.ok ? checked.effectiveWaiver : null;
     },
   };
 }
@@ -405,6 +426,19 @@ function closeoutTaskIdentity(target, backend, taskId, params, config, io) {
   };
 }
 
+function closeoutTaskArtifactHead(identity, backend) {
+  const [frontmatter] = parseFrontmatter(identity?.snapshot?.body ?? '');
+  const integrated = optionString(frontmatter?.integrated_by);
+  const implementation = optionString(frontmatter?.implementation_artifact);
+  const integratedMatch = backend === 'github'
+    ? integrated.match(/^pr:[1-9]\d*@([0-9a-f]{40}|[0-9a-f]{64})$/)
+    : integrated.match(/^commit:([0-9a-f]{40}|[0-9a-f]{64})$/) ??
+      integrated.match(/^range:[0-9a-f]{40,64}\.\.([0-9a-f]{40}|[0-9a-f]{64})$/);
+  const implementationMatch = implementation.match(/^commit:([0-9a-f]{40}|[0-9a-f]{64})$/) ??
+    implementation.match(/^range:[0-9a-f]{40,64}\.\.([0-9a-f]{40}|[0-9a-f]{64})$/);
+  return integratedMatch?.[1] ?? implementationMatch?.[1] ?? null;
+}
+
 /**
  * Build the evaluation params shared by prepare, status, and record
  * revalidation. GitHub inventory is fetched once per command and reused by
@@ -513,6 +547,9 @@ function printAssurance(assurance, io) {
   io.out(`    observed return assurance: ${assurance.observed_return_assurance ?? 'missing'}`);
   if (assurance.return_capability_limitation) io.out(`    return capability limitation: ${assurance.return_capability_limitation}`);
   if (assurance.compatibility_waiver) io.out(`    compatibility waiver: ${assurance.compatibility_waiver.waiverId} (${assurance.compatibility_waiver.waivedDimensions.join(', ')}; no activation or return-authentication claim)`);
+  for (const diagnostic of assurance.compatibility_diagnostics ?? []) {
+    io.out(`    compatibility diagnostic [${diagnostic.code}]: ${diagnostic.message}`);
+  }
   for (const task of assurance.tasks ?? []) {
     const derivation = task.binding_derivation ? ` (${task.binding_derivation})` : '';
     io.out(`    ${task.task_id}: activation ${task.activation ?? 'unknown'}${derivation}`);
@@ -524,7 +561,7 @@ async function applyLegacyCompatibilityWaiver(target, params, evaluation, opts, 
   if (!opts.legacyUnactivated) return evaluation;
   if (params.assurance?.mode !== 'standard') throw new PublicCommandError('--legacy-unactivated is permitted only in standard activation mode');
   const assuranceCategories = new Set([
-    'activation_evidence_absent', 'return_evidence_absent', 'activation_revoked',
+    'activation_evidence_absent', 'activation_revoked',
     'activation_expired', 'activation_malformed', 'activation_stale',
     'activation_for_changed_contract', 'return_evidence_malformed',
     'return_verification_failed', 'return_evidence_stale',
@@ -553,8 +590,10 @@ async function applyLegacyCompatibilityWaiver(target, params, evaluation, opts, 
     const checked = verifyLegacyUnactivatedWaiver(existing.record, {
       target, workUnit: params.workUnit, tasks, verify: verification.verify, path: existing.path,
     });
-    if (checked.ok && absentScopes.every(scope => existing.record.waivedDimensions.includes(scope))) {
-      params.assurance.legacyWaiver = existing.record;
+    if (checked.ok && absentScopes.every(scope => checked.effectiveWaiver.waivedDimensions.includes(scope))) {
+      // Keep the signed record unchanged and pass only an explicit effective
+      // projection. A retired return scope never becomes lifecycle authority.
+      params.assurance.legacyWaiver = checked.effectiveWaiver;
       return evaluateCloseout(target, params);
     }
   }
@@ -579,7 +618,11 @@ async function applyLegacyCompatibilityWaiver(target, params, evaluation, opts, 
   });
   const written = writeLegacyUnactivatedWaiver(target, waiver);
   if (!written.ok) throw new PublicCommandError(`compatibility waiver could not be written: ${written.errors.join('; ')}`);
-  params.assurance.legacyWaiver = waiver;
+  params.assurance.legacyWaiver = {
+    waivedDimensions: waiver.waivedDimensions,
+    sourceRecord: waiver,
+    diagnostics: [],
+  };
   return evaluateCloseout(target, params);
 }
 
@@ -914,7 +957,7 @@ export async function cmdCloseout(args, io = createIo()) {
           io.err('closeout record: stale packet: GitHub state changed immediately before publication; re-run closeout prepare');
           return 1;
         }
-        return await recordGitHubMarker(target, config, packet, markerBody, finalParams, { dryRun, yes }, io);
+        return await recordGitHubMarker(target, config, packet, markerBody, finalParams, { dryRun, yes }, io, finalLive.handoffRecognition ?? []);
       }
       return recordFilesMarker(target, config, packet, markerBody, live, { dryRun, yes }, io);
     }
@@ -1360,12 +1403,19 @@ function recordFilesMarker(target, config, packet, markerBody, live, mode, io) {
     gateDigest: packet.digest,
     artifact: packet.candidate_artifact,
     workUnit: packet.work_unit,
-  });
+  }, live?.handoffRecognition ?? []);
   return terminal.ok ? 0 : 1;
 }
 
-/** Print the closeout-owned terminal transition outcome and its receipt. */
-function reportTerminalTransition(terminal, io, packet = null, marker = null) {
+/**
+ * Print the closeout-owned terminal transition outcome and its receipt.
+ *
+ * `handoffRecognition` carries the closeout verdicts produced while the live
+ * return evidence was evaluated. Completion is claimed only when those verdicts
+ * recognize the canonical chain, so a run that reaches this point on unrecognized
+ * evidence still reports the transition it performed and makes no lifecycle claim.
+ */
+function reportTerminalTransition(terminal, io, packet = null, marker = null, handoffRecognition = []) {
   const { receipt } = terminal;
   if (terminal.ok) {
     io.out(receipt.mutationDisposition === 'already_current'
@@ -1377,6 +1427,7 @@ function reportTerminalTransition(terminal, io, packet = null, marker = null) {
       closeoutPacket: packet,
       closeoutTerminalReceipt: receipt,
       currentCloseoutMarker: marker,
+      handoff: { closeout: handoffRecognition },
     });
     for (const claim of claims) io.out(`  lifecycle: ${claim.claim}`);
     return;
@@ -1386,7 +1437,7 @@ function reportTerminalTransition(terminal, io, packet = null, marker = null) {
   io.err(`  atomicity: ${receipt.atomicity}`);
 }
 
-async function recordGitHubMarker(target, config, packet, markerBody, liveParams, mode, io) {
+async function recordGitHubMarker(target, config, packet, markerBody, liveParams, mode, io, handoffRecognition = []) {
   const ghRunner = liveParams.ghRunner ?? defaultGhCommandRunner;
   const carrier = resolveGitHubCloseoutCarrier(liveParams.inventory, packet.covered_tasks);
   if (carrier.error) {
@@ -1433,7 +1484,7 @@ async function recordGitHubMarker(target, config, packet, markerBody, liveParams
       gateDigest: packet.digest,
       artifact: packet.candidate_artifact,
       workUnit: packet.work_unit,
-    });
+    }, handoffRecognition);
     return resumed.ok ? 0 : 1;
   }
 
@@ -1493,6 +1544,6 @@ async function recordGitHubMarker(target, config, packet, markerBody, liveParams
     gateDigest: packet.digest,
     artifact: packet.candidate_artifact,
     workUnit: packet.work_unit,
-  });
+  }, handoffRecognition);
   return terminal.ok ? 0 : 1;
 }

@@ -35,7 +35,10 @@ function packetRepositoryIdentity(packet) {
 }
 
 function workUnitIdentity(packet) {
-  return packet?.decomposition?.scan?.workUnit?.id ?? packet?.decomposition?.workUnit?.id ?? null;
+  return packet?.decomposition?.workUnitId ??
+    packet?.decomposition?.scan?.workUnit?.id ??
+    packet?.decomposition?.workUnit?.id ??
+    null;
 }
 
 function dispatchAuthorityDigest(packet) {

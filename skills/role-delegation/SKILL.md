@@ -83,32 +83,36 @@ and Codex instructions are therefore advisory. Dispatch binds one version 3
 report per degraded action, emits `capability.enforcement.degraded`, and return
 import checks it against authenticated actor/evidence.
 
-### Exact implementation dispatch
+### Implementation dispatch
 
-Before one Engineer implementation delegation, the orchestrator emits one
-read-only `agenticloop.role-preparation` packet from the current task. It binds
+Before Engineer delegation, the orchestrator runs
+`task prepare-dispatch` to emit one read-only `agenticloop.role-preparation`
+packet for the current task, binding
 the parser-controlled activation identity, trusted task and contract digests,
-current mechanically reevaluated readiness/base/dependency evidence, committed
+current reevaluated readiness/base/dependency evidence, committed
 Maintainer-attributed decomposition provenance, scope, checks, role and invocation
-IDs, canonical references, selected host and exact host-role capability
+IDs, canonical references, selected host and host-role capability
 declaration, branch/worktree, attribution, liveness,
 and cancellation boundary. Its activation capture is verified by a target-scoped
 Ed25519 public key from the fixed host-owned operator registry; repository-local
-or caller-selected external adapter/key data cannot authorize it. The packet references canonical role, skill, and
-backend documents; it does not copy their procedures or select a solution.
+or caller-selected external adapter/key data cannot authorize it. The packet
+references canonical role, skill, and backend documents.
 
-The Engineer invokes the read-only packet verifier before its first mutation.
-The result is raw `agenticloop.role-return` JSON bound to the exact packet
-digest. Success uses canonical `disposition: proceed` with a separate
-non-authoritative implementation outcome, never a fake review or completion
-claim. The orchestrator validates or reroutes invalid returns; it never
-reconstructs them. Standard mode may persist a fully revalidated return as
-`session_reported`; its producer is not host-authenticated. Hardened mode
-requires host provenance bound to repository, adapter/key, invocation, packet,
-return, liveness, and repository evidence. The verifier selects the adapter/key
-from the verified packet, not the receipt; replayed, unsigned, or self-attested
-receipts fail closed. Its observed producer must match both the assigned
-`roleId` and raw producer; trailers cannot repair a mismatch.
+Start the role through `task status <id> in-progress --dispatch-packet <packet>`;
+missing, stale, consumed, already-current, or noted starts fail closed without
+fresh packet. The Engineer invokes the read-only packet verifier before mutation.
+Its unkeyed validation record proves packet/result integrity, not validator
+identity or canonical origin. Public boundaries rerun validation and accept no
+caller-authored receipt option. The raw `agenticloop.role-return` binds the exact
+packet and uses `disposition: proceed` with a non-authoritative implementation
+outcome, never review or completion. The orchestrator validates or reroutes it;
+it never reconstructs it. Standard mode may persist a fully revalidated
+`session_reported` return without producer authentication. Hardened mode requires
+host provenance bound to repository, adapter/key, invocation, packet, return,
+liveness, and repository evidence. The verifier uses the packet-selected
+adapter/key; replayed, unsigned, or self-attested receipts fail closed. The
+observed producer must match assignment and raw producer; trailers cannot repair
+a mismatch.
 
 `task verify-return` / `role_return_receive` also gates blocked resume and
 recovery before state change. Normal resume uses the authenticated producer;

@@ -14,14 +14,30 @@ import { tmpdir } from 'node:os';
 
 import { runCliInProcess } from './helpers/run-cli.js';
 import { createTaskProjectFixture } from './helpers/task-fixture.js';
+import {
+  createDispatchFixture,
+  git,
+  prepare,
+  producerBinding,
+  readyReturn,
+  repositoryEvidence,
+} from './helpers/dispatch-fixture.js';
+import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
+import { protectedHostBoundary } from './helpers/host-trust-fixture.js';
+import { receiveRoleReturn } from '../src/dispatch-envelope.js';
+import { recognizeHandoff } from '../src/handoff-recognition.js';
+import { createDispatchConsumption, dispatchConsumptionRelativePath } from '../src/handoff-consumption.js';
+import { createReturnVerification, writeReturnVerification } from '../src/return-verification.js';
 import { applyGitHubTaskBody, taskBodyDigest } from '../src/github-task-body.js';
 import { readLifecycleReceipt } from '../src/lifecycle-plan.js';
 import { LIFECYCLE_RECEIPT_RELATIVE_PATH } from '../src/layout.js';
 import { resolveCanonicalTerminalScope } from '../src/terminal-scope.js';
 import { renderCloseoutMarker } from '../src/closeout-contract.js';
+import { createTaskContractBaselineRecord, renderTaskContractRecord, taskContractDigest } from '../src/task-contract-baseline.js';
 import {
   createTaskEvidenceContext,
   createTaskMutationReceipt,
+  createTaskReadinessEvidence,
   shellQuoteArgument,
   validateTaskEvidenceContext,
   validateTaskMutationReceipt,
@@ -430,57 +446,71 @@ describe('prior-gate receipts are verified on read', () => {
 // ---------------------------------------------------------------------------
 
 describe('GitHub closeout resumes the terminal transition after publication', () => {
-  function coveredTaskBody(status) {
-    return [
-      '---', 'task_id: T-001', 'task_contract_schema: 2', `status: ${status}`, 'backend: github',
-      'attempt_budget: 5', 'review_budget: 5', 'allowed_paths:', '  - src/**',
-      'intended_creations:', '  - src/new.js', '---', '', '# Covered', '',
-      '## Task', 'Covered work.', '', '## Source Documents Reviewed', '- README.md', '',
-      '## Current State', 'Accepted.', '', '## Scope', 'One field.', '', '## Out of Scope', 'Everything else.', '',
-      '## Acceptance Criteria', '- valid', '', '## Required Checks', '- npm test', '',
-      '## Expected Files or Areas', '- src/', '', '## Implementation Notes', 'none', '',
-      '## Completion Summary Template', 'none', '', '## Reviewer Checklist', '- [ ] review', '',
-      '[[agent: maintainer]]',
-    ].join('\n');
-  }
-
   it('does not report success while a covered task is still accepted', async () => {
-    const target = mkdtempSync(join(temp, 'gh-closeout-resume-'));
-    mkdirSync(join(target, '.agenticloop', 'audits'), { recursive: true });
-    mkdirSync(join(target, '.agenticloop', 'tasks'), { recursive: true });
-    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
-    writeFileSync(join(target, '.agenticloop', 'project.md'), [
+    const taskId = 'P35-09';
+    const projectMap = [
       '---', 'setup_status: confirmed', 'development_stage: expansion', 'task_backend: github',
-      'work_unit_audit: disabled', 'grouping_profile: milestone', '---', '', '# Project', '',
-    ].join('\n'));
+      'work_unit_audit: disabled', 'grouping_profile: milestone', 'task_id_regex: "^P\\d+-\\d{2,}$"',
+      '---', '', '# Project', '',
+    ].join('\n');
+    const fixture = await createDispatchFixture(temp, 'gh-closeout-resume', {
+      taskIds: [taskId], workUnit: 'milestone:M00',
+    });
+    const target = fixture.root;
+    writeFileSync(join(target, '.agenticloop', 'project.md'), projectMap, 'utf8');
+    git(target, ['add', '.agenticloop/project.md']);
+    git(target, ['commit', '-m', 'configure mocked GitHub closeout']);
+    const repository = fixture.repository;
+    const dispatchHead = git(target, ['rev-parse', 'HEAD']);
+    fixture.repository = () => ({ ...repository(), head: dispatchHead, baseHead: dispatchHead });
+    fixture.refetchRepository = fixture.repository;
 
-    const full = 'a'.repeat(40);
-    const carrier = { body: coveredTaskBody('accepted') };
+    const carrier = {
+      body: readFileSync(fixture.taskPath, 'utf8')
+        .replace(/^status: .*$/m, 'status: accepted')
+        .replace(/^backend: .*$/m, 'backend: github')
+        .replace(/\s*$/, '\n\n[[agent: maintainer]]\n'),
+    };
     const issues = [{
       number: 1, state: 'CLOSED', title: '', body: carrier.body, labels: [],
       url: 'https://example.test/1', updatedAt: 'now',
     }];
     const comments = [];
+    const baselineContract = taskContractDigest(carrier.body);
+    const baseline = {
+      id: 420, html_url: 'https://example.test/comments/420',
+      user: { login: 'loop' }, author_association: 'MEMBER',
+      created_at: '2026-08-10T00:00:00Z', updated_at: '2026-08-10T00:00:00Z',
+      body: renderTaskContractRecord(createTaskContractBaselineRecord({
+        recordId: 'task-contract-record:00000000-0000-4000-8000-000000000009',
+        taskId, digest: baselineContract.digest, projection: baselineContract.projection,
+        authority: `policy:${taskId}`, actor: 'loop', timestamp: '2026-08-10T00:00:00.000Z',
+        affectedArtifact: 'issue:1',
+      })),
+    };
+    let full = git(target, ['rev-parse', 'HEAD']);
     const mergedPr = {
       number: 5, state: 'MERGED', mergedAt: '2026-07-27T12:00:00Z',
       mergeCommit: { oid: full }, headRefOid: full, reviewDecision: 'APPROVED',
       reviews: [], closingIssuesReferences: [{ number: 1 }],
     };
     // The terminal body write is refused on the first record run only.
-    const state = { failBodyEdit: true, bodyWrites: 0 };
+    const state = { failBodyEdit: true, bodyWrites: 0, returnPr: null };
     const runner = (command, args) => {
       if (args[0] === 'issue' && args[1] === 'list') return { status: 0, stdout: JSON.stringify(issues), stderr: '' };
       if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify({ login: 'loop' }), stderr: '' };
       if (args[0] === 'issue' && args[1] === 'view' && args.includes('closedByPullRequestsReferences')) {
         return { status: 0, stdout: JSON.stringify({ closedByPullRequestsReferences: [{ number: 5 }] }), stderr: '' };
       }
-      if (args[0] === 'api') return { status: 0, stdout: JSON.stringify([[]]), stderr: '' };
+      if (args[0] === 'api') return { status: 0, stdout: JSON.stringify([[baseline]]), stderr: '' };
       if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'example/repo' }), stderr: '' };
       if (args[0] === 'issue' && args[1] === 'view' && String(args[args.indexOf('--json') + 1] ?? '').includes('body')) {
         return { status: 0, stdout: JSON.stringify({ number: 1, body: carrier.body }), stderr: '' };
       }
       if (args[0] === 'issue' && args[1] === 'view') return { status: 0, stdout: JSON.stringify({ comments, updatedAt: 'now' }), stderr: '' };
-      if (args[0] === 'pr' && args[1] === 'view') return { status: 0, stdout: JSON.stringify(mergedPr), stderr: '' };
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { status: 0, stdout: JSON.stringify(Number(args[2]) === 6 ? state.returnPr : mergedPr), stderr: '' };
+      }
       if (args[0] === 'issue' && args[1] === 'comment') {
         comments.push({ id: comments.length + 1, author: { login: 'loop' }, body: args[args.indexOf('--body') + 1] });
         return { status: 0, stdout: '', stderr: '' };
@@ -495,22 +525,92 @@ describe('GitHub closeout resumes the terminal transition after publication', ()
       return { status: 1, stdout: '', stderr: `unexpected ${args.join(' ')}` };
     };
 
+    const snapshot = {
+      ...fixture.snapshot(), backend: 'github', carrier: 'issue:1', body: carrier.body,
+      digest: taskBodyDigest(carrier.body),
+    };
+    const readiness = {
+      ...fixture.readiness,
+      evidence: createTaskReadinessEvidence({
+        ...fixture.readiness.evidence,
+        backend: 'github', task: { id: taskId, carrier: 'issue:1', expectedDigest: snapshot.digest },
+      }),
+    };
+    const githubFixture = {
+      ...fixture,
+      refetchTask: () => snapshot,
+      readiness,
+      refetchReadiness: () => readiness,
+      assignment: {
+        ...fixture.assignment,
+        canonicalReferences: ['agents/engineer.md', 'skills/role-delegation/SKILL.md', 'backends/github.md'],
+      },
+    };
+    const dispatched = prepare(githubFixture);
+    assert.equal(dispatched.ok, true, dispatched.validation.errors?.join('\n'));
+    const packet = dispatched.packet;
+    const recognition = recognizeHandoff({
+      transition: 'role_start',
+      expectation: {
+        backend: 'github', taskId, roleId: 'engineer',
+        taskContractDigest: packet.task.contractDigest, carrierDigest: packet.task.digest,
+        packetId: packet.packetId, packetDigest: packet.digest,
+        workUnitIdentity: packet.decomposition.workUnitId, artifactHead: packet.repository.head,
+        worktreeRoot: packet.repository.worktree, minimumActivationAssurance: 'operator_confirmed',
+      },
+      preparedDispatch: packet,
+      validatePreparedDispatch: fixtureDispatchValidator(fixture),
+    });
+    assert.equal(recognition.recognized, true, JSON.stringify(recognition.diagnostics));
+    const consumption = createDispatchConsumption({ backend: 'github', taskId, recognition });
+    const consumptionPath = join(target, dispatchConsumptionRelativePath(consumption));
+    mkdirSync(join(consumptionPath, '..'), { recursive: true });
+    writeFileSync(consumptionPath, `${JSON.stringify(consumption, null, 2)}\n`, 'utf8');
+
+    writeFileSync(join(target, 'src', 'existing.js'), 'export const current = "github-return";\n', 'utf8');
+    git(target, ['add', 'src/existing.js']);
+    git(target, ['commit', '-m', `record GitHub return\n\nTask: ${taskId}\nAgent: engineer`]);
+    full = git(target, ['rev-parse', 'HEAD']);
+    mergedPr.mergeCommit.oid = full;
+    mergedPr.headRefOid = full;
+    const pr = { state: 'open', number: 6, url: 'https://example.test/pull/6' };
+    const evidence = repositoryEvidence(packet, { head: full, pr });
+    evidence.branch = packet.assignment.branch;
+    evidence.attribution = { range: { base: packet.repository.head, head: full }, commits: [full] };
+    state.returnPr = { number: 6, state: 'OPEN', url: pr.url, headRefOid: full, headRefName: evidence.branch };
+    const roleReturn = readyReturn(packet, evidence);
+    const binding = producerBinding(fixture.trust, packet, roleReturn, evidence);
+    const received = receiveRoleReturn({
+      raw: JSON.stringify(roleReturn), packet, refetchTask: () => snapshot,
+      refetchRepositoryEvidence: () => evidence,
+      producerReceipt: binding.producerReceipt,
+      resolveTrustedAdapter: binding.resolveTrustedAdapter,
+    }, fixture.options);
+    assert.equal(received.ok, true, received.validation.errors?.join('\n'));
+    const verification = createReturnVerification({
+      target, packet, roleReturn, repositoryEvidence: evidence,
+      producerReceipt: binding.producerReceipt, received,
+    });
+    const stored = writeReturnVerification(target, verification);
+    assert.equal(stored.ok, true, stored.errors.join('\n'));
+
+    const options = {
+      ghCommandRunner: runner,
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      hostAuthority: protectedHostBoundary(fixture.trust),
+    };
+
     const packetPath = join(target, '.agenticloop', 'tmp', 'github-packet.json');
     const prepared = await runCliInProcess([
-      'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
-      '--artifact', `commit:${full}`, '--output', packetPath,
-      '--legacy-unactivated', '--legacy-reason', 'historical unactivated transition fixture', '--target', target,
-    ], {
-      ghCommandRunner: runner, operatorActivationRoot: join(temp, 'operator-activation'),
-      stdinIsTTY: true, isTTY: true, ci: false,
-      promptFactory: () => ({ ask: async () => 'waive', close() {} }),
-    });
+      'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', taskId,
+      '--artifact', `commit:${full}`, '--output', packetPath, '--target', target,
+    ], options);
     assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
 
     // Run 1: the marker publishes, then the terminal transition fails.
     const first = await runCliInProcess([
       'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
-    ], { ghCommandRunner: runner, operatorActivationRoot: join(temp, 'operator-activation') });
+    ], options);
     assert.notEqual(first.status, 0, 'a failed terminal transition must not report success');
     assert.equal(comments.length, 1, 'the marker published exactly once');
     assert.match(carrier.body, /status: accepted/);
@@ -520,7 +620,7 @@ describe('GitHub closeout resumes the terminal transition after publication', ()
     state.failBodyEdit = false;
     const second = await runCliInProcess([
       'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
-    ], { ghCommandRunner: runner, operatorActivationRoot: join(temp, 'operator-activation') });
+    ], options);
     assert.equal(second.status, 0, `${second.stdout}${second.stderr}`);
     assert.match(carrier.body, /status: "?closed"?/, 'the rerun must complete the terminal transition');
     assert.equal(comments.length, 1, 'the rerun must not republish the marker');

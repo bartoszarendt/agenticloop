@@ -63,6 +63,7 @@ import { REVIEW_ROLE_CARRIER_VERSION, normalizeReviewRoleCarrier, renderReviewRo
 import { canonicalSha256 } from '../src/canonical-json.js';
 import { auditorReportDigest, parseAuditorWireReport } from '../src/audit-report-schema.js';
 import { deriveLifecycleClaims } from '../src/lifecycle-claims.js';
+import { syntheticRecognizedVerdict } from './helpers/handoff-fixture.js';
 
 const HEAD = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0';
 const OTHER = 'b'.repeat(40);
@@ -940,16 +941,22 @@ describe('retained Auditor report and lifecycle-claim corrections', () => {
   it('never derives completion from review readiness alone', () => {
     const { loaded, result } = material();
     const receipt = createReviewEntryReceipt(loaded, result, { observedAt: '2026-08-07T00:00:00.000Z' });
-    const claims = deriveLifecycleClaims({ reviewEntry: { loaded, result, receipt }, currentArtifact: HEAD });
+    const { verdict } = syntheticRecognizedVerdict('review-authority-handoff-target', 'review_entry');
+    // A genuine closeout verdict, so the prose-packet assertion below proves the
+    // packet check rather than an incidentally absent handoff.
+    const { verdict: closeoutVerdict } = syntheticRecognizedVerdict('review-authority-handoff-target', 'closeout');
+    const handoff = { review_entry: verdict, closeout: closeoutVerdict };
+    const claims = deriveLifecycleClaims({ reviewEntry: { loaded, result, receipt }, currentArtifact: HEAD, handoff });
     assert.deepEqual(claims.map(item => item.claim), ['implementation_ready_for_review']);
     assert.equal(claims.every(item => item.completion === false), true);
     // A caller-asserted "validated" flag is not evidence.
-    assert.deepEqual(deriveLifecycleClaims({ reviewEntry: { validated: true, receipt }, currentArtifact: HEAD }), []);
+    assert.deepEqual(deriveLifecycleClaims({ reviewEntry: { validated: true, receipt }, currentArtifact: HEAD, handoff }), []);
     // Prose-like closeout inputs cannot claim completion either.
     assert.deepEqual(deriveLifecycleClaims({
       closeoutPacket: { completion_eligible: true, recommended_status: 'complete' },
       closeoutTerminalReceipt: { kind: 'agenticloop.closeout-terminal-receipt' },
       currentCloseoutMarker: {},
+      handoff,
     }), []);
   });
 });

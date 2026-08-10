@@ -106,14 +106,104 @@ import {
 import { buildGitHubTaskIdentityInventory, resolveCoveredGitHubTask } from './github-task-identity.js';
 import { fetchGitHubTaskBody } from './github-task-body.js';
 import { createReturnVerification, writeReturnVerification } from './return-verification.js';
+import {
+  recognizeLifecycleReturn,
+  recognizeRoleStart,
+} from './handoff-binding.js';
+import { createPreparedDispatchValidation } from './handoff-recognition.js';
 import { refetchGitHubReturnEvidence } from './github-return-evidence.js';
+import { refetchFilesReturnEvidence } from './files-return-evidence.js';
+import {
+  createDispatchConsumption,
+  dispatchConsumptionRelativePath,
+  listDispatchConsumptions,
+} from './handoff-consumption.js';
 
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function implementationArtifactHead(content) {
+  const [frontmatter] = parseFrontmatter(content);
+  const value = frontmatterString(frontmatter?.implementation_artifact);
+  const commit = value.match(/^commit:([0-9a-f]{40}|[0-9a-f]{64})$/);
+  if (commit) return commit[1];
+  const range = value.match(/^range:[0-9a-f]{40,64}\.\.([0-9a-f]{40}|[0-9a-f]{64})$/);
+  return range?.[1] ?? null;
+}
+
 function taskLintCommandRunner(command, args, options = {}) {
   return spawnSync(command, args, { encoding: 'utf-8', ...options });
+}
+
+/**
+ * Re-run the canonical prepare-dispatch consumer against live target state.
+ *
+ * Role-start callers use this immediately before mutation. Reusing the public
+ * command path keeps task, readiness, repository, decomposition, inventory,
+ * activation, and operator-policy refetches identical to `task
+ * prepare-dispatch --packet`; a static packet validation is not a freshness
+ * check.
+ */
+export async function verifyCurrentDispatchPacket({
+  target,
+  io,
+  taskId,
+  packetPath,
+  roleId = 'engineer',
+  hostTrustStore = undefined,
+  repo = undefined,
+}) {
+  const stdout = [];
+  const stderr = [];
+  const captureIo = {
+    ...io,
+    out: (...args) => stdout.push(args.join(' ')),
+    err: (...args) => stderr.push(args.join(' ')),
+    warn: (...args) => stderr.push(args.join(' ')),
+  };
+  const args = [
+    'prepare-dispatch', String(taskId),
+    '--packet', String(packetPath),
+    '--target', String(target),
+    '--role', String(roleId),
+    '--json',
+  ];
+  try {
+    const packet = JSON.parse(readFileSync(resolve(target, String(packetPath)), 'utf8'));
+    if (packet?.returnAdapter?.adapterId) {
+      args.push('--return-adapter', String(packet.returnAdapter.adapterId));
+    }
+  } catch {
+    // The canonical command below owns the typed unreadable/malformed result.
+  }
+  if (hostTrustStore) args.push('--host-trust-store', String(hostTrustStore));
+  if (repo) args.push('--repo', String(repo));
+  let exactPacket = null;
+  try {
+    exactPacket = JSON.parse(readFileSync(resolve(target, String(packetPath)), 'utf8'));
+  } catch {
+    // The canonical command below owns the public malformed-packet diagnostic.
+  }
+  try {
+    const status = await cmdTask(args, captureIo);
+    if (status === 0) return createPreparedDispatchValidation(exactPacket, { ok: true, errors: [] });
+    let parsed = null;
+    try {
+      parsed = JSON.parse(stdout.join('\n'));
+    } catch {
+      // Human diagnostics remain a valid fallback if an older projection did
+      // not emit a structured result.
+    }
+    const errors = Array.isArray(parsed?.errors) && parsed.errors.length > 0
+      ? parsed.errors.map(String)
+      : stderr.length > 0 ? stderr : ['dispatch packet is not current for this role start'];
+    return createPreparedDispatchValidation(exactPacket, { ok: false, errors });
+  } catch (error) {
+    return createPreparedDispatchValidation(exactPacket, {
+      ok: false, errors: [`dispatch packet freshness check failed: ${error.message}`],
+    });
+  }
 }
 
 function resolveProject(target) {
@@ -706,61 +796,6 @@ function refetchDispatchParallelScanInventory(backend, enumerateInventory, decom
  * Host-signed checks remain transport evidence; repository identity, paths, and
  * attribution are always derived again before the receipt is authenticated.
  */
-function refetchFilesReturnEvidence(target, packet, signedEvidence) {
-  const readGit = (args, label) => {
-    const result = spawnSync('git', args, { cwd: target, encoding: 'utf8' });
-    if (result.status !== 0) {
-      throw new VerificationContextStaleError(`${label} is unavailable: ${String(result.stderr ?? '').trim()}`);
-    }
-    return String(result.stdout ?? '').trim();
-  };
-  const branch = readGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], 'current return branch');
-  const head = readGit(['rev-parse', '--verify', 'HEAD'], 'current return head');
-  if (!isGitObjectId(head)) throw new VerificationContextMalformedError('current return head is not a full Git identity');
-  for (const args of [['diff', '--quiet'], ['diff', '--cached', '--quiet']]) {
-    const dirty = spawnSync('git', args, { cwd: target, encoding: 'utf8' });
-    if (dirty.status !== 0) throw new VerificationContextStaleError('tracked repository state changed after the role-return evidence was collected');
-  }
-  const untracked = readGit(['ls-files', '--others', '--exclude-standard'], 'untracked return paths')
-    .split(/\r?\n/)
-    .filter(Boolean);
-  const untrackedInScope = untracked.filter(path =>
-    (packet?.task?.allowedPaths ?? []).some(pattern => fileMatchesScopePattern(path, pattern))
-  );
-  if (untrackedInScope.length > 0) {
-    throw new VerificationContextStaleError(`untracked task-scope paths are not represented by durable return evidence: ${untrackedInScope.join(', ')}`);
-  }
-  const baseHead = packet?.repository?.head;
-  if (!isGitObjectId(baseHead)) throw new VerificationContextMalformedError('dispatch packet lacks a full return base identity');
-  // One canonical derivation proves contiguous ancestry before it lists commits,
-  // changed paths, or trailers, so a reset or rebase cannot present a truncated
-  // range as the returned work.
-  const derived = deriveCommitRange({
-    runGit: targetGitRunner(target),
-    baseHead,
-    head,
-    taskId: packet?.task?.id,
-    roleId: packet?.assignment?.roleId,
-  });
-  if (!derived.ok) {
-    throw derived.evidenceState === 'malformed'
-      ? new VerificationContextMalformedError(derived.message)
-      : new VerificationContextStaleError(derived.message);
-  }
-  return {
-    backend: 'files',
-    task: signedEvidence?.task,
-    worktree: resolve(target),
-    branch,
-    baseHead,
-    head,
-    changedPaths: derived.changedPaths,
-    attribution: { range: derived.range, commits: derived.commits },
-    checks: signedEvidence?.checks,
-    pr: { state: 'not_applicable', number: null, url: null },
-  };
-}
-
 /**
  * Resolve explicit base evidence. There is no implicit HEAD and no default
  * branch: exactly one of `--base` or `--base-paths` must be supplied, and a
@@ -2089,6 +2124,76 @@ export async function cmdTask(args, io = createIo()) {
         }
       }
 
+      // --- Role-start recognition, before any candidate is constructed ---
+      //
+      // Entering `in-progress` is the role start. Agentic Loop cannot stop a
+      // host from invoking a role by hand, so this boundary decides only what
+      // the record is allowed to claim: with a canonical packet the start is
+      // recognized and bound; without one it stays an explicitly graded
+      // `session_reported` observation that no later protected transition may
+      // consume. A packet that is supplied but does not bind refuses the
+      // mutation outright rather than degrading to the unrecognized form.
+      // The requested status decides whether this is a role start, exactly as it
+      // does on the GitHub carrier. Re-requesting a status the record already
+      // holds is still a role start being claimed, so it is still recognized;
+      // whether anything is written is the separate no-op decision below.
+      let roleStartRecognition = null;
+      let roleStartConsumption = null;
+      let lifecycleHandoffRecognition = null;
+      if (nextStatus === 'in-progress') {
+        const recordContract = taskContractDigest(currentContent);
+        try {
+          const consumed = listDispatchConsumptions(target, taskId, { backend: 'files' });
+          if (!consumed.ok) {
+            throw new VerificationContextMalformedError(consumed.errors.join('; '));
+          }
+          const currentDispatch = opts.dispatchPacket
+            ? await verifyCurrentDispatchPacket({
+                target,
+                io,
+                taskId,
+                packetPath: String(opts.dispatchPacket),
+                hostTrustStore: opts.hostTrustStore,
+              })
+            : null;
+          roleStartRecognition = recognizeRoleStart({
+            target,
+            io,
+            backend: 'files',
+            taskId,
+            taskContractDigest: recordContract.ok ? recordContract.digest : null,
+            carrierDigest: currentDigest,
+            packetPath: opts.dispatchPacket ? String(opts.dispatchPacket) : null,
+            hostTrustStore: opts.hostTrustStore,
+            validatePreparedDispatch: currentDispatch
+              ? () => currentDispatch
+              : null,
+            consumedPacketIds: consumed.records.map(record => record.packetId),
+            rawStartLabel: `raw role start requested for ${taskId} without a prepared dispatch`,
+          });
+        } catch (error) {
+          if (error instanceof PublicCommandError) return failure(error);
+          throw error;
+        }
+        if (!roleStartRecognition.recognized) {
+          return printGateResult('task status', {
+            ok: false,
+            diagnostics: roleStartRecognition.diagnostics,
+            errors: roleStartRecognition.diagnostics.map(item => item.message),
+            warnings: [],
+            evidenceState: roleStartRecognition.evidenceState,
+            disposition: roleStartRecognition.disposition,
+            committedStateEvaluated: true,
+            rollbackAuthorized: false,
+            handoff_recognition: roleStartRecognition,
+            ...domain,
+          }, asJson, io);
+        }
+        roleStartConsumption = createDispatchConsumption({
+          backend: 'files', taskId, recognition: roleStartRecognition,
+        });
+      }
+
       if (nextStatus === 'closed' && currentStatus !== nextStatus) {
         const scope = resolveCanonicalTerminalScope({ target, config: projectConfig, taskId });
         if (!scope.decision.genericTerminalAllowed) {
@@ -2106,6 +2211,45 @@ export async function cmdTask(args, io = createIo()) {
         if (gateErrors.length > 0) {
           for (const err of gateErrors) io.err(err);
           return 1;
+        }
+        const contract = taskContractDigest(currentContent);
+        const history = loadFilesTaskContractRecords(target, taskId);
+        lifecycleHandoffRecognition = recognizeLifecycleReturn({
+          target,
+          io,
+          transition: nextStatus === 'accepted' ? 'acceptance' : 'closeout',
+          backend: 'files',
+          taskId,
+          taskContractDigest: contract.ok ? contract.digest : null,
+          carrierDigest: currentDigest,
+          artifactHead: implementationArtifactHead(currentContent),
+          refetchTask: () => ({
+            backend: 'files', taskId, carrier: relPath,
+            body: readFileSync(filePath, 'utf8'),
+            digest: taskRecordDigest(readFileSync(filePath, 'utf8')),
+            trustedRecords: history.trustedRecords,
+            trustedRecordErrors: history.errors,
+          }),
+          refetchRepositoryEvidence: record => refetchFilesReturnEvidence(
+            target,
+            record.evidence.packet,
+            record.evidence.repositoryEvidence
+          ),
+          hostTrustStore: opts.hostTrustStore,
+        });
+        if (!lifecycleHandoffRecognition.recognized) {
+          return printGateResult('task status', {
+            ok: false,
+            diagnostics: lifecycleHandoffRecognition.diagnostics,
+            errors: lifecycleHandoffRecognition.diagnostics.map(item => item.message),
+            warnings: [],
+            evidenceState: lifecycleHandoffRecognition.evidenceState,
+            disposition: lifecycleHandoffRecognition.disposition,
+            committedStateEvaluated: true,
+            rollbackAuthorized: false,
+            handoff_recognition: lifecycleHandoffRecognition,
+            ...domain,
+          }, asJson, io);
         }
       }
 
@@ -2139,18 +2283,40 @@ export async function cmdTask(args, io = createIo()) {
         digest: validationResultDigest(result),
       });
       const emitReceipt = receipt => {
-        if (asJson) io.out(JSON.stringify({ ...domain, receipt }, null, 2));
-        else {
+        if (asJson) {
+          io.out(JSON.stringify({
+            ...domain,
+            receipt,
+            ...(roleStartRecognition ? { handoff_recognition: roleStartRecognition } : {}),
+            ...(!roleStartRecognition && lifecycleHandoffRecognition
+              ? { handoff_recognition: lifecycleHandoffRecognition }
+              : {}),
+          }, null, 2));
+        } else {
           io.out(receipt.mutationDisposition === 'already_current'
             ? `${taskId} is already '${nextStatus}'; the validated record is unchanged.`
             : `Updated ${taskId} status to ${nextStatus}`);
           io.out(`  revalidate: ${receipt.revalidateCommand}`);
+        }
+        if (roleStartRecognition?.recognized && !asJson) {
+          io.out(`  role start: recognized against ${roleStartRecognition.boundIdentity.packetId}`);
         }
         return receipt.unresolved ? 1 : 0;
       };
 
       // --- 4. Validated no-op: rerunning an already-current transition ---
       if (candidate === currentContent) {
+        if (roleStartConsumption) {
+          const recorded = executeMutationBatch(target, [{
+            type: 'create',
+            path: dispatchConsumptionRelativePath(roleStartConsumption),
+            content: `${JSON.stringify(roleStartConsumption, null, 2)}\n`,
+          }]);
+          if (!recorded.ok) {
+            for (const error of recorded.errors) io.err(`task status failed: ${error}`);
+            return 1;
+          }
+        }
         const result = createValidationResult({
           command: 'task status', ok: true, evidenceState: 'current', disposition: 'proceed', ...domain,
         });
@@ -2179,7 +2345,13 @@ export async function cmdTask(args, io = createIo()) {
           `The task record changed between validation and mutation; nothing was written to ${relPath}.`
         ));
       }
-      const committed = executeMutationBatch(target, [{ type: 'write', path: relPath, content: candidate }]);
+      const mutationActions = [{ type: 'write', path: relPath, content: candidate }];
+      if (roleStartConsumption) mutationActions.push({
+        type: 'create',
+        path: dispatchConsumptionRelativePath(roleStartConsumption),
+        content: `${JSON.stringify(roleStartConsumption, null, 2)}\n`,
+      });
+      const committed = executeMutationBatch(target, mutationActions);
       if (!committed.ok) {
         const rolledBack = committed.rollbackErrors.length === 0;
         const result = createValidationResult({
@@ -2207,7 +2379,13 @@ export async function cmdTask(args, io = createIo()) {
         });
         for (const error of committed.errors) io.err(`task status failed: ${error}`);
         for (const error of committed.rollbackErrors) io.err(`rollback error: ${error}`);
-        if (asJson) io.out(JSON.stringify({ ...domain, receipt }, null, 2));
+        if (asJson) {
+          io.out(JSON.stringify({
+            ...domain,
+            receipt,
+            ...(roleStartRecognition ? { handoff_recognition: roleStartRecognition } : {}),
+          }, null, 2));
+        }
         return 1;
       }
 

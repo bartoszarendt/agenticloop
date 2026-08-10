@@ -297,8 +297,8 @@ export const COMMAND_REGISTRY = {
       },
       transition: {
         summary: 'Transition a task status through one guarded field mutation.',
-        usage: 'agenticloop task-body transition --issue <number> --status <status> --expect-digest <digest> (--dry-run|--yes) [--base <ref>|--base-paths <path>] [--dependencies <path>] [--label <name>] [options]',
-        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('status', 'string', 'Target status. Required.'), opt('expect-digest', 'string', 'Exact digest printed by task-body fetch. Required.'), opt('repo', 'string', 'Target repository.'), opt('note', 'string', 'Explanatory note. Required for blocked or needs_context; persisted as an issue comment.'), opt('base', 'string', 'Explicit Git base required for agent-ready; no default branch is selected.'), opt('base-paths', 'string', 'Explicit JSON base-tree path inventory required for agent-ready.'), opt('dependencies', 'string', 'Exact JSON dependency-status snapshot required for agent-ready.'), opt('label', 'string', 'Owned status label to reconcile after the body write. Repeatable.', { multiple: true }), dryRunOption, yesOption, jsonOption],
+        usage: 'agenticloop task-body transition --issue <number> --status <status> --expect-digest <digest> (--dry-run|--yes) [--dispatch-packet <path>] [--base <ref>|--base-paths <path>] [--dependencies <path>] [--label <name>] [options]',
+        options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('status', 'string', 'Target status. Required.'), opt('expect-digest', 'string', 'Exact digest printed by task-body fetch. Required.'), opt('repo', 'string', 'Target repository.'), opt('note', 'string', 'Explanatory note. Required for blocked or needs_context; an in-progress note requests a new role start and requires a fresh dispatch packet.'), opt('base', 'string', 'Explicit Git base required for agent-ready; no default branch is selected.'), opt('base-paths', 'string', 'Explicit JSON base-tree path inventory required for agent-ready.'), opt('dependencies', 'string', 'Exact JSON dependency-status snapshot required for agent-ready.'), opt('dispatch-packet', 'string', 'Canonical "task prepare-dispatch" packet JSON. Required for every requested role start, including already-current in-progress; missing, stale, malformed, or consumed packets are refused without mutation.'), opt('label', 'string', 'Owned status label to reconcile after the body write. Repeatable.', { multiple: true }), dryRunOption, yesOption, jsonOption],
       },
       'establish-baseline': {
         summary: 'Create a separately carried trusted task-contract baseline record.',
@@ -587,12 +587,13 @@ export const COMMAND_REGISTRY = {
       },
       status: {
         summary: 'Update task status.',
-        usage: 'agenticloop task status <id> <status> --expect-digest <digest> [--note <text>] [--base <ref>] [--base-paths <path>] [--dependencies <path>] [--block-category <category>] [--target <dir>]',
+        usage: 'agenticloop task status <id> <status> --expect-digest <digest> [--dispatch-packet <path>] [--note <text>] [--base <ref>] [--base-paths <path>] [--dependencies <path>] [--block-category <category>] [--target <dir>]',
         positionals: [{ name: 'id', required: true }, { name: 'status', required: true }],
         options: [
           targetOption(),
           opt('expect-digest', 'string', 'Exact SHA-256 digest of the current task record. Required before mutation.'),
-          opt('note', 'string', 'Append a dated line under ## Comments.'),
+          opt('dispatch-packet', 'string', 'Canonical "task prepare-dispatch" packet JSON. Required for every requested role start, including already-current in-progress; missing, stale, malformed, or consumed packets are refused without mutation.'),
+          opt('note', 'string', 'Append a dated line under ## Comments. With in-progress this requests a new role start and requires a fresh dispatch packet.'),
           opt('block-category', 'string', 'Required when setting status to blocked.'),
           opt('base', 'string', 'Explicit Git base required for agent-ready; no default branch is selected.'),
           opt('base-paths', 'string', 'Explicit JSON base-tree inventory required for agent-ready.'),

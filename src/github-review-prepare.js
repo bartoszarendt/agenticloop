@@ -16,7 +16,11 @@ import {
   validateReviewEntryReceiptShape,
 } from './review-entry-receipt.js';
 import { isGitObjectId, sameGitObjectFormat } from './git-oid.js';
+import { recognizeLifecycleReturn } from './handoff-binding.js';
+import { resolveGitHubTaskIdentityStrict } from './github-task-identity.js';
 import { canonicalSha256 } from './canonical-json.js';
+import { fetchGitHubTaskBody } from './github-task-body.js';
+import { refetchGitHubReturnEvidence } from './github-return-evidence.js';
 
 const REVIEW_PACKET_TYPE = 'agenticloop.github_review_preparation';
 const REVIEW_PACKET_SCHEMA_VERSION = 3;
@@ -157,10 +161,11 @@ function validateReviewPacketShape(packet, expectedPr) {
   if (!exactKeys(contract, ['digest', 'baseline'])) {
     errors.push('packet taskContract must be an object');
   } else {
-    for (const key of ['digest', 'baseline']) {
-      if (contract[key] !== null && typeof contract[key] !== 'string') {
-        errors.push(`packet taskContract ${key} must be a string or null`);
-      }
+    if (contract.digest !== null && typeof contract.digest !== 'string') {
+      errors.push('packet taskContract digest must be a string or null');
+    }
+    if (contract.baseline !== null && !isObject(contract.baseline)) {
+      errors.push('packet taskContract baseline must be an object or null');
     }
   }
   let digestValid = false;
@@ -189,7 +194,7 @@ function validateReviewPacketShape(packet, expectedPr) {
     if (receipt.task.contractDigest !== (packet.taskContract?.digest ?? null)) {
       errors.push('packet taskContract digest does not equal the receipt task contract digest');
     }
-    if (receipt.task.contractBaseline !== (packet.taskContract?.baseline ?? null)) {
+    if (canonicalSha256(receipt.task.contractBaseline) !== canonicalSha256(packet.taskContract?.baseline ?? null)) {
       errors.push('packet taskContract baseline does not equal the receipt task contract baseline');
     }
     if (receipt.review.mode !== packet.reviewMode) errors.push('packet reviewMode does not equal the receipt review mode');
@@ -326,6 +331,37 @@ export function runGitHubReviewPrepare({ pr, workspace, packet: packetPath, ...o
       firstSafeRepair: diagnostic.nextAction,
     };
   }
+  // Review entry is protected: no packet or lifecycle-bearing receipt exists
+  // until a current canonical verified return is recognized. Returning a
+  // readable packet with a null outer claim was still a dispatch capability,
+  // and the embedded receipt still asserted the claim.
+  const handoffRecognition = recognizeReviewEntryHandoff({
+    target: options.target,
+    io: options.io ?? null,
+    issueBody: refreshed.input.issueData.body,
+    issueNumber: refreshed.input.issueData.number,
+    taskContractDigest: freshResult.contractBaseline?.digest ?? null,
+    artifactHead: freshHead,
+    commandRunner,
+    repo: options.repo,
+  });
+  if (!handoffRecognition.recognized) {
+    const routed = routeDiagnostics(handoffRecognition.diagnostics, capabilities);
+    const errors = routed.diagnostics.map(item => item.message);
+    return {
+      schemaVersion: 1, ok: false, pr: refreshed.input.prData.number,
+      issue: refreshed.input.issueData.number, headRefOid: freshHead,
+      errors, warnings: freshResult.warnings ?? [], diagnostics: routed.diagnostics,
+      ownerRouting: routed.ownerRouting, packet: null,
+      resumePacket: createReviewEntryFailurePacket({
+        loaded: refreshed,
+        result: { ...freshResult, ok: false, errors },
+        diagnostics: routed.diagnostics,
+      }),
+      handoffRecognition,
+      firstSafeRepair: routed.diagnostics[0]?.nextAction ?? null,
+    };
+  }
   const receipt = createReviewEntryReceipt(refreshed, freshResult);
   const prior = [...refreshed.input.reviewHistory.events].reverse().find(event => event.type === 'outcome' && event.status === 'needs_revision');
   const packet = {
@@ -348,9 +384,57 @@ export function runGitHubReviewPrepare({ pr, workspace, packet: packetPath, ...o
   return {
     schemaVersion: 1, ok: true, pr: packet.pr, issue: packet.task, headRefOid: packet.headRefOid,
     errors: [], warnings: freshResult.warnings ?? [], diagnostics: presentDiagnostics(freshResult.warningDiagnostics ?? [], capabilities), ownerRouting: {}, packet,
-    lifecycle: { claim: receipt.lifecycle.claim, completion: false, receiptDigest: receipt.digest, attribution: receipt.attribution },
+    lifecycle: {
+      claim: receipt.lifecycle.claim, completion: false, receiptDigest: receipt.digest,
+      attribution: receipt.attribution, handoffRecognitionDigest: handoffRecognition.digest,
+    },
+    handoffRecognition,
     firstSafeRepair: null,
   };
+}
+
+/**
+ * Recognize the canonical verified return standing behind one review entry.
+ *
+ * The task identity and contract generation come from the live issue and its
+ * trusted baseline, and the assurance minimum from current operator policy, so
+ * nothing here is read back out of the evidence being judged.
+ */
+function recognizeReviewEntryHandoff({
+  target, io, issueBody, issueNumber, taskContractDigest, artifactHead,
+  commandRunner = defaultGhCommandRunner, repo,
+}) {
+  const root = target ?? process.cwd();
+  const identity = resolveGitHubTaskIdentityStrict({ body: issueBody });
+  const taskId = identity.ok ? identity.identity?.taskId ?? null : null;
+  const liveTask = () => {
+    const fetched = fetchGitHubTaskBody({
+      issue: issueNumber,
+      repo,
+      commandRunner,
+    });
+    return {
+      backend: 'github', taskId, carrier: `issue:${fetched.issue}`,
+      body: fetched.body, digest: fetched.digest,
+      trustedRecords: fetched.trustedRecords,
+      trustedRecordErrors: fetched.trustedRecordErrors,
+    };
+  };
+  return recognizeLifecycleReturn({
+    target: root,
+    transition: 'review_entry',
+    io,
+    backend: 'github',
+    taskId,
+    taskContractDigest,
+    carrierDigest: liveTask().digest,
+    artifactHead,
+    refetchTask: liveTask,
+    refetchRepositoryEvidence: record => refetchGitHubReturnEvidence(record.evidence.repositoryEvidence, {
+      commandRunner,
+      repo,
+    }),
+  });
 }
 
 /**
@@ -386,7 +470,7 @@ export function validateReviewPacket(packet, currentHead, options = {}) {
  */
 export function verifyReviewPacket({
   pr, packet, commandRunner = defaultGhCommandRunner, workspaceCommandRunner,
-  repo, target = process.cwd(),
+  repo, target = process.cwd(), io = null,
 } = {}) {
   const prNumber = Number(pr);
   if (!Number.isInteger(prNumber) || prNumber <= 0) {
@@ -433,6 +517,7 @@ export function verifyReviewPacket({
   const currentHead = refetchCurrentHead(commandRunner, prNumber, repo);
   const check = validateReviewPacket(parsed, currentHead, { expectedPr: prNumber });
   const facts = [];
+  let handoffRecognition = null;
   if (!check.valid) {
     facts.push(createDiagnostic({
       code: 'review_prepare.stale_head',
@@ -472,6 +557,17 @@ export function verifyReviewPacket({
         message: `review packet rejected before dispatch: ${receipt.errors[0]}`,
         repairHint: 'Regenerate the packet with github-review-prepare before dispatch.',
       }));
+      handoffRecognition = recognizeReviewEntryHandoff({
+        target,
+        io,
+        issueBody: refreshed.input.issueData.body,
+        issueNumber: refreshed.input.issueData.number,
+        taskContractDigest: result.contractBaseline?.digest ?? null,
+        artifactHead: currentHead,
+        commandRunner,
+        repo,
+      });
+      if (!handoffRecognition.recognized) facts.push(...handoffRecognition.diagnostics);
     } catch (error) {
       facts.push(createDiagnostic({
         code: 'review_prepare.packet',
@@ -488,6 +584,7 @@ export function verifyReviewPacket({
     errors: diagnostics.map(item => item.message), warnings: [], diagnostics,
     ownerRouting: routed.ownerRouting,
     packetCheck: check, packet: ok ? parsed : null,
+    handoffRecognition,
     firstSafeRepair: ok ? null : diagnostics[0].nextAction,
   };
 }

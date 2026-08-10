@@ -33,20 +33,22 @@ describe('closeout observed assurance', () => {
     assert.match(result.reasons.map(item => item.message).join('\n'), /observed return assurance 'missing'/);
   });
 
-  it('allows an explicit standard compatibility waiver without inventing either grade', () => {
+  it('limits a standard compatibility waiver to activation and still requires the return chain', () => {
     const waiver = {
       waiverId: 'legacy-waiver:fixture',
-      waivedDimensions: ['activation_evidence_absent', 'return_evidence_absent'],
+      waivedDimensions: ['activation_evidence_absent'],
     };
     const result = summarizeCloseoutAssurance({
       mode: 'standard', policySource: 'default', legacyWaiver: waiver,
       resolveTask: () => null,
       resolveReturns: () => ({ usable: false, records: [], reasons: [] }),
     }, ['T-001']);
-    assert.equal(result.ok, true);
+    assert.equal(result.ok, false);
     assert.equal(result.report.tasks[0].activation, null);
     assert.equal(result.report.observed_return_assurance, null);
-    assert.deepEqual(result.report.compatibility_waiver.waivedDimensions, ['activation_evidence_absent', 'return_evidence_absent']);
+    assert.deepEqual(result.report.compatibility_waiver.waivedDimensions, ['activation_evidence_absent']);
+    assert.deepEqual(result.report.compatibility_diagnostics, []);
+    assert.match(result.reasons.map(item => item.message).join('\n'), /role-return verification|observed return assurance 'missing'/);
 
     const hardened = summarizeCloseoutAssurance({
       mode: 'hardened', policySource: 'operator_pin', legacyWaiver: waiver,

@@ -302,7 +302,7 @@ export function validateReviewEntryReceiptShape(receipt) {
     if (typeof task.id !== 'string' || !/^[1-9]\d*$/.test(task.id)) errors.push('review-entry receipt task id must be a positive integer identity');
     if (!BODY_DIGEST_RE.test(String(task.bodyDigest ?? ''))) errors.push('review-entry receipt task bodyDigest is invalid');
     if (!CONTRACT_DIGEST_RE.test(String(task.contractDigest ?? ''))) errors.push('review-entry receipt task contractDigest is invalid');
-    if (task.contractBaseline !== null && typeof task.contractBaseline !== 'string') errors.push('review-entry receipt task contractBaseline must be a string or null');
+    if (task.contractBaseline !== null && !isObject(task.contractBaseline)) errors.push('review-entry receipt task contractBaseline must be an object or null');
   }
 
   const artifact = receipt?.artifact;

@@ -15,6 +15,14 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { runCliInProcess } from './helpers/run-cli.js';
+import {
+  createDispatchFixture, git as fixtureGit, prepare, readyReturn, repositoryEvidence, sha256,
+} from './helpers/dispatch-fixture.js';
+import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
+import { protectedHostBoundary } from './helpers/host-trust-fixture.js';
+import { recognizeHandoff } from '../src/handoff-recognition.js';
+import { createDispatchConsumption, dispatchConsumptionRelativePath } from '../src/handoff-consumption.js';
+import { createTaskReadinessEvidence } from '../src/task-evidence-contract.js';
 
 let tmpDir;
 before(() => { tmpDir = mkdtempSync(join(tmpdir(), 'al-deltas-')); });
@@ -37,19 +45,28 @@ function git(target, args) {
   return execSync(`git ${args}`, { cwd: target, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
-function makeGitTarget(name) {
-  const target = mkdtempSync(join(tmpDir, `${name}-`));
-  mkdirSync(join(target, '.agenticloop', 'audits'), { recursive: true });
-  mkdirSync(join(target, '.agenticloop', 'tasks'), { recursive: true });
+const dispatchFixtures = new Map();
+
+async function makeGitTarget(name) {
+  const fixture = await createDispatchFixture(tmpDir, name, {
+    workUnit: 'milestone:M00', projectMapContent: PROJECT_MAP,
+    additionalAllowedPaths: [
+      '.agenticloop/audits/**', '.agenticloop/improvements/**', '.agenticloop/logs/**',
+      '.agenticloop/tasks/**', '.agenticloop/tmp/**', 'app.js',
+    ],
+  });
+  const target = fixture.root;
   mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
-  writeFileSync(join(target, '.agenticloop', 'project.md'), PROJECT_MAP, 'utf-8');
-  git(target, 'init -q');
-  git(target, 'config user.email test@example.com');
-  git(target, 'config user.name Test');
   writeFileSync(join(target, 'app.js'), 'export const v = 1;\n', 'utf-8');
-  writeFileSync(join(target, '.gitignore'), '.agenticloop/tmp/\n', 'utf-8');
+  writeFileSync(join(target, '.gitignore'), '.agenticloop/tmp/\n.agenticloop/handoffs/\n.agenticloop/returns/\n', 'utf-8');
   git(target, 'add -A');
-  git(target, 'commit -qm init');
+  git(target, 'commit -qm "configure workflow-delta fixture"');
+  const repository = fixture.repository;
+  const head = fixtureGit(target, ['rev-parse', 'HEAD']);
+  fixture.repository = () => ({ ...repository(), head, baseHead: head });
+  fixture.refetchRepository = fixture.repository;
+  fixture.closeoutScanInventory = fixture.refetchParallelScanInventory();
+  dispatchFixtures.set(target, fixture);
   return target;
 }
 
@@ -85,9 +102,9 @@ function writeTask(target, taskId, status, grouping = 'milestone:M00') {
 }
 
 function commitAll(target, message) {
-  git(target, 'add -A');
-  git(target, `commit -qm "${message}"`);
-  return `commit:${git(target, 'rev-parse HEAD')}`;
+  fixtureGit(target, ['add', '-A']);
+  fixtureGit(target, ['commit', '-m', `${message}\n\nTask: T-001\nAgent: engineer`]);
+  return `commit:${fixtureGit(target, ['rev-parse', 'HEAD'])}`;
 }
 
 function wireReport(artifact, coveredTasks, overrides = {}) {
@@ -114,19 +131,63 @@ async function audit(args, target) {
 }
 
 async function closeout(args, target) {
-  const compatibility = args[0] === 'prepare'
-    ? ['--legacy-unactivated', '--legacy-reason', 'historical unactivated workflow-delta fixture']
-    : [];
-  return runCliInProcess(['closeout', ...args, ...compatibility, '--target', target], {
+  const fixture = dispatchFixtures.get(target);
+  return runCliInProcess(['closeout', ...args, '--target', target], {
+    operatorTrustRoot: fixture.operatorTrustRoot,
     operatorActivationRoot: join(tmpDir, 'operator-activation'),
-    stdinIsTTY: true, isTTY: true, ci: false,
-    promptFactory: () => ({ ask: async () => 'waive', close() {} }),
+    hostAuthority: protectedHostBoundary(fixture.trust),
   });
 }
 
-async function certify(target, tasks = ['T-001', 'T-002']) {
-  for (const taskId of tasks) writeTask(target, taskId, 'accepted');
-  const artifact = commitAll(target, 'integrate candidate');
+async function certify(target, tasks = ['T-001']) {
+  assert.deepEqual(tasks, ['T-001']);
+  const fixture = dispatchFixtures.get(target);
+  writeFileSync(fixture.taskPath, readFileSync(fixture.taskPath, 'utf8').replace(/^status: .*$/m, 'status: accepted'), 'utf8');
+  commitAll(target, 'record accepted task');
+  const snapshot = fixture.snapshot;
+  fixture.snapshot = () => {
+    const value = snapshot();
+    const body = readFileSync(fixture.taskPath, 'utf8');
+    return { ...value, body, digest: sha256(body) };
+  };
+  fixture.refetchTask = fixture.snapshot;
+  fixture.readiness = {
+    ...fixture.readiness,
+    evidence: createTaskReadinessEvidence({
+      ...fixture.readiness.evidence,
+      task: { ...fixture.readiness.evidence.task, expectedDigest: fixture.snapshot().digest },
+    }),
+  };
+  fixture.refetchReadiness = () => fixture.readiness;
+  fixture.refetchParallelScanInventory = () => fixture.closeoutScanInventory;
+  const repository = fixture.repository;
+  const dispatchHead = fixtureGit(target, ['rev-parse', 'HEAD']);
+  fixture.repository = () => ({ ...repository(), head: dispatchHead, baseHead: dispatchHead });
+  fixture.refetchRepository = fixture.repository;
+  const prepared = prepare(fixture);
+  assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+  const packet = prepared.packet;
+  const packetPath = join(target, '.agenticloop', 'tmp', 'T-001-dispatch.json');
+  fixture.packet = packet;
+  fixture.packetPath = packetPath;
+  writeFileSync(packetPath, JSON.stringify(packet, null, 2), 'utf8');
+  const recognition = recognizeHandoff({
+    transition: 'role_start', expectation: {
+      backend: 'files', taskId: 'T-001', roleId: 'engineer', taskContractDigest: packet.task.contractDigest,
+      carrierDigest: packet.task.digest, packetId: packet.packetId, packetDigest: packet.digest,
+      workUnitIdentity: packet.decomposition.workUnitId, artifactHead: packet.repository.head,
+      worktreeRoot: packet.repository.worktree, minimumActivationAssurance: 'operator_confirmed',
+    }, preparedDispatch: packet, validatePreparedDispatch: fixtureDispatchValidator(fixture),
+  });
+  assert.equal(recognition.recognized, true, JSON.stringify(recognition.diagnostics));
+  const consumption = createDispatchConsumption({ backend: 'files', taskId: 'T-001', recognition });
+  const consumptionPath = join(target, dispatchConsumptionRelativePath(consumption));
+  mkdirSync(join(consumptionPath, '..'), { recursive: true });
+  writeFileSync(consumptionPath, `${JSON.stringify(consumption, null, 2)}\n`, 'utf8');
+  writeFileSync(join(target, 'src', 'existing.js'), 'export const current = "closeout-ready";\n', 'utf8');
+  fixtureGit(target, ['add', 'src/existing.js']);
+  fixtureGit(target, ['commit', '-m', 'record closeout candidate\n\nTask: T-001\nAgent: engineer']);
+  const artifact = `commit:${fixtureGit(target, ['rev-parse', 'HEAD'])}`;
   const created = await audit([
     'new', '--work-unit', 'milestone:M00',
     '--covered-tasks', tasks.join(','),
@@ -136,11 +197,28 @@ async function certify(target, tasks = ['T-001', 'T-002']) {
     '--evidence', 'npm test (pass)',
   ], target);
   assert.equal(created.status, 0, `${created.stdout}${created.stderr}`);
-  commitAll(target, 'record audit');
+  fixtureGit(target, ['add', '.agenticloop/audits']);
+  fixtureGit(target, ['commit', '-m', 'record audit\n\nTask: T-001\nAgent: engineer']);
   const reportPath = join(target, '.agenticloop', 'tmp', 'run-1.json');
   writeFileSync(reportPath, JSON.stringify(wireReport(artifact, tasks)), 'utf-8');
   const reported = await audit(['report', 'AUD-001', '--file', reportPath], target);
   assert.equal(reported.status, 0, `${reported.stdout}${reported.stderr}`);
+  fixtureGit(target, ['add', '.agenticloop/audits']);
+  fixtureGit(target, ['commit', '-m', 'record audit report\n\nTask: T-001\nAgent: engineer']);
+  const returnHead = fixtureGit(target, ['rev-parse', 'HEAD']);
+  const changedPaths = fixtureGit(target, ['diff', '--name-only', `${packet.repository.head}..${returnHead}`]).split(/\r?\n/).filter(Boolean);
+  const commits = fixtureGit(target, ['rev-list', '--reverse', `${packet.repository.head}..${returnHead}`]).split(/\r?\n/).filter(Boolean);
+  const evidence = repositoryEvidence(packet, { head: returnHead, changedPaths });
+  evidence.attribution = { range: { base: packet.repository.head, head: returnHead }, commits };
+  const returnPath = join(target, '.agenticloop', 'tmp', 'T-001-return.json');
+  const evidencePath = join(target, '.agenticloop', 'tmp', 'T-001-evidence.json');
+  writeFileSync(returnPath, JSON.stringify(readyReturn(packet, evidence), null, 2), 'utf8');
+  writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), 'utf8');
+  const verified = await runCliInProcess([
+    'task', 'verify-return', 'T-001', '--packet', packetPath, '--return', returnPath,
+    '--repository-evidence', evidencePath, '--target', target,
+  ], { operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: protectedHostBoundary(fixture.trust) });
+  assert.equal(verified.status, 0, `${verified.stdout}${verified.stderr}`);
   return artifact;
 }
 
@@ -180,12 +258,12 @@ function closeoutEvent(taskId) {
 
 describe('covered-task terminal transitions', () => {
   it('recording a marker then closing another covered task does not stale the marker', async () => {
-    const target = makeGitTarget('non-carrier-close');
+    const target = await makeGitTarget('non-carrier-close');
     const artifact = await certify(target);
     await recordCompleteMarker(target, artifact);
 
-    // The non-carrier covered task transitions accepted -> closed.
-    writeTask(target, 'T-001', 'closed');
+    // The covered carrier task transitions accepted -> closed while retaining its marker.
+    writeFileSync(taskPath(target, 'T-001'), readFileSync(taskPath(target, 'T-001'), 'utf8').replace(/^status: accepted$/m, 'status: closed'), 'utf8');
     commitAll(target, 'close T-001');
 
     const state = await statusState(target);
@@ -194,17 +272,12 @@ describe('covered-task terminal transitions', () => {
   });
 
   it('closing multiple covered tasks including the carrier stays current', async () => {
-    const target = makeGitTarget('all-close');
-    const artifact = await certify(target, ['T-001', 'T-002', 'T-003']);
+    const target = await makeGitTarget('all-close');
+    const artifact = await certify(target);
     await recordCompleteMarker(target, artifact);
 
-    writeTask(target, 'T-001', 'closed');
-    writeTask(target, 'T-002', 'closed');
-    // The carrier (last in canonical order) may also transition; the marker
-    // block is preserved because writeTask content carries no marker yet -
-    // re-apply the carrier with its recorded marker intact.
-    const carrierContent = readFileSync(taskPath(target, 'T-003'), 'utf-8');
-    writeFileSync(taskPath(target, 'T-003'), carrierContent.replace(/^status: accepted$/m, 'status: closed'), 'utf-8');
+    const carrierContent = readFileSync(taskPath(target, 'T-001'), 'utf-8');
+    writeFileSync(taskPath(target, 'T-001'), carrierContent.replace(/^status: accepted$/m, 'status: closed'), 'utf-8');
     commitAll(target, 'close covered tasks');
 
     const state = await statusState(target);
@@ -213,7 +286,7 @@ describe('covered-task terminal transitions', () => {
   });
 
   it('rejects any unrelated covered-task change as product drift', async () => {
-    const target = makeGitTarget('unrelated-task-change');
+    const target = await makeGitTarget('unrelated-task-change');
     const artifact = await certify(target);
     await recordCompleteMarker(target, artifact);
 
@@ -226,7 +299,7 @@ describe('covered-task terminal transitions', () => {
     assert.ok(state.reasons.some(message => /T-001/.test(message)), JSON.stringify(state));
 
     // Body edits unrelated to the terminal transition are drift too.
-    const target2 = makeGitTarget('task-body-edit');
+    const target2 = await makeGitTarget('task-body-edit');
     const artifact2 = await certify(target2);
     await recordCompleteMarker(target2, artifact2);
     writeFileSync(
@@ -240,13 +313,13 @@ describe('covered-task terminal transitions', () => {
   });
 
   it('rejects arbitrary carrier edits while permitting the marker mutation itself', async () => {
-    const target = makeGitTarget('carrier-edit');
+    const target = await makeGitTarget('carrier-edit');
     const artifact = await certify(target);
     await recordCompleteMarker(target, artifact);
 
     // Substantive carrier body change beyond marker + status: drift.
-    const carrier = taskPath(target, 'T-002');
-    writeFileSync(carrier, readFileSync(carrier, 'utf-8').replace('# T-002', '# T-002 renamed'), 'utf-8');
+    const carrier = taskPath(target, 'T-001');
+    writeFileSync(carrier, readFileSync(carrier, 'utf-8').replace('# T-001', '# T-001 renamed'), 'utf-8');
     commitAll(target, 'edit carrier title');
 
     const state = await statusState(target);
@@ -256,7 +329,7 @@ describe('covered-task terminal transitions', () => {
 
 describe('append-only closeout event deltas', () => {
   it('permits a schema-valid append-only task.closed event in the applicable log', async () => {
-    const target = makeGitTarget('event-append');
+    const target = await makeGitTarget('event-append');
     const artifact = await certify(target);
     await recordCompleteMarker(target, artifact);
 
@@ -270,7 +343,7 @@ describe('append-only closeout event deltas', () => {
   });
 
   it('permits appending to a log that already existed at certification', async () => {
-    const target = makeGitTarget('event-append-existing');
+    const target = await makeGitTarget('event-append-existing');
     mkdirSync(join(target, '.agenticloop', 'logs'), { recursive: true });
     writeFileSync(join(target, '.agenticloop', 'logs', 'T-001.jsonl'), '', 'utf-8');
     const artifact = await certify(target);
@@ -292,7 +365,7 @@ describe('append-only closeout event deltas', () => {
   });
 
   it('fails closed when an event log is rewritten or carries disallowed events', async () => {
-    const target = makeGitTarget('event-rewrite');
+    const target = await makeGitTarget('event-rewrite');
     mkdirSync(join(target, '.agenticloop', 'logs'), { recursive: true });
     writeFileSync(join(target, '.agenticloop', 'logs', 'T-001.jsonl'), `${closeoutEvent('T-001')}\n`, 'utf-8');
     const artifact = await certify(target);
@@ -311,7 +384,7 @@ describe('append-only closeout event deltas', () => {
     assert.notEqual(state.state, 'complete');
 
     // A disallowed event type fails closed.
-    const target2 = makeGitTarget('event-type');
+    const target2 = await makeGitTarget('event-type');
     const artifact2 = await certify(target2);
     await recordCompleteMarker(target2, artifact2);
     mkdirSync(join(target2, '.agenticloop', 'logs'), { recursive: true });
@@ -322,7 +395,7 @@ describe('append-only closeout event deltas', () => {
     assert.notEqual(state.state, 'complete');
 
     // Malformed JSON fails closed.
-    const target3 = makeGitTarget('event-malformed');
+    const target3 = await makeGitTarget('event-malformed');
     const artifact3 = await certify(target3);
     await recordCompleteMarker(target3, artifact3);
     mkdirSync(join(target3, '.agenticloop', 'logs'), { recursive: true });
@@ -333,7 +406,7 @@ describe('append-only closeout event deltas', () => {
   });
 
   it('an event log for a non-covered task is not an applicable log and remains drift', async () => {
-    const target = makeGitTarget('event-foreign');
+    const target = await makeGitTarget('event-foreign');
     const artifact = await certify(target);
     await recordCompleteMarker(target, artifact);
 
@@ -349,26 +422,26 @@ describe('append-only closeout event deltas', () => {
 
 describe('scratch and rename safety', () => {
   it('treats tracked scratch activity under .agenticloop/tmp as transient', async () => {
-    const target = makeGitTarget('scratch');
+    const target = await makeGitTarget('scratch');
     const artifact = await certify(target);
     await recordCompleteMarker(target, artifact);
 
     writeFileSync(join(target, '.agenticloop', 'tmp', 'notes.txt'), 'transient\n', 'utf-8');
     git(target, 'add -f .agenticloop/tmp/notes.txt');
-    git(target, 'commit -qm "tracked scratch"');
+    fixtureGit(target, ['commit', '-m', 'tracked scratch\n\nTask: T-001\nAgent: engineer']);
 
     const state = await statusState(target);
     assert.equal(state.state, 'complete', JSON.stringify(state));
   });
 
   it('rejects product-to-scratch and product-to-carrier rename attacks', async () => {
-    const target = makeGitTarget('rename-scratch');
+    const target = await makeGitTarget('rename-scratch');
     const artifact = await certify(target);
     await recordCompleteMarker(target, artifact);
 
     git(target, 'mv app.js .agenticloop/tmp/app.js');
     git(target, 'add -A');
-    git(target, 'commit -qm "rename product into scratch"');
+    fixtureGit(target, ['commit', '-m', 'rename product into scratch\n\nTask: T-001\nAgent: engineer']);
 
     const state = await statusState(target);
     assert.notEqual(state.state, 'complete');
@@ -426,7 +499,7 @@ describe('referenced improvement proposals', () => {
   }
 
   it('permits an exact valid referenced proposal and rejects an invalid one', async () => {
-    const target = makeGitTarget('improvement-valid');
+    const target = await makeGitTarget('improvement-valid');
     const artifact = await certify(target);
     mkdirSync(join(target, '.agenticloop', 'improvements'), { recursive: true });
     writeFileSync(
@@ -445,7 +518,7 @@ describe('referenced improvement proposals', () => {
     assert.deepEqual(packet.improvement_refs, ['I-2026-07-27-001']);
 
     // An invalid proposal at a referenced path is drift, never an allowed delta.
-    const target2 = makeGitTarget('improvement-invalid');
+    const target2 = await makeGitTarget('improvement-invalid');
     const artifact2 = await certify(target2);
     mkdirSync(join(target2, '.agenticloop', 'improvements'), { recursive: true });
     writeFileSync(
@@ -466,7 +539,7 @@ describe('referenced improvement proposals', () => {
 
   it('blocks closeout when a referenced proposal is missing or belongs to another work unit', async () => {
     // Missing proposal.
-    const target = makeGitTarget('improvement-missing');
+    const target = await makeGitTarget('improvement-missing');
     const artifact = await certify(target);
     const missing = await closeout([
       'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact,
@@ -476,7 +549,7 @@ describe('referenced improvement proposals', () => {
     assert.ok(JSON.parse(missing.stdout).reasons.some(item => item.gate === 'improvement_refs'));
 
     // Valid proposal tied to unrelated tasks.
-    const target2 = makeGitTarget('improvement-foreign');
+    const target2 = await makeGitTarget('improvement-foreign');
     const artifact2 = await certify(target2);
     mkdirSync(join(target2, '.agenticloop', 'improvements'), { recursive: true });
     writeFileSync(
@@ -496,7 +569,7 @@ describe('referenced improvement proposals', () => {
   });
 
   it('blocks closeout when a proposal cites an unresolvable durable source reference', async () => {
-    const target = makeGitTarget('improvement-unresolvable-source');
+    const target = await makeGitTarget('improvement-unresolvable-source');
     const artifact = await certify(target);
     mkdirSync(join(target, '.agenticloop', 'improvements'), { recursive: true });
     writeFileSync(

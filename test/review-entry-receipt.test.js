@@ -7,6 +7,11 @@ import { normalizeReviewRoleCarrier, REVIEW_ROLE_CARRIER_VERSION } from '../src/
 import { createExceptionalVerification, receiveExceptionalVerification } from '../src/exceptional-verification.js';
 import { formatReviewMarker, parseReviewMarker } from '../src/review-history.js';
 import { deriveLifecycleClaims } from '../src/lifecycle-claims.js';
+import { syntheticRecognizedVerdict } from './helpers/handoff-fixture.js';
+
+// The handoff fixture derives a repository identity from this path only; no
+// filesystem state is read, so a stable literal keeps the claim digests stable.
+const HANDOFF_TARGET = 'review-entry-receipt-handoff-target';
 
 const HEAD = 'a'.repeat(40);
 const NEXT = 'b'.repeat(40);
@@ -133,13 +138,22 @@ describe('exceptional verification routing and lifecycle claims', () => {
   it('never derives completion from review readiness or prose-like inputs', () => {
     const { loaded, result } = material();
     const receipt = createReviewEntryReceipt(loaded, result, { observedAt: '2026-08-07T00:00:00.000Z' });
+    const { verdict } = syntheticRecognizedVerdict(HANDOFF_TARGET, 'review_entry');
+    const handoff = { review_entry: verdict };
     const claims = deriveLifecycleClaims({
       reviewEntry: { loaded, result, receipt },
       currentArtifact: HEAD,
+      handoff,
     });
     assert.deepEqual(claims.map(item => item.claim), ['implementation_ready_for_review']);
+    assert.equal(claims[0].handoffRecognitionDigest, verdict.digest);
     assert.deepEqual(deriveLifecycleClaims({
-      reviewEntry: { validated: true, receipt }, currentArtifact: HEAD,
+      reviewEntry: { validated: true, receipt }, currentArtifact: HEAD, handoff,
+    }), []);
+    // A correct receipt is still not a consumed handoff: without the canonical
+    // chain the claim is not weakened, it is not made.
+    assert.deepEqual(deriveLifecycleClaims({
+      reviewEntry: { loaded, result, receipt }, currentArtifact: HEAD,
     }), []);
   });
 });

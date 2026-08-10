@@ -31,6 +31,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createDispatchFixture,
   git,
+  prepare,
   readyReturn,
   repositoryEvidence,
 } from './helpers/dispatch-fixture.js';
@@ -380,6 +381,15 @@ function assertReadOnlyGhInvocations(invocations) {
 }
 
 describe('packed package smoke tests', () => {
+  it('ships and imports every canonical handoff module', async () => {
+    const recognition = await import(pathToFileURL(join(packedRoot, 'src', 'handoff-recognition.js')).href);
+    const binding = await import(pathToFileURL(join(packedRoot, 'src', 'handoff-binding.js')).href);
+    const consumption = await import(pathToFileURL(join(packedRoot, 'src', 'handoff-consumption.js')).href);
+    assert.equal(typeof recognition.recognizeHandoff, 'function');
+    assert.equal(typeof binding.recognizeRoleStart, 'function');
+    assert.equal(typeof consumption.validateDispatchConsumption, 'function');
+  });
+
   it('reports the package version', () => {
     const pkg = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf-8'));
     for (const args of [['--version'], ['version']]) {
@@ -1397,6 +1407,86 @@ describe('packed package smoke tests', () => {
       assert.equal(result.errors, 0, `${adapter} installed validate must report zero errors:\n${result.output}`);
       assert.doesNotMatch(result.output, /^\s*ERROR:/m, adapter);
     }
+  });
+
+  it('returns one installed authoritative handoff verdict for all five adapters', { timeout: 300000 }, async () => {
+    const verdicts = {};
+    const successfulVerdicts = {};
+    for (const adapter of ['opencode', 'codex', 'claude-code', 'copilot', 'cursor']) {
+      const fixture = await createDispatchFixture(tmpBase, `installed-handoff-${adapter}`);
+      const initialized = runPacked(['init', '--target', fixture.root, '--adapter', adapter]);
+      assert.equal(initialized.status, 0, `${adapter}: ${initialized.stdout}\n${initialized.stderr}`);
+      git(fixture.root, ['add', '-A']);
+      git(fixture.root, ['commit', '-m', `install ${adapter} adapter\n\nTask: T-001\nAgent: maintainer`]);
+      const installedHead = git(fixture.root, ['rev-parse', 'HEAD']);
+      const currentRepository = () => ({ ...fixture.repository(), head: installedHead, baseHead: installedHead });
+      const prepared = prepare(fixture, {
+        repository: currentRepository,
+        refetchRepository: currentRepository,
+      });
+      assert.equal(prepared.ok, true, `${adapter}: ${prepared.validation.errors?.join('; ')}`);
+      mkdirSync(join(fixture.root, '.agenticloop', 'tmp'), { recursive: true });
+      writeFileSync(join(fixture.root, '.agenticloop', 'tmp', 'dispatch.json'), JSON.stringify(prepared.packet), 'utf8');
+
+      const guidance = readFileSync(join(fixture.root, 'agenticloop', 'skills', 'role-delegation', 'SKILL.md'), 'utf8');
+      assert.match(guidance, /task prepare-dispatch/, adapter);
+      assert.match(guidance, /task status <id> in-progress --dispatch-packet <packet>/, adapter);
+      assert.match(guidance, /task verify-return/, adapter);
+
+      const taskPath = join(fixture.root, '.agenticloop', 'tasks', 'T-001.md');
+      const before = readFileSync(taskPath, 'utf8');
+      const digest = `sha256:${createHash('sha256').update(before, 'utf8').digest('hex')}`;
+      const refused = runPacked([
+        'task', 'status', 'T-001', 'in-progress', '--expect-digest', digest,
+        '--json', '--target', fixture.root,
+      ]);
+      assert.equal(refused.status, 1, `${adapter}: ${refused.stdout}\n${refused.stderr}`);
+      assert.equal(readFileSync(taskPath, 'utf8'), before, `${adapter} refusal must not mutate the carrier`);
+      const handoff = JSON.parse(refused.stdout).handoff_recognition;
+      verdicts[adapter] = {
+        transition: handoff.transition,
+        requirement: handoff.requirement,
+        recognized: handoff.recognized,
+        evidenceState: handoff.evidenceState,
+        disposition: handoff.disposition,
+        diagnosticCodes: handoff.diagnostics.map(item => item.code),
+      };
+
+      const accepted = runPackedWithBoundary([
+        'task', 'status', 'T-001', 'in-progress', '--expect-digest', digest,
+        '--dispatch-packet', '.agenticloop/tmp/dispatch.json', '--json', '--target', fixture.root,
+      ], {
+        operatorTrustRoot: fixture.operatorTrustRoot,
+        adapterId: fixture.trust.adapterId,
+        keyId: fixture.trust.keyId,
+        privateKey: fixture.trust.privateKey,
+      });
+      assert.equal(accepted.status, 0, `${adapter}: ${accepted.stdout}\n${accepted.stderr}`);
+      const recognized = JSON.parse(accepted.stdout).handoff_recognition;
+      successfulVerdicts[adapter] = {
+        transition: recognized.transition,
+        requirement: recognized.requirement,
+        recognized: recognized.recognized,
+        evidenceState: recognized.evidenceState,
+        disposition: recognized.disposition,
+        diagnosticCodes: recognized.diagnostics.map(item => item.code),
+      };
+    }
+    const [reference, ...rest] = Object.values(verdicts);
+    for (const verdict of rest) assert.deepEqual(verdict, reference, JSON.stringify(verdicts, null, 2));
+    assert.deepEqual(reference, {
+      transition: 'role_start', requirement: 'prepared_dispatch', recognized: false,
+      evidenceState: 'missing', disposition: 'needs_context',
+      diagnosticCodes: ['handoff.evidence.missing', 'handoff.evidence.unauthenticated'],
+    });
+    const [successfulReference, ...successfulRest] = Object.values(successfulVerdicts);
+    for (const verdict of successfulRest) {
+      assert.deepEqual(verdict, successfulReference, JSON.stringify(successfulVerdicts, null, 2));
+    }
+    assert.deepEqual(successfulReference, {
+      transition: 'role_start', requirement: 'prepared_dispatch', recognized: true,
+      evidenceState: 'current', disposition: 'proceed', diagnosticCodes: [],
+    });
   });
 
   /**

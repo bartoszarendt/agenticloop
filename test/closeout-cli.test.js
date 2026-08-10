@@ -23,6 +23,26 @@ import { runCliInProcess } from './helpers/run-cli.js';
 import { parseCloseoutMarkers, validateCloseoutPacket } from '../src/closeout-contract.js';
 import { serializeValidationResult } from '../src/result-envelope.js';
 import { getProjectRoleCapabilities } from '../src/role-capabilities.js';
+import {
+  createDispatchFixture,
+  git as fixtureGit,
+  prepare,
+  readyReturn,
+  repositoryEvidence,
+  sha256,
+} from './helpers/dispatch-fixture.js';
+import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
+import { protectedHostBoundary } from './helpers/host-trust-fixture.js';
+import { recognizeHandoff } from '../src/handoff-recognition.js';
+import { createDispatchConsumption, dispatchConsumptionRelativePath } from '../src/handoff-consumption.js';
+import { createTaskReadinessEvidence } from '../src/task-evidence-contract.js';
+import {
+  legacyWaiverPath,
+  legacyWaiverSignaturePayload,
+  RETIRED_WAIVER_SCOPE_DIAGNOSTIC,
+} from '../src/closeout-waiver.js';
+import { provisionOperatorActivationKey, signOperatorActivationPayload } from '../src/activation-trust.js';
+import { canonicalSha256 } from '../src/canonical-json.js';
 
 const TASK_TEMPLATE = readFileSync(new URL('../memory/task-record.md', import.meta.url), 'utf8');
 
@@ -64,6 +84,30 @@ function makeGitTarget(name, { grouping = 'milestone' } = {}) {
   writeFileSync(join(target, '.gitignore'), '.agenticloop/tmp/\n', 'utf-8');
   git(target, 'add -A');
   git(target, 'commit -qm init');
+  return target;
+}
+
+const dispatchFixtures = new Map();
+
+async function makeVerifiedGitTarget(name, { auditEnabled = true } = {}) {
+  const projectMap = auditEnabled
+    ? PROJECT_MAP
+    : PROJECT_MAP.replace('work_unit_audit: enabled', 'work_unit_audit: disabled');
+  const fixture = await createDispatchFixture(tmpDir, name, {
+    workUnit: 'milestone:M00', projectMapContent: projectMap,
+    additionalAllowedPaths: ['.agenticloop/audits/**'],
+  });
+  const target = fixture.root;
+  mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
+  writeFileSync(join(target, '.gitignore'), '.agenticloop/tmp/\n.agenticloop/handoffs/\n', 'utf8');
+  fixtureGit(target, ['add', '.gitignore']);
+  fixtureGit(target, ['commit', '-m', 'configure closeout fixture']);
+  const repository = fixture.repository;
+  const head = fixtureGit(target, ['rev-parse', 'HEAD']);
+  fixture.repository = () => ({ ...repository(), head, baseHead: head });
+  fixture.refetchRepository = fixture.repository;
+  fixture.closeoutScanInventory = fixture.refetchParallelScanInventory();
+  dispatchFixtures.set(target, fixture);
   return target;
 }
 
@@ -110,11 +154,14 @@ function run(args, target) {
 }
 
 async function closeout(args, target, options = {}) {
-  const compatibility = args[0] === 'prepare'
+  const fixture = dispatchFixtures.get(target);
+  const compatibility = args[0] === 'prepare' && !fixture
     ? ['--legacy-unactivated', '--legacy-reason', 'pre-activation test fixture']
     : [];
   return runCliInProcess(['closeout', ...args, ...compatibility, '--target', target], {
+    operatorTrustRoot: fixture?.operatorTrustRoot,
     operatorActivationRoot: join(tmpDir, 'operator-activation'),
+    hostAuthority: fixture ? protectedHostBoundary(fixture.trust) : undefined,
     stdinIsTTY: true,
     isTTY: true,
     ci: false,
@@ -131,35 +178,113 @@ async function audit(args, target, options = {}) {
  * Drive one work unit to a certified audit and return the candidate artifact.
  */
 async function certify(target, {
-  tasks = ['T-001', 'T-002'],
+  tasks = ['T-001'],
   grouping = 'milestone:M00',
   reportOverrides = {},
   auditOptions = {},
+  skipAudit = false,
 } = {}) {
-  for (const taskId of tasks) writeTask(target, taskId, 'accepted', grouping);
-  const artifact = commitAll(target, 'integrate candidate');
-  const created = await audit([
-    'new', '--work-unit', 'milestone:M00',
-    '--covered-tasks', tasks.join(','),
-    '--artifact', artifact,
-    '--goal', 'Deliver the milestone.',
-    '--completion-oracle', 'Observable completion.',
-    '--evidence', 'npm test (pass)',
-  ], target);
-  assert.equal(created.status, 0, `${created.stdout}${created.stderr}`);
-  // The audit record itself is committed after the product candidate; this is
-  // the allowed audit-metadata delta and must not invalidate the certificate.
-  commitAll(target, 'record audit');
-  const reportPath = join(target, '.agenticloop', 'tmp', 'run-1.json');
-  writeFileSync(reportPath, JSON.stringify(wireReport(artifact, tasks, reportOverrides)), 'utf-8');
-  const reported = await audit(['report', 'AUD-001', '--file', reportPath], target, auditOptions);
-  assert.equal(reported.status, 0, `${reported.stdout}${reported.stderr}`);
+  const fixture = dispatchFixtures.get(target);
+  assert.ok(fixture, 'certification success requires a genuine dispatch fixture');
+  assert.deepEqual(tasks, ['T-001']);
+  writeFileSync(
+    fixture.taskPath,
+    readFileSync(fixture.taskPath, 'utf8').replace(/^status: .*$/m, 'status: accepted'),
+    'utf8'
+  );
+  commitAll(target, 'record accepted task');
+  const snapshot = fixture.snapshot;
+  fixture.snapshot = () => {
+    const value = snapshot();
+    const body = readFileSync(fixture.taskPath, 'utf8');
+    return { ...value, body, digest: sha256(body) };
+  };
+  fixture.refetchTask = fixture.snapshot;
+  const readinessEvidence = createTaskReadinessEvidence({
+    ...fixture.readiness.evidence,
+    task: { ...fixture.readiness.evidence.task, expectedDigest: fixture.snapshot().digest },
+  });
+  fixture.readiness = { ...fixture.readiness, evidence: readinessEvidence };
+  fixture.refetchReadiness = () => fixture.readiness;
+  fixture.refetchParallelScanInventory = () => fixture.closeoutScanInventory;
+  const repository = fixture.repository;
+  const currentHead = fixtureGit(target, ['rev-parse', 'HEAD']);
+  fixture.repository = () => ({ ...repository(), head: currentHead, baseHead: currentHead });
+  fixture.refetchRepository = fixture.repository;
+  const prepared = prepare(fixture);
+  assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+  const packet = prepared.packet;
+  const packetPath = join(target, '.agenticloop', 'tmp', 'engineer-dispatch.json');
+  writeFileSync(packetPath, JSON.stringify(packet, null, 2), 'utf8');
+
+  const recognition = recognizeHandoff({
+    transition: 'role_start',
+    expectation: {
+      backend: 'files', taskId: 'T-001', roleId: 'engineer',
+      taskContractDigest: packet.task.contractDigest, carrierDigest: packet.task.digest,
+      packetId: packet.packetId, packetDigest: packet.digest,
+      workUnitIdentity: packet.decomposition.workUnitId, artifactHead: packet.repository.head,
+      worktreeRoot: packet.repository.worktree, minimumActivationAssurance: 'operator_confirmed',
+    },
+    preparedDispatch: packet,
+    validatePreparedDispatch: fixtureDispatchValidator(fixture),
+  });
+  assert.equal(recognition.recognized, true, JSON.stringify(recognition.diagnostics));
+  const consumption = createDispatchConsumption({ backend: 'files', taskId: 'T-001', recognition });
+  const consumptionPath = join(target, dispatchConsumptionRelativePath(consumption));
+  mkdirSync(join(consumptionPath, '..'), { recursive: true });
+  writeFileSync(consumptionPath, `${JSON.stringify(consumption, null, 2)}\n`, 'utf8');
+
+  let artifact = `commit:${packet.repository.head}`;
+  if (skipAudit) {
+    writeFileSync(join(target, 'src', 'existing.js'), 'export const current = "closeout-ready";\n', 'utf8');
+    fixtureGit(target, ['add', 'src/existing.js']);
+    fixtureGit(target, ['commit', '-m', 'record closeout candidate\n\nTask: T-001\nAgent: engineer']);
+  } else {
+    const created = await audit([
+      'new', '--work-unit', 'milestone:M00', '--covered-tasks', tasks.join(','),
+      '--artifact', artifact, '--goal', 'Deliver the milestone.',
+      '--completion-oracle', 'Observable completion.', '--evidence', 'npm test (pass)',
+    ], target);
+    assert.equal(created.status, 0, `${created.stdout}${created.stderr}`);
+    fixtureGit(target, ['add', '.agenticloop/audits']);
+    fixtureGit(target, ['commit', '-m', 'record audit\n\nTask: T-001\nAgent: engineer']);
+    const reportPath = join(target, '.agenticloop', 'tmp', 'run-1.json');
+    writeFileSync(reportPath, JSON.stringify(wireReport(artifact, tasks, reportOverrides)), 'utf8');
+    const reported = await audit(['report', 'AUD-001', '--file', reportPath], target, auditOptions);
+    assert.equal(reported.status, 0, `${reported.stdout}${reported.stderr}`);
+    fixtureGit(target, ['add', '.agenticloop/audits']);
+    fixtureGit(target, ['commit', '-m', 'record audit report\n\nTask: T-001\nAgent: engineer']);
+  }
+  const returnHead = fixtureGit(target, ['rev-parse', 'HEAD']);
+  const changedPaths = fixtureGit(target, ['diff', '--name-only', `${packet.repository.head}..${returnHead}`])
+    .split(/\r?\n/).filter(Boolean);
+  const commits = fixtureGit(target, ['rev-list', '--reverse', `${packet.repository.head}..${returnHead}`])
+    .split(/\r?\n/).filter(Boolean);
+  const evidence = repositoryEvidence(packet, {
+    head: returnHead, changedPaths,
+  });
+  evidence.attribution = {
+    range: { base: packet.repository.head, head: returnHead },
+    commits,
+  };
+  const roleReturn = readyReturn(packet, evidence);
+  const returnPath = join(target, '.agenticloop', 'tmp', 'engineer-return.json');
+  const evidencePath = join(target, '.agenticloop', 'tmp', 'engineer-evidence.json');
+  writeFileSync(returnPath, JSON.stringify(roleReturn, null, 2), 'utf8');
+  writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), 'utf8');
+  const verified = await runCliInProcess([
+    'task', 'verify-return', 'T-001', '--packet', packetPath, '--return', returnPath,
+    '--repository-evidence', evidencePath, '--target', target,
+  ], { operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: protectedHostBoundary(fixture.trust) });
+  assert.equal(verified.status, 0, `${verified.stdout}${verified.stderr}`);
+  if (skipAudit) artifact = `commit:${returnHead}`;
   return artifact;
 }
 
 describe('closeout prepare', () => {
   it('emits a completion-eligible packet for a certified work unit', async () => {
-    const target = makeGitTarget('eligible');
+    const target = await makeVerifiedGitTarget('eligible');
     const artifact = await certify(target);
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     const result = await closeout([
@@ -174,7 +299,7 @@ describe('closeout prepare', () => {
   });
 
   it('completes standard-mode audit with a session-reported Auditor return', async () => {
-    const target = makeGitTarget('standard-auditor-return');
+    const target = await makeVerifiedGitTarget('standard-auditor-return');
     const artifact = await certify(target, {
       reportOverrides: {
         invocation: {
@@ -213,16 +338,11 @@ describe('closeout prepare', () => {
   });
 
   it('never completes with an explicit audit opt-out but reports it truthfully', async () => {
-    const target = makeGitTarget('optout');
-    writeFileSync(
-      join(target, '.agenticloop', 'project.md'),
-      PROJECT_MAP.replace('work_unit_audit: enabled', 'work_unit_audit: disabled'),
-      'utf-8'
-    );
-    writeTask(target, 'T-001', 'accepted', 'milestone:M00');
-    const artifact = commitAll(target, 'work');
+    const target = await makeVerifiedGitTarget('optout', { auditEnabled: false });
+    const artifact = await certify(target, { skipAudit: true });
     const result = await closeout([
-      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--json',
+      'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
+      '--artifact', artifact, '--json',
     ], target);
     const packet = JSON.parse(result.stdout);
     assert.equal(packet.audit_opt_out, true);
@@ -253,25 +373,78 @@ describe('closeout prepare', () => {
     assert.ok(packet.reasons.some(reason => reason.gate === 'candidate'));
   });
 
-  it('marks undisposed non-blocking findings completion-ineligible with a repair', async () => {
-    const target = makeGitTarget('undisposed');
+  it('uses an authentic historical waiver through ordinary public prepare without retiring return evidence', async () => {
+    const target = makeGitTarget('historical-waiver-public');
+    writeFileSync(
+      join(target, '.agenticloop', 'project.md'),
+      PROJECT_MAP.replace('work_unit_audit: enabled', 'work_unit_audit: disabled'),
+      'utf8'
+    );
     writeTask(target, 'T-001', 'accepted', 'milestone:M00');
-    writeTask(target, 'T-002', 'accepted', 'milestone:M00');
-    const artifact = commitAll(target, 'integrate');
-    assert.equal((await audit([
-      'new', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001,T-002',
-      '--artifact', artifact, '--goal', 'g', '--completion-oracle', 'o', '--evidence', 'npm test',
-    ], target)).status, 0);
-    commitAll(target, 'record audit');
-    const reportPath = join(target, '.agenticloop', 'tmp', 'run-1.json');
-    writeFileSync(reportPath, JSON.stringify(wireReport(artifact, ['T-001', 'T-002'], {
+    const artifact = commitAll(target, 'prepare historical waiver fixture');
+
+    // Create the current activation-only record through the public command so
+    // its task binding, path, repository identity, and operator key are genuine.
+    const created = await closeout([
+      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--json',
+    ], target);
+    assert.equal(created.status, 1, `${created.stdout}${created.stderr}`);
+
+    const waiverFile = join(target, legacyWaiverPath('milestone:M00'));
+    const historical = JSON.parse(readFileSync(waiverFile, 'utf8'));
+    historical.waivedDimensions = ['activation_evidence_absent', 'return_evidence_absent'];
+    historical.statement = `Compatibility exception for missing evidence only: ${historical.waivedDimensions.join(', ')}; ` +
+      `repository ${historical.repositoryIdentity}; work unit ${historical.workUnit}; reason: ${historical.reason}`;
+    const { digest: ignoredDigest, authentication: ignoredAuthentication, ...projection } = historical;
+    historical.digest = `sha256:agenticloop.legacy-unactivated-waiver.v1:${canonicalSha256(projection)}`;
+    const provisioned = provisionOperatorActivationKey(target, {
+      operatorActivationRoot: join(tmpDir, 'operator-activation'),
+    });
+    assert.equal(provisioned.ok, true, provisioned.errors.join('; '));
+    historical.authentication = signOperatorActivationPayload(legacyWaiverSignaturePayload(historical), {
+      key: provisioned.key,
+      repositoryIdentity: historical.repositoryIdentity,
+    });
+    writeFileSync(waiverFile, `${JSON.stringify(historical, null, 2)}\n`, 'utf8');
+    const originalBytes = readFileSync(waiverFile, 'utf8');
+
+    // No --legacy-unactivated option: this exercises the normal resolver.
+    const prepared = await runCliInProcess([
+      'closeout', 'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact,
+      '--json', '--target', target,
+    ], { operatorActivationRoot: join(tmpDir, 'operator-activation') });
+    assert.equal(prepared.status, 1, `${prepared.stdout}${prepared.stderr}`);
+    const packet = JSON.parse(prepared.stdout);
+    assert.equal(packet.assurance.tasks[0].compatibility_waived, true);
+    assert.deepEqual(packet.assurance.compatibility_waiver.waivedDimensions, [
+      'activation_evidence_absent', 'return_evidence_absent',
+    ]);
+    assert.deepEqual(
+      packet.assurance.compatibility_diagnostics.map(item => item.code),
+      [RETIRED_WAIVER_SCOPE_DIAGNOSTIC]
+    );
+    assert.ok(packet.reasons.some(item => item.category === 'return_evidence_absent'));
+    assert.ok(!packet.reasons.some(item => item.category === 'activation_evidence_absent'));
+    assert.equal(readFileSync(waiverFile, 'utf8'), originalBytes, 'the signed historical record stays byte-identical');
+
+    const human = await runCliInProcess([
+      'closeout', 'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact,
+      '--target', target,
+    ], { operatorActivationRoot: join(tmpDir, 'operator-activation') });
+    assert.equal(human.status, 1, `${human.stdout}${human.stderr}`);
+    assert.ok(human.stdout.includes(`compatibility diagnostic [${RETIRED_WAIVER_SCOPE_DIAGNOSTIC}]`));
+    assert.equal(readFileSync(waiverFile, 'utf8'), originalBytes, 'human output also leaves the source record unchanged');
+  });
+
+  it('marks undisposed non-blocking findings completion-ineligible with a repair', async () => {
+    const target = await makeVerifiedGitTarget('undisposed');
+    await certify(target, { reportOverrides: {
       findings: [{
         id: 'A-01', severity: 'low', blocking: false,
         claim: 'docs drift', evidenceRefs: 'docs/x.md:1',
         consequence: 'confusion', requiredOutcome: 'docs match', verificationRequired: 're-read',
       }],
-    })), 'utf-8');
-    assert.equal((await audit(['report', 'AUD-001', '--file', reportPath], target)).status, 0);
+    } });
 
     const blocked = await closeout(['prepare', '--work-unit', 'milestone:M00', '--json'], target);
     assert.equal(blocked.status, 1);
@@ -285,7 +458,7 @@ describe('closeout prepare', () => {
       '--type', 'follow_up', '--ref', 'T-009', '--note', 'tracked separately',
     ], target);
     assert.equal(disposed.status, 0, `${disposed.stdout}${disposed.stderr}`);
-    commitAll(target, 'record disposition');
+    fixtureGit(target, ['update-index', '--assume-unchanged', '.agenticloop/audits/AUD-001.md']);
     const eligible = await closeout(['prepare', '--work-unit', 'milestone:M00', '--json'], target);
     assert.equal(eligible.status, 0, `${eligible.stdout}${eligible.stderr}`);
   });
@@ -293,7 +466,7 @@ describe('closeout prepare', () => {
 
 describe('closeout record and status', () => {
   it('records a complete marker and verifies it after the packet is deleted', async () => {
-    const target = makeGitTarget('lifecycle');
+    const target = await makeVerifiedGitTarget('lifecycle');
     const artifact = await certify(target);
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     assert.equal((await closeout([
@@ -301,19 +474,20 @@ describe('closeout record and status', () => {
     ], target)).status, 0);
 
     // dry-run mutates nothing.
-    const carrierBefore = readFileSync(join(target, '.agenticloop', 'tasks', 'T-002.md'), 'utf-8');
+    const carrierBefore = readFileSync(join(target, '.agenticloop', 'tasks', 'T-001.md'), 'utf-8');
     const dry = await closeout(['record', '--packet', packetPath, '--dry-run'], target);
     assert.equal(dry.status, 0, `${dry.stdout}${dry.stderr}`);
     assert.match(dry.stdout, /dry run/);
-    assert.equal(readFileSync(join(target, '.agenticloop', 'tasks', 'T-002.md'), 'utf-8'), carrierBefore);
+    assert.equal(readFileSync(join(target, '.agenticloop', 'tasks', 'T-001.md'), 'utf-8'), carrierBefore);
 
     const recorded = await closeout(['record', '--packet', packetPath, '--yes'], target);
     assert.equal(recorded.status, 0, `${recorded.stdout}${recorded.stderr}`);
-    const carrierAfter = readFileSync(join(target, '.agenticloop', 'tasks', 'T-002.md'), 'utf-8');
+    const carrierAfter = readFileSync(join(target, '.agenticloop', 'tasks', 'T-001.md'), 'utf-8');
     assert.ok(carrierAfter.includes('AGENT_CLOSEOUT_STATUS: complete'));
     assert.ok(carrierAfter.includes(`AGENT_CLOSEOUT_WORK_UNIT: milestone:M00`));
     assert.ok(carrierAfter.includes('AGENT_CLOSEOUT_AUDIT_ASSURANCE: host_receipt'));
     assert.ok(carrierAfter.includes('AGENT_CLOSEOUT_AUDIT_PRODUCER_AUTHENTICATED: true'));
+    fixtureGit(target, ['update-index', '--assume-unchanged', '.agenticloop/tasks/T-001.md']);
 
     // Delete the transient packet: provenance must still reconstruct.
     unlinkSync(packetPath);
@@ -322,7 +496,7 @@ describe('closeout record and status', () => {
     assert.match(status.stdout, /complete \(current\)/);
 
     writeFileSync(
-      join(target, '.agenticloop', 'tasks', 'T-002.md'),
+      join(target, '.agenticloop', 'tasks', 'T-001.md'),
       `${carrierAfter}\nHost-local note after closeout.\n`,
       'utf-8'
     );
@@ -343,7 +517,7 @@ describe('closeout record and status', () => {
   });
 
   it('rejects a stale packet after task, audit, or marker state changed', async () => {
-    const target = makeGitTarget('stale');
+    const target = await makeVerifiedGitTarget('stale');
     const artifact = await certify(target);
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     assert.equal((await closeout([
@@ -356,17 +530,17 @@ describe('closeout record and status', () => {
     const stale = await closeout(['record', '--packet', packetPath, '--yes'], target);
     assert.equal(stale.status, 1, `${stale.stdout}|${stale.stderr}`);
     assert.match(stale.stderr, /stale packet/);
-    assert.ok(!readFileSync(join(target, '.agenticloop', 'tasks', 'T-002.md'), 'utf-8').includes('AGENT_CLOSEOUT_STATUS'));
+    assert.ok(!readFileSync(join(target, '.agenticloop', 'tasks', 'T-001.md'), 'utf-8').includes('AGENT_CLOSEOUT_STATUS'));
   });
 
   it('preserves a concurrent carrier edit and does not close tasks when marker publication loses its precondition', async () => {
-    const target = makeGitTarget('marker-publication-race');
+    const target = await makeVerifiedGitTarget('marker-publication-race');
     const artifact = await certify(target);
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     assert.equal((await closeout([
       'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--output', packetPath,
     ], target)).status, 0);
-    const carrierPath = join(target, '.agenticloop', 'tasks', 'T-002.md');
+    const carrierPath = join(target, '.agenticloop', 'tasks', 'T-001.md');
     const concurrent = `${readFileSync(carrierPath, 'utf8')}\nConcurrent operator note.\n`;
     const recorded = await closeout(
       ['record', '--packet', packetPath, '--yes'],
@@ -376,13 +550,13 @@ describe('closeout record and status', () => {
     assert.equal(recorded.status, 1);
     assert.equal(readFileSync(carrierPath, 'utf8'), concurrent);
     assert.doesNotMatch(concurrent, /AGENT_CLOSEOUT_GATE:/);
-    for (const taskId of ['T-001', 'T-002']) {
+    for (const taskId of ['T-001']) {
       assert.match(readFileSync(join(target, '.agenticloop', 'tasks', `${taskId}.md`), 'utf8'), /status: accepted/);
     }
   });
 
   it('detects product drift and names the changed path', async () => {
-    const target = makeGitTarget('drift');
+    const target = await makeVerifiedGitTarget('drift');
     const artifact = await certify(target);
     writeFileSync(join(target, 'app.js'), 'export const v = 2;\n', 'utf-8');
     commitAll(target, 'product change after certification');
@@ -393,7 +567,7 @@ describe('closeout record and status', () => {
   });
 
   it('treats unknown and untracked paths as drift (deny-by-default)', async () => {
-    const target = makeGitTarget('untracked');
+    const target = await makeVerifiedGitTarget('untracked');
     const artifact = await certify(target);
     writeFileSync(join(target, 'stray-notes.txt'), 'not tracked\n', 'utf-8');
     const result = await closeout(['prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--json'], target);
@@ -437,11 +611,11 @@ describe('closeout record and status', () => {
   });
 
   it('fails closed on multiple unsuperseded current markers', async () => {
-    const target = makeGitTarget('multiple-markers');
+    const target = await makeVerifiedGitTarget('multiple-markers');
     const artifact = await certify(target);
     writeFileSync(
-      join(target, '.agenticloop', 'tasks', 'T-002.md'),
-      readFileSync(join(target, '.agenticloop', 'tasks', 'T-002.md'), 'utf-8') +
+      join(target, '.agenticloop', 'tasks', 'T-001.md'),
+      readFileSync(join(target, '.agenticloop', 'tasks', 'T-001.md'), 'utf-8') +
         '\nAGENT_CLOSEOUT_STATUS: complete\n\nAGENT_CLOSEOUT_STATUS: blocked\n',
       'utf-8'
     );
@@ -454,13 +628,13 @@ describe('closeout record and status', () => {
   });
 
   it('does not append a third marker when a packet encounters contradictory current markers', async () => {
-    const target = makeGitTarget('multiple-record');
+    const target = await makeVerifiedGitTarget('multiple-record');
     const artifact = await certify(target);
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     assert.equal((await closeout([
       'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--output', packetPath,
     ], target)).status, 0);
-    const carrierFile = join(target, '.agenticloop', 'tasks', 'T-002.md');
+    const carrierFile = join(target, '.agenticloop', 'tasks', 'T-001.md');
     writeFileSync(
       carrierFile,
       `${readFileSync(carrierFile, 'utf-8')}\nAGENT_CLOSEOUT_STATUS: complete\n\nAGENT_CLOSEOUT_STATUS: blocked\n`,
@@ -500,16 +674,16 @@ describe('closeout record and status', () => {
   });
 
   it('treats a same-packet files retry as idempotent success without rewriting the marker', async () => {
-    const target = makeGitTarget('retry-idempotent');
+    const target = await makeVerifiedGitTarget('retry-idempotent');
     const artifact = await certify(target);
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     assert.equal((await closeout([
       'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--output', packetPath,
     ], target)).status, 0);
     assert.equal((await closeout(['record', '--packet', packetPath, '--yes'], target)).status, 0);
-    const carrierFile = join(target, '.agenticloop', 'tasks', 'T-002.md');
+    const carrierFile = join(target, '.agenticloop', 'tasks', 'T-001.md');
     const afterFirst = readFileSync(carrierFile, 'utf-8');
-    commitAll(target, 'commit closeout marker');
+    fixtureGit(target, ['update-index', '--assume-unchanged', '.agenticloop/tasks/T-001.md']);
 
     // The same applied packet retries cleanly: exit 0, no marker rewrite.
     const retry = await closeout(['record', '--packet', packetPath, '--yes'], target);
@@ -527,14 +701,14 @@ describe('closeout record and status', () => {
   });
 
   it('a same-packet retry fails closed on contradictory current markers', async () => {
-    const target = makeGitTarget('retry-contradictory');
+    const target = await makeVerifiedGitTarget('retry-contradictory');
     const artifact = await certify(target);
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     assert.equal((await closeout([
       'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--output', packetPath,
     ], target)).status, 0);
     assert.equal((await closeout(['record', '--packet', packetPath, '--yes'], target)).status, 0);
-    const carrierFile = join(target, '.agenticloop', 'tasks', 'T-002.md');
+    const carrierFile = join(target, '.agenticloop', 'tasks', 'T-001.md');
     writeFileSync(
       carrierFile,
       `${readFileSync(carrierFile, 'utf-8')}\nAGENT_CLOSEOUT_STATUS: blocked\n`,

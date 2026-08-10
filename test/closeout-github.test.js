@@ -21,6 +21,26 @@ import {
 } from '../src/closeout-github.js';
 import { renderCloseoutMarker } from '../src/closeout-contract.js';
 import { runCliInProcess } from './helpers/run-cli.js';
+import {
+  createDispatchFixture,
+  git as fixtureGit,
+  prepare as prepareDispatch,
+  producerBinding,
+  readyReturn,
+  repositoryEvidence,
+} from './helpers/dispatch-fixture.js';
+import { createTaskReadinessEvidence } from '../src/task-evidence-contract.js';
+import { recognizeHandoff } from '../src/handoff-recognition.js';
+import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
+import { createDispatchConsumption, dispatchConsumptionRelativePath } from '../src/handoff-consumption.js';
+import { protectedHostBoundary } from './helpers/host-trust-fixture.js';
+import { receiveRoleReturn } from '../src/dispatch-envelope.js';
+import { createReturnVerification, writeReturnVerification } from '../src/return-verification.js';
+import {
+  createTaskContractBaselineRecord,
+  renderTaskContractRecord,
+  taskContractDigest,
+} from '../src/task-contract-baseline.js';
 
 let tmpDir;
 before(() => { tmpDir = mkdtempSync(join(tmpdir(), 'al-closeout-gh-')); });
@@ -266,12 +286,14 @@ describe('terminal PR lifecycle', () => {
     assert.ok(JSON.parse(result.stdout).reasons.some(item => /certified candidate/.test(item.message)));
   });
 
-  it('a valid reviewed, merged, candidate-bound closing PR completes', async () => {
+  it('a valid PR lifecycle still refuses when the legacy activation waiver has no return chain', async () => {
     const result = await prepare('valid-pr', lifecycleRunner());
-    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
     const packet = JSON.parse(result.stdout);
-    assert.equal(packet.completion_eligible, true);
+    assert.equal(packet.completion_eligible, false);
     assert.ok(packet.gates.some(gate => gate.id === 'pr_lifecycle' && gate.passed === true));
+    assert.ok(packet.reasons.some(reason => /dispatch consumption/.test(reason.message)));
+    assert.ok(packet.reasons.some(reason => /role-return verification/.test(reason.message)));
   });
 });
 
@@ -383,7 +405,7 @@ describe('github closeout evaluation', () => {
     const carrier = { body: coveredTaskBody('accepted') };
     const issues = [issue(1, { state: 'CLOSED', body: carrier.body })];
     const comments = [];
-    const state = { recording: false, commentReads: 0, postAttempts: 0 };
+    const state = { recording: false, commentReads: 0, postAttempts: 0, returnPr: null, baseline: null };
     const mergedPr = {
       number: 5,
       state: 'MERGED',
@@ -410,7 +432,7 @@ describe('github closeout evaluation', () => {
       if (args[0] === 'issue' && args[1] === 'view' && args.includes('closedByPullRequestsReferences')) {
         return { status: 0, stdout: JSON.stringify({ closedByPullRequestsReferences: [{ number: 5 }] }), stderr: '' };
       }
-      if (args[0] === 'api') return { status: 0, stdout: JSON.stringify([[]]), stderr: '' };
+      if (args[0] === 'api') return { status: 0, stdout: JSON.stringify([[...(state.baseline ? [state.baseline] : [])]]), stderr: '' };
       if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'example/repo' }), stderr: '' };
       if (args[0] === 'issue' && args[1] === 'view' && String(args[args.indexOf('--json') + 1] ?? '').includes('body')) {
         return { status: 0, stdout: JSON.stringify({ number: 1, body: carrier.body }), stderr: '' };
@@ -424,7 +446,10 @@ describe('github closeout evaluation', () => {
         }
         return { status: 0, stdout: JSON.stringify({ comments, updatedAt: 'now' }), stderr: '' };
       }
-      if (args[0] === 'pr' && args[1] === 'view') return { status: 0, stdout: JSON.stringify(mergedPr), stderr: '' };
+      if (args[0] === 'pr' && args[1] === 'view') {
+        const viewed = Number(args[2]);
+        return { status: 0, stdout: JSON.stringify(viewed === 6 && state.returnPr ? state.returnPr : mergedPr), stderr: '' };
+      }
       if (args[0] === 'issue' && args[1] === 'comment') {
         state.postAttempts += 1;
         if (publishVisible) {
@@ -439,7 +464,115 @@ describe('github closeout evaluation', () => {
       }
       return { status: 1, stdout: '', stderr: `unexpected ${args.join(' ')}` };
     };
-    return { full, carrier, comments, state, runner };
+    return { full, carrier, comments, issues, mergedPr, state, runner };
+  }
+
+  async function establishGitHubHandoff(name, harness) {
+    const fixture = await createDispatchFixture(tmpDir, `${name}-dispatch`, { workUnit: 'milestone:M00' });
+    const target = fixture.root;
+    writeFileSync(join(target, '.agenticloop', 'project.md'), [
+      '---', 'setup_status: confirmed', 'development_stage: expansion',
+      'task_backend: github', 'work_unit_audit: disabled', 'grouping_profile: milestone',
+      '---', '', '# Project', '',
+    ].join('\n'), 'utf8');
+    fixtureGit(target, ['add', '.agenticloop/project.md']);
+    fixtureGit(target, ['commit', '-m', 'configure GitHub closeout fixture']);
+    const repository = fixture.repository;
+    const currentHead = fixtureGit(target, ['rev-parse', 'HEAD']);
+    fixture.repository = () => ({ ...repository(), head: currentHead, baseHead: currentHead });
+    fixture.refetchRepository = fixture.repository;
+    const body = readFileSync(fixture.taskPath, 'utf8')
+      .replace(/^status: .*$/m, 'status: closed')
+      .replace(/^backend: .*$/m, 'backend: github');
+    harness.carrier.body = body;
+    harness.issues[0].body = body;
+    const contract = taskContractDigest(body);
+    harness.state.baseline = {
+      id: 420, html_url: 'https://example.test/comments/420',
+      user: { login: 'loop' }, author_association: 'MEMBER',
+      created_at: '2026-08-10T00:00:00Z', updated_at: '2026-08-10T00:00:00Z',
+      body: renderTaskContractRecord(createTaskContractBaselineRecord({
+        recordId: 'task-contract-record:00000000-0000-4000-8000-000000000001',
+        taskId: 'T-001', digest: contract.digest, projection: contract.projection,
+        authority: 'policy:T-001', actor: 'loop', timestamp: '2026-08-10T00:00:00.000Z',
+        affectedArtifact: 'issue:1',
+      })),
+    };
+    const identity = buildGitHubTaskIdentityInventory(harness.issues);
+    assert.equal(resolveCoveredGitHubTask(identity, 'T-001').found, true, JSON.stringify(identity.errors));
+    const snapshot = {
+      ...fixture.snapshot(), backend: 'github', carrier: 'issue:1', body,
+      digest: `sha256:${(await import('node:crypto')).createHash('sha256').update(body, 'utf8').digest('hex')}`,
+    };
+    const readiness = {
+      ...fixture.readiness,
+      evidence: createTaskReadinessEvidence({
+        ...fixture.readiness.evidence,
+        backend: 'github',
+        task: { id: 'T-001', carrier: 'issue:1', expectedDigest: snapshot.digest },
+      }),
+    };
+    const githubFixture = {
+      ...fixture,
+      refetchTask: () => snapshot,
+      readiness,
+      refetchReadiness: () => readiness,
+      assignment: {
+        ...fixture.assignment,
+        canonicalReferences: ['agents/engineer.md', 'skills/role-delegation/SKILL.md', 'backends/github.md'],
+      },
+    };
+    const prepared = prepareDispatch(githubFixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    const packet = prepared.packet;
+    const recognition = recognizeHandoff({
+      transition: 'role_start',
+      expectation: {
+        backend: 'github', taskId: 'T-001', roleId: 'engineer',
+        taskContractDigest: packet.task.contractDigest, carrierDigest: packet.task.digest,
+        packetId: packet.packetId, packetDigest: packet.digest,
+        workUnitIdentity: packet.decomposition.workUnitId, artifactHead: packet.repository.head,
+        worktreeRoot: packet.repository.worktree, minimumActivationAssurance: 'operator_confirmed',
+      },
+      preparedDispatch: packet,
+      validatePreparedDispatch: fixtureDispatchValidator(fixture),
+    });
+    assert.equal(recognition.recognized, true, JSON.stringify(recognition.diagnostics));
+    const consumption = createDispatchConsumption({ backend: 'github', taskId: 'T-001', recognition });
+    const consumptionPath = join(target, dispatchConsumptionRelativePath(consumption));
+    mkdirSync(join(consumptionPath, '..'), { recursive: true });
+    writeFileSync(consumptionPath, `${JSON.stringify(consumption, null, 2)}\n`, 'utf8');
+
+    writeFileSync(join(target, 'src', 'existing.js'), 'export const current = "github-return";\n', 'utf8');
+    fixtureGit(target, ['add', 'src/existing.js']);
+    fixtureGit(target, ['commit', '-m', 'record GitHub return\n\nTask: T-001\nAgent: engineer']);
+    harness.full = fixtureGit(target, ['rev-parse', 'HEAD']);
+    harness.mergedPr.mergeCommit.oid = harness.full;
+    harness.mergedPr.headRefOid = harness.full;
+    const pr = { state: 'open', number: 6, url: 'https://example.test/pull/6' };
+    const evidence = repositoryEvidence(packet, { head: harness.full, pr });
+    evidence.branch = packet.assignment.branch;
+    evidence.attribution = { range: { base: packet.repository.head, head: harness.full }, commits: [harness.full] };
+    harness.state.returnPr = {
+      number: 6, state: 'OPEN', url: pr.url, headRefOid: harness.full,
+      headRefName: evidence.branch,
+    };
+    const roleReturn = readyReturn(packet, evidence);
+    const binding = producerBinding(fixture.trust, packet, roleReturn, evidence);
+    const received = receiveRoleReturn({
+      raw: JSON.stringify(roleReturn), packet, refetchTask: () => snapshot,
+      refetchRepositoryEvidence: () => evidence,
+      producerReceipt: binding.producerReceipt,
+      resolveTrustedAdapter: binding.resolveTrustedAdapter,
+    }, fixture.options);
+    assert.equal(received.ok, true, received.validation.errors?.join('\n'));
+    const verification = createReturnVerification({
+      target, packet, roleReturn, repositoryEvidence: evidence,
+      producerReceipt: binding.producerReceipt, received,
+    });
+    const stored = writeReturnVerification(target, verification);
+    assert.equal(stored.ok, true, stored.errors.join('\n'));
+    return { fixture, packet, target };
   }
 
   it('blocks completion when a covered GitHub task was reopened after certification', async () => {
@@ -497,159 +630,102 @@ describe('github closeout evaluation', () => {
   });
 
   it('records a trusted GitHub marker and reconstructs status after the packet is deleted', async () => {
-    const target = makeTarget('lifecycle', { work_unit_audit: 'disabled' });
-    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
-    const full = 'a'.repeat(40);
-    // The closeout-owned terminal transition reads and rewrites the covered
-    // carrier body, so this fake transport serves and stores it.
-    const carrier = { body: coveredTaskBody('accepted') };
-    const issues = [issue(1, { state: 'CLOSED', body: carrier.body })];
-    const comments = [];
-    const mergedPr = {
-      number: 5,
-      state: 'MERGED',
-      mergedAt: '2026-07-27T12:00:00Z',
-      mergeCommit: { oid: full },
-      headRefOid: full,
-      reviewDecision: 'APPROVED',
-      reviews: [],
-      closingIssuesReferences: [{ number: 1 }],
-    };
-    const runner = (command, args) => {
-      if (args[0] === 'issue' && args[1] === 'list') return { status: 0, stdout: JSON.stringify(issues), stderr: '' };
-      if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify({ login: 'loop' }), stderr: '' };
-      if (args[0] === 'issue' && args[1] === 'view' && args.includes('closedByPullRequestsReferences')) {
-        return { status: 0, stdout: JSON.stringify({ closedByPullRequestsReferences: [{ number: 5 }] }), stderr: '' };
-      }
-      if (args[0] === 'api') return { status: 0, stdout: JSON.stringify([[]]), stderr: '' };
-      if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'example/repo' }), stderr: '' };
-      if (args[0] === 'issue' && args[1] === 'view' && String(args[args.indexOf('--json') + 1] ?? '').includes('body')) {
-        return { status: 0, stdout: JSON.stringify({ number: 1, body: carrier.body }), stderr: '' };
-      }
-      if (args[0] === 'issue' && args[1] === 'view') return { status: 0, stdout: JSON.stringify({ comments, updatedAt: 'now' }), stderr: '' };
-      if (args[0] === 'pr' && args[1] === 'view') return { status: 0, stdout: JSON.stringify(mergedPr), stderr: '' };
-      if (args[0] === 'issue' && args[1] === 'comment') {
-        comments.push({ id: comments.length + 1, author: { login: 'loop' }, body: args[args.indexOf('--body') + 1] });
-        return { status: 0, stdout: '', stderr: '' };
-      }
-      if (args[0] === 'issue' && args[1] === 'edit' && args.includes('--body-file')) {
-        carrier.body = readFileSync(args[args.indexOf('--body-file') + 1], 'utf8');
-        issues[0].body = carrier.body;
-        return { status: 0, stdout: '', stderr: '' };
-      }
-      return { status: 1, stdout: '', stderr: `unexpected ${args.join(' ')}` };
+    const harness = closeoutHarness();
+    const { target, fixture } = await establishGitHubHandoff('lifecycle', harness);
+    const options = {
+      ghCommandRunner: harness.runner, operatorTrustRoot: fixture.operatorTrustRoot,
+      hostAuthority: protectedHostBoundary(fixture.trust),
     };
     const packetPath = join(target, '.agenticloop', 'tmp', 'github-packet.json');
-    const prepared = await runCliInProcess(legacyPrepareArgs([
+    const prepared = await runCliInProcess([
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
-      '--artifact', `commit:${full}`, '--output', packetPath, '--target', target,
-    ]), legacyOptions(runner));
+      '--artifact', `commit:${harness.full}`, '--output', packetPath, '--target', target,
+    ], options);
     assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
     const recorded = await runCliInProcess([
       'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
-    ], legacyOptions(runner));
+    ], options);
     assert.equal(recorded.status, 0, `${recorded.stdout}${recorded.stderr}`);
-    assert.equal(comments.length, 1);
-    // The canonical closeout-owned terminal transition reaches `closed`.
+    assert.equal(harness.comments.length, 1);
     assert.match(recorded.stdout, /closeout_owned_accepted_to_closed/);
-    assert.match(carrier.body, /status: "?closed"?/);
+    assert.match(harness.carrier.body, /status: "?closed"?/);
     (await import('node:fs')).unlinkSync(packetPath);
     const status = await runCliInProcess([
       'closeout', 'status', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001', '--target', target,
-    ], legacyOptions(runner));
+    ], options);
     assert.equal(status.status, 0, `${status.stdout}${status.stderr}`);
     assert.match(status.stdout, /complete \(current\)/);
   });
 
   it('does not close covered tasks when a successful post is not remotely visible', async () => {
-    const target = makeTarget('post-not-visible', { work_unit_audit: 'disabled' });
-    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
     const harness = closeoutHarness({ publishVisible: false });
+    const { target, fixture } = await establishGitHubHandoff('post-not-visible', harness);
+    const options = { ghCommandRunner: harness.runner, operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: protectedHostBoundary(fixture.trust) };
     const packetPath = join(target, '.agenticloop', 'tmp', 'github-packet.json');
-    const prepared = await runCliInProcess(legacyPrepareArgs([
+    const prepared = await runCliInProcess([
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
       '--artifact', `commit:${harness.full}`, '--output', packetPath, '--target', target,
-    ]), legacyOptions(harness.runner));
+    ], options);
     assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
     harness.state.recording = true;
     const recorded = await runCliInProcess([
       'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
-    ], legacyOptions(harness.runner));
+    ], options);
     assert.equal(recorded.status, 1);
     assert.match(recorded.stderr, /not the unique current packet/);
     assert.equal(harness.state.postAttempts, 1);
     assert.deepEqual(harness.comments, []);
-    assert.match(harness.carrier.body, /status: accepted/);
+    assert.match(harness.carrier.body, /status: closed/);
   });
 
   it('refuses publication when the trusted marker carrier changes after final evaluation', async () => {
-    const target = makeTarget('marker-race', { work_unit_audit: 'disabled' });
-    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
     const harness = closeoutHarness({ conflictOnFinalRead: true });
+    const { target, fixture } = await establishGitHubHandoff('marker-race', harness);
+    const options = { ghCommandRunner: harness.runner, operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: protectedHostBoundary(fixture.trust) };
     const packetPath = join(target, '.agenticloop', 'tmp', 'github-packet.json');
-    const prepared = await runCliInProcess(legacyPrepareArgs([
+    const prepared = await runCliInProcess([
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
       '--artifact', `commit:${harness.full}`, '--output', packetPath, '--target', target,
-    ]), legacyOptions(harness.runner));
+    ], options);
     assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
     harness.state.recording = true;
     const recorded = await runCliInProcess([
       'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
-    ], legacyOptions(harness.runner));
+    ], options);
     assert.equal(recorded.status, 1);
     assert.match(recorded.stderr, /marker carrier changed after final evaluation/);
     assert.equal(harness.state.postAttempts, 0);
     assert.equal(harness.comments.length, 1);
-    assert.match(harness.carrier.body, /status: accepted/);
+    assert.match(harness.carrier.body, /status: closed/);
   });
 
   it('refuses GitHub publication when a covered task reopens in the final snapshot', async () => {
-    const target = makeTarget('final-reopen', { work_unit_audit: 'disabled' });
-    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
-    const full = 'a'.repeat(40);
-    const comments = [];
-    const mergedPr = {
-      number: 5,
-      state: 'MERGED',
-      mergedAt: '2026-07-27T12:00:00Z',
-      mergeCommit: { oid: full },
-      headRefOid: full,
-      reviewDecision: 'APPROVED',
-      reviews: [],
-      closingIssuesReferences: [{ number: 1 }],
-    };
+    const harness = closeoutHarness();
+    const { target, fixture } = await establishGitHubHandoff('final-reopen', harness);
     let inventoryReads = 0;
     const runner = (command, args) => {
       if (args[0] === 'issue' && args[1] === 'list') {
         inventoryReads += 1;
         return { status: 0, stdout: JSON.stringify([issue(1, {
-          state: inventoryReads >= 3 ? 'OPEN' : 'CLOSED', body: coveredTaskBody('accepted'),
+          state: inventoryReads >= 3 ? 'OPEN' : 'CLOSED', body: harness.carrier.body,
         })]), stderr: '' };
       }
-      if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify({ login: 'loop' }), stderr: '' };
-      if (args[0] === 'api') return { status: 0, stdout: JSON.stringify([[]]), stderr: '' };
-      if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'example/repo' }), stderr: '' };
-      if (args[0] === 'issue' && args[1] === 'view' && args.includes('closedByPullRequestsReferences')) {
-        return { status: 0, stdout: JSON.stringify({ closedByPullRequestsReferences: [{ number: 5 }] }), stderr: '' };
-      }
-      if (args[0] === 'issue' && args[1] === 'view' && String(args[args.indexOf('--json') + 1] ?? '').includes('body')) {
-        return { status: 0, stdout: JSON.stringify({ number: 1, body: coveredTaskBody('accepted') }), stderr: '' };
-      }
-      if (args[0] === 'issue' && args[1] === 'view') return { status: 0, stdout: JSON.stringify({ comments, updatedAt: 'now' }), stderr: '' };
-      if (args[0] === 'pr' && args[1] === 'view') return { status: 0, stdout: JSON.stringify(mergedPr), stderr: '' };
-      if (args[0] === 'issue' && args[1] === 'comment') return { status: 0, stdout: '', stderr: '' };
-      return { status: 1, stdout: '', stderr: `unexpected ${args.join(' ')}` };
+      return harness.runner(command, args);
+    };
+    const options = {
+      ghCommandRunner: runner, operatorTrustRoot: fixture.operatorTrustRoot,
+      hostAuthority: protectedHostBoundary(fixture.trust),
     };
     const packetPath = join(target, '.agenticloop', 'tmp', 'github-packet.json');
-    assert.equal((await runCliInProcess(legacyPrepareArgs([
+    assert.equal((await runCliInProcess([
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
-      '--artifact', `commit:${full}`, '--output', packetPath, '--target', target,
-    ]), legacyOptions(runner))).status, 0);
+      '--artifact', `commit:${harness.full}`, '--output', packetPath, '--target', target,
+    ], options)).status, 0);
     const recorded = await runCliInProcess([
       'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
-    ], legacyOptions(runner));
+    ], options);
     assert.equal(recorded.status, 1);
     assert.match(recorded.stderr, /GitHub state changed/);
-    assert.deepEqual(comments, []);
+    assert.deepEqual(harness.comments, []);
   });
 });

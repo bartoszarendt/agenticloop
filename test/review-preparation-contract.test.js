@@ -12,12 +12,28 @@ import { evaluateNoProgress, applyCheckpointRepairs, parseCheckpointRepair, form
 import {
   REVIEW_PACKET_LEASE,
   reviewPacketDigest,
+  runGitHubReviewPrepare,
   validateReviewPacket,
+  verifyReviewPacket,
 } from '../src/github-review-prepare.js';
 import { taskContractDigest } from '../src/task-contract-baseline.js';
 import { createReviewEntryReceipt, reviewEntryReceiptCurrentFindingIds } from '../src/review-entry-receipt.js';
 import { presentDiagnostic } from '../src/diagnostic-presentation.js';
 import { getProjectRoleCapabilities } from '../src/role-capabilities.js';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import {
+  createDispatchFixture, git, prepare, producerBinding, readyReturn, repositoryEvidence,
+} from './helpers/dispatch-fixture.js';
+import { createTaskReadinessEvidence } from '../src/task-evidence-contract.js';
+import { receiveRoleReturn } from '../src/dispatch-envelope.js';
+import { recognizeHandoff } from '../src/handoff-recognition.js';
+import { createDispatchConsumption, dispatchConsumptionRelativePath } from '../src/handoff-consumption.js';
+import { createReturnVerification, writeReturnVerification } from '../src/return-verification.js';
+import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
+import { protectedHostBoundary } from './helpers/host-trust-fixture.js';
+import { createTaskContractBaselineRecord, renderTaskContractRecord } from '../src/task-contract-baseline.js';
 
 const REPO_ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 
@@ -1436,14 +1452,166 @@ describe('review preparation contract - review preparation and packet freshness'
 
   const verifyContext = { projectFacts: [], decisionExists: () => false, taskExists: () => false };
 
-  it('emits one exact-head packet on successful preparation', async () => {
+  it('emits and verifies a review packet through the complete public return chain', async () => {
+    const temporary = mkdtempSync(join(tmpdir(), 'review-public-chain-'));
+    try {
+      const fixture = await createDispatchFixture(temporary, 'dispatch', { taskIds: ['T-007'] });
+      const taskBody = fixture.snapshot().body;
+      const taskDigest = fixture.snapshot().digest;
+      const dispatchHead = fixture.repository().head;
+      const contract = taskContractDigest(taskBody);
+      const baselineText = renderTaskContractRecord(createTaskContractBaselineRecord({
+        recordId: 'task-contract-record:00000000-0000-4000-8000-000000000007',
+        taskId: 'T-007', digest: contract.digest, projection: contract.projection,
+        authority: 'policy:T-007', actor: 'maintainer',
+        timestamp: new Date().toISOString(), affectedArtifact: 'issue:7',
+      }));
+      const baselineComment = {
+        id: 7, html_url: 'https://example.test/issues/7#issuecomment-7',
+        user: { login: 'maintainer' }, author_association: 'MEMBER',
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        body: baselineText,
+      };
+      const snapshot = () => ({
+        ...fixture.snapshot(), backend: 'github', carrier: 'issue:7', body: taskBody,
+        digest: taskDigest,
+      });
+      const readiness = {
+        ...fixture.readiness,
+        evidence: createTaskReadinessEvidence({
+          ...fixture.readiness.evidence,
+          backend: 'github', task: { id: 'T-007', carrier: 'issue:7', expectedDigest: taskDigest },
+        }),
+      };
+      const prepared = prepare({
+        ...fixture, refetchTask: snapshot, readiness, refetchReadiness: () => readiness,
+        assignment: {
+          ...fixture.assignment,
+          canonicalReferences: ['agents/engineer.md', 'skills/role-delegation/SKILL.md', 'backends/github.md'],
+        },
+      });
+      assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+      const packet = prepared.packet;
+      const recognition = recognizeHandoff({
+        transition: 'role_start',
+        expectation: {
+          backend: 'github', taskId: 'T-007', roleId: 'engineer',
+          taskContractDigest: packet.task.contractDigest, carrierDigest: packet.task.digest,
+          packetId: packet.packetId, packetDigest: packet.digest,
+          workUnitIdentity: packet.decomposition.workUnitId, artifactHead: dispatchHead,
+          worktreeRoot: packet.repository.worktree, minimumActivationAssurance: 'operator_confirmed',
+        },
+        preparedDispatch: packet,
+        validatePreparedDispatch: fixtureDispatchValidator(fixture),
+      });
+      assert.equal(recognition.recognized, true, JSON.stringify(recognition.diagnostics));
+      const consumption = createDispatchConsumption({ backend: 'github', taskId: 'T-007', recognition });
+      const consumptionPath = join(fixture.root, dispatchConsumptionRelativePath(consumption));
+      mkdirSync(join(consumptionPath, '..'), { recursive: true });
+      writeFileSync(consumptionPath, `${JSON.stringify(consumption, null, 2)}\n`, 'utf8');
+
+      writeFileSync(join(fixture.root, 'src', 'existing.js'), 'export const current = "review-ready";\n', 'utf8');
+      git(fixture.root, ['add', 'src/existing.js']);
+      git(fixture.root, ['commit', '-m', 'review-ready implementation\n\nTask: T-007\nAgent: engineer']);
+      const head = git(fixture.root, ['rev-parse', 'HEAD']);
+      const evidence = repositoryEvidence(packet, {
+        head, changedPaths: ['src/existing.js'],
+        pr: { state: 'open', number: 42, url: 'https://example.test/pull/42' },
+      });
+      evidence.attribution = { range: { base: dispatchHead, head }, commits: [head] };
+      const roleReturn = readyReturn(packet, evidence);
+      const producer = producerBinding(fixture.trust, packet, roleReturn, evidence);
+      const received = receiveRoleReturn({
+        raw: JSON.stringify(roleReturn), packet, refetchTask: snapshot,
+        refetchRepositoryEvidence: () => evidence,
+        producerReceipt: producer.producerReceipt,
+        resolveTrustedAdapter: producer.resolveTrustedAdapter,
+      }, fixture.options);
+      assert.equal(received.ok, true, received.validation.errors?.join('\n'));
+      const verification = createReturnVerification({
+        target: fixture.root, packet, roleReturn, repositoryEvidence: evidence,
+        producerReceipt: producer.producerReceipt, received,
+      });
+      assert.equal(writeReturnVerification(fixture.root, verification).ok, true);
+
+      const prBody = [
+        '## Scope Completed', 'Completed.', '', '## Artifacts', `Current implementation artifact: commit:${head}`, '',
+        '## Evidence', `Current PR head: ${head}`, '',
+        '- Required check: [RC-1] command: `npm test`', '  Verdict: passed', '  Evidence: tests passed (exit 0)', '',
+        '- Required check: [RC-2] command: `npm run typecheck`', '  Verdict: passed', '  Evidence: typecheck passed (exit 0)', '',
+        '## Deviations', 'None.', '', '## Known Gaps', 'None.', '', '## Follow-Ups', 'None.', '', '[[agent: engineer]]',
+      ].join('\n');
+      const prData = {
+        number: 42, state: 'OPEN', url: 'https://example.test/pull/42', body: prBody,
+        headRefOid: head, headRefName: packet.assignment.branch, baseRefOid: packet.repository.baseHead,
+        closingIssuesReferences: [{ number: 7 }], files: [], statusCheckRollup: [], comments: [], reviews: [],
+        commits: [{ oid: head, message: 'implementation\n\nTask: T-007\nAgent: engineer' }],
+      };
+      const issueData = { number: 7, body: taskBody, title: 'T-007 review preparation', comments: [] };
+      const runner = (_command, args) => {
+        if (args[0] === 'pr') return { status: 0, stdout: JSON.stringify(
+          (args[args.indexOf('--json') + 1] ?? '') === 'headRefOid' ? { headRefOid: head } : prData
+        ), stderr: '' };
+        if (args[0] === 'issue') return { status: 0, stdout: JSON.stringify(issueData), stderr: '' };
+        if (args[0] === 'repo') return { status: 0, stdout: JSON.stringify({ nameWithOwner: 'example/repo' }), stderr: '' };
+        if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: JSON.stringify({ login: 'loop-bot', type: 'User' }), stderr: '' };
+        if (args[0] === 'api' && /git\/trees\//.test(args[1] ?? '')) {
+          return { status: 0, stdout: JSON.stringify({ tree: [] }), stderr: '' };
+        }
+        if (args[0] === 'api' && args.includes('--paginate')) {
+          const endpoint = args.find(arg => /^repos\//.test(arg)) ?? '';
+          return { status: 0, stdout: JSON.stringify(/issues\/7\/comments/.test(endpoint) ? [[baselineComment]] : [[]]), stderr: '' };
+        }
+        throw new Error(`unexpected gh call: ${args.join(' ')}`);
+      };
+      const io = {
+        operatorTrustRoot: fixture.operatorTrustRoot,
+        hostAuthority: protectedHostBoundary(fixture.trust),
+      };
+      const result = runGitHubReviewPrepare({
+        pr: 42, commandRunner: runner, verificationContext: verifyContext,
+        target: fixture.root, repo: 'example/repo', io,
+      });
+      assert.equal(result.ok, true, result.errors.join('\n'));
+      assert.equal(result.handoffRecognition.recognized, true);
+      assert.ok(result.packet);
+      assert.equal(result.packet.task, 7);
+      assert.equal(result.packet.pr, 42);
+      assert.equal(result.packet.headRefOid, head);
+      assert.equal(result.packet.taskContract.digest, packet.task.contractDigest);
+      assert.equal(result.lifecycle.handoffRecognitionDigest, result.handoffRecognition.digest);
+      assert.deepEqual(result.handoffRecognition.boundIdentity, {
+        backend: 'github', taskId: 'T-007', roleId: 'engineer',
+        taskContractDigest: packet.task.contractDigest, carrierDigest: packet.task.digest,
+        packetId: packet.packetId, packetDigest: packet.digest,
+        workUnitIdentity: packet.decomposition.workUnitId, artifactHead: head,
+        worktreeRoot: packet.repository.worktree,
+        repositoryIdentity: verification.repositoryIdentity,
+        returnId: roleReturn.returnId, returnGrade: 'host_receipt',
+      });
+      assert.equal(verification.roleReturnDigest, roleReturn.digest);
+
+      const packetPath = join(temporary, 'review-packet.json');
+      writeFileSync(packetPath, JSON.stringify(result.packet), 'utf8');
+      const checked = verifyReviewPacket({
+        pr: 42, packet: packetPath, commandRunner: runner,
+        target: fixture.root, repo: 'example/repo', io,
+      });
+      assert.equal(checked.ok, true, checked.errors.join('\n'));
+      assert.equal(checked.handoffRecognition.recognized, true);
+      assert.equal(checked.packet.digest, result.packet.digest);
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
+    }
+  });
+
+  it('emits no packet when preflight passes but no canonical verified return exists', async () => {
     const { runGitHubReviewPrepare } = await import('../src/github-review-prepare.js');
     const result = runGitHubReviewPrepare({ pr: 42, commandRunner: prepareRunner(), verificationContext: verifyContext });
-    assert.equal(result.ok, true, result.errors.join('\n'));
-    assert.equal(result.packet.headRefOid, HEAD);
-    assert.equal(result.packet.reviewMode, 'host_subagent');
-    assert.equal(result.packet.independentReviewRequired, false);
-    assert.match(result.packet.lease, /read-only/);
+    assert.equal(result.ok, false);
+    assert.equal(result.packet, null);
+    assert.match(result.errors.join('\n'), /canonical verified return/);
+    assert.equal(result.handoffRecognition.recognized, false);
   });
 
   it('emits no packet and routes owners when preflight fails', async () => {
@@ -1480,13 +1648,13 @@ describe('review preparation contract - review preparation and packet freshness'
     assert.match(result.errors.join('\n'), /missing or malformed/);
   });
 
-  it('marks independent-review mode in the packet', async () => {
+  it('does not let independent-review policy bypass the verified-return gate', async () => {
     const { runGitHubReviewPrepare } = await import('../src/github-review-prepare.js');
     const independentIssue = PREP_ISSUE.replace('task_id: T-007', 'task_id: T-007\nindependent_review_required: true');
     const result = runGitHubReviewPrepare({ pr: 42, commandRunner: prepareRunner({ issueBody: independentIssue }), verificationContext: verifyContext });
-    assert.equal(result.ok, true, result.errors.join('\n'));
-    assert.equal(result.packet.reviewMode, 'independent_human');
-    assert.equal(result.packet.independentReviewRequired, true);
+    assert.equal(result.ok, false);
+    assert.equal(result.packet, null);
+    assert.match(result.errors.join('\n'), /canonical verified return/);
   });
 
   it('verifies a packet against the refetched head and rejects stale, malformed, or headless packets', async () => {
@@ -1503,10 +1671,10 @@ describe('review preparation contract - review preparation and packet freshness'
     };
 
     const { runGitHubReviewPrepare } = await import('../src/github-review-prepare.js');
-    const prepared = runGitHubReviewPrepare({ pr: 42, commandRunner: prepareRunner(), verificationContext: verifyContext });
-    const fresh = verifyReviewPacket({ pr: 42, packet: write('fresh.json', JSON.stringify(prepared.packet)), commandRunner: prepareRunner() });
-    assert.equal(fresh.ok, true, fresh.errors.join('\n'));
-    assert.equal(fresh.packet.headRefOid, HEAD);
+    const fresh = verifyReviewPacket({ pr: 42, packet: write('fresh.json', JSON.stringify(reviewPacket())), commandRunner: prepareRunner() });
+    assert.equal(fresh.ok, false);
+    assert.equal(fresh.packet, null);
+    assert.match(fresh.errors.join('\n'), /canonical verified return/);
 
     const staleReceipt = reviewEntryReceipt({ head: BASE });
     const stalePacket = reviewPacket({
@@ -1535,7 +1703,7 @@ describe('review preparation contract - review preparation and packet freshness'
     assert.equal(wrongPr.ok, false);
     assert.match(wrongPr.errors.join('\n'), /does not match requested PR/);
 
-    const substitutedWorkspace = structuredClone(prepared.packet);
+    const substitutedWorkspace = structuredClone(reviewPacket());
     substitutedWorkspace.workspace = { path: dir, head: HEAD, verified: true };
     substitutedWorkspace.digest = reviewPacketDigest(substitutedWorkspace);
     const substituted = verifyReviewPacket({

@@ -42,6 +42,8 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { recognizeLifecycleReturn, recognizeRoleStart } from './handoff-binding.js';
+import { resolveGitHubTaskIdentityStrict } from './github-task-identity.js';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { join, resolve, isAbsolute } from 'node:path';
@@ -102,7 +104,13 @@ import { canonicalJson } from './canonical-json.js';
 import { isGitObjectId } from './git-oid.js';
 import { resolveTaskBackend } from './task-backend.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
-import { cmdTask } from './task-cli.js';
+import { cmdTask, verifyCurrentDispatchPacket } from './task-cli.js';
+import {
+  createDispatchConsumption,
+  dispatchConsumptionRelativePath,
+  listDispatchConsumptions,
+} from './handoff-consumption.js';
+import { refetchGitHubReturnEvidence } from './github-return-evidence.js';
 import { cmdActivate, cmdActivation } from './activation-cli.js';
 import { cmdHostTrust } from './host-trust-cli.js';
 import {
@@ -1949,6 +1957,9 @@ async function cmdTaskBody(args, io) {
     // in scope so the guarded status-change gate below can compare the candidate
     // against real remote state rather than against the caller's assertion.
     let current = null;
+    /** @type {any} */
+    let taskBodyHandoffRecognition = null;
+    let taskBodyRoleStartConsumption = null;
     if (sub === 'set-field' || sub === 'transition') {
       if (!opts.expectDigest) throw new CliUsageError(`task-body ${sub} requires --expect-digest <digest>`);
       const field = sub === 'transition' ? 'status' : opts.field;
@@ -2067,11 +2078,60 @@ async function cmdTaskBody(args, io) {
     // routes to exactly the state the gates exist to refuse.
     const fromStatus = String(parseFrontmatterStrict(current.body).data?.status ?? '').trim();
     const toStatus = String(parseFrontmatterStrict(body).data?.status ?? '').trim();
-    if (fromStatus === toStatus && typeof opts.note === 'string') {
+    if (fromStatus === toStatus && typeof opts.note === 'string' && toStatus !== 'in-progress') {
       throw new GitHubTaskBodyError(
         '--note is only valid when this command changes task status; notes are durable transition projections and are never accepted for a non-status update',
         TASK_BODY_USAGE_ERROR
       );
+    }
+    // Requesting in-progress is a role start on both carriers, even when the
+    // durable status is already current. Recognition and one-time consumption
+    // precede the separate decision whether a carrier write is necessary.
+    if (toStatus === 'in-progress') {
+      const identity = resolveGitHubTaskIdentityStrict({ body: current.body, number: current.issue });
+      const taskId = identity.ok ? identity.identity?.taskId ?? null : null;
+      const contract = taskContractDigest(current.body);
+      const consumed = listDispatchConsumptions(target, taskId ?? `#${current.issue}`, { backend: 'github' });
+      if (!consumed.ok) throw new VerificationContextMalformedError(consumed.errors.join('; '));
+      const currentDispatch = opts.dispatchPacket
+        ? await verifyCurrentDispatchPacket({
+            target, io, taskId,
+            packetPath: String(opts.dispatchPacket),
+            hostTrustStore: opts.hostTrustStore,
+            repo: opts.repo,
+          })
+        : null;
+      taskBodyHandoffRecognition = recognizeRoleStart({
+        target,
+        io,
+        backend: 'github',
+        taskId,
+        taskContractDigest: contract.ok ? contract.digest : null,
+        carrierDigest: current.digest,
+        packetPath: opts.dispatchPacket ? String(opts.dispatchPacket) : null,
+        hostTrustStore: opts.hostTrustStore,
+        validatePreparedDispatch: currentDispatch ? () => currentDispatch : null,
+        consumedPacketIds: consumed.records.map(record => record.packetId),
+        rawStartLabel: `raw role start requested on issue #${current.issue} without a prepared dispatch`,
+      });
+      if (!taskBodyHandoffRecognition.recognized) {
+        return printGateResult(`task-body ${sub}`, {
+          ok: false,
+          diagnostics: taskBodyHandoffRecognition.diagnostics,
+          errors: taskBodyHandoffRecognition.diagnostics.map(item => item.message),
+          warnings: [],
+          evidenceState: taskBodyHandoffRecognition.evidenceState,
+          disposition: taskBodyHandoffRecognition.disposition,
+          committedStateEvaluated: true,
+          rollbackAuthorized: false,
+          handoff_recognition: taskBodyHandoffRecognition,
+          issue: current.issue,
+          carrier: `issue:${current.issue}`,
+        }, asJson, io);
+      }
+      taskBodyRoleStartConsumption = createDispatchConsumption({
+        backend: 'github', taskId, recognition: taskBodyHandoffRecognition,
+      });
     }
     let evidenceContext = null;
     if (fromStatus !== toStatus) {
@@ -2124,6 +2184,95 @@ async function cmdTaskBody(args, io) {
         }
       }
     }
+    const currentData = parseFrontmatterStrict(current.body).data ?? {};
+    const candidateData = parseFrontmatterStrict(body).data ?? {};
+    const currentIntegration = String(currentData.integrated_by ?? '').trim();
+    const candidateIntegration = String(candidateData.integrated_by ?? '').trim();
+    const integrationChanged = currentIntegration !== candidateIntegration;
+    const acceptanceRequested = fromStatus !== toStatus && toStatus === 'accepted';
+    if (integrationChanged && !candidateIntegration) {
+      throw new GitHubTaskBodyError(
+        'clearing authoritative integrated_by evidence is not supported; use an explicit future correction path rather than erasing integration provenance',
+        TASK_TRANSITION_NEGATIVE_CONTEXT
+      );
+    }
+    if (acceptanceRequested && integrationChanged) {
+      throw new GitHubTaskBodyError(
+        'a compound acceptance plus integration mutation is refused; record accepted first, then perform a separately guarded integrated_by mutation',
+        TASK_TRANSITION_NEGATIVE_CONTEXT
+      );
+    }
+    const protectedTransition = acceptanceRequested ? 'acceptance' : integrationChanged ? 'integration' : null;
+    if (protectedTransition !== null) {
+      const identity = resolveGitHubTaskIdentityStrict({ body: current.body, number: current.issue });
+      const taskId = identity.ok ? identity.identity?.taskId ?? null : null;
+      const contract = taskContractDigest(current.body);
+      const implementationValue = String(candidateData.implementation_artifact ?? '').trim();
+      const implementationMatch = implementationValue.match(/^commit:([0-9a-f]{40}|[0-9a-f]{64})$/) ??
+        implementationValue.match(/^range:[0-9a-f]{40,64}\.\.([0-9a-f]{40}|[0-9a-f]{64})$/);
+      const integrationMatch = candidateIntegration.match(/^pr:([1-9]\d*)@([0-9a-f]{40}|[0-9a-f]{64})$/);
+      if (protectedTransition === 'integration' && !integrationMatch) {
+        throw new GitHubTaskBodyError(
+          "integrated_by must be an exact 'pr:<number>@<full-git-object-id>' artifact",
+          TASK_TRANSITION_NEGATIVE_CONTEXT
+        );
+      }
+      if (protectedTransition === 'integration') {
+        const prArgs = ['pr', 'view', integrationMatch[1], '--json', 'number,headRefOid'];
+        if (opts.repo) prArgs.push('--repo', String(opts.repo));
+        const liveIntegration = runGhJson(commandRunner, prArgs);
+        if (Number(liveIntegration?.number) !== Number(integrationMatch[1]) ||
+            String(liveIntegration?.headRefOid ?? '') !== integrationMatch[2]) {
+          throw new GitHubTaskBodyError(
+            `integrated_by '${candidateIntegration}' does not match current PR #${integrationMatch[1]} head '${String(liveIntegration?.headRefOid ?? '(absent)')}'`,
+            TASK_TRANSITION_NEGATIVE_CONTEXT
+          );
+        }
+      }
+      const refetchTask = () => {
+        const fetched = fetchGitHubTaskBody({
+          issue: current.issue, repo: opts.repo, commandRunner, projectMapConfig,
+        });
+        return {
+          backend: 'github', taskId, carrier: `issue:${fetched.issue}`,
+          body: fetched.body, digest: fetched.digest,
+          trustedRecords: fetched.trustedRecords,
+          trustedRecordErrors: fetched.trustedRecordErrors,
+        };
+      };
+      taskBodyHandoffRecognition = recognizeLifecycleReturn({
+        target,
+        io,
+        transition: protectedTransition,
+        backend: 'github',
+        taskId,
+        taskContractDigest: contract.ok ? contract.digest : null,
+        carrierDigest: current.digest,
+        artifactHead: protectedTransition === 'integration' ? integrationMatch?.[2] ?? null : implementationMatch?.[1] ?? null,
+        artifactPr: protectedTransition === 'integration' ? Number(integrationMatch?.[1]) : null,
+        refetchTask,
+        refetchRepositoryEvidence: record => refetchGitHubReturnEvidence(
+          record.evidence.repositoryEvidence,
+          { commandRunner, repo: opts.repo }
+        ),
+        hostTrustStore: opts.hostTrustStore,
+      });
+      if (!taskBodyHandoffRecognition.recognized) {
+        return printGateResult(`task-body ${sub}`, {
+          ok: false,
+          diagnostics: taskBodyHandoffRecognition.diagnostics,
+          errors: taskBodyHandoffRecognition.diagnostics.map(item => item.message),
+          warnings: [],
+          evidenceState: taskBodyHandoffRecognition.evidenceState,
+          disposition: taskBodyHandoffRecognition.disposition,
+          committedStateEvaluated: true,
+          rollbackAuthorized: false,
+          handoff_recognition: taskBodyHandoffRecognition,
+          issue: current.issue,
+          carrier: `issue:${current.issue}`,
+        }, asJson, io);
+      }
+    }
     const result = applyGitHubTaskBody({
       issue: opts.issue,
       repo: opts.repo,
@@ -2141,8 +2290,22 @@ async function cmdTaskBody(args, io) {
       projectMapConfig,
       evidenceContext,
     });
-    if (asJson) return printGateResult(`task-body ${sub}`, result, true, io);
-    else {
+    if (result.ok && !result.dryRun && taskBodyRoleStartConsumption) {
+      atomicWriteUtf8(
+        join(target, dispatchConsumptionRelativePath(taskBodyRoleStartConsumption)),
+        `${JSON.stringify(taskBodyRoleStartConsumption, null, 2)}\n`
+      );
+    }
+    if (asJson) {
+      return printGateResult(
+        `task-body ${sub}`,
+        taskBodyHandoffRecognition
+          ? { ...result, handoff_recognition: taskBodyHandoffRecognition }
+          : result,
+        true,
+        io
+      );
+    } else {
       io.out(`agenticloop task-body ${sub}: ${result.ok ? (result.dryRun ? 'dry-run passed' : 'applied') : 'FAILED'}`);
       if (result.diff) io.out(result.diff);
       for (const error of result.errors ?? []) io.err(`  ERROR: ${error}`);
@@ -2237,7 +2400,7 @@ async function cmdGithubReviewPrepare(args, io) {
   const target = resolveCliTarget(io, opts.target);
   try {
     if (!opts.pr) return printGateResult('github-review-prepare', commandFailure('github-review-prepare', new CliUsageError('github-review-prepare requires --pr <number>'), 'usage', {}, target), asJson, io, EXIT_USAGE);
-    const result = runGitHubReviewPrepare({ ...opts, packet: opts.packet ? resolveCliTarget(io, opts.packet) : undefined, target });
+    const result = runGitHubReviewPrepare({ ...opts, packet: opts.packet ? resolveCliTarget(io, opts.packet) : undefined, target, io });
     if (asJson) return printGateResult('github-review-prepare', result, true, io);
     const code = printGateResult('github-review-prepare', result, false, io);
     if (result.ok) io.out(JSON.stringify(result.packet, null, 2));
