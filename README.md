@@ -1,12 +1,12 @@
 # Agentic Loop
 
-> Loop engineering for AI coding agents – shaping the whole run, not one prompt – in a Markdown-first overlay that gives your agent a task contract, role boundaries, verification rules, and durable memory: the process a good engineering team already has.
+> Graph engineering for AI coding agents – binding every state change, evidence requirement, and authorization boundary to durable artifacts so multi-hour work stays coherent – in a Markdown-first overlay that gives your agent the process a good engineering team already has.
 
 AI coding agents are useful, but they are unreliable at sustained software work. They drift scope, skip verification, repeat failing approaches, and lose context between sessions. The problem is not that the models are not smart enough. The problem is that they lack process: a clear task contract, role boundaries, verification rules, and durable project memory.
 
 Agentic Loop adds that layer. It installs as a lightweight, removable overlay in an existing project and never rewrites your target-owned documents: your `README.md`, implementation plan, and architecture docs stay untouched. (The one clearly marked, removable exception is described in [Repository-rules activation guidance](#repository-rules-activation-guidance).) It gives agents the scaffolding they need to stay in scope, produce evidence, and respect review gates.
 
-![Version: 0.3.1](https://img.shields.io/badge/version-0.3.1-blue)
+![Version: 0.4.0](https://img.shields.io/badge/version-0.4.0-blue)
 ![Node.js >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -14,24 +14,24 @@ Agentic Loop adds that layer. It installs as a lightweight, removable overlay in
 [![npm version](https://img.shields.io/npm/v/agenticloop.svg)](https://www.npmjs.com/package/agenticloop)
 -->
 
-## Loop engineering
+## Graph engineering
 
-Prompt engineering shapes a single response. Context engineering shapes what the model sees. **Loop engineering** shapes the whole run: which states the agent moves through, what durable artifact each state must produce, when verification happens, when to stop and escalate, and who reviews work before it counts as done.
+Prompt engineering shapes a single response. Context engineering shapes what the model sees. **Graph engineering** shapes what may happen next: which states the agent may enter, which transitions are legal, what evidence and authority each edge requires, when to stop and escalate, and who must independently review work before it counts as done.
 
-Most agent failures – scope drift, evidence-free "done", unbounded retries, reviewing your own work – are loop failures, not model failures. Agentic Loop is loop engineering made practical: an installable Markdown overlay that defines the states, gates, and artifacts so the loop holds for hours of complex work instead of unraveling after a few exchanges. Under the hood this is prompt chaining hardened for software delivery: each step hands off a durable, reviewable artifact – a task record, verification evidence, a review result – instead of loose chat text.
+Most agent failures – scope drift, evidence-free "done", unbounded retries, reviewing your own work – arise when workflow structure is absent or unguarded. Agentic Loop makes workflow graph engineering practical: an installable Markdown overlay whose typed states, guarded transitions, durable artifacts, parallel branches, remediation paths, audit, and closeout prevent these failures by binding every state change and role handoff to evidence and authority.
 
 ## Why this exists
 
-After watching AI coding agents work on real projects, the same loop failures keep showing up:
+After watching AI coding agents work on real projects, the same workflow graph failures keep showing up:
 
-- **Scope drift**: the agent expands the task or bundles unrelated changes because nothing tells it where the boundary is.
-- **Evidence-free completion**: the agent claims work is done without running fresh checks against the final state.
-- **Unbounded retries**: the agent repeats the same failing approach because there is no rule that says stop and escalate.
-- **Role confusion**: the same agent plans, implements, and reviews its own work – which is the equivalent of grading your own exam.
-- **Lost context**: useful decisions disappear when the chat session ends because nothing durable was written down.
+- **Unguarded transitions**: the agent enters a new state (implementation, review, closeout) without proving it has the evidence or authority that state requires.
+- **Broken edges**: handoffs between roles carry no durable record of what was delivered, by whom, and with what assurance – so the next role has no proof of chain.
+- **Lost provenance**: who approved what, when, and under what conditions disappears into chat; decisions and corrections evaporate without durable traces.
+- **Authority leaks**: the same agent plans, implements, reviews, and accepts its own work because there is nothing that enforces separation of concerns.
+- **Evidence gaps**: transitions happen on claims, not proof – the agent says work is done without fresh evidence bound to that state change.
 - **Host lock-in**: workflow instructions get written in one agent host's format and are useless in another.
 
-These are process failures, not model failures – and they are exactly what the loop is engineered to prevent, in a form portable across hosts without duplicating everything.
+These are process failures, not model failures – and they are exactly what the guarded workflow graph is engineered to prevent, in a form portable across hosts without duplicating everything.
 
 ## Who this is for
 
@@ -73,6 +73,8 @@ has the user-facing guide; merge remains human-controlled.
 |---|---|
 | **Task records** | Define scope, out-of-scope boundaries, acceptance criteria, required checks, expected files, implementation notes, and review state. |
 | **Role boundaries** | Split work across orchestrator, maintainer, engineer, and auditor roles with explicit edit and acceptance boundaries per role. |
+| **Guarded workflow graph** | Allow state changes only through evidence-bound transitions with explicit authority, provenance, readiness, and safe-repair diagnostics. |
+| **Activation and return assurance** | Bind dispatch to an operator-confirmed or host-signed activation and grade role returns honestly as session-reported or host-receipted. |
 | **Work-unit audit** | Certify a finished work unit against its exact integrated baseline before closeout, with findings routed through ordinary remediation. On by default; an explicit `work_unit_audit: disabled` is the human opt-out. |
 | **Mechanical closeout** | Prepare and revalidate a digest-bound packet before recording one current marker, with correction history, candidate-drift checks, and files/GitHub parity. |
 | **Parallel worktree lanes** | Run independent engineer lanes concurrently in guarded repo-internal `git worktree`s, with guard checks, lane-state preservation, and safe bulk cleanup after acceptance. |
@@ -85,48 +87,37 @@ has the user-facing guide; merge remains human-controlled.
 | **Host adapters** | Generate host-native shims for OpenCode, Claude Code, Codex, GitHub Copilot, and Cursor from one canonical Markdown source. |
 | **Optional event logs** | Record compact JSONL workflow-gate events for local audit and summary generation without storing raw transcripts. |
 
-## The core loop
+## The workflow graph
 
 ```text
 Request
-  ↓
-Task record
-  - scope
-  - out of scope
-  - acceptance criteria
-  - required checks
-  - expected files or areas
-  ↓
-Implementation  ◄─────────────┐
-  - smallest useful slice     │
-  - TDD when applicable       │
-  ↓                           │
-Verification                  │
-  - required checks           │
-  - fresh evidence from       │
-    the final state           │
-  ↓                           │
-Review                        │
-  - lens 1: task compliance   │
-  - lens 2: engineering       │
-    quality                   │
-  - lens 3: necessity and     │
-    coherence                 │
-  ↓                           │
-  needs revision ─────────────┘
-  ↓ accepted
-Closeout
-  - confirm the task record's inline
-    completion summary, mark done
-  ↓
-Next task → new task record, top of the loop
+  |
+  v
+Task contract --> operator activation --> guarded dispatch
+                                          |
+                                          v
+                    +--------------- Implementation
+                    |                     |
+                    | needs_revision      v
+                    +------------------ Review <--- fresh verification
+                                          |
+                                          | accepted
+                                          v
+                                   Work-unit audit
+                                    |           |
+                           findings |           | certified
+                                    v           v
+                               Remediation   Closeout --> next task
+
+Any gate -- missing authority, context, or evidence --> blocked/needs_context
+          -- repaired evidence ---------------------> re-enter that gate
 ```
 
-Every meaningful state change should produce a durable artifact. Nothing important should live only in chat.
+Every meaningful edge is guarded by current evidence and produces or verifies a durable artifact. Nothing important should live only in chat.
 
 ## Why long runs don't fall apart
 
-A loose chat session degrades as it grows: context evaporates, failed attempts repeat, and "done" gets cheaper the longer the session runs. The loop is engineered so that multi-hour runs on complex tasks stay stable:
+A loose chat session degrades as it grows: context evaporates, failed attempts repeat, and "done" gets cheaper the longer the session runs. The guarded workflow graph is engineered so that multi-hour runs on complex tasks stay stable:
 
 - **Attempt budgets.** Repeating an equivalent action that produces no new evidence hits a hard budget (task `attempt_budget`, then project `default_attempt_budget`, then built-in `5`). When it is exhausted, the agent stops repeating and records a blocked or needs-context state instead of thrashing.
 - **Review round checkpoints.** A task that keeps failing review is bounded separately: after five `needs_revision` rounds by default, the orchestrator must classify the cause and route one targeted revision. This is a checkpoint threshold, not a review cap.
@@ -140,11 +131,12 @@ The result in practice: inside an authorized work unit, the agent works autonomo
 
 A typical files-backed run, condensed:
 
-1. You activate with a bare `/agenticloop`. The agent orients itself: it reads the project map and configured docs, reports what the project is and where it currently stands, and proposes the next task – from open task records, or straight from your implementation plan.
+1. You start with a bare `/agenticloop`. The agent orients itself: it reads the project map and configured docs, reports where the project stands, and proposes the next task.
 2. You approve. The maintainer creates `.agenticloop/tasks/T-014.md` with scope, out of scope, acceptance criteria, and required checks.
-3. The engineer implements the smallest useful slice test-first, runs the required checks fresh, and publishes the implementation summary with evidence into the task record.
-4. The maintainer reviews in one ordered three-lens round – task compliance, engineering quality, then necessity and coherence – and accepts or requests revisions with concrete findings.
-5. Closeout confirms the inline completion summary and marks the task done. You review a durable record, not a chat scroll.
+3. In your own terminal, outside the agent session, you run `npx agenticloop activate T-014` and confirm the exact contract and work-unit binding.
+4. Guarded dispatch revalidates that binding. The engineer implements the smallest useful slice, runs the required checks fresh, and returns evidence against the dispatched artifact.
+5. The maintainer verifies the return and reviews through task compliance, engineering quality, and necessity/coherence, accepting or requesting a bounded revision.
+6. A separate auditor certifies the exact integrated candidate. Mechanical closeout revalidates the certificate, covered tasks, plan synchronization, and candidate before recording completion.
 
 An implementation plan in the repository is all it needs: bare activation finds the plan, proposes the next task from it, and the loop handles it once you approve. To route directly to a known work unit instead, pass it: `/agenticloop T-014` or a one-line task description.
 
@@ -247,7 +239,7 @@ Use `--adapter all` to generate artifacts for every supported host adapter.
 
 ## Start Agentic Loop
 
-Agentic Loop does not run automatically. You explicitly activate it from the agent host when you want the agent to enter the supervised loop.
+Agentic Loop does not run automatically. You explicitly start it from the agent host when you want the agent to enter the supervised workflow. This session-level start is routing intent; it is not dispatch authority by itself.
 
 The activation argument is optional.
 
@@ -277,6 +269,35 @@ Host-specific activation surfaces differ:
 | Cursor | Supported | `/agenticloop` or `/agenticloop <task-id or task description>` |
 
 See [docs/host-adapters.md](docs/host-adapters.md) for the full adapter matrix and generated file shapes.
+
+### Authorize dispatch
+
+Every shipped host can start and coordinate Agentic Loop, but none can currently
+produce a cryptographically authenticated activation capture inside the agent
+session. Authorize existing tasks once from your own interactive terminal:
+
+```text
+npx agenticloop activate T-014 T-015
+```
+
+The command prints the exact tasks, task-contract digests, repository, work
+unit, and resulting assurance, then requires typed confirmation. It refuses CI
+and non-interactive use and deliberately has no `--yes` option. Existing tasks
+and projects do not need to be recreated or rewritten.
+
+Agentic Loop reports two independent assurance dimensions:
+
+| Dimension | Standard | Hardened |
+|---|---|---|
+| Activation | `operator_confirmed` | `host_signed` |
+| Role return | `session_reported` | `host_receipt` |
+
+Standard mode is usable on every shipped host, but `operator_confirmed` and
+`session_reported` are not cryptographic proof of an in-session producer's
+identity. Hardened mode requires a protected host integration and fails closed
+without it. Repository configuration may request hardened mode but cannot lower
+an operator-pinned policy. See [Host adapters](docs/host-adapters.md) and the
+[CLI reference](docs/cli-reference.md) for provisioning, revocation, and status.
 
 ## Stop Agentic Loop
 
@@ -376,7 +397,7 @@ Agentic Loop is intentionally narrow. It is not:
 - a telemetry collector or raw transcript store;
 - a way to bypass human approval for merge, release, destructive cleanup, or locked project decisions.
 
-The human stays in the loop for authorization boundaries. The agent handles routine workflow steps inside an authorized work unit.
+The human stays at the authorization boundary. The agent handles routine workflow steps inside an authorized work unit.
 
 ## Design principles
 
@@ -400,7 +421,7 @@ A task is not complete because the agent says so. Completion requires fresh veri
 
 ### Supervised autonomy
 
-Autonomous inside the boundary, supervised at the boundary. The human authorizes work units; inside one, the agent advances through the full lifecycle on its own – implement, verify, request review, revise, close out. It stops for human direction before leaving scope, merging, releasing, publishing, destructive cleanup, or changing locked decisions. The human owns the authorization boundaries; the loop owns everything between them.
+Authorized at the boundary, autonomous inside it. The human authorizes work units and holds dispatch authority; inside one, the agent advances through guarded state transitions on its own – implement, verify, request review, revise, close out. It stops for human direction before leaving scope, merging, releasing, publishing, destructive cleanup, or changing locked decisions. The human owns the authorization boundaries; the guarded graph owns everything between them.
 
 ### Portable across hosts
 
@@ -417,6 +438,12 @@ npx agenticloop update [--adapter <host>]            Refresh toolkit assets and 
 npx agenticloop upgrade                              Compatibility alias for update
 npx agenticloop validate                             Validate skills, config, links, and host setup
 npx agenticloop status                               Show configured adapters, artifacts, and next steps
+npx agenticloop activate <task-id...>                Interactively authorize existing tasks for dispatch
+npx agenticloop activation status                    Inspect activation authority
+npx agenticloop activation revoke <grant-id>         Revoke one activation grant
+npx agenticloop activation provision-key             Provision operator activation material
+npx agenticloop host-trust status                    Inspect protected host trust
+npx agenticloop host-trust register [options]        Register a protected host public key
 npx agenticloop github-preflight --pr <number>       Verify a GitHub PR body carries final-state evidence
 npx agenticloop github-ready --pr <number>           Read-only pre-merge gate: evidence preflight + review audit
 npx agenticloop task-body <fetch|lint|apply|set-field|transition|establish-baseline|authorize-correction>
@@ -424,8 +451,14 @@ npx agenticloop task-body <fetch|lint|apply|set-field|transition|establish-basel
 npx agenticloop commit-attribution check --task <id>  Validate prospective or HEAD commit attribution
 npx agenticloop task list [--status <s>] [--json]    List files-backed task records
 npx agenticloop task lint [<task-id>] [--json]       Lint task frontmatter and lifecycle state
-npx agenticloop task new <title> [--id <id>]         Create a new task record
+npx agenticloop task new <title> --scaffold          Create a new task scaffold
 npx agenticloop task status <id> <status>            Change task lifecycle status
+npx agenticloop task prepare-decomposition [options] Bind a current ready-set decomposition
+npx agenticloop task prepare-dispatch <id> [options] Revalidate authority and prepare a role handoff
+npx agenticloop task verify-return <id> [options]    Verify the returned artifact and assurance
+npx agenticloop audit <new|baseline|report|status|gate|lint|resolve>
+                                                       Manage exact-candidate work-unit certification
+npx agenticloop closeout <prepare|status|record>      Revalidate and record mechanical closeout
 npx agenticloop worktree add <task-id> <branch>      Create guarded repo-internal lane worktree
 npx agenticloop worktree guard [--fix] [--all]       Check or repair non-interactive Git guard config
 npx agenticloop worktree list [--json]               List all registered worktrees
@@ -543,7 +576,7 @@ updates. Canonical toolkit assets (agents, skills, backends) always live under
 
 ## Status
 
-Version 0.3.1. The methodology, files backend, Node CLI, validation, overlay management, and all five host adapters (OpenCode, Claude Code, Codex, Copilot, and Cursor) are supported and ready for use.
+Version 0.4.0. The guarded workflow graph, files and GitHub backends, Node CLI, validation, overlay management, universal operator-confirmed activation, standard assurance path, and all five host adapters (OpenCode, Claude Code, Codex, Copilot, and Cursor) are supported and ready for use. Hardened host-signed activation and host-receipted returns require a protected host integration; no shipped adapter currently provides that boundary.
 
 Registry, marketplace, and centralized services are intentionally deferred – see [docs/registry-horizon.md](docs/registry-horizon.md) for the reasoning and the evidence gates that would need to pass before revisiting.
 

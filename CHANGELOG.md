@@ -1,6 +1,48 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-08-10
+
+### Highlights
+- **Workflow graph engineering.** Agentic Loop now has one backend-neutral,
+  executable transition contract for task evidence, lifecycle claims, role
+  authority, ownership, provenance, readiness, audit, and terminal scope. Files
+  and GitHub carriers produce the same public diagnostics and safe-repair routes
+  for equivalent conditions.
+- **Universal activation with honest assurance.** Existing tasks can be
+  authorized from an operator-controlled interactive terminal without rewriting
+  their bodies or history. Activation and role returns carry separate assurance
+  grades, and standard mode never presents operator confirmation or
+  session-reported identity as cryptographic host authentication.
+- **Guarded dispatch and return.** Role handoffs bind the current task contract,
+  activation, repository state, candidate artifact, required checks, role
+  capability, and liveness. Returns are independently revalidated before their
+  evidence can advance the workflow.
+- **Exact-candidate audit and closeout.** Work-unit audit, remediation, plan
+  synchronization, improvement references, covered-task membership, and final
+  closeout are bound to the exact integrated candidate, with stale or conflicting
+  evidence failing closed.
+- **Review and parallel-work integrity.** Trusted task-contract correction
+  graphs, exact-head review-entry receipts, finding lifecycles, no-progress
+  routing, managed joins, and authoritative parallel-scan provenance protect
+  branching and rework paths without weakening review independence.
+
+### Breaking changes and migration summary
+- Node.js `>=22` is now required.
+- `task new` requires either `--scaffold` or a supported host-produced v2
+  activation input. `task prepare-decomposition` and `task prepare-dispatch`
+  reject unsupported backends instead of falling through.
+- Role-preparation packets, degraded-enforcement reports, audit records, and
+  closeout packets/markers have new schema versions. Stale transport packets
+  should be regenerated; existing task bodies and project history do not need to
+  be recreated.
+- Canonical role-registry validation is stricter. Custom host agents must live
+  outside managed `agenticloop/agents/`; update target configuration, run
+  `npx agenticloop update`, and then revalidate.
+- `pr-body lint --input` and `init --setup` remain available only as deprecated
+  compatibility paths. Prefer the live/snapshot PR-body modes and
+  `agenticloop setup` respectively.
+
+The detailed compatibility notes below are normative for migration.
 
 ### Added
 - **Universal, host-neutral activation.** Agentic Loop no longer requires a host

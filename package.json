@@ -1,7 +1,7 @@
 {
   "name": "agenticloop",
-  "version": "0.3.1",
-  "description": "Loop engineering for AI coding agents – shaping the whole run, not one prompt: a Markdown-first overlay of task records, role boundaries, verification evidence, and review gates that holds across multi-hour work",
+  "version": "0.4.0",
+  "description": "Graph engineering for AI coding agents – binding every state change, evidence requirement, and authorization boundary to durable artifacts for multi-hour work",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -35,9 +35,10 @@
     "ai",
     "agent",
     "agentic",
-    "loop-engineering",
+    "graph-engineering",
     "workflow",
-    "skills",
+    "provenance",
+    "assurance",
     "markdown",
     "opencode",
     "codex",
