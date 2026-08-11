@@ -66,19 +66,24 @@ function blockedReturn() {
   return createRoleReturn({
     producerRole: 'engineer',
     packet: {
-      packetId: 'packet:11111111-1111-4111-8111-111111111111',
+      packetId: 'dispatch:11111111-1111-4111-8111-111111111111',
       digest: `sha256:agenticloop.role-preparation.v4:${'1'.repeat(64)}`,
     },
     task: {
       backend: 'files',
       id: 'T-001',
-      digest: `sha256:${'2'.repeat(64)}`,
+      taskContractDigest: `sha256:v1:${'2'.repeat(64)}`,
+      dispatchCarrierDigest: `sha256:${'3'.repeat(64)}`,
+      currentCarrierDigest: `sha256:${'3'.repeat(64)}`,
     },
     worktree: 'C:\\target',
     branch: 'task/T-001',
-    head: FULL_SHA_B,
-    baseHead: FULL_SHA_A,
-    changedPaths: [],
+    productBaseHead: FULL_SHA_A,
+    productHead: FULL_SHA_B,
+    workflowHead: FULL_SHA_B,
+    candidateHead: null,
+    productChangedPaths: [],
+    workflowChangedPaths: [],
     checks: [{
       id: 'RC-1',
       kind: 'command',
@@ -87,9 +92,13 @@ function blockedReturn() {
       exitCode: 1,
       evidence: 'host state prevents execution',
     }],
-    attribution: {
+    productAttribution: {
       range: { base: FULL_SHA_A, head: FULL_SHA_B },
       commits: [FULL_SHA_B],
+    },
+    carrierLineage: {
+      dispatchConsumptionDigest: `sha256:agenticloop.dispatch-consumption.v3:${'4'.repeat(64)}`,
+      evidenceMutationReceiptDigests: [],
     },
     pr: { state: 'not_applicable', number: null, url: null },
     outcome: {

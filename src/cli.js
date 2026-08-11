@@ -52,6 +52,7 @@ import { createValidationResult, emitValidationResult } from './result-envelope.
 import { commandFailure, printGateResult, validationResultForGate } from './public-result.js';
 import {
   createTaskEvidenceContext,
+  createCarrierMutationReceipt,
   createTaskReadinessEvidence,
   dependencyStatusMap,
   parseDependencySnapshot,
@@ -104,11 +105,13 @@ import { canonicalJson } from './canonical-json.js';
 import { isGitObjectId } from './git-oid.js';
 import { resolveTaskBackend } from './task-backend.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
-import { cmdTask, verifyCurrentDispatchPacket } from './task-cli.js';
+import { appendComment, cmdTask, verifyCurrentDispatchPacket } from './task-cli.js';
 import {
+  carrierMutationRelativePath,
   createDispatchConsumption,
   dispatchConsumptionRelativePath,
   listDispatchConsumptions,
+  resolveCarrierLineage,
 } from './handoff-consumption.js';
 import { refetchGitHubReturnEvidence } from './github-return-evidence.js';
 import { cmdActivate, cmdActivation } from './activation-cli.js';
@@ -1843,10 +1846,23 @@ function taskContractChanges(before, after) {
   return { previous, next, changes };
 }
 
+/** Preserve the required final Maintainer trailer when adding Engineer evidence. */
+function appendGitHubEngineerEvidence(body, note) {
+  const trailer = /\[\[agent: maintainer\]\]\s*$/i.exec(body);
+  if (!trailer || trailer.index === undefined) {
+    throw new GitHubTaskBodyError(
+      'GitHub task body must end with the Maintainer attribution trailer before Engineer evidence can be recorded',
+      TASK_BODY_MALFORMED_CONTEXT
+    );
+  }
+  const prefix = body.slice(0, trailer.index).trimEnd();
+  return `${appendComment(prefix, note).trimEnd()}\n\n${trailer[0].trim()}\n`;
+}
+
 async function cmdTaskBody(args, io) {
   const sub = args[0];
   const spec = sub && COMMAND_REGISTRY['task-body'].subcommands[sub];
-  if (!spec) throw new CliUsageError('task-body requires a subcommand: fetch | lint | apply | set-field | establish-baseline | authorize-correction | transition');
+  if (!spec) throw new CliUsageError('task-body requires a subcommand: fetch | lint | apply | set-field | evidence | establish-baseline | authorize-correction | transition');
   const { opts } = parseCommandArgs(`task-body ${sub}`, spec, args.slice(1));
   const asJson = Boolean(opts.json);
   const target = resolveCliTarget(io, opts.target);
@@ -1960,7 +1976,85 @@ async function cmdTaskBody(args, io) {
     /** @type {any} */
     let taskBodyHandoffRecognition = null;
     let taskBodyRoleStartConsumption = null;
-    if (sub === 'set-field' || sub === 'transition') {
+    /** @type {any} */
+    let engineerEvidenceMutation = null;
+    if (sub === 'set-field' || sub === 'transition' || sub === 'evidence') {
+      if (sub === 'evidence') {
+        const mutationClass = String(opts.class ?? '');
+        const evidenceClasses = new Set([
+          'implementation_artifact_evidence',
+          'implementation_summary_evidence',
+          'implementation_outcome_evidence',
+        ]);
+        if (!opts.expectDigest || !evidenceClasses.has(mutationClass)) {
+          throw new CliUsageError(
+            'task-body evidence requires --expect-digest and --class implementation_artifact_evidence|implementation_summary_evidence|implementation_outcome_evidence'
+          );
+        }
+        current = assertExpectedRemoteDigest(fetchGitHubTaskBody({ issue: opts.issue, repo: opts.repo, commandRunner, projectMapConfig }));
+        const identity = resolveGitHubTaskIdentityStrict({ body: current.body, number: current.issue });
+        const taskId = identity.ok ? identity.identity?.taskId ?? null : null;
+        const contract = taskContractDigest(current.body);
+        if (!taskId || !contract.ok) {
+          throw new GitHubTaskBodyError(
+            identity.diagnostic?.message ?? contract.error ?? 'GitHub task evidence requires a canonical task identity and contract',
+            TASK_BODY_MALFORMED_CONTEXT
+          );
+        }
+        const currentStatus = String(parseFrontmatterStrict(current.body).data?.status ?? '').trim();
+        if (currentStatus !== 'in-progress') {
+          throw new GitHubTaskBodyError(
+            'Engineer evidence mutation requires the task to be in-progress through a recognized role start',
+            TASK_BODY_NEGATIVE_EVIDENCE
+          );
+        }
+        const lineage = resolveCarrierLineage(target, taskId, {
+          backend: 'github', taskContractDigest: contract.digest, currentCarrierDigest: current.digest,
+        });
+        if (!lineage.ok) {
+          throw new GitHubTaskBodyError(
+            `Engineer evidence mutation refused: ${lineage.errors.join('; ')}`,
+            {
+              code: 'task.evidence.lineage', evidenceState: 'changed', disposition: 'blocked',
+              committedStateEvaluated: true,
+              safeRepair: 'Restore the recognized carrier lineage or prepare a fresh dispatch; do not edit task evidence directly.',
+            }
+          );
+        }
+        let ownedFields;
+        if (mutationClass === 'implementation_artifact_evidence') {
+          const productHead = String(opts.productHead ?? '');
+          const observedHead = String(spawnSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: target, encoding: 'utf8' }).stdout ?? '').trim();
+          if (!isGitObjectId(productHead) || productHead !== observedHead) {
+            throw new GitHubTaskBodyError(
+              'implementation artifact evidence requires --product-head equal to the exact current repository HEAD before workflow evidence is committed',
+              { code: 'task.evidence.product_head', evidenceState: 'changed', disposition: 'blocked', committedStateEvaluated: true }
+            );
+          }
+          body = setTaskBodyFrontmatterField(current.body, 'implementation_artifact', `commit:${productHead}`).body;
+          ownedFields = ['implementation_artifact'];
+        } else if (mutationClass === 'implementation_summary_evidence') {
+          if (typeof opts.summary !== 'string' || !opts.summary.trim() || typeof opts.checkEvidence !== 'string' || !opts.checkEvidence.trim()) {
+            throw new CliUsageError('task-body evidence --class implementation_summary_evidence requires --summary and --check-evidence');
+          }
+          body = appendGitHubEngineerEvidence(current.body, `Engineer summary: ${opts.summary.trim()} | Check evidence: ${opts.checkEvidence.trim()}`);
+          ownedFields = ['comments'];
+        } else {
+          if (!['implementation_ready_for_review', 'implementation_blocked'].includes(String(opts.outcome ?? ''))) {
+            throw new CliUsageError('task-body evidence --class implementation_outcome_evidence requires --outcome implementation_ready_for_review|implementation_blocked');
+          }
+          body = appendGitHubEngineerEvidence(current.body, `Engineer outcome (non-authoritative): ${String(opts.outcome)}`);
+          ownedFields = ['comments'];
+        }
+        const candidateContract = taskContractDigest(body);
+        if (!candidateContract.ok || candidateContract.digest !== contract.digest || body === current.body) {
+          throw new GitHubTaskBodyError(
+            'Engineer evidence candidate changes protected task contract or makes no bounded evidence change',
+            { code: 'task.evidence.contract_drift', evidenceState: 'changed', disposition: 'blocked', committedStateEvaluated: true }
+          );
+        }
+        engineerEvidenceMutation = { mutationClass, taskId, contract, lineage, ownedFields };
+      } else {
       if (!opts.expectDigest) throw new CliUsageError(`task-body ${sub} requires --expect-digest <digest>`);
       const field = sub === 'transition' ? 'status' : opts.field;
       const value = sub === 'transition' ? opts.status : opts.value;
@@ -1997,6 +2091,7 @@ async function cmdTaskBody(args, io) {
         }, asJson, io);
       }
       body = setTaskBodyFrontmatterField(current.body, field, value).body;
+      }
     } else if (sub === 'lint' && !opts.bodyFile && opts.expectTaskDigest) {
       // Read-only receipt revalidation: verify the live body against the exact
       // digest a receipt reported, with no local candidate involved.
@@ -2087,7 +2182,7 @@ async function cmdTaskBody(args, io) {
     // Requesting in-progress is a role start on both carriers, even when the
     // durable status is already current. Recognition and one-time consumption
     // precede the separate decision whether a carrier write is necessary.
-    if (toStatus === 'in-progress') {
+    if (toStatus === 'in-progress' && sub !== 'evidence') {
       const identity = resolveGitHubTaskIdentityStrict({ body: current.body, number: current.issue });
       const taskId = identity.ok ? identity.identity?.taskId ?? null : null;
       const contract = taskContractDigest(current.body);
@@ -2107,7 +2202,7 @@ async function cmdTaskBody(args, io) {
         backend: 'github',
         taskId,
         taskContractDigest: contract.ok ? contract.digest : null,
-        carrierDigest: current.digest,
+        dispatchCarrierDigest: current.digest,
         packetPath: opts.dispatchPacket ? String(opts.dispatchPacket) : null,
         hostTrustStore: opts.hostTrustStore,
         validatePreparedDispatch: currentDispatch ? () => currentDispatch : null,
@@ -2129,9 +2224,6 @@ async function cmdTaskBody(args, io) {
           carrier: `issue:${current.issue}`,
         }, asJson, io);
       }
-      taskBodyRoleStartConsumption = createDispatchConsumption({
-        backend: 'github', taskId, recognition: taskBodyHandoffRecognition,
-      });
     }
     let evidenceContext = null;
     if (fromStatus !== toStatus) {
@@ -2204,6 +2296,12 @@ async function cmdTaskBody(args, io) {
     }
     const protectedTransition = acceptanceRequested ? 'acceptance' : integrationChanged ? 'integration' : null;
     if (protectedTransition !== null) {
+      if (typeof opts.note === 'string' || (Array.isArray(opts.label) && opts.label.length > 0)) {
+        throw new GitHubTaskBodyError(
+          `${protectedTransition} must not bundle notes or labels with its guarded carrier mutation; publish the terminal transition alone`,
+          TASK_TRANSITION_NEGATIVE_CONTEXT
+        );
+      }
       const identity = resolveGitHubTaskIdentityStrict({ body: current.body, number: current.issue });
       const taskId = identity.ok ? identity.identity?.taskId ?? null : null;
       const contract = taskContractDigest(current.body);
@@ -2247,8 +2345,8 @@ async function cmdTaskBody(args, io) {
         backend: 'github',
         taskId,
         taskContractDigest: contract.ok ? contract.digest : null,
-        carrierDigest: current.digest,
-        artifactHead: protectedTransition === 'integration' ? integrationMatch?.[2] ?? null : implementationMatch?.[1] ?? null,
+         currentCarrierDigest: current.digest,
+         productHead: protectedTransition === 'integration' ? integrationMatch?.[2] ?? null : implementationMatch?.[1] ?? null,
         artifactPr: protectedTransition === 'integration' ? Number(integrationMatch?.[1]) : null,
         refetchTask,
         refetchRepositoryEvidence: record => refetchGitHubReturnEvidence(
@@ -2290,11 +2388,93 @@ async function cmdTaskBody(args, io) {
       projectMapConfig,
       evidenceContext,
     });
-    if (result.ok && !result.dryRun && taskBodyRoleStartConsumption) {
+    if (result.ok && !result.dryRun && taskBodyHandoffRecognition?.recognized &&
+        taskBodyHandoffRecognition.transition === 'role_start') {
+      const resultingCarrierDigest = result.receipt?.resultingDigest ?? result.remote?.digest;
+      if (typeof resultingCarrierDigest !== 'string' || resultingCarrierDigest !== result.remote?.digest) {
+        throw new GitHubTaskBodyError(
+          'role-start dispatch consumption requires the authoritative post-write refetched task-body digest',
+          TASK_BODY_MALFORMED_CONTEXT
+        );
+      }
+      taskBodyRoleStartConsumption = createDispatchConsumption({
+        backend: 'github', taskId: taskBodyHandoffRecognition.boundIdentity.taskId, recognition: taskBodyHandoffRecognition,
+        currentCarrierDigest: resultingCarrierDigest,
+      });
       atomicWriteUtf8(
         join(target, dispatchConsumptionRelativePath(taskBodyRoleStartConsumption)),
         `${JSON.stringify(taskBodyRoleStartConsumption, null, 2)}\n`
       );
+    }
+    if (result.ok && !result.dryRun && engineerEvidenceMutation !== null) {
+      const resultingCarrierDigest = result.receipt?.resultingDigest ?? result.remote?.digest;
+      const resultingBody = result.remote?.body;
+      const resultingContract = taskContractDigest(resultingBody);
+      if (typeof resultingCarrierDigest !== 'string' || resultingCarrierDigest !== result.remote?.digest ||
+          resultingBody !== body || !resultingContract.ok ||
+          resultingContract.digest !== engineerEvidenceMutation.contract.digest) {
+        return printGateResult(`task-body ${sub}`, {
+          ...result,
+          ok: false,
+          errors: ['Engineer evidence mutation did not refetch to the validated current task carrier; no lineage receipt was recorded.'],
+          recovery: 'Refetch the GitHub task record and reconcile it before attempting another return or lifecycle transition.',
+        }, asJson, io);
+      }
+      const receipt = createCarrierMutationReceipt({
+        receiptId: `task-mutation:${randomUUID()}`,
+        backend: 'github', task: { id: engineerEvidenceMutation.taskId, carrier: `issue:${current.issue}` },
+        taskContractDigest: engineerEvidenceMutation.contract.digest,
+        dispatchCarrierDigest: engineerEvidenceMutation.lineage.dispatchCarrierDigest,
+        priorCarrierDigest: current.digest,
+        currentCarrierDigest: resultingCarrierDigest,
+        mutationClass: engineerEvidenceMutation.mutationClass,
+        ownedFields: engineerEvidenceMutation.ownedFields,
+        changedFields: engineerEvidenceMutation.ownedFields,
+        producer: {
+          workflowRole: 'engineer', assuranceGrade: 'session_reported',
+          invocationId: engineerEvidenceMutation.lineage.dispatchConsumption.invocationId,
+          workUnitIdentity: engineerEvidenceMutation.lineage.dispatchConsumption.workUnitIdentity,
+          repositoryIdentity: engineerEvidenceMutation.lineage.dispatchConsumption.repositoryIdentity,
+        },
+        predecessor: {
+          kind: engineerEvidenceMutation.lineage.receipts.length === 0 ? 'dispatch_consumption' : 'task_mutation_receipt',
+          digest: engineerEvidenceMutation.lineage.receipts.length === 0
+            ? engineerEvidenceMutation.lineage.dispatchConsumption.digest
+            : engineerEvidenceMutation.lineage.receipts.at(-1).digest,
+        },
+      });
+      const receiptPath = carrierMutationRelativePath(receipt);
+      try {
+        atomicWriteUtf8(join(target, receiptPath), `${JSON.stringify(receipt, null, 2)}\n`);
+      } catch (error) {
+        return printGateResult(`task-body ${sub}`, {
+          ...result,
+          ok: false,
+          errors: [`GitHub task evidence is current but its required local lineage receipt could not be written: ${error.message}`],
+          recovery: 'The remote task carrier changed without a local lineage receipt. Restore the receipt from the recorded dispatch generation before any return or lifecycle transition.',
+        }, asJson, io);
+      }
+      const finalLineage = resolveCarrierLineage(target, engineerEvidenceMutation.taskId, {
+        backend: 'github',
+        taskContractDigest: engineerEvidenceMutation.contract.digest,
+        currentCarrierDigest: resultingCarrierDigest,
+      });
+      if (!finalLineage.ok) {
+        return printGateResult(`task-body ${sub}`, {
+          ...result,
+          ok: false,
+          errors: [`GitHub task evidence receipt did not produce one current carrier lineage: ${finalLineage.errors.join('; ')}`],
+          recovery: 'Repair the receipt chain before attempting a return or lifecycle transition.',
+        }, asJson, io);
+      }
+      result.engineerEvidence = {
+        mutationClass: engineerEvidenceMutation.mutationClass,
+        taskContractDigest: engineerEvidenceMutation.contract.digest,
+        dispatchCarrierDigest: engineerEvidenceMutation.lineage.dispatchCarrierDigest,
+        currentCarrierDigest: resultingCarrierDigest,
+        receipt,
+        receiptPath,
+      };
     }
     if (asJson) {
       return printGateResult(

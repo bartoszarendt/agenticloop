@@ -514,6 +514,8 @@ export function classifyCloseoutPath(relPath, options = {}) {
   if (!normalized) return 'product';
   for (const prefix of [
     '.agenticloop/activations/',
+    '.agenticloop/handoffs/',
+    '.agenticloop/reviews/',
     '.agenticloop/returns/verifications/',
     '.agenticloop/closeout-waivers/',
   ]) {

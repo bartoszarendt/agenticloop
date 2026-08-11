@@ -121,8 +121,10 @@ Neither is host-authenticated. To require `host_signed` activation and
 `npx agenticloop host-trust register ...` and pin hardened mode.
 
 Select a protected return adapter independently with `--return-adapter` when a
-host receipt is required, then run `task verify-return` to persist the observed
-evidence for closeout. Missing evidence never satisfies a minimum. Genuinely
+host receipt is required. For files, retain the role-start carrier, use `task
+evidence` to record artifact, summary/check, and outcome mutations, then run
+`task verify-return` and `task review-prepare <id>`. Missing evidence never
+satisfies a minimum. Genuinely
 pre-activation work may use the explicit interactive standard-only
 `--legacy-unactivated --legacy-reason <text>` waiver, which makes no activation
 claim; hardened mode rejects it.

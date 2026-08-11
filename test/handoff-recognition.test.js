@@ -93,11 +93,11 @@ function roleStartExpectation(overrides = {}) {
     taskId: packet.task.id,
     roleId: 'engineer',
     taskContractDigest: packet.task.contractDigest,
-    carrierDigest: packet.task.digest,
+    dispatchCarrierDigest: packet.task.dispatchCarrierDigest,
     packetId: packet.packetId,
     packetDigest: packet.digest,
     workUnitIdentity: packet.decomposition.workUnitId,
-    artifactHead: packet.repository.head,
+    productBaseHead: packet.repository.head,
     worktreeRoot: packet.repository.worktree,
     minimumActivationAssurance: 'operator_confirmed',
     ...overrides,
@@ -252,7 +252,7 @@ describe('role start recognition', () => {
     assert.equal(verdict.disposition, 'proceed');
     assert.equal(verdict.requirement, 'prepared_dispatch');
     assert.equal(verdict.boundIdentity.packetId, packet.packetId);
-    assert.equal(verdict.boundIdentity.artifactHead, packet.repository.head);
+    assert.equal(verdict.boundIdentity.productBaseHead, packet.repository.head);
     assert.equal(verdict.boundIdentity.worktreeRoot, packet.repository.worktree);
     assert.equal(verdict.observedGrade, 'host_signed');
     assert.equal(verdict.authenticated, true);
@@ -424,9 +424,9 @@ describe('role start recognition', () => {
       expectation: roleStartExpectation({
         taskId: 'T-999',
         roleId: 'auditor',
-        artifactHead: 'f'.repeat(40),
+        productBaseHead: 'f'.repeat(40),
         worktreeRoot: '/somewhere/else',
-        carrierDigest: `sha256:${'0'.repeat(64)}`,
+        dispatchCarrierDigest: `sha256:${'0'.repeat(64)}`,
       }),
       preparedDispatch: packet,
       validatePreparedDispatch: validator(),
@@ -434,7 +434,7 @@ describe('role start recognition', () => {
     assert.equal(verdict.recognized, false);
     assert.deepEqual([...new Set(codes(verdict))], ['handoff.evidence.mismatched']);
     const fields = verdict.diagnostics.map(item => item.evidence.field).sort();
-    assert.deepEqual(fields, ['artifactHead', 'carrierDigest', 'roleId', 'taskId', 'worktreeRoot']);
+    assert.deepEqual(fields, ['dispatchCarrierDigest', 'productBaseHead', 'roleId', 'taskId', 'worktreeRoot']);
   });
 
   it('refuses a packet whose task-contract generation is not the expected one', () => {
@@ -474,6 +474,7 @@ describe('durable dispatch consumption', () => {
   function consumption(overrides = {}) {
     return createDispatchConsumption({
       backend: 'files', taskId: packet.task.id, recognition: recognizedStart(),
+      currentCarrierDigest: packet.task.dispatchCarrierDigest,
       consumedAt: '2026-08-01T12:00:00.000Z', ...overrides,
     });
   }
@@ -566,22 +567,13 @@ describe('verified return recognition', () => {
       worktree: packet.repository.worktree,
       digest: `sha256:agenticloop.role-return.v2:${'b'.repeat(64)}`,
     };
-    const record = createReturnVerification({
+    assert.throws(() => createReturnVerification({
       target: dispatch.root,
       packet,
       roleReturn: incomplete,
       repositoryEvidence: fixture.repositoryEvidence,
       received: { ok: true, returnAssurance: 'session_reported' },
-    });
-    const verdict = recognizeHandoff({
-      transition: 'review_entry',
-      expectation: handoffExpectation(fixture),
-      verifiedReturn: record,
-      validatePreparedDispatch: validator(),
-    });
-    assert.equal(verdict.recognized, false);
-    assert.ok(verdict.diagnostics.some(item =>
-      item.code === 'handoff.evidence.malformed' && /embedded role return rejected/.test(item.message)));
+    }), /canonical JSON cannot represent undefined|return verification/);
   });
 
   const laterTransitions = ['review_entry', 'acceptance', 'integration', 'closeout'];
@@ -679,14 +671,14 @@ describe('verified return recognition', () => {
       transition: 'review_entry',
       expectation: handoffExpectation(fixture, {
         packetId: 'dispatch:00000000-0000-4000-8000-0000000000ff',
-        artifactHead: 'b'.repeat(40),
+        productBaseHead: 'b'.repeat(40),
         worktreeRoot: '/another/worktree',
       }),
       verifiedReturn: fixture.record,
       validatePreparedDispatch: validator(),
     });
     const fields = verdict.diagnostics.map(item => item.evidence.field).sort();
-    assert.deepEqual(fields, ['artifactHead', 'packetId', 'worktreeRoot']);
+    assert.deepEqual(fields, ['packetId', 'productBaseHead', 'worktreeRoot']);
   });
 
   it('refuses session_reported evidence when the policy minimum is a host receipt', () => {
@@ -862,7 +854,7 @@ describe('lifecycle claim consumption', () => {
       }),
       resolveReturns: () => ({
         usable: true, records: [fixture.record], reasons: [],
-        artifactHead: fixture.roleReturn.head,
+        productBaseHead: fixture.roleReturn.productBaseHead,
       }),
     }, ['T-001']);
     assert.equal(result.ok, true, JSON.stringify(result.reasons));
@@ -881,11 +873,11 @@ describe('lifecycle claim consumption', () => {
         source: 'activation_grant', producer: 'operator', channel: 'cli', derivation: 'direct', reasons: [],
       }),
       resolveReturns: () => ({
-        usable: true, records: [fixture.record], reasons: [], artifactHead: 'f'.repeat(40),
+        usable: true, records: [fixture.record], reasons: [], productBaseHead: 'f'.repeat(40),
       }),
     }, ['T-001']);
     assert.equal(result.ok, false);
-    assert.ok(result.recognition[0].diagnostics.some(item => item.evidence.field === 'artifactHead'));
+    assert.ok(result.recognition[0].diagnostics.some(item => item.evidence.field === 'productBaseHead'));
   });
 
   it('does not let a legacy activation waiver replace dispatch consumption or a verified return', () => {
@@ -1277,11 +1269,11 @@ describe('review entry claim gate', () => {
     assert.deepEqual(withChain[0].handoffBindings, [verdict.boundIdentity]);
     assert.equal(withChain[0].handoffBindings[0].taskId, packet.task.id);
     assert.equal(withChain[0].handoffBindings[0].packetId, packet.packetId);
-    assert.equal(withChain[0].handoffBindings[0].carrierDigest, packet.task.digest);
+    assert.equal(withChain[0].handoffBindings[0].dispatchCarrierDigest, packet.task.dispatchCarrierDigest);
     assert.equal(withChain[0].handoffBindings[0].workUnitIdentity, packet.decomposition.workUnitId);
     assert.equal(withChain[0].handoffBindings[0].repositoryIdentity, verdict.boundIdentity.repositoryIdentity);
     assert.equal(withChain[0].handoffBindings[0].worktreeRoot, packet.repository.worktree);
-    assert.equal(withChain[0].handoffBindings[0].artifactHead, verdict.boundIdentity.artifactHead);
+    assert.equal(withChain[0].handoffBindings[0].productBaseHead, verdict.boundIdentity.productBaseHead);
     assert.equal(withChain[0].handoffBindings[0].roleId, 'engineer');
     assert.equal(withChain[0].handoffBindings[0].returnGrade, verdict.observedGrade);
     const withoutChain = deriveLifecycleClaims({

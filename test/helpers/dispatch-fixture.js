@@ -384,14 +384,26 @@ export function repositoryEvidence(packet, { head = FULL_SHA_B, changedPaths = [
   ];
   return {
     backend: packet.backend,
-    task: { id: packet.task.id, digest: packet.task.digest },
+    task: {
+      id: packet.task.id,
+      taskContractDigest: packet.task.taskContractDigest,
+      dispatchCarrierDigest: packet.task.dispatchCarrierDigest,
+      currentCarrierDigest: packet.task.dispatchCarrierDigest,
+    },
     worktree: packet.assignment.worktree,
     branch: packet.assignment.branch,
-    baseHead: packet.repository.head,
-    head,
-    changedPaths,
-    attribution: { range: { base: packet.repository.head, head }, commits: [FULL_SHA_B] },
+    productBaseHead: packet.repository.head,
+    productHead: head,
+    workflowHead: head,
+    candidateHead: null,
+    productChangedPaths: changedPaths,
+    workflowChangedPaths: [],
+    productAttribution: { range: { base: packet.repository.head, head }, commits: [FULL_SHA_B] },
     checks: checked,
+    carrierLineage: {
+      dispatchConsumptionDigest: `sha256:agenticloop.dispatch-consumption.v3:${'a'.repeat(64)}`,
+      evidenceMutationReceiptDigests: [],
+    },
     pr: pr ?? { state: 'not_applicable', number: null, url: null },
   };
 }
@@ -419,9 +431,13 @@ export function producerBinding(trust, packet, roleReturn, evidence, receiptPatc
 export function readyReturn(packet, evidence = repositoryEvidence(packet)) {
   return createRoleReturn({
     producerRole: 'engineer', packet: { packetId: packet.packetId, digest: packet.digest },
-    task: { backend: packet.backend, id: packet.task.id, digest: packet.task.digest },
-    worktree: evidence.worktree, branch: evidence.branch, head: evidence.head, baseHead: evidence.baseHead,
-    changedPaths: evidence.changedPaths, checks: evidence.checks, attribution: evidence.attribution, pr: evidence.pr,
+    task: { backend: packet.backend, id: packet.task.id, ...evidence.task },
+    worktree: evidence.worktree, branch: evidence.branch,
+    productBaseHead: evidence.productBaseHead, productHead: evidence.productHead,
+    workflowHead: evidence.workflowHead, candidateHead: evidence.candidateHead,
+    productChangedPaths: evidence.productChangedPaths, workflowChangedPaths: evidence.workflowChangedPaths,
+    checks: evidence.checks, productAttribution: evidence.productAttribution, pr: evidence.pr,
+    carrierLineage: evidence.carrierLineage,
     outcome: { kind: 'implementation_ready_for_review', completion: false, authority: 'non_authoritative_role_outcome' },
     disposition: 'proceed', blocker: null, freshness: { invalidatedBy: [...RETURN_INVALIDATORS] },
   });

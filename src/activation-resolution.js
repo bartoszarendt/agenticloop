@@ -193,7 +193,7 @@ export function resolvePacketActivationBinding(target, io, packet, options = {})
     backend: packet.backend,
     taskId: packet.task?.id,
     carrier: packet.task?.carrier,
-    taskContractDigest: packet.task?.contractDigest,
+    taskContractDigest: packet.task?.taskContractDigest,
     verifySignature: verification.verify,
     revocations: [...external.revocations, ...local.revocations],
     decomposition: packetDecomposition(target, envelope.binding),

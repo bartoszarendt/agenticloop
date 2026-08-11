@@ -622,8 +622,14 @@ async function closeoutFixture(name) {
   const consumptionPath = join(root, dispatchConsumptionRelativePath(consumption));
   mkdirSync(join(consumptionPath, '..'), { recursive: true });
   writeFileSync(consumptionPath, `${JSON.stringify(consumption, null, 2)}\n`, 'utf8');
+  writeFileSync(join(root, 'src', 'existing.js'), 'export const terminal = true;\n', 'utf8');
+  git(root, ['add', 'src/existing.js']);
+  git(root, ['commit', '-m', 'record terminal candidate\n\nTask: T-001\nAgent: engineer']);
+  const productHead = git(root, ['rev-parse', 'HEAD']);
+  git(root, ['add', '-f', '.agenticloop/handoffs']);
+  git(root, ['commit', '-m', 'record dispatch consumption\n\nTask: T-001\nAgent: maintainer']);
 
-  const auditArtifact = `commit:${packet.repository.head}`;
+  const auditArtifact = `commit:${productHead}`;
   const auditCreated = await runCliInProcess([
     'audit', 'new', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
     '--artifact', auditArtifact, '--goal', 'Exercise closeout-owned terminal scope.',
@@ -655,15 +661,24 @@ async function closeoutFixture(name) {
   assert.equal(auditReported.status, 0, auditReported.stdout + auditReported.stderr);
   git(root, ['add', '.agenticloop/audits']);
   git(root, ['commit', '-m', 'record audit report\n\nTask: T-001\nAgent: engineer']);
-  const returnHead = git(root, ['rev-parse', 'HEAD']);
-  const changedPaths = git(root, ['diff', '--name-only', `${packet.repository.head}..${returnHead}`])
+  const workflowHead = git(root, ['rev-parse', 'HEAD']);
+  const changedPaths = git(root, ['diff', '--name-only', `${packet.repository.head}..${workflowHead}`])
     .split(/\r?\n/).filter(Boolean);
-  const commits = git(root, ['rev-list', '--reverse', `${packet.repository.head}..${returnHead}`])
+  const productChangedPaths = git(root, ['diff', '--name-only', `${packet.repository.head}..${productHead}`])
     .split(/\r?\n/).filter(Boolean);
-  const evidence = repositoryEvidence(packet, { head: returnHead, changedPaths });
-  evidence.attribution = {
-    range: { base: packet.repository.head, head: returnHead },
+  const commits = git(root, ['rev-list', '--reverse', `${packet.repository.head}..${productHead}`])
+    .split(/\r?\n/).filter(Boolean);
+  const evidence = repositoryEvidence(packet, { head: productHead, changedPaths: productChangedPaths });
+  evidence.workflowHead = workflowHead;
+  evidence.productChangedPaths = productChangedPaths;
+  evidence.workflowChangedPaths = changedPaths.filter(path => !productChangedPaths.includes(path));
+  evidence.productAttribution = {
+    range: { base: packet.repository.head, head: productHead },
     commits,
+  };
+  evidence.carrierLineage = {
+    dispatchConsumptionDigest: consumption.digest,
+    evidenceMutationReceiptDigests: [],
   };
   const roleReturn = readyReturn(packet, evidence);
   const returnPath = join(root, '.agenticloop', 'tmp', 'engineer-return.json');
@@ -678,7 +693,7 @@ async function closeoutFixture(name) {
     hostAuthority: protectedHostBoundary(fixture.trust),
   });
   assert.equal(verified.status, 0, verified.stdout + verified.stderr);
-  fixture.closeoutArtifact = `commit:${packet.repository.head}`;
+  fixture.closeoutArtifact = auditArtifact;
   closeoutDispatchFixtures.set(root, fixture);
   return root;
 }

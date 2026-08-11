@@ -33,6 +33,22 @@ export const TASK_READINESS_EVIDENCE_KIND = 'agenticloop.task-readiness-evidence
 export const TASK_READINESS_EVIDENCE_SCHEMA_VERSION = 1;
 export const TASK_MUTATION_RECEIPT_KIND = 'agenticloop.task-mutation-receipt';
 export const TASK_MUTATION_RECEIPT_SCHEMA_VERSION = 2;
+export const TASK_CARRIER_MUTATION_RECEIPT_SCHEMA_VERSION = 3;
+export const TASK_CARRIER_MUTATION_CLASSES = Object.freeze([
+  'role_start_status',
+  'implementation_artifact_evidence',
+  'implementation_summary_evidence',
+  'implementation_outcome_evidence',
+  'review_record',
+]);
+// The broad task-mutation vocabulary also names transitions owned by other
+// lifecycle boundaries. Only these Engineer-owned evidence classes may form a
+// role-return carrier lineage.
+export const ENGINEER_CARRIER_MUTATION_CLASSES = Object.freeze([
+  'implementation_artifact_evidence',
+  'implementation_summary_evidence',
+  'implementation_outcome_evidence',
+]);
 export const DEPENDENCY_SNAPSHOT_KIND = 'agenticloop.dependency-snapshot';
 export const DEPENDENCY_SNAPSHOT_SCHEMA_VERSION = 1;
 
@@ -987,6 +1003,9 @@ export function createTaskMutationReceipt(input = {}) {
  * @returns {{ok: boolean, errors: string[]}}
  */
 export function validateTaskMutationReceipt(receipt) {
+  if (receipt?.schemaVersion === TASK_CARRIER_MUTATION_RECEIPT_SCHEMA_VERSION) {
+    return validateCarrierMutationReceipt(receipt);
+  }
   const errors = [];
   if (!isPlainObject(receipt)) return { ok: false, errors: ['mutation receipt must be an object'] };
   try {
@@ -1040,4 +1059,95 @@ export function taskMutationReceiptDigest(receipt) {
   const validation = validateTaskMutationReceipt(receipt);
   if (!validation.ok) fail(`invalid task mutation receipt: ${validation.errors.join('; ')}`);
   return `sha256:agenticloop.task-mutation-receipt.v${TASK_MUTATION_RECEIPT_SCHEMA_VERSION}:${canonicalSha256(receipt)}`;
+}
+
+const CARRIER_MUTATION_FIELDS = Object.freeze([
+  'kind', 'schemaVersion', 'receiptId', 'backend', 'task', 'taskContractDigest',
+  'dispatchCarrierDigest', 'priorCarrierDigest', 'currentCarrierDigest',
+  'mutationClass', 'ownedFields', 'changedFields', 'producer', 'predecessor',
+  'observedAt', 'digest',
+]);
+
+function carrierMutationDigest(receipt) {
+  const { digest, ...projection } = receipt;
+  return `sha256:agenticloop.task-mutation-receipt.v${TASK_CARRIER_MUTATION_RECEIPT_SCHEMA_VERSION}:${canonicalSha256(projection)}`;
+}
+
+function sortedUniqueStrings(value) {
+  return Array.isArray(value) && value.every(item => typeof item === 'string' && item) &&
+    JSON.stringify(value) === JSON.stringify([...new Set(value)].sort());
+}
+
+/**
+ * Validate a v3 role-owned carrier mutation. v2 receipts remain valid for
+ * historical publication/readiness operations but cannot satisfy an Engineer
+ * return lineage.
+ */
+export function validateCarrierMutationReceipt(receipt) {
+  const errors = [];
+  if (!isPlainObject(receipt) || !Object.keys(receipt).every(key => CARRIER_MUTATION_FIELDS.includes(key)) ||
+      Object.keys(receipt).length !== CARRIER_MUTATION_FIELDS.length) {
+    return { ok: false, errors: ['carrier mutation receipt fields must equal the closed schema'] };
+  }
+  if (receipt.kind !== TASK_MUTATION_RECEIPT_KIND || receipt.schemaVersion !== TASK_CARRIER_MUTATION_RECEIPT_SCHEMA_VERSION) {
+    errors.push('carrier mutation receipt identity is invalid');
+  }
+  if (!/^task-mutation:[0-9a-f-]{36}$/.test(String(receipt.receiptId ?? ''))) errors.push('carrier mutation receiptId is invalid');
+  if (!TRANSITION_BACKENDS.includes(receipt.backend) || !isPlainObject(receipt.task) ||
+      Object.keys(receipt.task).length !== 2 || typeof receipt.task.id !== 'string' || !receipt.task.id ||
+      typeof receipt.task.carrier !== 'string' || !receipt.task.carrier) errors.push('carrier mutation task identity is invalid');
+  if (!/^sha256:v1:[a-f0-9]{64}$/.test(String(receipt.taskContractDigest ?? ''))) errors.push('carrier mutation taskContractDigest is invalid');
+  for (const field of ['dispatchCarrierDigest', 'priorCarrierDigest', 'currentCarrierDigest']) {
+    if (!DIGEST_PATTERN.test(String(receipt[field] ?? ''))) errors.push(`carrier mutation ${field} is invalid`);
+  }
+  if (!ENGINEER_CARRIER_MUTATION_CLASSES.includes(receipt.mutationClass)) {
+    errors.push('carrier mutation class is not an Engineer-owned return-lineage class');
+  }
+  if (!sortedUniqueStrings(receipt.ownedFields) || !sortedUniqueStrings(receipt.changedFields) ||
+      JSON.stringify(receipt.ownedFields) !== JSON.stringify(receipt.changedFields)) {
+    errors.push('carrier mutation ownedFields and changedFields must be equal canonical string lists');
+  }
+  const producer = receipt.producer;
+  if (!isPlainObject(producer) || Object.keys(producer).length !== 5 || producer.workflowRole !== 'engineer' ||
+      producer.assuranceGrade !== 'session_reported' ||
+      !['invocationId', 'workUnitIdentity', 'repositoryIdentity'].every(field => typeof producer[field] === 'string' && producer[field])) {
+    errors.push('carrier mutation producer identity is invalid');
+  }
+  const predecessor = receipt.predecessor;
+  if (!isPlainObject(predecessor) || Object.keys(predecessor).length !== 2 ||
+      !['dispatch_consumption', 'task_mutation_receipt'].includes(predecessor.kind) ||
+      !/^sha256:agenticloop\.[a-z-]+\.v[1-9]\d*:[a-f0-9]{64}$/.test(String(predecessor.digest ?? ''))) {
+    errors.push('carrier mutation predecessor is invalid');
+  }
+  const observed = Date.parse(receipt.observedAt);
+  if (!ISO_INSTANT_PATTERN.test(String(receipt.observedAt ?? '')) || !Number.isFinite(observed)) errors.push('carrier mutation observedAt is invalid');
+  if (receipt.digest !== carrierMutationDigest(receipt)) errors.push('carrier mutation digest is invalid');
+  return { ok: errors.length === 0, errors };
+}
+
+/** Create one validated Engineer-owned v3 evidence mutation receipt. */
+export function createCarrierMutationReceipt(input = {}) {
+  if (!isPlainObject(input)) fail('carrier mutation receipt input must be an object');
+  const receipt = {
+    kind: TASK_MUTATION_RECEIPT_KIND,
+    schemaVersion: TASK_CARRIER_MUTATION_RECEIPT_SCHEMA_VERSION,
+    receiptId: input.receiptId,
+    backend: input.backend,
+    task: input.task,
+    taskContractDigest: input.taskContractDigest,
+    dispatchCarrierDigest: input.dispatchCarrierDigest,
+    priorCarrierDigest: input.priorCarrierDigest,
+    currentCarrierDigest: input.currentCarrierDigest,
+    mutationClass: input.mutationClass,
+    ownedFields: input.ownedFields,
+    changedFields: input.changedFields,
+    producer: input.producer,
+    predecessor: input.predecessor,
+    observedAt: input.observedAt ?? new Date().toISOString(),
+    digest: null,
+  };
+  receipt.digest = carrierMutationDigest(receipt);
+  const checked = validateCarrierMutationReceipt(receipt);
+  if (!checked.ok) fail(`invalid carrier mutation receipt: ${checked.errors.join('; ')}`);
+  return Object.freeze(receipt);
 }

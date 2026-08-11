@@ -78,6 +78,25 @@ or refetched PR facts do not match current projected evidence. Injected transpor
 fixtures must invoke their transport and prove the same shared semantic verdict as
 files; no live GitHub call is required for that proof.
 
+Shared identity names are never overloaded by the transport: `taskContractDigest`
+is protected authority, `dispatchCarrierDigest` is historical role-start evidence,
+and `currentCarrierDigest` is the current issue carrier only when a recognized
+receipt chain proves it. `productBaseHead`, `productHead`, `workflowHead`, and
+`candidateHead` likewise remain distinct. GitHub may report partial remote
+transport writes, but it must not claim an authoritative final lifecycle result
+without refetching and validating the same normalized carrier lineage.
+
+After a recognized GitHub role start, `task-body evidence` is the only bounded
+Engineer path that may evolve that lineage. It refetches the exact issue digest,
+requires the local dispatch-consumption record for the active generation, writes
+only artifact, summary/check, or non-authoritative outcome evidence, then stores
+the matching versioned carrier-mutation receipt under
+`.agenticloop/handoffs/task-mutations/`. A remote body change without that
+receipt fails closed at return and later lifecycle transitions. Acceptance and
+integration are isolated guarded body mutations: notes and labels are refused on
+those requests so a fallible side projection cannot leave a transient terminal
+carrier state.
+
 ## GitHub-Specific Configuration
 
 GitHub-only label and branch config lives under `backends.github` in

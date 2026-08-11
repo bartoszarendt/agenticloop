@@ -139,6 +139,7 @@ async function closeout(args, target) {
 async function certify(target) {
   const fixture = dispatchFixtures.get(target);
   const packets = new Map();
+  const consumptions = new Map();
   for (const [taskId, taskFixture] of fixture.taskFixtures) {
     writeFileSync(taskFixture.taskPath, readFileSync(taskFixture.taskPath, 'utf8').replace(/^status: .*$/m, 'status: accepted'), 'utf8');
   }
@@ -185,6 +186,7 @@ async function certify(target) {
     });
     assert.equal(recognition.recognized, true, JSON.stringify(recognition.diagnostics));
     const consumption = createDispatchConsumption({ backend: 'files', taskId, recognition });
+    consumptions.set(taskId, consumption);
     const consumptionPath = join(target, dispatchConsumptionRelativePath(consumption));
     mkdirSync(join(consumptionPath, '..'), { recursive: true });
     writeFileSync(consumptionPath, `${JSON.stringify(consumption, null, 2)}\n`, 'utf8');
@@ -192,8 +194,10 @@ async function certify(target) {
   writeFileSync(join(target, 'src', 'existing.js'), 'export const current = "closeout-ready";\n', 'utf8');
   fixtureGit(target, ['add', 'src/existing.js']);
   fixtureGit(target, ['commit', '-m', 'record closeout candidate\n\nTask: T-001\nAgent: engineer']);
-  const returnHead = fixtureGit(target, ['rev-parse', 'HEAD']);
-  artifact = `commit:${returnHead}`;
+  const productHead = fixtureGit(target, ['rev-parse', 'HEAD']);
+  artifact = `commit:${productHead}`;
+  fixtureGit(target, ['add', '-f', '.agenticloop/handoffs']);
+  fixtureGit(target, ['commit', '-m', 'record dispatch consumption\n\nTask: T-001\nAgent: maintainer']);
   assert.equal((await audit([
     'new', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
     '--artifact', artifact, '--goal', 'g', '--completion-oracle', 'o', '--evidence', 'npm test',
@@ -208,9 +212,18 @@ async function certify(target) {
   const verifiedHead = fixtureGit(target, ['rev-parse', 'HEAD']);
   for (const [taskId, packet] of packets) {
     const changedPaths = fixtureGit(target, ['diff', '--name-only', `${packet.repository.head}..${verifiedHead}`]).split(/\r?\n/).filter(Boolean);
-    const commits = fixtureGit(target, ['rev-list', '--reverse', `${packet.repository.head}..${verifiedHead}`]).split(/\r?\n/).filter(Boolean);
-    const evidence = repositoryEvidence(packet, { head: verifiedHead, changedPaths });
-    evidence.attribution = { range: { base: packet.repository.head, head: verifiedHead }, commits };
+    const productChangedPaths = fixtureGit(target, ['diff', '--name-only', `${packet.repository.head}..${productHead}`]).split(/\r?\n/).filter(Boolean);
+    const commits = fixtureGit(target, ['rev-list', '--reverse', `${packet.repository.head}..${productHead}`]).split(/\r?\n/).filter(Boolean);
+    const evidence = repositoryEvidence(packet, { head: productHead, changedPaths: productChangedPaths });
+    evidence.workflowHead = verifiedHead;
+    evidence.productChangedPaths = productChangedPaths;
+    evidence.workflowChangedPaths = changedPaths.filter(path => !productChangedPaths.includes(path));
+    evidence.productAttribution = { range: { base: packet.repository.head, head: productHead }, commits };
+    const consumption = consumptions.get(taskId);
+    evidence.carrierLineage = {
+      dispatchConsumptionDigest: consumption.digest,
+      evidenceMutationReceiptDigests: [],
+    };
     const returnPath = join(target, '.agenticloop', 'tmp', `${taskId}-return.json`);
     const evidencePath = join(target, '.agenticloop', 'tmp', `${taskId}-evidence.json`);
     writeFileSync(returnPath, JSON.stringify(readyReturn(packet, evidence), null, 2), 'utf8');

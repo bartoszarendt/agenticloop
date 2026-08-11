@@ -552,7 +552,7 @@ describe('github closeout evaluation', () => {
     const pr = { state: 'open', number: 6, url: 'https://example.test/pull/6' };
     const evidence = repositoryEvidence(packet, { head: harness.full, pr });
     evidence.branch = packet.assignment.branch;
-    evidence.attribution = { range: { base: packet.repository.head, head: harness.full }, commits: [harness.full] };
+    evidence.productAttribution = { range: { base: packet.repository.head, head: harness.full }, commits: [harness.full] };
     harness.state.returnPr = {
       number: 6, state: 'OPEN', url: pr.url, headRefOid: harness.full,
       headRefName: evidence.branch,

@@ -40,7 +40,7 @@ import {
 } from './return-verification.js';
 
 export const HANDOFF_RECOGNITION_KIND = 'agenticloop.handoff-recognition';
-export const HANDOFF_RECOGNITION_SCHEMA_VERSION = 1;
+export const HANDOFF_RECOGNITION_SCHEMA_VERSION = 2;
 export const PREPARED_DISPATCH_VALIDATION_KIND = 'agenticloop.prepared-dispatch-validation';
 export const PREPARED_DISPATCH_VALIDATION_SCHEMA_VERSION = 1;
 /** Maximum age of a return that may authorize a new protected transition. */
@@ -105,8 +105,8 @@ export const HANDOFF_RECOGNITION_CODES = Object.freeze([
 
 /** The closed expectation a caller binds recognition to. */
 export const HANDOFF_EXPECTATION_FIELDS = Object.freeze([
-  'backend', 'taskId', 'roleId', 'taskContractDigest', 'carrierDigest',
-  'packetId', 'packetDigest', 'workUnitIdentity', 'artifactHead', 'worktreeRoot',
+  'backend', 'taskId', 'roleId', 'invocationId', 'taskContractDigest', 'dispatchCarrierDigest', 'currentCarrierDigest',
+  'packetId', 'packetDigest', 'workUnitIdentity', 'productBaseHead', 'productHead', 'workflowHead', 'candidateHead', 'worktreeRoot',
   'repositoryIdentity', 'minimumActivationAssurance', 'minimumReturnAssurance',
 ]);
 
@@ -129,8 +129,8 @@ const HANDOFF_DISPOSITIONS =
 
 /** The closed identity a recognized handoff binds. */
 export const HANDOFF_BOUND_IDENTITY_FIELDS = Object.freeze([
-  'backend', 'taskId', 'roleId', 'taskContractDigest', 'carrierDigest',
-  'packetId', 'packetDigest', 'workUnitIdentity', 'artifactHead', 'worktreeRoot',
+  'backend', 'taskId', 'roleId', 'invocationId', 'taskContractDigest', 'dispatchCarrierDigest', 'currentCarrierDigest',
+  'packetId', 'packetDigest', 'workUnitIdentity', 'productBaseHead', 'productHead', 'workflowHead', 'candidateHead', 'worktreeRoot',
   'repositoryIdentity', 'returnId', 'returnGrade',
 ]);
 
@@ -203,36 +203,45 @@ export function createHandoffExpectation(input) {
   if (!isObject(input)) {
     return { ok: false, expectation: null, errors: ['handoff expectation must be an object'] };
   }
-  const unknown = Object.keys(input).filter(key => !HANDOFF_EXPECTATION_FIELDS.includes(key));
+  // v1 callers may still pass the retired ambiguous labels. They are accepted
+  // only at this parser boundary and normalized before any verdict is emitted;
+  // persisted v2 expectations and bound identities never serialize them.
+  const legacyFields = new Set(['carrierDigest', 'artifactHead']);
+  const unknown = Object.keys(input).filter(key => !HANDOFF_EXPECTATION_FIELDS.includes(key) && !legacyFields.has(key));
   if (unknown.length > 0) {
     errors.push(`handoff expectation has unknown field(s): ${unknown.sort().join(', ')}`);
   }
-  if (!SUPPORTED_BACKENDS.includes(input.backend)) {
+  const normalized = {
+    ...input,
+    dispatchCarrierDigest: input.dispatchCarrierDigest ?? input.carrierDigest,
+    productBaseHead: input.productBaseHead ?? input.artifactHead,
+  };
+  if (!SUPPORTED_BACKENDS.includes(normalized.backend)) {
     errors.push(`handoff expectation backend must be one of: ${SUPPORTED_BACKENDS.join(', ')}`);
   }
-  if (!nonEmptyString(input.taskId)) errors.push('handoff expectation taskId is required');
-  if (!nonEmptyString(input.roleId)) errors.push('handoff expectation roleId is required');
+  if (!nonEmptyString(normalized.taskId)) errors.push('handoff expectation taskId is required');
+  if (!nonEmptyString(normalized.roleId)) errors.push('handoff expectation roleId is required');
   for (const field of [
-    'taskContractDigest', 'carrierDigest', 'packetId', 'packetDigest',
-    'workUnitIdentity', 'artifactHead', 'worktreeRoot', 'repositoryIdentity',
+    'invocationId', 'taskContractDigest', 'dispatchCarrierDigest', 'currentCarrierDigest', 'packetId', 'packetDigest',
+    'workUnitIdentity', 'productBaseHead', 'productHead', 'workflowHead', 'candidateHead', 'worktreeRoot', 'repositoryIdentity',
   ]) {
-    const value = input[field];
+    const value = normalized[field];
     if (value !== undefined && value !== null && !nonEmptyString(value)) {
       errors.push(`handoff expectation ${field} must be a non-empty string when supplied`);
     }
   }
-  if (input.minimumActivationAssurance !== undefined && input.minimumActivationAssurance !== null &&
-      !HANDOFF_ACTIVATION_GRADES.includes(input.minimumActivationAssurance)) {
+  if (normalized.minimumActivationAssurance !== undefined && normalized.minimumActivationAssurance !== null &&
+      !HANDOFF_ACTIVATION_GRADES.includes(normalized.minimumActivationAssurance)) {
     errors.push(`handoff expectation minimumActivationAssurance must be one of: ${HANDOFF_ACTIVATION_GRADES.join(', ')}`);
   }
-  if (input.minimumReturnAssurance !== undefined && input.minimumReturnAssurance !== null &&
-      !HANDOFF_RETURN_GRADES.includes(input.minimumReturnAssurance)) {
+  if (normalized.minimumReturnAssurance !== undefined && normalized.minimumReturnAssurance !== null &&
+      !HANDOFF_RETURN_GRADES.includes(normalized.minimumReturnAssurance)) {
     errors.push(`handoff expectation minimumReturnAssurance must be one of: ${HANDOFF_RETURN_GRADES.join(', ')}`);
   }
   if (errors.length > 0) return { ok: false, expectation: null, errors };
   const expectation = {};
   for (const field of HANDOFF_EXPECTATION_FIELDS) {
-    expectation[field] = input[field] === undefined ? null : input[field];
+    expectation[field] = normalized[field] === undefined ? null : normalized[field];
   }
   return { ok: true, expectation: Object.freeze(expectation), errors: [] };
 }
@@ -606,12 +615,17 @@ function recognizePreparedDispatch({
     backend: bind('backend', expectation.backend, packet.backend, diagnostics, 'prepared dispatch backend'),
     taskId: bind('taskId', expectation.taskId, packet.task?.id, diagnostics, 'prepared dispatch task'),
     roleId: bind('roleId', expectation.roleId, packet.assignment?.roleId, diagnostics, 'prepared dispatch assigned role'),
-    taskContractDigest: bind('taskContractDigest', expectation.taskContractDigest, packet.task?.contractDigest, diagnostics, 'prepared dispatch task-contract digest'),
-    carrierDigest: bind('carrierDigest', expectation.carrierDigest, packet.task?.digest, diagnostics, 'prepared dispatch task-carrier digest'),
+    invocationId: bind('invocationId', expectation.invocationId, packet.assignment?.invocationId, diagnostics, 'prepared dispatch invocation'),
+    taskContractDigest: bind('taskContractDigest', expectation.taskContractDigest, packet.task?.taskContractDigest, diagnostics, 'prepared dispatch task-contract digest'),
+    dispatchCarrierDigest: bind('dispatchCarrierDigest', expectation.dispatchCarrierDigest, packet.task?.dispatchCarrierDigest, diagnostics, 'prepared dispatch dispatch carrier digest'),
+    currentCarrierDigest: null,
     packetId: bind('packetId', expectation.packetId, packet.packetId, diagnostics, 'prepared dispatch packet'),
     packetDigest: bind('packetDigest', expectation.packetDigest, packet.digest, diagnostics, 'prepared dispatch packet digest'),
     workUnitIdentity: bind('workUnitIdentity', expectation.workUnitIdentity, packetWorkUnitIdentity(packet), diagnostics, 'prepared dispatch work unit'),
-    artifactHead: bind('artifactHead', expectation.artifactHead, packet.repository?.head, diagnostics, 'prepared dispatch artifact head'),
+    productBaseHead: bind('productBaseHead', expectation.productBaseHead, packet.repository?.head, diagnostics, 'prepared dispatch product base head'),
+    productHead: null,
+    workflowHead: null,
+    candidateHead: null,
     worktreeRoot: bind('worktreeRoot', expectation.worktreeRoot, packet.repository?.worktree, diagnostics, 'prepared dispatch worktree'),
     repositoryIdentity: bind(
       'repositoryIdentity', expectation.repositoryIdentity,
@@ -786,12 +800,17 @@ function recognizeVerifiedReturn({
     backend: bind('backend', expectation.backend, verification.backend, diagnostics, 'verified return backend'),
     taskId: bind('taskId', expectation.taskId, verification.taskId, diagnostics, 'verified return task'),
     roleId: bind('roleId', expectation.roleId, verification.producerRole, diagnostics, 'verified return producing role'),
+    invocationId: bind('invocationId', expectation.invocationId, verification.evidence?.packet?.assignment?.invocationId, diagnostics, 'verified return invocation'),
     taskContractDigest: bind('taskContractDigest', expectation.taskContractDigest, verification.taskContractDigest, diagnostics, 'verified return task-contract digest'),
-    carrierDigest: bind('carrierDigest', expectation.carrierDigest, roleReturn?.task?.digest, diagnostics, 'verified return task-carrier digest'),
+    dispatchCarrierDigest: bind('dispatchCarrierDigest', expectation.dispatchCarrierDigest, roleReturn?.task?.dispatchCarrierDigest, diagnostics, 'verified return dispatch carrier digest'),
+    currentCarrierDigest: bind('currentCarrierDigest', expectation.currentCarrierDigest, roleReturn?.task?.currentCarrierDigest, diagnostics, 'verified return current carrier digest'),
     packetId: bind('packetId', expectation.packetId, verification.packetId, diagnostics, 'verified return packet'),
     packetDigest: bind('packetDigest', expectation.packetDigest, verification.packetDigest, diagnostics, 'verified return packet digest'),
     workUnitIdentity: bind('workUnitIdentity', expectation.workUnitIdentity, verification.workUnitIdentity, diagnostics, 'verified return work unit'),
-    artifactHead: bind('artifactHead', expectation.artifactHead, roleReturn?.head, diagnostics, 'verified return artifact head'),
+    productBaseHead: bind('productBaseHead', expectation.productBaseHead, roleReturn?.productBaseHead, diagnostics, 'verified return product base head'),
+    productHead: bind('productHead', expectation.productHead, roleReturn?.productHead, diagnostics, 'verified return product head'),
+    workflowHead: bind('workflowHead', expectation.workflowHead, roleReturn?.workflowHead, diagnostics, 'verified return workflow head'),
+    candidateHead: bind('candidateHead', expectation.candidateHead, roleReturn?.candidateHead, diagnostics, 'verified return candidate head'),
     worktreeRoot: bind('worktreeRoot', expectation.worktreeRoot, roleReturn?.worktree, diagnostics, 'verified return worktree'),
     repositoryIdentity: bind('repositoryIdentity', expectation.repositoryIdentity, verification.repositoryIdentity, diagnostics, 'verified return repository identity'),
     returnId: roleReturn?.returnId ?? null,

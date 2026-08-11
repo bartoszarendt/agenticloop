@@ -1,6 +1,6 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -9,6 +9,7 @@ import {
   createReturnVerification,
   listReturnVerifications,
   revalidateReturnVerification,
+  returnGenerationDigest,
   returnVerificationPath,
   selectCurrentReturnVerifications,
   validateReturnVerification,
@@ -19,6 +20,8 @@ import { repositoryEvidenceDigest } from '../src/host-handoff.js';
 import { targetRepositoryIdentity } from '../src/host-trust.js';
 import { refetchGitHubReturnEvidence } from '../src/github-return-evidence.js';
 import { receiveRoleReturn } from '../src/dispatch-envelope.js';
+import { recognizeHandoff } from '../src/handoff-recognition.js';
+import { createDispatchConsumption, dispatchConsumptionRelativePath } from '../src/handoff-consumption.js';
 import { resolveCloseoutAssuranceContext } from '../src/closeout-cli.js';
 import { loadProjectMap } from '../src/project-map.js';
 import { protectedHostBoundary } from './helpers/host-trust-fixture.js';
@@ -30,6 +33,7 @@ import {
   readyReturn,
   repositoryEvidence,
 } from './helpers/dispatch-fixture.js';
+import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
 
 let root;
 before(() => { root = mkdtempSync(join(tmpdir(), 'al-return-verification-')); });
@@ -42,9 +46,11 @@ describe('observed return verification storage', () => {
     const repositoryIdentity = targetRepositoryIdentity(root);
     const taskDigest = `sha256:${'c'.repeat(64)}`;
     const contractDigest = `sha256:v1:${'d'.repeat(64)}`;
+    const baseHead = '1'.repeat(40);
+    const head = '2'.repeat(40);
     const packet = {
-      backend: 'files', packetId, digest: `sha256:agenticloop.role-preparation.v6:${'a'.repeat(64)}`,
-      task: { id: taskId, digest: taskDigest, contractDigest }, activation: null,
+      backend: 'files', packetId, digest: `sha256:agenticloop.role-preparation.v7:${'a'.repeat(64)}`,
+      task: { id: taskId, taskContractDigest: contractDigest, dispatchCarrierDigest: taskDigest }, activation: null,
       activationBinding: { grant: { repositoryIdentity, digest: 'grant' }, binding: { digest: 'binding' } },
       returnAdapter: null,
       assignment: { roleId: 'engineer', invocationId: 'invocation:fixture' },
@@ -54,10 +60,16 @@ describe('observed return verification storage', () => {
     };
     packet.backend = backend;
     const roleReturn = {
-      returnId, producerRole: 'engineer', digest: `sha256:agenticloop.role-return.v2:${'b'.repeat(64)}`,
-      packet: { packetId, digest: packet.digest }, task: { backend, id: taskId, digest: taskDigest },
+      returnId, producerRole: 'engineer', digest: `sha256:agenticloop.role-return.v3:${'b'.repeat(64)}`,
+      packet: { packetId, digest: packet.digest },
+      task: { backend, id: taskId, taskContractDigest: contractDigest, dispatchCarrierDigest: taskDigest, currentCarrierDigest: taskDigest },
+      productBaseHead: baseHead, productHead: head, workflowHead: head, candidateHead: null,
     };
-    const repositoryEvidence = { backend, worktree: root, task: { id: taskId, digest: taskDigest } };
+    const repositoryEvidence = {
+      backend, worktree: root,
+      task: { backend, id: taskId, taskContractDigest: contractDigest, dispatchCarrierDigest: taskDigest, currentCarrierDigest: taskDigest },
+      productBaseHead: baseHead, productHead: head, workflowHead: head, candidateHead: null,
+    };
     const record = createReturnVerification({
       target: root, packet, roleReturn, repositoryEvidence,
       received: { ok: true, returnAssurance: 'session_reported' },
@@ -68,7 +80,7 @@ describe('observed return verification storage', () => {
 
   function redigest(record) {
     const { digest, ...projection } = record;
-    return { ...record, digest: `sha256:agenticloop.return-verification.v1:${canonicalSha256(projection)}` };
+    return { ...record, digest: `sha256:agenticloop.return-verification.v2:${canonicalSha256(projection)}` };
   }
 
   it('persists session-reported evidence without claiming authenticated producer identity', () => {
@@ -98,13 +110,7 @@ describe('observed return verification storage', () => {
     ]) {
       const changed = structuredClone(record);
       mutate(changed);
-      changed.returnGenerationDigest = `sha256:agenticloop.return-generation.v1:${canonicalSha256({
-        repositoryIdentity: changed.repositoryIdentity, backend: changed.backend, taskId: changed.taskId,
-        workUnitIdentity: changed.workUnitIdentity, taskContractDigest: changed.taskContractDigest,
-        packetId: changed.packetId, packetDigest: changed.packetDigest,
-        dispatchAuthorityDigest: changed.dispatchAuthorityDigest,
-        activationAuthorityDigest: changed.activationAuthorityDigest, producerRole: changed.producerRole,
-      })}`;
+      changed.returnGenerationDigest = returnGenerationDigest(changed);
       assert.equal(validateReturnVerification(redigest(changed)).ok, false);
     }
   });
@@ -206,7 +212,8 @@ describe('observed return verification storage', () => {
   it('refetches GitHub PR identity and rejects transport drift', () => {
     const head = 'a'.repeat(40);
     const evidence = {
-      backend: 'github', branch: 'task/T-001', head,
+      backend: 'github', branch: 'task/T-001',
+      productBaseHead: 'b'.repeat(40), productHead: head, workflowHead: head,
       pr: { state: 'open', number: 42, url: 'https://github.test/o/r/pull/42' },
     };
     const runner = (_command, args) => ({
@@ -224,6 +231,9 @@ describe('observed return verification storage', () => {
         headRefOid: 'b'.repeat(40), headRefName: evidence.branch,
       }), stderr: '' }),
     }), /changed after return evidence/);
+    assert.throws(() => refetchGitHubReturnEvidence({ ...evidence, workflowHead: undefined, head }, {
+      commandRunner: runner,
+    }), /productBaseHead, productHead, and workflowHead/);
   });
 
   it('freshly revalidates real standard and hardened return evidence', async () => {
@@ -235,15 +245,44 @@ describe('observed return verification storage', () => {
       }
       const prepared = prepare(dispatch);
       assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+      const recognition = recognizeHandoff({
+        transition: 'role_start',
+        expectation: {
+          backend: 'files', taskId: 'T-001', roleId: 'engineer',
+          taskContractDigest: prepared.packet.task.contractDigest,
+          carrierDigest: prepared.packet.task.digest,
+          packetId: prepared.packet.packetId, packetDigest: prepared.packet.digest,
+          workUnitIdentity: prepared.packet.decomposition.workUnitId,
+          artifactHead: prepared.packet.repository.head,
+          worktreeRoot: prepared.packet.repository.worktree,
+          minimumActivationAssurance: 'operator_confirmed',
+        },
+        preparedDispatch: prepared.packet,
+        validatePreparedDispatch: fixtureDispatchValidator(dispatch),
+      });
+      assert.equal(recognition.recognized, true, JSON.stringify(recognition.diagnostics));
+      const consumption = createDispatchConsumption({ backend: 'files', taskId: 'T-001', recognition });
       writeFileSync(join(dispatch.root, 'src', 'existing.js'), `export const grade = '${grade}';\n`, 'utf8');
       git(dispatch.root, ['add', 'src/existing.js']);
       git(dispatch.root, ['commit', '-m', `verify ${grade}\n\nTask: T-001\nAgent: engineer`]);
-      const head = git(dispatch.root, ['rev-parse', 'HEAD']);
-      const evidence = repositoryEvidence(prepared.packet, { head });
-      evidence.attribution = {
-        range: { base: prepared.packet.repository.head, head },
-        commits: git(dispatch.root, ['rev-list', '--reverse', `${prepared.packet.repository.head}..${head}`])
+      const productHead = git(dispatch.root, ['rev-parse', 'HEAD']);
+      const consumptionPath = dispatchConsumptionRelativePath(consumption);
+      mkdirSync(join(dispatch.root, '.agenticloop', 'handoffs', 'dispatch', 'T-001'), { recursive: true });
+      writeFileSync(join(dispatch.root, consumptionPath), `${JSON.stringify(consumption, null, 2)}\n`, 'utf8');
+      git(dispatch.root, ['add', '-f', '.agenticloop/handoffs']);
+      git(dispatch.root, ['commit', '-m', `record dispatch consumption for ${grade}\n\nTask: T-001\nAgent: maintainer`]);
+      const workflowHead = git(dispatch.root, ['rev-parse', 'HEAD']);
+      const evidence = repositoryEvidence(prepared.packet, { head: productHead });
+      evidence.workflowHead = workflowHead;
+      evidence.workflowChangedPaths = [consumptionPath];
+      evidence.productAttribution = {
+        range: { base: prepared.packet.repository.head, head: productHead },
+        commits: git(dispatch.root, ['rev-list', '--reverse', `${prepared.packet.repository.head}..${productHead}`])
           .split(/\r?\n/).filter(Boolean),
+      };
+      evidence.carrierLineage = {
+        dispatchConsumptionDigest: consumption.digest,
+        evidenceMutationReceiptDigests: [],
       };
       const roleReturn = readyReturn(prepared.packet, evidence);
       const binding = grade === 'host_receipt'
@@ -274,7 +313,7 @@ describe('observed return verification storage', () => {
         resolveActivationBinding: () => ({ ok: false, errors: [] }),
         resolveTrustedAdapter: binding.resolveTrustedAdapter,
         expectedBackend: 'files', expectedTaskId: 'T-001',
-        expectedTaskContractDigest: prepared.packet.task.contractDigest,
+        expectedTaskContractDigest: prepared.packet.task.taskContractDigest,
         expectedActivationAuthorityDigest: record.activationAuthorityDigest,
         expectedWorkUnitIdentity: record.workUnitIdentity,
         refetchTask: dispatch.refetchTask,

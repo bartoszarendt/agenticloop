@@ -833,19 +833,20 @@ describe('packed package smoke tests', () => {
     const changedBody = `${fixture.snapshot().body}\n`;
     const changedSnapshot = { ...fixture.snapshot(), body: changedBody, digest: digest(changedBody) };
     const staleEvidence = repositoryEvidence(prepared.packet);
-    staleEvidence.task.digest = changedSnapshot.digest;
+    staleEvidence.task.currentCarrierDigest = changedSnapshot.digest;
     const staleReturnDraft = structuredClone(readyReturn(prepared.packet, staleEvidence));
-    staleReturnDraft.task.digest = changedSnapshot.digest;
+    staleReturnDraft.task.currentCarrierDigest = changedSnapshot.digest;
     const staleReturn = dispatch.createRoleReturn(staleReturnDraft);
     const stale = dispatch.receiveRoleReturn({
       raw: JSON.stringify(staleReturn),
       packet: prepared.packet,
       refetchTask: () => changedSnapshot,
       refetchRepositoryEvidence: () => staleEvidence,
+      runGit: fixture.runGit,
       ...provider(prepared.packet, staleReturn, staleEvidence),
     }, fixture.options);
     assert.equal(stale.ok, false);
-    assert.match(stale.validation.errors.join('\n'), /authoritative task and contract/);
+    assert.match(stale.validation.errors.join('\n'), /task identity|workflowHead/);
 
     const recomputed = structuredClone(prepared.packet);
     recomputed.task.scope += '\nrecomputed packet attack';
@@ -857,10 +858,11 @@ describe('packed package smoke tests', () => {
       packet: recomputed,
       refetchTask: fixture.snapshot,
       refetchRepositoryEvidence: () => recomputedEvidence,
+      runGit: fixture.runGit,
       ...provider(recomputed, recomputedReturn, recomputedEvidence),
     }, fixture.options);
     assert.equal(recomputedResult.ok, false);
-    assert.match(recomputedResult.validation.errors.join('\n'), /authoritative task and contract/);
+    assert.match(recomputedResult.validation.errors.join('\n'), /authoritative task and contract|workflowHead/);
 
     const githubSnapshot = { ...fixture.snapshot(), backend: 'github', carrier: 'issue:42' };
     const githubReadiness = {
@@ -898,7 +900,7 @@ describe('packed package smoke tests', () => {
       ...provider(githubAttack, githubReturn, githubEvidence),
     }, fixture.options);
     assert.equal(githubRejected.ok, false);
-    assert.match(githubRejected.validation.errors.join('\n'), /authoritative task and contract/);
+    assert.match(githubRejected.validation.errors.join('\n'), /authoritative task and contract|dispatch packet task contract/);
 
     const replay = dispatch.activationCaptureDisposition(fixture.activation, {
       ...fixture.options,
@@ -1489,6 +1491,164 @@ describe('packed package smoke tests', () => {
     });
   });
 
+  it('runs the files lifecycle through the public role-start and Engineer evidence boundary', { timeout: 300000 }, async () => {
+    // This is deliberately an installed-package characterization. Fixture setup
+    // establishes durable prerequisites, while every lifecycle transition uses
+    // the packaged public CLI rather than writing a handoff record directly.
+    const fixture = await createDispatchFixture(tmpBase, 'packed-files-lifecycle');
+    const inputPath = join(fixture.root, '.agenticloop', 'tmp', 'dispatch-input.json');
+    mkdirSync(dirname(inputPath), { recursive: true });
+    writeFileSync(inputPath, JSON.stringify({
+      readiness: fixture.readiness,
+      decomposition: fixture.decomposition,
+      assignment: fixture.assignment,
+    }, null, 2), 'utf8');
+
+    const prepared = runPackedWithBoundary([
+      'task', 'prepare-dispatch', 'T-001', '--input', '.agenticloop/tmp/dispatch-input.json',
+      '--host-trust-store', fixture.trustStorePath, '--json', '--target', fixture.root,
+    ], {
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      adapterId: fixture.trust.adapterId,
+      keyId: fixture.trust.keyId,
+      privateKey: fixture.trust.privateKey,
+    });
+    assert.equal(prepared.status, 0, `${prepared.stdout}\n${prepared.stderr}`);
+    writeFileSync(join(fixture.root, '.agenticloop', 'tmp', 'T-001.packet.json'), prepared.stdout, 'utf8');
+
+    const taskPath = join(fixture.root, '.agenticloop', 'tasks', 'T-001.md');
+    const dispatchCarrier = readFileSync(taskPath, 'utf8');
+    const dispatchCarrierDigest = `sha256:${createHash('sha256').update(dispatchCarrier, 'utf8').digest('hex')}`;
+    const started = runPackedWithBoundary([
+      'task', 'status', 'T-001', 'in-progress', '--expect-digest', dispatchCarrierDigest,
+      '--dispatch-packet', '.agenticloop/tmp/T-001.packet.json', '--json', '--target', fixture.root,
+    ], {
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      adapterId: fixture.trust.adapterId,
+      keyId: fixture.trust.keyId,
+      privateKey: fixture.trust.privateKey,
+    });
+    assert.equal(started.status, 0, `${started.stdout}\n${started.stderr}`);
+    assert.notEqual(readFileSync(taskPath, 'utf8'), dispatchCarrier, 'role start must retain its in-progress carrier');
+    git(fixture.root, ['add', '.agenticloop/tasks', '.agenticloop/handoffs']);
+    git(fixture.root, ['commit', '-m', 'Start Engineer work\n\nTask: T-001\nAgent: engineer']);
+
+    writeFileSync(join(fixture.root, 'src', 'existing.js'), 'export const current = false;\n', 'utf8');
+    git(fixture.root, ['add', 'src/existing.js']);
+    git(fixture.root, ['commit', '-m', 'Implement files lifecycle work\n\nTask: T-001\nAgent: engineer']);
+    const productHead = git(fixture.root, ['rev-parse', 'HEAD']);
+    const currentCarrier = readFileSync(taskPath, 'utf8');
+    const currentCarrierDigest = `sha256:${createHash('sha256').update(currentCarrier, 'utf8').digest('hex')}`;
+
+    // P35-10 characterization first failure at the plan baseline: there is no
+    // guarded public Engineer mutation path for bounded evidence after start.
+    const evidence = runPacked([
+      'task', 'evidence', 'T-001', '--class', 'implementation_artifact_evidence',
+      '--expect-digest', currentCarrierDigest, '--product-head', productHead,
+      '--json', '--target', fixture.root,
+    ]);
+    assert.equal(evidence.status, 0, `${evidence.stdout}\n${evidence.stderr}`);
+    git(fixture.root, ['add', '.agenticloop/tasks', '.agenticloop/handoffs']);
+    git(fixture.root, ['commit', '-m', 'Record implementation artifact\n\nTask: T-001\nAgent: engineer']);
+
+    const afterArtifact = readFileSync(taskPath, 'utf8');
+    const artifactCarrierDigest = `sha256:${createHash('sha256').update(afterArtifact, 'utf8').digest('hex')}`;
+    const summary = runPacked([
+      'task', 'evidence', 'T-001', '--class', 'implementation_summary_evidence',
+      '--expect-digest', artifactCarrierDigest, '--summary', 'Updated src/existing.js.',
+      '--check-evidence', 'Focused lifecycle check passed.', '--json', '--target', fixture.root,
+    ]);
+    assert.equal(summary.status, 0, `${summary.stdout}\n${summary.stderr}`);
+    git(fixture.root, ['add', '.agenticloop/tasks', '.agenticloop/handoffs']);
+    git(fixture.root, ['commit', '-m', 'Record implementation summary\n\nTask: T-001\nAgent: engineer']);
+
+    const afterSummary = readFileSync(taskPath, 'utf8');
+    const summaryCarrierDigest = `sha256:${createHash('sha256').update(afterSummary, 'utf8').digest('hex')}`;
+    const outcome = runPacked([
+      'task', 'evidence', 'T-001', '--class', 'implementation_outcome_evidence',
+      '--expect-digest', summaryCarrierDigest, '--outcome', 'implementation_ready_for_review',
+      '--json', '--target', fixture.root,
+    ]);
+    assert.equal(outcome.status, 0, `${outcome.stdout}\n${outcome.stderr}`);
+    git(fixture.root, ['add', '.agenticloop/tasks', '.agenticloop/handoffs']);
+    git(fixture.root, ['commit', '-m', 'Record implementation outcome\n\nTask: T-001\nAgent: engineer']);
+
+    const packet = JSON.parse(prepared.stdout);
+    const finalCarrier = readFileSync(taskPath, 'utf8');
+    const finalCarrierDigest = `sha256:${createHash('sha256').update(finalCarrier, 'utf8').digest('hex')}`;
+    const workflowHead = git(fixture.root, ['rev-parse', 'HEAD']);
+    const productRangePaths = git(fixture.root, ['diff', '--name-only', `${packet.repository.head}..${productHead}`])
+      .split(/\r?\n/).filter(Boolean).sort();
+    const changedPaths = git(fixture.root, ['diff', '--name-only', `${packet.repository.head}..${workflowHead}`])
+      .split(/\r?\n/).filter(Boolean).sort();
+    const productChangedPaths = productRangePaths.filter(path => path.startsWith('src/'));
+    const workflowChangedPaths = changedPaths.filter(path => !productChangedPaths.includes(path));
+    const attributionCommits = git(fixture.root, ['rev-list', '--reverse', `${packet.repository.head}..${productHead}`])
+      .split(/\r?\n/).filter(Boolean);
+    const dispatchDir = join(fixture.root, '.agenticloop', 'handoffs', 'dispatch', 'T-001');
+    const dispatchConsumption = JSON.parse(readFileSync(join(dispatchDir, readdirSync(dispatchDir)[0]), 'utf8'));
+    const evidenceDir = join(fixture.root, '.agenticloop', 'handoffs', 'task-mutations', 'T-001');
+    const evidenceReceipts = readdirSync(evidenceDir).sort().map(name =>
+      JSON.parse(readFileSync(join(evidenceDir, name), 'utf8'))
+    );
+    const evidenceMutationReceiptDigests = [];
+    let predecessorDigest = dispatchConsumption.digest;
+    while (evidenceReceipts.length > 0) {
+      const receipt = evidenceReceipts.find(item => item.predecessor.digest === predecessorDigest);
+      assert.ok(receipt, 'every Engineer evidence receipt must continue the consumed dispatch lineage');
+      evidenceReceipts.splice(evidenceReceipts.indexOf(receipt), 1);
+      evidenceMutationReceiptDigests.push(receipt.digest);
+      predecessorDigest = receipt.digest;
+    }
+    // P35-11 will provide public producers. Until then raw-return and
+    // repository-evidence construction stays inside this lower-level fixture;
+    // all lifecycle transitions remain public installed CLI commands.
+    const returnEvidence = repositoryEvidence(packet, { head: productHead, changedPaths: productChangedPaths });
+    returnEvidence.task.currentCarrierDigest = finalCarrierDigest;
+    returnEvidence.workflowHead = workflowHead;
+    returnEvidence.productChangedPaths = productChangedPaths;
+    returnEvidence.workflowChangedPaths = workflowChangedPaths;
+    returnEvidence.productAttribution = {
+      range: { base: packet.repository.head, head: productHead }, commits: attributionCommits,
+    };
+    returnEvidence.carrierLineage = {
+      dispatchConsumptionDigest: dispatchConsumption.digest,
+      evidenceMutationReceiptDigests,
+    };
+    const rawReturn = readyReturn(packet, returnEvidence);
+    writeFileSync(join(fixture.root, '.agenticloop', 'tmp', 'T-001.return.json'), JSON.stringify(rawReturn, null, 2), 'utf8');
+    writeFileSync(join(fixture.root, '.agenticloop', 'tmp', 'T-001.repository-evidence.json'), JSON.stringify(returnEvidence, null, 2), 'utf8');
+    const verified = runPackedWithBoundary([
+      'task', 'verify-return', 'T-001', '--packet', '.agenticloop/tmp/T-001.packet.json',
+      '--return', '.agenticloop/tmp/T-001.return.json',
+      '--repository-evidence', '.agenticloop/tmp/T-001.repository-evidence.json',
+      '--json', '--target', fixture.root,
+    ], {
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      adapterId: fixture.trust.adapterId,
+      keyId: fixture.trust.keyId,
+      privateKey: fixture.trust.privateKey,
+    });
+    assert.equal(verified.status, 0, `${verified.stdout}\n${verified.stderr}`);
+    const verification = JSON.parse(verified.stdout);
+    assert.equal(verification.ok, true);
+    const review = runPackedWithBoundary([
+      'task', 'review-prepare', 'T-001', '--json', '--target', fixture.root,
+    ], {
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      adapterId: fixture.trust.adapterId,
+      keyId: fixture.trust.keyId,
+      privateKey: fixture.trust.privateKey,
+    });
+    assert.equal(review.status, 0, `${review.stdout}\n${review.stderr}`);
+    const reviewEntry = JSON.parse(review.stdout);
+    assert.equal(reviewEntry.handoff_recognition.boundIdentity.packetId, packet.packetId);
+    assert.equal(reviewEntry.currentCarrierDigest, finalCarrierDigest);
+    const persistedReview = JSON.parse(readFileSync(join(fixture.root, reviewEntry.reviewEntryPath), 'utf8'));
+    assert.equal(persistedReview.handoffRecognitionDigest, reviewEntry.handoff_recognition.digest);
+    assert.equal(persistedReview.dispatchCarrierDigest, packet.task.dispatchCarrierDigest);
+  });
+
   /**
    * Every adapter that renders backend references must actually write them.
    * Zero discovered backend entries produced a silently reference-free artifact
@@ -2075,7 +2235,7 @@ describe('packed audit, closeout, and improvement flows', () => {
     // A real current packet from installed code, not a synthetic stand-in.
     assert.equal(packet.kind, 'agenticloop.role-preparation');
     assert.equal(packet.schemaVersion, envelope.DISPATCH_PREPARATION_SCHEMA_VERSION);
-    assert.equal(packet.schemaVersion, 6);
+    assert.equal(packet.schemaVersion, 7);
     const validated = envelope.validateDispatchPreparation(packet, { capabilities: fixture.trust.capabilities });
     assert.equal(validated.ok, true, JSON.stringify(validated.findings ?? validated.errors ?? null));
 

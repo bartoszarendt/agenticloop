@@ -10,12 +10,13 @@ import { dispatchPreparationDigest, receiveRoleReturn, validateDispatchPreparati
 
 export const RETURN_VERIFICATION_ROOT = '.agenticloop/returns/verifications';
 export const RETURN_VERIFICATION_KIND = 'agenticloop.return-verification';
-export const RETURN_VERIFICATION_SCHEMA_VERSION = 1;
+export const RETURN_VERIFICATION_SCHEMA_VERSION = 2;
 export const RETURN_VERIFICATION_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 const FIELDS = Object.freeze([
   'kind', 'schemaVersion', 'recordId', 'repositoryIdentity', 'backend', 'taskId',
-  'workUnitIdentity', 'taskContractDigest', 'packetId', 'packetDigest',
+  'workUnitIdentity', 'taskContractDigest', 'dispatchCarrierDigest', 'currentCarrierDigest',
+  'productBaseHead', 'productHead', 'workflowHead', 'candidateHead', 'packetId', 'packetDigest',
   'dispatchAuthorityDigest', 'activationAuthorityDigest', 'returnGenerationDigest', 'roleReturnDigest',
   'repositoryEvidenceDigest', 'producerRole', 'observedReturnGrade',
   'producerAuthentication', 'verifiedAt', 'disposition', 'evidence', 'digest',
@@ -24,7 +25,7 @@ const FIELDS = Object.freeze([
 function isObject(value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value); }
 function semanticDigest(record) {
   const { digest, ...projection } = record;
-  return `sha256:${RETURN_VERIFICATION_KIND}.v1:${canonicalSha256(projection)}`;
+  return `sha256:${RETURN_VERIFICATION_KIND}.v${RETURN_VERIFICATION_SCHEMA_VERSION}:${canonicalSha256(projection)}`;
 }
 export function returnActivationAuthorityDigest(packet) {
   return `sha256:agenticloop.activation-authority.v1:${canonicalSha256(packet.activationBinding ?? packet.activation)}`;
@@ -58,6 +59,12 @@ export function returnGenerationDigest(record) {
     taskId: record?.taskId ?? null,
     workUnitIdentity: record?.workUnitIdentity ?? null,
     taskContractDigest: record?.taskContractDigest ?? null,
+    dispatchCarrierDigest: record?.dispatchCarrierDigest ?? null,
+    currentCarrierDigest: record?.currentCarrierDigest ?? null,
+    productBaseHead: record?.productBaseHead ?? null,
+    productHead: record?.productHead ?? null,
+    workflowHead: record?.workflowHead ?? null,
+    candidateHead: record?.candidateHead ?? null,
     packetId: record?.packetId ?? null,
     packetDigest: record?.packetDigest ?? null,
     dispatchAuthorityDigest: record?.dispatchAuthorityDigest ?? null,
@@ -108,7 +115,15 @@ export function validateReturnVerification(record, { path = null, now = Date.now
   if (record.backend !== packet?.backend || record.backend !== roleReturn?.task?.backend || record.backend !== repositoryEvidence?.backend) errors.push('return verification backend does not match all embedded evidence');
   if (record.taskId !== packet?.task?.id || record.taskId !== roleReturn?.task?.id || record.taskId !== repositoryEvidence?.task?.id) errors.push('return verification task does not match all embedded evidence');
   if (record.workUnitIdentity !== workUnitIdentity(packet)) errors.push('return verification work-unit identity does not match the embedded packet');
-  if (record.taskContractDigest !== packet?.task?.contractDigest) errors.push('return verification task-contract digest does not match the embedded packet');
+  if (record.taskContractDigest !== packet?.task?.taskContractDigest) errors.push('return verification taskContractDigest does not match the embedded packet');
+  if (record.dispatchCarrierDigest !== packet?.task?.dispatchCarrierDigest) errors.push('return verification dispatchCarrierDigest does not match the embedded packet');
+  if (record.currentCarrierDigest !== roleReturn?.task?.currentCarrierDigest || record.currentCarrierDigest !== repositoryEvidence?.task?.currentCarrierDigest) errors.push('return verification currentCarrierDigest does not match embedded current evidence');
+  for (const [field, expected] of [
+    ['productBaseHead', roleReturn?.productBaseHead], ['productHead', roleReturn?.productHead],
+    ['workflowHead', roleReturn?.workflowHead], ['candidateHead', roleReturn?.candidateHead],
+  ]) {
+    if (record[field] !== expected || record[field] !== repositoryEvidence?.[field]) errors.push(`return verification ${field} does not match embedded evidence`);
+  }
   if (record.packetId !== packet?.packetId || record.packetId !== roleReturn?.packet?.packetId) errors.push('return verification packet ID does not match the embedded return');
   if (record.packetDigest !== packet?.digest || record.packetDigest !== roleReturn?.packet?.digest) errors.push('return verification packet digest does not match the embedded return');
   if (record.dispatchAuthorityDigest !== dispatchAuthorityDigest(packet)) errors.push('return verification dispatch authority does not match the embedded packet');
@@ -153,7 +168,13 @@ export function createReturnVerification({ target, packet, roleReturn, repositor
     backend: packet.backend,
     taskId: packet.task.id,
     workUnitIdentity: workUnitIdentity(packet),
-    taskContractDigest: packet.task.contractDigest,
+    taskContractDigest: packet.task.taskContractDigest,
+    dispatchCarrierDigest: packet.task.dispatchCarrierDigest,
+    currentCarrierDigest: roleReturn.task?.currentCarrierDigest ?? repositoryEvidence.task?.currentCarrierDigest ?? null,
+    productBaseHead: roleReturn.productBaseHead ?? repositoryEvidence.productBaseHead ?? null,
+    productHead: roleReturn.productHead ?? repositoryEvidence.productHead ?? null,
+    workflowHead: roleReturn.workflowHead ?? repositoryEvidence.workflowHead ?? null,
+    candidateHead: roleReturn.candidateHead ?? repositoryEvidence.candidateHead ?? null,
     packetId: packet.packetId,
     packetDigest: packet.digest,
     dispatchAuthorityDigest: dispatchAuthorityDigest(packet),
@@ -225,7 +246,7 @@ export function listReturnVerifications(target, taskId = null, {
     try {
       const record = JSON.parse(readFileSync(resolve(directory, name), 'utf8'));
       const candidateTask = record?.evidence?.packet?.task?.id ?? record?.taskId;
-      const candidateContract = record?.evidence?.packet?.task?.contractDigest ?? record?.taskContractDigest;
+       const candidateContract = record?.evidence?.packet?.task?.taskContractDigest ?? record?.taskContractDigest;
       const candidateAuthority = isObject(record?.evidence?.packet)
         ? returnActivationAuthorityDigest(record.evidence.packet)
         : record?.activationAuthorityDigest;

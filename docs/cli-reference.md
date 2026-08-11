@@ -31,7 +31,7 @@ All commands:
 | `guidance` | Manage the activation-guidance block (`apply`, `check`, `remove`) |
 | `generate` | Generate adapter artifacts (`opencode`, `codex`, `claude-code`, `copilot`, `cursor`, `all`) |
 | `configure models` | Set per-host role model settings in `agenticloop.json` |
-| `task` | Task records and read-only preparation (`list`, `lint`, `new`, `establish-baseline`, `authorize-correction`, `prepare-decomposition`, `prepare-dispatch`, `verify-return`, `status`) |
+| `task` | Task records and lifecycle preparation (`list`, `lint`, `new`, `establish-baseline`, `authorize-correction`, `prepare-decomposition`, `prepare-dispatch`, `verify-return`, `evidence`, `review-prepare`, `status`) |
 | `audit` | Work-unit audit certificates (`new`, `baseline`, `report`, `status`, `gate`, `lint`, `repair-structure`, `disposition`, `override`, `resolve`) |
 | `closeout` | Composite closeout packets (`prepare`, `status`, `record`) |
 | `improvement` | Bounded improvement proposals (`new`, `lint`, `status`) |
@@ -499,12 +499,12 @@ command reruns readiness from the exact Git tree and dependency snapshot, reads
 decomposition from its committed `sourceRef`, and requires the source commit to
 carry canonical `Task:` and `Agent: maintainer` attribution before emitting a versioned
 `agenticloop.role-preparation` packet only when every binding is current. The
-current packet is schema version 6 and binds the selected host, the exact closed
+current packet is schema version 7 and binds the selected host, the exact closed
 Engineer capability declaration and digest, and the canonical derived
 degraded-enforcement report inventory plus a constant-size decomposition binding
 to the committed scan source. The real shipped baseline was schema
-version 2. Authentic versions 2 through 5 fail with typed
-`dispatch.packet.stale`; regenerate them as version 6
+version 2. Authentic versions 2 through 6 fail with typed
+`dispatch.packet.stale`; regenerate them as version 7
 instead of repairing them in place. Merely setting an old version number on
 malformed input does not classify it as a legacy packet. A missing, malformed, non-canonical, or
 implementation-denying declaration fails before dispatch.
@@ -520,7 +520,8 @@ mutation. A scaffold made with `task new --scaffold` has no verified activation
 identity and cannot dispatch in that state; activate the existing task with
 `npx agenticloop activate <task-id>` before dispatch.
 
-Packet v6 embeds the complete signed grant and binding and independently binds a
+Packet v7 names `taskContractDigest` separately from the immutable historical
+`dispatchCarrierDigest`; it embeds the complete signed grant and binding and independently binds a
 nullable return adapter (`--return-adapter <adapter-id>`). Packet digests are
 integrity only. The in-process prepared-dispatch validation result is likewise
 an unkeyed, exact-packet/result-bound integrity record: it detects alteration and
@@ -529,7 +530,7 @@ Public files and GitHub mutation commands accept the prepared-dispatch packet,
 not a validation-receipt option, and rerun the complete current
 `canonicalDispatchValidator` immediately before mutation. A persisted receipt
 or verdict crossing a process or trust boundary must be rederived from its
-underlying packet or verified return. `task verify-return` persists observed version-1 evidence under
+underlying packet or verified return. `task verify-return` persists observed version-2 evidence under
 `.agenticloop/returns/verifications/`; closeout revalidates it and never treats a
 registered capability as proof an event happened. Standard plugin-free operation
 uses `operator_confirmed` activation and freshly revalidated `session_reported`
@@ -560,6 +561,25 @@ host-adapter receipt:
 ```text
 npx agenticloop task verify-return T-001 --packet packet.json --return role-return.json [--repository-evidence repository-evidence.json] [--producer-receipt producer-receipt.json] [--repo <owner/name>] [--resume-owner <role-id> --redelegation-authority redelegation.json | --recovery-request recovery.json --human-disposition disposition.json --human-disposition-authority <authority-id> --human-disposition-key-id <key-id>] [--host-trust-store <expected-registered-path>] --json
 ```
+
+For a files-backed Engineer run, retain the role-start carrier and record only
+bounded evidence mutations before constructing the raw return:
+
+```text
+npx agenticloop task evidence T-001 --class implementation_artifact_evidence --expect-digest <currentCarrierDigest> --product-head <productHead> --json
+npx agenticloop task evidence T-001 --class implementation_summary_evidence --expect-digest <currentCarrierDigest> --summary <text> --check-evidence <text> --json
+npx agenticloop task evidence T-001 --class implementation_outcome_evidence --expect-digest <currentCarrierDigest> --outcome implementation_ready_for_review --json
+npx agenticloop task review-prepare T-001 --json
+```
+
+`task evidence` atomically writes the task carrier and a versioned receipt under
+`.agenticloop/handoffs/task-mutations/`. It refuses an unreceipted carrier,
+protected contract drift, or any class outside artifact, summary, and outcome
+evidence. The chain binds `taskContractDigest`, `dispatchCarrierDigest`, and the
+resulting `currentCarrierDigest`. Raw returns and repository evidence name
+`productBaseHead`, `productHead`, `workflowHead`, `candidateHead`, separate
+product/workflow paths, and exact chain references. `task review-prepare` uses
+one command-local carrier snapshot and writes no review receipt when it changes.
 
 The CLI never receives a signing secret. The operator registry contains only
 Ed25519 public keys and scopes them to one canonical target checkout. A host or
@@ -640,6 +660,21 @@ npx agenticloop task-body transition --issue <n> --status agent-ready --expect-d
 npx agenticloop task-body establish-baseline --issue <n> --expect-digest <digest> --authority <ref> --actor <login> --dry-run
 npx agenticloop task-body authorize-correction --issue <n> --body-file <candidate.md> --expect-digest <digest> --reason <text> --authority <ref> --actor <login> --dry-run
 ```
+
+During a recognized Engineer run, use the bounded evidence command rather than a
+generic task-body edit:
+
+```text
+npx agenticloop task-body evidence --issue <n> --class implementation_artifact_evidence --expect-digest <digest> --product-head <productHead> --dry-run
+npx agenticloop task-body evidence --issue <n> --class implementation_summary_evidence --expect-digest <digest> --summary <text> --check-evidence <text> --dry-run
+npx agenticloop task-body evidence --issue <n> --class implementation_outcome_evidence --expect-digest <digest> --outcome implementation_ready_for_review --dry-run
+```
+
+It consumes the current local GitHub dispatch-consumption generation and writes
+the resulting carrier-mutation receipt after refetching the exact issue body.
+Only artifact, summary/check, and non-authoritative outcome evidence are
+permitted; a protected contract change or an unreceipted carrier change is
+refused. Repeat a valid dry run with `--yes`.
 
 Repeat any dry run with `--yes` only after inspecting its patch plan. The first
 two commands make one bounded body change through the same lint/refetch/expected

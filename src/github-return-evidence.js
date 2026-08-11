@@ -1,5 +1,5 @@
 import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
-import { isGitObjectId } from './git-oid.js';
+import { isGitObjectId, sameGitObjectFormat } from './git-oid.js';
 import {
   VerificationContextMalformedError,
   VerificationContextStaleError,
@@ -15,6 +15,14 @@ export function refetchGitHubReturnEvidence(suppliedEvidence, {
   commandRunner = defaultGhCommandRunner,
   repo,
 } = {}) {
+  const identities = ['productBaseHead', 'productHead', 'workflowHead']
+    .map(field => [field, String(suppliedEvidence?.[field] ?? '').trim()]);
+  if (identities.some(([, identity]) => !isGitObjectId(identity)) ||
+      !sameGitObjectFormat(identities.map(([, identity]) => identity))) {
+    throw new VerificationContextMalformedError(
+      'GitHub return evidence requires productBaseHead, productHead, and workflowHead as full identities of one Git object format'
+    );
+  }
   const number = Number(suppliedEvidence?.pr?.number);
   if (!Number.isInteger(number) || number <= 0) {
     throw new VerificationContextMalformedError('GitHub return evidence requires a positive PR number');
@@ -40,10 +48,18 @@ export function refetchGitHubReturnEvidence(suppliedEvidence, {
   if (String(live?.state ?? '').toUpperCase() !== 'OPEN') {
     throw new VerificationContextStaleError(`GitHub PR #${number} is no longer open`);
   }
-  if (liveHead !== String(suppliedEvidence?.head ?? '').toLowerCase() ||
+  if (liveHead !== suppliedEvidence.workflowHead ||
       liveBranch !== suppliedEvidence?.branch ||
       liveUrl !== suppliedEvidence?.pr?.url) {
     throw new VerificationContextStaleError(`GitHub PR #${number} changed after return evidence was collected`);
   }
-  return structuredClone(suppliedEvidence);
+  // Transport facts are observed here. Product topology and path evidence stay
+  // bound to their producing verification boundary; this function never accepts
+  // the retired ambiguous `head` field as a substitute for workflowHead.
+  return {
+    ...structuredClone(suppliedEvidence),
+    branch: liveBranch,
+    workflowHead: liveHead,
+    pr: { state: 'open', number: liveNumber, url: liveUrl },
+  };
 }

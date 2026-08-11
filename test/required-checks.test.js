@@ -111,7 +111,7 @@ describe('canonical required-check model', () => {
     const roleReturn = JSON.parse(JSON.stringify(readyReturn(prepared.packet, evidence)));
     roleReturn.checks.reverse();
     const { digest: _priorDigest, ...projection } = roleReturn;
-    roleReturn.digest = `sha256:agenticloop.role-return.v2:${canonicalSha256(projection)}`;
+    roleReturn.digest = `sha256:agenticloop.role-return.v3:${canonicalSha256(projection)}`;
     const received = receiveRoleReturn({
       raw: JSON.stringify(roleReturn),
       packet: prepared.packet,

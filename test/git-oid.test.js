@@ -80,19 +80,24 @@ describe('shared Git object identity rule', () => {
   it('accepts full SHA-256 identities in role-return wire validation', () => {
     const packet = {
       backend: 'files',
-      packetId: 'packet:00000000-0000-4000-8000-000000000000',
+      packetId: 'dispatch:00000000-0000-4000-8000-000000000000',
       digest: `sha256:agenticloop.role-preparation.v2:${'d'.repeat(64)}`,
-      task: { id: 'T-001', digest: `sha256:${'c'.repeat(64)}` },
+      task: {
+        id: 'T-001',
+        taskContractDigest: `sha256:v1:${'c'.repeat(64)}`,
+        dispatchCarrierDigest: `sha256:${'e'.repeat(64)}`,
+        currentCarrierDigest: `sha256:${'e'.repeat(64)}`,
+      },
       assignment: { worktree: '/repo', branch: 'task/T-001' },
       repository: { head: SHA256 },
     };
     const evidence = repositoryEvidence(packet, { head: SHA256 });
-    evidence.attribution = { range: { base: SHA256, head: SHA256 }, commits: [SHA256] };
+    evidence.productAttribution = { range: { base: SHA256, head: SHA256 }, commits: [SHA256] };
     const wire = readyReturn(packet, evidence);
     const validated = validateRoleReturn(wire);
     assert.equal(validated.ok, true, validated.errors.join('\n'));
     const abbreviated = JSON.parse(JSON.stringify(wire));
-    abbreviated.attribution = { range: { base: SHA256, head: SHA256 }, commits: [SHA256.slice(0, 7)] };
+    abbreviated.productAttribution = { range: { base: SHA256, head: SHA256 }, commits: [SHA256.slice(0, 7)] };
     assert.equal(validateRoleReturn(abbreviated).ok, false);
   });
 
@@ -184,24 +189,24 @@ describe('mixed Git object formats in dispatch and return evidence', () => {
     // hostile variant below is patched raw JSON.
     assert.throws(() => {
       const forced = repositoryEvidence(prepared.packet, { head: SHA256 });
-      forced.attribution = { range: { base: prepared.packet.repository.head, head: SHA256 }, commits: [SHA256] };
+      forced.productAttribution = { range: { base: prepared.packet.repository.head, head: SHA256 }, commits: [SHA256] };
       readyReturn(prepared.packet, forced);
     }, MIXED);
 
-    // A SHA-256 head against a SHA-1 baseHead.
+    // A SHA-256 product head against a SHA-1 product base.
     const mixedHead = structuredClone(readyReturn(prepared.packet, evidence));
-    mixedHead.head = SHA256;
-    mixedHead.attribution.range.head = SHA256;
+    mixedHead.productHead = SHA256;
+    mixedHead.productAttribution.range.head = SHA256;
     assert.match(validateRoleReturn(mixedHead).errors.join('\n'), MIXED);
 
     // One SHA-256 commit smuggled into an otherwise SHA-1 range.
     const mixedCommits = structuredClone(readyReturn(prepared.packet, evidence));
-    mixedCommits.attribution.commits = [...mixedCommits.attribution.commits, SHA256];
+    mixedCommits.productAttribution.commits = [...mixedCommits.productAttribution.commits, SHA256];
     assert.match(validateRoleReturn(mixedCommits).errors.join('\n'), MIXED);
 
     // An abbreviation stays its own distinct fault, not a format complaint.
     const abbreviated = structuredClone(readyReturn(prepared.packet, evidence));
-    abbreviated.attribution.commits = [SHA1.slice(0, 7)];
+    abbreviated.productAttribution.commits = [SHA1.slice(0, 7)];
     const abbreviatedResult = validateRoleReturn(abbreviated);
     assert.equal(abbreviatedResult.ok, false);
     assert.match(abbreviatedResult.errors.join('\n'), /must be full Git identities/);
@@ -218,7 +223,7 @@ describe('mixed Git object formats in dispatch and return evidence', () => {
     const evidence = repositoryEvidence(prepared.packet);
     const roleReturn = readyReturn(prepared.packet, evidence);
     const mixedEvidence = structuredClone(evidence);
-    mixedEvidence.attribution.commits = [SHA256];
+    mixedEvidence.productAttribution.commits = [SHA256];
     const received = receiveRoleReturn({
       raw: JSON.stringify(roleReturn),
       packet: prepared.packet,
@@ -279,10 +284,11 @@ describe('mixed Git object formats in dispatch and return evidence', () => {
     // a real attacker posts bytes and never calls our constructor, so the
     // receive boundary itself has to reject the mix.
     const mixed = repositoryEvidence(prepared.packet, { head: SHA256, pr });
-    mixed.attribution = { range: { base: prepared.packet.repository.head, head: SHA256 }, commits: [SHA256] };
+    mixed.productAttribution = { range: { base: prepared.packet.repository.head, head: SHA256 }, commits: [SHA256] };
     const mixedReturn = structuredClone(honestReturn);
-    mixedReturn.head = SHA256;
-    mixedReturn.attribution = structuredClone(mixed.attribution);
+    mixedReturn.productHead = SHA256;
+    mixedReturn.workflowHead = SHA256;
+    mixedReturn.productAttribution = structuredClone(mixed.productAttribution);
     const rejected = receiveRoleReturn({
       raw: JSON.stringify(mixedReturn),
       packet: prepared.packet,

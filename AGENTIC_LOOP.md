@@ -347,7 +347,7 @@ Existing `activation_input_digest` and `activation_capture_ref` task frontmatter
 remain valid legacy provenance. Grant records are an alternate authorized
 source, not a forced rewrite: existing tasks and projects never need recreation.
 
-Dispatch packet schema version `6` carries the complete signed grant and task
+Dispatch packet schema version `7` carries the complete signed grant and task
 binding in `activationBinding`; its packet digest is integrity, not
 authentication. Preparation, pre-mutation revalidation, return import, and
 closeout revalidate signatures, repository/backend/carrier/task-contract
@@ -355,7 +355,7 @@ binding, expiry, decomposition, effective policy, and external revocation state.
 Authentic packet versions `2` through `5` are typed stale.
 
 Successful returns are persisted as `agenticloop.return-verification` version
-`1` under `.agenticloop/returns/verifications/`. Closeout derives return
+`2` under `.agenticloop/returns/verifications/`. Closeout derives return
 assurance only from these observed records and reauthenticates retained host
 receipts. Missing activation or return evidence is below both mode minimums.
 Genuinely pre-activation work has one explicit, interactive, standard-only
@@ -384,10 +384,10 @@ operator input.
 ### Single-role dispatch and return
 
 One implementation handoff uses `agenticloop.role-preparation`, schema version
-`6`, defined in the bundled `src/dispatch-envelope.js` module. It is a read-only
+`7`, defined in the bundled `src/dispatch-envelope.js` module. It is a read-only
 handoff artifact, not a controller, lane-result store, task mutation, or shared
 durable-state import. Its canonical digest is
-`sha256:agenticloop.role-preparation.v6:<64-lowercase-hex>` and it binds the
+`sha256:agenticloop.role-preparation.v7:<64-lowercase-hex>` and it binds the
 current task/contract/activation identities, both assurance dimensions, freshly
 reevaluated P35-03
 readiness and base/dependency sources, committed Maintainer-attributed
@@ -398,14 +398,14 @@ attribution, liveness, and
 cancellation. Any bound input changing stales the packet. The receiver verifies
 its ID, digest, role, and current bindings before its first mutation.
 Schema versions 2, 3, 4, and 5 are recognized as authentic prior evidence and
-rejected as `dispatch.packet.stale`; regenerate the packet as version 6 rather
+rejected as `dispatch.packet.stale`; regenerate the packet as version 7 rather
 than reinterpreting or repairing an earlier version in place. Version 4 is not
 migrated: its decomposition field carries the version 1 caller-asserted
 completeness token, and no migration can supply the scan proof version 6
 requires. Version 5 is not migrated either: it predates the assurance
 dimensions, so it can neither state its activation grade nor carry an activation
 grant binding.
-An otherwise-current version 6 packet carrying the exact former version 3
+An otherwise-current version 7 packet carrying the exact former version 3
 degraded-enforcement report set is likewise rejected as
 `dispatch.packet.stale` only after its original digest and complete
 projected-current semantics validate. It is never migrated or accepted in
@@ -446,7 +446,7 @@ committed source cannot hide an omitted or newly authored task behind its own
 `complete` field.
 
 The single-role execution result is `agenticloop.role-return`, schema version
-`2`, with digest `sha256:agenticloop.role-return.v2:<64-lowercase-hex>`. It
+`3`, with digest `sha256:agenticloop.role-return.v3:<64-lowercase-hex>`. It
 binds a unique return ID, immutable producer, exact packet ID/digest, backend and
 task digest, exact branch/worktree and full 40- or 64-character base/head, changed paths,
 structured checks, actual contiguous commit-range attribution, PR state,
@@ -474,7 +474,7 @@ id>` pair, but those cooperative trailers cannot repair a producer mismatch.
 Publishing `task prepare-dispatch` and `task verify-return` is not the same as
 requiring them. A handoff mechanism is authoritative only where it is actually
 consumed, so one shared host-neutral seam - `agenticloop.handoff-recognition`,
-schema version `1`, defined in the bundled `src/handoff-recognition.js` module -
+ schema version `2`, defined in the bundled `src/handoff-recognition.js` module -
 decides whether presented evidence may authorize a protected lifecycle
 transition. Files and GitHub supply the same normalized evidence and receive the
 same verdict; installed host adapters project that verdict and never define
@@ -483,7 +483,8 @@ their own.
 The protected transitions form a closed inventory. `role_start` requires a fresh
 canonical prepared dispatch. `review_entry`, `acceptance`, `integration`, and
 `closeout` each require a canonical verified return. Recognition binds the exact
-task, dispatch packet, task/carrier identity and digest, artifact head and
+task, dispatch packet, `taskContractDigest`, `dispatchCarrierDigest`,
+`currentCarrierDigest`, `productBaseHead`, `productHead`, and
 worktree, role, return schema, and assurance result; a supplied expectation the
 evidence does not satisfy is a refusal, never a warning. Every expectation is
 assembled from durable state and current operator policy, never read back out of
@@ -545,6 +546,41 @@ when the carrier already holds that status. Recognition runs before deciding
 whether the carrier write is a validated no-op, and the fresh packet is consumed
 exactly once. Supplying a note with that request is part of the new start and
 does not create a note-only bypass; it therefore also requires a fresh packet.
+
+### Carrier lineage and identity
+
+Activation, operator authorization, and readiness are distinct gates. Activation
+names the eligible workflow/session scope; the operator-confirmed task binding
+names the work permitted now; readiness proves that exact task may start from its
+current baseline, dependency, decomposition, and carrier evidence. A broader
+activation never expands the exact task authorization, and neither replaces
+readiness.
+
+The protected `taskContractDigest` is immutable throughout an Engineer run.
+`dispatchCarrierDigest` records the exact carrier consumed at role start, while
+`currentCarrierDigest` may change only through the durable chain beginning with
+the dispatch-consumption receipt and continuing through closed Engineer evidence
+mutation classes. The current files path is: recognized `role_start_status`, then
+zero or more `implementation_artifact_evidence`,
+`implementation_summary_evidence`, or `implementation_outcome_evidence`
+receipts. Scope, allowed paths, required checks, dependencies, activation, and
+work-unit membership are protected contract fields, not Engineer evidence.
+
+`productBaseHead` is the packet-bound start point, `productHead` is the returned
+implementation artifact, `workflowHead` includes permitted workflow-only
+evidence commits, and `candidateHead` remains null until a later candidate cycle.
+Product paths, workflow paths, task carriers, and scratch paths are classified
+separately. A new `## Deviations` entry cannot retrospectively authorize an
+already-created product path: only scope bound into the packet before that work
+can do so. Unknown or scratch paths fail closed.
+
+For files-backed work, the Engineer records bounded evidence through the guarded
+public command family before returning: `task evidence <id> --class ...
+--expect-digest ...`. It writes the carrier and its receipt atomically and
+refetches the resulting chain. After public `task verify-return` persists the
+verified return, `task review-prepare <id>` consumes one command-local carrier
+snapshot. If that carrier changes before the receipt write, review preparation
+returns a typed changed/retry result and writes no review-entry state.
 
 ### Lifecycle and source of truth
 
@@ -1055,7 +1091,7 @@ plan is an artifact of that relation, not a new `managed_join_plan` synonym. Use
 `cancellation_boundary`, `review_no_mutation_window`, and
 `digest_guarded_rollback` precisely. None is a lock or authority transfer.
 
-A blocked role return has kind `agenticloop.role-return`, schema version `2`,
+A blocked role return has kind `agenticloop.role-return`, schema version `3`,
 and separately declares required fields plus constant `disposition: blocked`.
 Its fields include return ID, producing role, consumed transition ID/digest,
 blocker category/evidence, resume owner/transition, and resume preconditions. An exceptional-verification return has kind

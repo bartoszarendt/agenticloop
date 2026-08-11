@@ -58,8 +58,11 @@ import {
 } from '../src/public-error.js';
 import { repairPolicyFor } from '../src/repair-policy.js';
 import { loadAgenticLoopConfig } from '../src/json.js';
+import { canonicalJson } from '../src/canonical-json.js';
 import { buildHostRoleCapabilityInventory } from '../src/host-role-capabilities.js';
 import { resolveWorkflowRoleRegistry } from '../src/workflow-roles.js';
+import { recognizeHandoff } from '../src/handoff-recognition.js';
+import { createDispatchConsumption, dispatchConsumptionRelativePath } from '../src/handoff-consumption.js';
 import {
   activation,
   createDispatchFixture,
@@ -74,6 +77,7 @@ import {
 } from './helpers/dispatch-fixture.js';
 import { createTestHostTrust, protectedHostBoundary as signedHostBoundary, writeHostTrustStore } from './helpers/host-trust-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
+import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
 
 let temp;
 
@@ -142,7 +146,7 @@ describe('public envelope validators are total', () => {
         retyped[key] = replacement;
         // `blocker: null` is the valid ready-return representation, so assigning
         // the already-valid value is not a malformed-wire probe.
-        if (!(key === 'blocker' && replacement === null)) {
+        if (canonicalJson(replacement) !== canonicalJson(valid[key])) {
           cases.push([`role return ${key}=${JSON.stringify(replacement)}`, validateRoleReturn, retyped]);
         }
       }
@@ -156,7 +160,7 @@ describe('public envelope validators are total', () => {
         retyped[key] = replacement;
         // A legacy-capture packet carries `activationBinding: null` already, so
         // assigning the already-valid value is not a malformed-wire probe.
-        if (key === 'activationBinding' && replacement === null) continue;
+        if (canonicalJson(replacement) === canonicalJson(packet[key])) continue;
         cases.push([`packet ${key}=${JSON.stringify(replacement)}`, value => validateDispatchPreparation(value, fixture.options), retyped]);
       }
     }
@@ -218,7 +222,8 @@ describe('public envelope validators are total', () => {
       packet: prepared.packet,
     }, fixture.options);
     assert.equal(received.ok, false);
-    assert.ok(received.validation.diagnostics.length >= 3);
+    // A closed-shape root failure suppresses dependent child diagnostics.
+    assert.equal(received.validation.diagnostics.length, 1);
     assert.equal(received.validation.errors.length, received.validation.diagnostics.length);
     assert.deepEqual(
       received.validation.errors,
@@ -346,7 +351,7 @@ describe('initial repository state binds the dispatch', () => {
       head: returnHead,
       changedPaths: ['.agenticloop/tmp/report.txt', 'src/existing.js'],
     });
-    evidence.attribution = {
+    evidence.productAttribution = {
       range: { base: prepared.packet.repository.head, head: returnHead },
       commits: git(fixture.root, ['rev-list', '--reverse', `${prepared.packet.repository.head}..${returnHead}`])
         .split(/\r?\n/)
@@ -658,7 +663,7 @@ describe('return ancestry is proven, not assumed', () => {
     git(fixture.root, ['commit', '-m', 'implement\n\nTask: T-001\nAgent: engineer']);
     const returnHead = git(fixture.root, ['rev-parse', 'HEAD']);
     const evidence = repositoryEvidence(prepared.packet, { head: returnHead });
-    evidence.attribution = { range: { base: prepared.packet.repository.head, head: returnHead }, commits: [returnHead] };
+    evidence.productAttribution = { range: { base: prepared.packet.repository.head, head: returnHead }, commits: [returnHead] };
     const roleReturn = readyReturn(prepared.packet, evidence);
     const accepted = receiveRoleReturn({
       raw: JSON.stringify(roleReturn), packet: prepared.packet, refetchTask: fixture.refetchTask,
@@ -719,7 +724,7 @@ describe('host receipt trust boundary', () => {
   it('rejects an Orchestrator-observed artifact presented as an Engineer return even with correct trailers', async () => {
     const { fixture, packet, evidence, roleReturn } = await signed('receipt-producer-mismatch');
     assert.equal(roleReturn.producerRole, 'engineer');
-    assert.equal(roleReturn.attribution.commits.length > 0, true);
+    assert.equal(roleReturn.productAttribution.commits.length > 0, true);
     const mismatched = createHostHandoffReceipt({
       adapterId: fixture.trust.adapterId,
       keyId: fixture.trust.keyId,
@@ -1054,16 +1059,45 @@ describe('role-return core boundary authenticates evidence itself', () => {
     const fixture = await createDispatchFixture(temp, name);
     const prepared = prepare(fixture);
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    const recognition = recognizeHandoff({
+      transition: 'role_start',
+      expectation: {
+        backend: 'files', taskId: 'T-001', roleId: 'engineer',
+        taskContractDigest: prepared.packet.task.contractDigest,
+        carrierDigest: prepared.packet.task.digest,
+        packetId: prepared.packet.packetId, packetDigest: prepared.packet.digest,
+        workUnitIdentity: prepared.packet.decomposition.workUnitId,
+        artifactHead: prepared.packet.repository.head,
+        worktreeRoot: prepared.packet.repository.worktree,
+        minimumActivationAssurance: 'operator_confirmed',
+      },
+      preparedDispatch: prepared.packet,
+      validatePreparedDispatch: fixtureDispatchValidator(fixture),
+    });
+    assert.equal(recognition.recognized, true, JSON.stringify(recognition.diagnostics));
+    const consumption = createDispatchConsumption({ backend: 'files', taskId: 'T-001', recognition });
     writeFileSync(join(fixture.root, 'src', 'existing.js'), 'export const current = "returned";\n', 'utf8');
     git(fixture.root, ['add', 'src/existing.js']);
     git(fixture.root, ['commit', '-m', 'implement\n\nTask: T-001\nAgent: engineer']);
-    const returnHead = git(fixture.root, ['rev-parse', 'HEAD']);
-    const evidence = repositoryEvidence(prepared.packet, { head: returnHead });
-    evidence.attribution = {
-      range: { base: prepared.packet.repository.head, head: returnHead },
-      commits: git(fixture.root, ['rev-list', '--reverse', `${prepared.packet.repository.head}..${returnHead}`])
+    const productHead = git(fixture.root, ['rev-parse', 'HEAD']);
+    const consumptionPath = dispatchConsumptionRelativePath(consumption);
+    mkdirSync(join(fixture.root, '.agenticloop', 'handoffs', 'dispatch', 'T-001'), { recursive: true });
+    writeFileSync(join(fixture.root, consumptionPath), `${JSON.stringify(consumption, null, 2)}\n`, 'utf8');
+    git(fixture.root, ['add', consumptionPath]);
+    git(fixture.root, ['commit', '-m', 'record dispatch consumption\n\nTask: T-001\nAgent: maintainer']);
+    const workflowHead = git(fixture.root, ['rev-parse', 'HEAD']);
+    const evidence = repositoryEvidence(prepared.packet, { head: productHead });
+    evidence.workflowHead = workflowHead;
+    evidence.workflowChangedPaths = [consumptionPath];
+    evidence.productAttribution = {
+      range: { base: prepared.packet.repository.head, head: productHead },
+      commits: git(fixture.root, ['rev-list', '--reverse', `${prepared.packet.repository.head}..${productHead}`])
         .split(/\r?\n/)
         .filter(Boolean),
+    };
+    evidence.carrierLineage = {
+      dispatchConsumptionDigest: consumption.digest,
+      evidenceMutationReceiptDigests: [],
     };
     const roleReturn = readyReturn(prepared.packet, evidence);
     const receipt = createHostHandoffReceipt({
@@ -1091,14 +1125,18 @@ describe('role-return core boundary authenticates evidence itself', () => {
     return createRoleReturn({
       producerRole: 'engineer',
       packet: { packetId: packet.packetId, digest: packet.digest },
-      task: { backend: packet.backend, id: packet.task.id, digest: packet.task.digest },
+      task: { backend: packet.backend, ...evidence.task },
       worktree: evidence.worktree,
       branch: evidence.branch,
-      head: evidence.head,
-      baseHead: evidence.baseHead,
-      changedPaths: evidence.changedPaths,
+      productBaseHead: evidence.productBaseHead,
+      productHead: evidence.productHead,
+      workflowHead: evidence.workflowHead,
+      candidateHead: evidence.candidateHead,
+      productChangedPaths: evidence.productChangedPaths,
+      workflowChangedPaths: evidence.workflowChangedPaths,
       checks: evidence.checks,
-      attribution: evidence.attribution,
+      productAttribution: evidence.productAttribution,
+      carrierLineage: evidence.carrierLineage,
       pr: evidence.pr,
       outcome: {
         kind: 'implementation_blocked',
@@ -1277,7 +1315,12 @@ describe('role-return core boundary authenticates evidence itself', () => {
   it('rejects a nonexistent returned commit identity', async () => {
     const { fixture, prepared, evidence, roleReturn } = await committed('boundary-ghost-commit');
     const ghost = `${'9'.repeat(40)}`;
-    const ghostEvidence = { ...evidence, head: ghost, attribution: { range: { base: evidence.baseHead, head: ghost }, commits: [ghost] } };
+    const ghostEvidence = {
+      ...evidence,
+      productHead: ghost,
+      workflowHead: ghost,
+      productAttribution: { range: { base: evidence.productBaseHead, head: ghost }, commits: [ghost] },
+    };
     const ghostReturn = readyReturn(prepared.packet, ghostEvidence);
     const ghostReceipt = createHostHandoffReceipt({
       adapterId: fixture.trust.adapterId,
@@ -1303,7 +1346,7 @@ describe('role-return core boundary authenticates evidence itself', () => {
 
   it('rejects caller-authored changed paths that contradict rederived Git state', async () => {
     const { fixture, prepared, evidence } = await committed('boundary-authored-evidence');
-    const authoredEvidence = { ...evidence, changedPaths: ['src/invented.js'] };
+    const authoredEvidence = { ...evidence, productChangedPaths: ['src/invented.js'] };
     const authoredReturn = readyReturn(prepared.packet, authoredEvidence);
     const authoredReceipt = createHostHandoffReceipt({
       adapterId: fixture.trust.adapterId,
@@ -1323,7 +1366,7 @@ describe('role-return core boundary authenticates evidence itself', () => {
       runGit: fixture.runGit,
     }, fixture.options);
     assert.equal(received.ok, false);
-    assert.match(received.validation.errors.join('\n'), /changed paths do not equal the durable Git diff/);
+    assert.match(received.validation.errors.join('\n'), /changed paths do not cover the durable Git commit range/);
   });
 
   it('rejects repository evidence the receipt did not sign', async () => {

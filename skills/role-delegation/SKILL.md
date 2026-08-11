@@ -114,13 +114,15 @@ adapter/key; replayed, unsigned, or self-attested receipts fail closed. The
 observed producer must match assignment and raw producer; trailers cannot repair
 a mismatch.
 
-`task verify-return` / `role_return_receive` also gates blocked resume and
-recovery before state change. Normal resume uses the authenticated producer;
-owner transfer needs an exact version 2 redelegation signed by a pinned
-Orchestrator/human authority, and destructive/scope/host-state recovery needs an
-exact version 2 disposition signed by the pinned human authority. Digests,
-labels, trailers, caller-selected keys, and self-minted records cannot
-substitute; human work stays human-attributed.
+Files retain the `in-progress` carrier. Use `task evidence` with current
+digest for artifact, summary, and outcome evidence. Receipts preserve
+`taskContractDigest` and link `dispatchCarrierDigest` to `currentCarrierDigest`;
+return product/workflow heads and lineage. Then use
+`task review-prepare <id>`.
+
+`task verify-return` / `role_return_receive` gates blocked resume and recovery.
+Owner transfer or destructive recovery needs the exact pinned signed authority;
+digests, labels, trailers, keys, and self-minted records cannot substitute.
 
 Work-unit certification is auditor-owned and is a fresh, separate invocation
 every time; see [[work-unit-audit]]. The auditor never implements, never accepts

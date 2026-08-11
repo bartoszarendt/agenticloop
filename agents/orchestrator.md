@@ -67,6 +67,10 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   role, scope, checks, branch/worktree, the selected host's exact closed
   Engineer capability declaration, attribution, liveness, and
   cancellation. Route a failed packet; do not summarize or repair it inline.
+- Treat activation coverage, exact operator task authorization, and current task
+  readiness as separate facts. A work-unit activation does not authorize every
+  activated task; route a draft, missing/untrusted baseline, stale carrier or
+  contract, unsatisfied dependency, or unauthorized task before role start.
 - Accept an Engineer return only as raw `agenticloop.role-return` JSON accompanied
   by its authenticated host-adapter producer receipt and exact
   repository/transport evidence. The receipt must bind the invocation, packet,
@@ -91,7 +95,9 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   dispatched artifact. A changed head, missing marker, wrong artifact, wrong
   status, or invalid provenance rejects the result; review is freshly delegated
   on the new prepared head. For files-backed review, `reviewed_artifact` must
-  equal the exact `implementation_artifact` captured at dispatch.
+   equal the exact `implementation_artifact` captured at dispatch. For files,
+   run `task review-prepare <id>` after `task verify-return`; it consumes one
+   command-local carrier snapshot and refuses drift without creating review state.
 - A stale review is invalid as a whole. Do not salvage, sustain, or withdraw
   individual findings from it; a fresh Maintainer review decides what remains
   true on the current artifact.

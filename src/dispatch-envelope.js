@@ -113,7 +113,13 @@ export const SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION = 4;
  * regenerated rather than reinterpreted.
  */
 export const ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION = 5;
-export const DISPATCH_PREPARATION_SCHEMA_VERSION = 6;
+/**
+ * v6 used `task.digest` for the mutable carrier. v7 names every authority
+ * identity explicitly so a later Engineer evidence mutation cannot be mistaken
+ * for protected-contract drift.
+ */
+export const CARRIER_NAMED_DISPATCH_PREPARATION_SCHEMA_VERSION = 6;
+export const DISPATCH_PREPARATION_SCHEMA_VERSION = 7;
 /** Packet-carried authenticated envelope containing a complete signed grant and binding. */
 export const ACTIVATION_BINDING_KIND = 'agenticloop.activation-binding';
 export const ACTIVATION_BINDING_SCHEMA_VERSION = 1;
@@ -136,7 +142,7 @@ export const DECOMPOSITION_SCHEMA_VERSION = 2;
 export const DECOMPOSITION_BINDING_KIND = 'agenticloop.decomposition-binding';
 export const DECOMPOSITION_BINDING_SCHEMA_VERSION = 1;
 export const ROLE_RETURN_KIND = 'agenticloop.role-return';
-export const ROLE_RETURN_SCHEMA_VERSION = 2;
+export const ROLE_RETURN_SCHEMA_VERSION = 3;
 
 const SHA256_RE = /^sha256:[a-f0-9]{64}$/;
 const CONTRACT_DIGEST_RE = /^sha256:v1:[a-f0-9]{64}$/;
@@ -1757,8 +1763,8 @@ function packetTaskBinding(snapshot, contract) {
   return {
     id: snapshot.taskId,
     carrier: snapshot.carrier,
-    digest: snapshot.digest,
-    contractDigest: contract.digest,
+    dispatchCarrierDigest: snapshot.digest,
+    taskContractDigest: contract.digest,
     // Grant-bound activation never rewrites task frontmatter, so these legacy
     // provenance fields are absent - and null - for that path.
     activationDigest: projection.activation_input_digest ?? null,
@@ -1768,6 +1774,7 @@ function packetTaskBinding(snapshot, contract) {
     allowedPaths: projection.allowed_paths,
     intendedCreations: projection.intended_creations,
     acceptanceCriteria: projection.acceptance_criteria,
+    preAuthorizedDeviationPaths: parseDeviations(snapshot.body).entries.map(entry => entry.path).sort(),
     requiredChecks: requiredChecks.ok ? requiredChecks.checks : [],
     independentReviewRequired: projection.independent_review_required,
     lockedDecisionRefs: projection.locked_decision_refs,
@@ -1882,6 +1889,7 @@ const LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSIONS = Object.freeze([
   LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION,
   SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION,
   ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION,
+  CARRIER_NAMED_DISPATCH_PREPARATION_SCHEMA_VERSION,
 ]);
 
 /**
@@ -2055,7 +2063,7 @@ export function prepareRoleDispatch(input = {}, options = {}) {
       backend: candidate.backend,
       taskId: candidate.task?.id,
       carrier: candidate.task?.carrier,
-      taskContractDigest: candidate.task?.contractDigest,
+      taskContractDigest: candidate.task?.taskContractDigest,
       verifySignature: options.verifyActivationSignature,
       revocations: activationEvidence?.revocations ?? [],
       decomposition,
@@ -2103,6 +2111,7 @@ const DISPATCH_FIELDS = Object.freeze([
   'kind', 'schemaVersion', 'packetId', 'backend', 'task', 'activation', 'activationBinding',
   'returnAdapter', 'assurance', 'readiness', 'decomposition', 'assignment', 'repository', 'freshness', 'digest',
 ]);
+const V6_DISPATCH_FIELDS = DISPATCH_FIELDS;
 /** The v2-v5 envelope: one activation model, no assurance dimensions. */
 const ASSURANCE_UNBOUND_DISPATCH_FIELDS = Object.freeze([
   'kind', 'schemaVersion', 'packetId', 'backend', 'task', 'activation', 'readiness',
@@ -2124,12 +2133,16 @@ function legacyDispatchCandidate(packet, schemaVersion) {
   const assignmentFields = schemaVersion === BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION
     ? V2_ASSIGNMENT_FIELDS
     : schemaVersion === SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION ||
-      schemaVersion === ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION
+      schemaVersion === ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION ||
+      schemaVersion === CARRIER_NAMED_DISPATCH_PREPARATION_SCHEMA_VERSION
       ? V4_ASSIGNMENT_FIELDS
       : V3_ASSIGNMENT_FIELDS;
+  const fields = schemaVersion === CARRIER_NAMED_DISPATCH_PREPARATION_SCHEMA_VERSION
+    ? V6_DISPATCH_FIELDS
+    : ASSURANCE_UNBOUND_DISPATCH_FIELDS;
   return packet?.kind === DISPATCH_PREPARATION_KIND &&
     packet?.schemaVersion === schemaVersion &&
-    closedKeys(packet, ASSURANCE_UNBOUND_DISPATCH_FIELDS) &&
+    closedKeys(packet, fields) &&
     closedKeys(packet.assignment, assignmentFields) &&
     typeof packet.packetId === 'string' &&
     /^dispatch:[0-9a-f-]{36}$/.test(packet.packetId) &&
@@ -2139,6 +2152,15 @@ function legacyDispatchCandidate(packet, schemaVersion) {
 function currentProjectionOfLegacy(packet, schemaVersion, options) {
   const projected = structuredClone(packet);
   projected.schemaVersion = DISPATCH_PREPARATION_SCHEMA_VERSION;
+  if (schemaVersion === CARRIER_NAMED_DISPATCH_PREPARATION_SCHEMA_VERSION) {
+    projected.task = {
+      ...projected.task,
+      dispatchCarrierDigest: projected.task.digest,
+      taskContractDigest: projected.task.contractDigest,
+    };
+    delete projected.task.digest;
+    delete projected.task.contractDigest;
+  }
   if (schemaVersion === BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION) {
     const inventory = options.hostRoleCapabilities ?? HOST_ROLE_CAPABILITIES;
     const host = inventory.opencode ? 'opencode' : Object.keys(inventory)[0];
@@ -2153,16 +2175,18 @@ function currentProjectionOfLegacy(packet, schemaVersion, options) {
   // and no assurance statement. The projection restates that truthfully so the
   // packet can be recognized as authentic prior evidence and routed to typed
   // regeneration; it never lets that evidence authorize a dispatch.
-  projected.activationBinding = null;
-  projected.returnAdapter = null;
-  projected.assurance = dispatchAssurance({
-    policy: DEFAULT_ASSURANCE_POLICY,
-    activation: 'host_signed',
-    activationSource: 'legacy_task_capture',
-    producerId: projected.activation?.adapter ?? 'unknown',
-    channel: 'protected_host_boundary',
-    derivation: 'legacy_task_capture',
-  });
+  if (schemaVersion !== CARRIER_NAMED_DISPATCH_PREPARATION_SCHEMA_VERSION) {
+    projected.activationBinding = null;
+    projected.returnAdapter = null;
+    projected.assurance = dispatchAssurance({
+      policy: DEFAULT_ASSURANCE_POLICY,
+      activation: 'host_signed',
+      activationSource: 'legacy_task_capture',
+      producerId: projected.activation?.adapter ?? 'unknown',
+      channel: 'protected_host_boundary',
+      derivation: 'legacy_task_capture',
+    });
+  }
   projected.digest = dispatchPreparationDigest(projected);
   return projected;
 }
@@ -2228,9 +2252,9 @@ function validateCurrentDispatchPreparation(packet, options = {}) {
     if (typeof packet?.packetId !== 'string' || !/^dispatch:[0-9a-f-]{36}$/.test(packet.packetId)) findings.malformed('dispatch preparation packetId is invalid');
     if (!['files', 'github'].includes(packet?.backend)) findings.malformed('dispatch preparation backend is invalid');
     exactKeys(packet?.task, [
-      'id', 'carrier', 'digest', 'contractDigest', 'activationDigest', 'activationCaptureRef',
+      'id', 'carrier', 'dispatchCarrierDigest', 'taskContractDigest', 'activationDigest', 'activationCaptureRef',
       'scope', 'outOfScope', 'allowedPaths', 'intendedCreations',
-      'acceptanceCriteria', 'requiredChecks', 'independentReviewRequired', 'lockedDecisionRefs',
+      'acceptanceCriteria', 'preAuthorizedDeviationPaths', 'requiredChecks', 'independentReviewRequired', 'lockedDecisionRefs',
     ], 'dispatch preparation task', findings);
     for (const key of ['id', 'carrier', 'scope']) {
       if (typeof packet?.task?.[key] !== 'string' || !packet.task[key]) findings.malformed(`dispatch preparation task ${key} is required`);
@@ -2238,7 +2262,7 @@ function validateCurrentDispatchPreparation(packet, options = {}) {
     for (const key of ['outOfScope', 'acceptanceCriteria', 'independentReviewRequired']) {
       if (typeof packet?.task?.[key] !== 'string') findings.malformed(`dispatch preparation task ${key} must be a string`);
     }
-    for (const key of ['allowedPaths', 'intendedCreations', 'lockedDecisionRefs']) {
+    for (const key of ['allowedPaths', 'intendedCreations', 'preAuthorizedDeviationPaths', 'lockedDecisionRefs']) {
       if (!Array.isArray(packet?.task?.[key]) || packet.task[key].some(path => typeof path !== 'string')) {
         findings.malformed(`dispatch preparation task ${key} must be a string array`);
       }
@@ -2247,8 +2271,8 @@ function validateCurrentDispatchPreparation(packet, options = {}) {
       label: 'dispatch preparation task requiredChecks',
     });
     for (const error of inventory.errors) findings.malformed(error);
-    if (!SHA256_RE.test(packet?.task?.digest ?? '')) findings.malformed('dispatch preparation task digest must be sha256:<64 lowercase hex>');
-    if (!CONTRACT_DIGEST_RE.test(packet?.task?.contractDigest ?? '')) findings.malformed('dispatch preparation task contractDigest must be sha256:v1:<64 lowercase hex>');
+    if (!SHA256_RE.test(packet?.task?.dispatchCarrierDigest ?? '')) findings.malformed('dispatch preparation task dispatchCarrierDigest must be sha256:<64 lowercase hex>');
+    if (!CONTRACT_DIGEST_RE.test(packet?.task?.taskContractDigest ?? '')) findings.malformed('dispatch preparation task taskContractDigest must be sha256:v1:<64 lowercase hex>');
     const grantBound = packet?.assurance?.activationSource === 'activation_grant';
     if (grantBound) {
       // A grant never rewrites task frontmatter, so the legacy provenance
@@ -2258,7 +2282,7 @@ function validateCurrentDispatchPreparation(packet, options = {}) {
       }
       validateActivationBindingProjection(packet?.activationBinding, {
         taskId: packet?.task?.id,
-        contract: { ok: true, digest: packet?.task?.contractDigest },
+        contract: { ok: true, digest: packet?.task?.taskContractDigest },
         findings,
       });
       if (typeof options.resolveActivationBinding !== 'function') {
@@ -2300,7 +2324,7 @@ function validateCurrentDispatchPreparation(packet, options = {}) {
       findings.missing('a host_receipt packet minimum requires a pinned return adapter', { code: 'return.assurance.insufficient' });
     }
     validateReadiness(packet?.readiness, {
-      backend: packet?.backend, taskId: packet?.task?.id, carrier: packet?.task?.carrier, digest: packet?.task?.digest,
+      backend: packet?.backend, taskId: packet?.task?.id, carrier: packet?.task?.carrier, digest: packet?.task?.dispatchCarrierDigest,
     }, findings);
     validateDecompositionBinding(packet?.decomposition, packet?.task?.id, findings, {
       allowLegacy: options.allowLegacyDecomposition === true,
@@ -2422,9 +2446,14 @@ export function validateRoleReturn(value) {
   try {
     const has = key => isObject(value) && Object.prototype.hasOwnProperty.call(value, key);
     const shapeOk = exactKeys(value, [
-      'kind', 'schemaVersion', 'returnId', 'producerRole', 'packet', 'task', 'worktree', 'branch', 'head', 'baseHead',
-      'changedPaths', 'checks', 'attribution', 'pr', 'outcome', 'disposition', 'blocker', 'freshness', 'digest',
+      'kind', 'schemaVersion', 'returnId', 'producerRole', 'packet', 'task', 'worktree', 'branch',
+      'productBaseHead', 'productHead', 'workflowHead', 'candidateHead',
+      'productChangedPaths', 'workflowChangedPaths', 'checks', 'productAttribution', 'pr', 'carrierLineage',
+      'outcome', 'disposition', 'blocker', 'freshness', 'digest',
     ], 'role return', findings);
+    // A closed-shape failure is the root cause. Continuing into children would
+    // manufacture diagnostics for fields whose presence and type are unknown.
+    if (!shapeOk) return { ok: false, errors: findings.messages, findings: findings.items };
     if (has('kind') && value.kind !== ROLE_RETURN_KIND) findings.malformed(`role return kind must be '${ROLE_RETURN_KIND}'`);
     if (has('schemaVersion') && value.schemaVersion !== ROLE_RETURN_SCHEMA_VERSION) findings.malformed(`role return schemaVersion must be ${ROLE_RETURN_SCHEMA_VERSION}`);
     if (has('returnId') && (typeof value.returnId !== 'string' || !/^return:[0-9a-f-]{36}$/.test(value.returnId))) findings.malformed('role return returnId is invalid');
@@ -2433,43 +2462,63 @@ export function validateRoleReturn(value) {
       if (typeof value.packet.packetId !== 'string' || !value.packet.packetId) findings.malformed('role return packetId is required');
       if (!SEMANTIC_DIGEST_RE.test(value.packet.digest ?? '')) findings.malformed('role return packet digest must be canonical');
     }
-    if (has('task') && exactKeys(value.task, ['backend', 'id', 'digest'], 'role return task', findings)) {
+    if (has('task') && exactKeys(value.task, [
+      'backend', 'id', 'taskContractDigest', 'dispatchCarrierDigest', 'currentCarrierDigest',
+    ], 'role return task', findings)) {
       if (!['files', 'github'].includes(value.task.backend)) findings.malformed('role return task backend is invalid');
       if (typeof value.task.id !== 'string' || !value.task.id) findings.malformed('role return task id is required');
-      if (!SHA256_RE.test(value.task.digest ?? '')) findings.malformed('role return task digest must be sha256:<64 lowercase hex>');
+      if (!CONTRACT_DIGEST_RE.test(value.task.taskContractDigest ?? '')) findings.malformed('role return task taskContractDigest must be sha256:v1:<64 lowercase hex>');
+      for (const key of ['dispatchCarrierDigest', 'currentCarrierDigest']) {
+        if (!SHA256_RE.test(value.task[key] ?? '')) findings.malformed(`role return task ${key} must be sha256:<64 lowercase hex>`);
+      }
     }
     if (has('worktree') && (typeof value.worktree !== 'string' || !value.worktree)) findings.malformed('role return worktree is required');
     if (has('branch') && (typeof value.branch !== 'string' || !value.branch)) findings.malformed('role return branch is required');
-    for (const key of ['head', 'baseHead']) {
+    for (const key of ['productBaseHead', 'productHead', 'workflowHead']) {
       if (has(key) && !isGitObjectId(value[key])) findings.malformed(`role return ${key} must be a full lowercase 40- or 64-character Git identity`);
     }
-    const changedPaths = has('changedPaths') && Array.isArray(value.changedPaths) ? value.changedPaths : null;
-    if (has('changedPaths')) {
-      if (!changedPaths || changedPaths.some(path => typeof path !== 'string' || !path || path.includes('\\') || path.startsWith('/') || path.includes('..'))) {
-        findings.malformed('role return changedPaths must be safe canonical forward-slash paths');
-      } else {
-        if (!sameCanonical(changedPaths, [...changedPaths].sort())) findings.malformed('role return changedPaths must be canonical sorted order');
-        if (new Set(changedPaths).size !== changedPaths.length) findings.malformed('role return changedPaths must not contain duplicates');
+    if (has('candidateHead') && value.candidateHead !== null && !isGitObjectId(value.candidateHead)) {
+      findings.malformed('role return candidateHead must be null or a full lowercase 40- or 64-character Git identity');
+    }
+    const productChangedPaths = has('productChangedPaths') && Array.isArray(value.productChangedPaths) ? value.productChangedPaths : null;
+    const workflowChangedPaths = has('workflowChangedPaths') && Array.isArray(value.workflowChangedPaths) ? value.workflowChangedPaths : null;
+    for (const [label, paths] of [['productChangedPaths', productChangedPaths], ['workflowChangedPaths', workflowChangedPaths]]) {
+      if (!paths || paths.some(path => typeof path !== 'string' || !path || path.includes('\\') || path.startsWith('/') || path.includes('..'))) {
+        findings.malformed(`role return ${label} must be safe canonical forward-slash paths`);
+      } else if (!sameCanonical(paths, [...paths].sort()) || new Set(paths).size !== paths.length) {
+        findings.malformed(`role return ${label} must be canonical sorted unique paths`);
       }
     }
+    if (productChangedPaths && workflowChangedPaths && productChangedPaths.some(path => workflowChangedPaths.includes(path))) {
+      findings.malformed('role return productChangedPaths and workflowChangedPaths must be disjoint');
+    }
     if (has('checks')) validateChecks(value.checks, findings);
-    if (has('attribution') && exactKeys(value.attribution, ['range', 'commits'], 'role return attribution', findings)) {
-      if (exactKeys(value.attribution.range, ['base', 'head'], 'role return attribution range', findings) &&
-          (value.attribution.range.base !== value?.baseHead || value.attribution.range.head !== value?.head)) {
-        findings.malformed('role return attribution range must match baseHead and head');
+    if (has('carrierLineage') && exactKeys(value.carrierLineage, [
+      'dispatchConsumptionDigest', 'evidenceMutationReceiptDigests',
+    ], 'role return carrierLineage', findings)) {
+      if (!SEMANTIC_DIGEST_RE.test(String(value.carrierLineage.dispatchConsumptionDigest ?? '')) ||
+          !Array.isArray(value.carrierLineage.evidenceMutationReceiptDigests) ||
+          value.carrierLineage.evidenceMutationReceiptDigests.some(digest => !SEMANTIC_DIGEST_RE.test(String(digest)))) {
+        findings.malformed('role return carrierLineage is invalid');
       }
-      const commits = Array.isArray(value.attribution.commits) ? value.attribution.commits : null;
-      if (!commits || commits.some(commit => !isGitObjectId(commit))) findings.malformed('role return attribution commits must be full Git identities');
-      else if (value?.head !== value?.baseHead && commits.length === 0) findings.malformed('changed role return head requires a non-empty commit range');
+    }
+    if (has('productAttribution') && exactKeys(value.productAttribution, ['range', 'commits'], 'role return productAttribution', findings)) {
+      if (exactKeys(value.productAttribution.range, ['base', 'head'], 'role return productAttribution range', findings) &&
+          (value.productAttribution.range.base !== value?.productBaseHead || value.productAttribution.range.head !== value?.productHead)) {
+        findings.malformed('role return productAttribution range must match productBaseHead and productHead');
+      }
+      const commits = Array.isArray(value.productAttribution.commits) ? value.productAttribution.commits : null;
+      if (!commits || commits.some(commit => !isGitObjectId(commit))) findings.malformed('role return productAttribution commits must be full Git identities');
+      else if (value?.productHead !== value?.productBaseHead && commits.length === 0) findings.malformed('changed role return productHead requires a non-empty commit range');
     }
     // The heads, the attribution range, and every listed commit are identities
     // from one repository, so they cannot mix Git object formats. Only complete
     // identities are compared here: an abbreviation is already reported above,
     // and reporting it twice would blur two distinct faults into one.
     const returnIdentities = [
-      value?.baseHead, value?.head,
-      value?.attribution?.range?.base, value?.attribution?.range?.head,
-      ...(Array.isArray(value?.attribution?.commits) ? value.attribution.commits : []),
+      value?.productBaseHead, value?.productHead, value?.workflowHead,
+      value?.productAttribution?.range?.base, value?.productAttribution?.range?.head,
+      ...(Array.isArray(value?.productAttribution?.commits) ? value.productAttribution.commits : []),
     ].filter(identity => identity !== null && identity !== undefined);
     if (returnIdentities.every(isGitObjectId) && !sameGitObjectFormat(returnIdentities)) {
       findings.malformed('role return Git identities must all share one Git object format');
@@ -2495,7 +2544,7 @@ export function validateRoleReturn(value) {
     }
     if (value?.disposition === 'proceed') {
       if (value?.blocker !== null) findings.malformed('successful role return cannot carry a blocker');
-      if ((changedPaths ?? []).length === 0) findings.malformed('implementation-ready role return requires changed paths derived from Git');
+      if ((productChangedPaths ?? []).length === 0) findings.malformed('implementation-ready role return requires productChangedPaths derived from Git');
       if (Array.isArray(value?.checks) && value.checks.some(check => check?.outcome !== 'passed')) {
         findings.negative('implementation-ready role return cannot contain failed, blocked, or not-run checks');
       }
@@ -2524,7 +2573,7 @@ export function validateRoleReturn(value) {
       findings.malformed('role return freshness invalidatedBy must equal the closed canonical inventory');
     }
     if (shapeOk) {
-      const digest = semanticDigest('agenticloop.role-return.v2', projection(value));
+      const digest = semanticDigest(`agenticloop.role-return.v${ROLE_RETURN_SCHEMA_VERSION}`, projection(value));
       if (!SEMANTIC_DIGEST_RE.test(value.digest ?? '') || value.digest !== digest) findings.malformed('role return digest is invalid');
     }
   } catch (error) {
@@ -2542,7 +2591,7 @@ export function createRoleReturn(input = {}) {
     schemaVersion: ROLE_RETURN_SCHEMA_VERSION,
     returnId: input.returnId ?? `return:${randomUUID()}`,
   };
-  value.digest = semanticDigest('agenticloop.role-return.v2', projection(value));
+  value.digest = semanticDigest(`agenticloop.role-return.v${ROLE_RETURN_SCHEMA_VERSION}`, projection(value));
   const checked = validateRoleReturn(value);
   if (!checked.ok) throw new TypeError(`invalid role return: ${checked.errors.join('; ')}`);
   return deepFreeze(value);
@@ -2565,26 +2614,44 @@ export function reconstructCommitAttribution(input = {}) {
 }
 
 function validateRepositoryEvidence(value, findings) {
-  exactKeys(value, ['backend', 'task', 'worktree', 'branch', 'baseHead', 'head', 'changedPaths', 'attribution', 'checks', 'pr'], 'repository evidence', findings);
+  const shapeOk = exactKeys(value, [
+    'backend', 'task', 'worktree', 'branch', 'productBaseHead', 'productHead', 'workflowHead', 'candidateHead',
+    'productChangedPaths', 'workflowChangedPaths', 'productAttribution', 'checks', 'pr', 'carrierLineage',
+  ], 'repository evidence', findings);
+  if (!shapeOk) return;
   if (!['files', 'github'].includes(value?.backend)) findings.malformed('repository evidence backend is invalid');
-  exactKeys(value?.task, ['id', 'digest'], 'repository evidence task', findings);
-  if (typeof value?.task?.id !== 'string' || !value.task.id || !SHA256_RE.test(value?.task?.digest ?? '')) findings.malformed('repository evidence task identity is invalid');
+  exactKeys(value?.task, ['id', 'taskContractDigest', 'dispatchCarrierDigest', 'currentCarrierDigest'], 'repository evidence task', findings);
+  if (typeof value?.task?.id !== 'string' || !value.task.id ||
+      !CONTRACT_DIGEST_RE.test(value?.task?.taskContractDigest ?? '') ||
+      !SHA256_RE.test(value?.task?.dispatchCarrierDigest ?? '') ||
+      !SHA256_RE.test(value?.task?.currentCarrierDigest ?? '')) {
+    findings.malformed('repository evidence task identity is invalid');
+  }
   if (typeof value?.worktree !== 'string' || !value.worktree || typeof value?.branch !== 'string' || !value.branch) findings.malformed('repository evidence worktree and branch are required');
-  for (const key of ['baseHead', 'head']) {
+  for (const key of ['productBaseHead', 'productHead', 'workflowHead']) {
     if (!isGitObjectId(value?.[key])) findings.malformed(`repository evidence ${key} must be full Git identity`);
   }
-  if (!Array.isArray(value?.changedPaths) || !sameCanonical(value.changedPaths, [...value.changedPaths].sort())) findings.malformed('repository evidence changedPaths must be canonical sorted paths');
+  if (value?.candidateHead !== null && !isGitObjectId(value?.candidateHead)) findings.malformed('repository evidence candidateHead must be null or a full Git identity');
+  for (const key of ['productChangedPaths', 'workflowChangedPaths']) {
+    if (!Array.isArray(value?.[key]) || !sameCanonical(value[key], [...value[key]].sort())) {
+      findings.malformed(`repository evidence ${key} must be canonical sorted paths`);
+    }
+  }
   validateChecks(value?.checks, findings, 'repository evidence');
-  exactKeys(value?.attribution, ['range', 'commits'], 'repository evidence attribution', findings);
-  exactKeys(value?.attribution?.range, ['base', 'head'], 'repository evidence attribution range', findings);
-  if (value?.attribution?.range?.base !== value?.baseHead || value?.attribution?.range?.head !== value?.head) findings.malformed('repository evidence attribution range must match evidence heads');
-  if (!Array.isArray(value?.attribution?.commits) || value.attribution.commits.some(commit => !isGitObjectId(commit))) findings.malformed('repository evidence attribution commits are invalid');
+  exactKeys(value?.productAttribution, ['range', 'commits'], 'repository evidence productAttribution', findings);
+  exactKeys(value?.productAttribution?.range, ['base', 'head'], 'repository evidence productAttribution range', findings);
+  if (value?.productAttribution?.range?.base !== value?.productBaseHead || value?.productAttribution?.range?.head !== value?.productHead) {
+    findings.malformed('repository evidence productAttribution range must match product heads');
+  }
+  if (!Array.isArray(value?.productAttribution?.commits) || value.productAttribution.commits.some(commit => !isGitObjectId(commit))) {
+    findings.malformed('repository evidence productAttribution commits are invalid');
+  }
   // Repository evidence describes exactly one repository, and one repository has
   // exactly one object format; a mixed 40/64 claim is rejected, never resolved.
   const evidenceIdentities = [
-    value?.baseHead, value?.head,
-    value?.attribution?.range?.base, value?.attribution?.range?.head,
-    ...(Array.isArray(value?.attribution?.commits) ? value.attribution.commits : []),
+    value?.productBaseHead, value?.productHead, value?.workflowHead,
+    value?.productAttribution?.range?.base, value?.productAttribution?.range?.head,
+    ...(Array.isArray(value?.productAttribution?.commits) ? value.productAttribution.commits : []),
   ].filter(identity => identity !== null && identity !== undefined);
   if (evidenceIdentities.every(isGitObjectId) && !sameGitObjectFormat(evidenceIdentities)) {
     findings.malformed('repository evidence Git identities must all share one Git object format');
@@ -2596,21 +2663,33 @@ function validateRepositoryEvidence(value, findings) {
 
 function validateReturnAgainstCurrent({
   wire, packet, snapshot, repositoryEvidence, producerEvidence, runGit,
-  returnAssurance = 'host_receipt', historicalCloseout = false,
+  carrierLineage = null, returnAssurance = 'host_receipt', historicalCloseout = false,
 }, findings) {
   validateRepositoryEvidence(repositoryEvidence, findings);
   const authoritative = authoritativePacketTaskBinding(snapshot);
   if (!authoritative.ok) {
     findings.malformed(`authoritative current task contract cannot be derived: ${authoritative.error}`);
   } else {
-    const currentBinding = historicalCloseout
-      ? {
-          ...authoritative.binding,
-          task: { ...authoritative.binding.task, digest: packet?.task?.digest },
-        }
-      : authoritative.binding;
-    if (!sameCanonical({ backend: packet.backend, task: packet.task }, currentBinding)) {
-      findings.changed('dispatch packet task binding does not equal the refetched authoritative task and contract');
+    // The dispatch carrier is the only task binding permitted to evolve during
+    // the Engineer run. Compare every other packet task field against a fresh
+    // authoritative derivation so a re-digested packet cannot expand scope or
+    // alter checks while preserving only the contract digest.
+    const { dispatchCarrierDigest: _packetCarrier, ...packetContractBinding } = packet?.task ?? {};
+    const { dispatchCarrierDigest: _currentCarrier, ...currentContractBinding } = authoritative.binding.task;
+    if (packet?.backend !== authoritative.binding.backend || !sameCanonical(packetContractBinding, currentContractBinding)) {
+      findings.changed('dispatch packet task contract does not equal the refetched authoritative task contract');
+    }
+  }
+  if (carrierLineage !== null && !carrierLineage?.ok) {
+    findings.missing('a continuous recognized task carrier lineage is required before accepting the role return');
+  } else if (carrierLineage !== null) {
+    if (carrierLineage.taskContractDigest !== packet?.task?.taskContractDigest ||
+        carrierLineage.dispatchCarrierDigest !== packet?.task?.dispatchCarrierDigest ||
+        carrierLineage.currentCarrierDigest !== snapshot?.digest ||
+        carrierLineage.currentCarrierDigest !== wire?.task?.currentCarrierDigest ||
+        carrierLineage.dispatchConsumption?.digest !== wire?.carrierLineage?.dispatchConsumptionDigest ||
+        !sameCanonical(carrierLineage.receipts?.map(receipt => receipt.digest) ?? [], wire?.carrierLineage?.evidenceMutationReceiptDigests ?? [])) {
+      findings.changed('role return carrier lineage does not equal the current recognized mutation chain');
     }
   }
   // With a host receipt the observed producer role is authenticated evidence.
@@ -2625,17 +2704,31 @@ function validateReturnAgainstCurrent({
     findings.malformed('role return producerRole does not match the dispatch assignment');
   }
   if (wire.packet.packetId !== packet.packetId || wire.packet.digest !== packet.digest) findings.changed('role return did not consume the exact dispatch packet');
-  if (wire.task.backend !== packet.backend || wire.task.id !== packet.task.id || wire.task.digest !== packet.task.digest) {
+  if (wire.task.backend !== packet.backend || wire.task.id !== packet.task.id ||
+      wire.task.taskContractDigest !== packet.task.taskContractDigest ||
+      wire.task.dispatchCarrierDigest !== packet.task.dispatchCarrierDigest) {
     findings.changed('role return task identity does not equal the persisted dispatch packet');
   }
   if (wire.task.backend !== snapshot.backend || wire.task.id !== snapshot.taskId ||
-      (!historicalCloseout && wire.task.digest !== snapshot.digest)) findings.changed('role return task identity does not equal refetched task');
-  if (wire.task.backend !== repositoryEvidence?.backend || wire.task.id !== repositoryEvidence?.task?.id || wire.task.digest !== repositoryEvidence?.task?.digest) findings.changed('role return task identity does not equal repository evidence');
+      wire.task.taskContractDigest !== authoritative.contract?.digest ||
+      (!historicalCloseout && wire.task.currentCarrierDigest !== snapshot.digest)) {
+    findings.changed('role return task identity does not equal refetched task');
+  }
+  if (wire.task.backend !== repositoryEvidence?.backend || wire.task.id !== repositoryEvidence?.task?.id ||
+      wire.task.taskContractDigest !== repositoryEvidence?.task?.taskContractDigest ||
+      wire.task.dispatchCarrierDigest !== repositoryEvidence?.task?.dispatchCarrierDigest ||
+      wire.task.currentCarrierDigest !== repositoryEvidence?.task?.currentCarrierDigest) {
+    findings.changed('role return task identity does not equal repository evidence');
+  }
   if (wire.worktree !== packet.assignment.worktree || wire.worktree !== repositoryEvidence?.worktree) findings.changed('role return worktree does not match dispatched/current worktree');
   if (wire.branch !== packet.assignment.branch || wire.branch !== repositoryEvidence?.branch) findings.changed('role return branch does not match dispatched/current branch');
-  if (wire.baseHead !== packet.repository.head || wire.baseHead !== repositoryEvidence?.baseHead) findings.changed('role return base head does not equal the packet-bound base');
-  if (wire.head !== repositoryEvidence?.head) findings.changed('role return head does not equal current repository head');
-  for (const key of ['changedPaths', 'attribution', 'pr']) {
+  if (wire.productBaseHead !== packet.repository.head || wire.productBaseHead !== repositoryEvidence?.productBaseHead) {
+    findings.changed('role return productBaseHead does not equal the packet-bound base');
+  }
+  if (wire.productHead !== repositoryEvidence?.productHead || wire.workflowHead !== repositoryEvidence?.workflowHead) {
+    findings.changed('role return productHead or workflowHead does not equal repository evidence');
+  }
+  for (const key of ['productChangedPaths', 'workflowChangedPaths', 'productAttribution', 'pr', 'carrierLineage']) {
     if (!sameCanonical(wire[key], repositoryEvidence?.[key])) findings.changed(`role return ${key} does not match refetched repository evidence`);
   }
   const wireChecks = validateRequiredCheckEvidence(wire.checks);
@@ -2658,23 +2751,30 @@ function validateReturnAgainstCurrent({
       const currentHeadId = String(currentHead?.stdout ?? '').trim();
       if (currentHead?.status !== 0 || !isGitObjectId(currentHeadId)) {
         findings.missing('current repository head could not be reread before accepting the role return');
-      } else if (!historicalCloseout && currentHeadId !== wire.head) {
-        findings.changed('role return head is no longer the current repository head');
+      } else if (!historicalCloseout && currentHeadId !== wire.workflowHead) {
+        findings.changed('role return workflowHead is no longer the current repository head');
       } else {
         if (historicalCloseout) {
-          const ancestor = runGit(['merge-base', '--is-ancestor', wire.head, currentHeadId]);
+          const ancestor = runGit(['merge-base', '--is-ancestor', wire.workflowHead, currentHeadId]);
           if (ancestor?.status !== 0) {
             findings.changed('historical role-return head is no longer an ancestor of the current repository head');
             return;
           }
         }
         const derived = deriveCommitRange({
-          runGit, baseHead: wire.baseHead, head: wire.head, taskId: packet.task.id, roleId: packet.assignment.roleId,
+          runGit, baseHead: wire.productBaseHead, head: wire.productHead, taskId: packet.task.id, roleId: packet.assignment.roleId,
         });
         if (!derived.ok) findings.add(derived.evidenceState, derived.message, { disposition: derived.disposition, code: derived.code });
         else {
-          if (!sameCanonical(wire.attribution.commits, derived.commits)) findings.changed('role return attribution commits do not equal the durable Git commit range');
-          if (!sameCanonical(wire.changedPaths, derived.changedPaths)) findings.changed('role return changed paths do not equal the durable Git diff');
+          const productToWorkflow = runGit(['merge-base', '--is-ancestor', wire.productHead, wire.workflowHead]);
+          if (productToWorkflow?.status !== 0) {
+            findings.changed('role return productHead is not an ancestor of workflowHead');
+          }
+          if (!sameCanonical(wire.productAttribution.commits, derived.commits)) findings.changed('role return product attribution commits do not equal the durable Git commit range');
+          if ((wire.productChangedPaths ?? []).some(path => !derived.changedPaths.includes(path)) ||
+              derived.changedPaths.some(path => !wire.productChangedPaths.includes(path) && !wire.workflowChangedPaths.includes(path))) {
+            findings.changed('role return product/workflow changed paths do not cover the durable Git commit range');
+          }
         }
       }
     }
@@ -2682,19 +2782,23 @@ function validateReturnAgainstCurrent({
     const currentHead = runGit(['rev-parse', '--verify', 'HEAD']);
     const currentHeadId = String(currentHead?.stdout ?? '').trim();
     if (currentHead?.status === 0 && isGitObjectId(currentHeadId) &&
-        (currentHeadId === wire.head || historicalCloseout)) {
+        (currentHeadId === wire.workflowHead || historicalCloseout)) {
       if (historicalCloseout) {
-        const ancestor = runGit(['merge-base', '--is-ancestor', wire.head, currentHeadId]);
+        const ancestor = runGit(['merge-base', '--is-ancestor', wire.workflowHead, currentHeadId]);
         if (ancestor?.status !== 0) {
           findings.changed('historical role-return head is no longer an ancestor of the current repository head');
           return;
         }
       }
       const derived = deriveCommitRange({
-        runGit, baseHead: wire.baseHead, head: wire.head, taskId: packet.task.id, roleId: packet.assignment.roleId,
+          runGit, baseHead: wire.productBaseHead, head: wire.productHead, taskId: packet.task.id, roleId: packet.assignment.roleId,
       });
       if (!derived.ok) findings.add(derived.evidenceState, derived.message, { disposition: derived.disposition, code: derived.code });
-      else if (!sameCanonical(wire.attribution.commits, derived.commits)) findings.changed('role return attribution commits do not equal the durable Git commit range');
+      else {
+        const productToWorkflow = runGit(['merge-base', '--is-ancestor', wire.productHead, wire.workflowHead]);
+        if (productToWorkflow?.status !== 0) findings.changed('role return productHead is not an ancestor of workflowHead');
+        if (!sameCanonical(wire.productAttribution.commits, derived.commits)) findings.changed('role return product attribution commits do not equal the durable Git commit range');
+      }
     }
   }
   const requiredChecks = authoritative.ok ? authoritative.binding.task.requiredChecks : packet.task.requiredChecks;
@@ -2702,14 +2806,16 @@ function validateReturnAgainstCurrent({
     findings.negative('role return checks do not match the authoritative required-check inventory by id, kind, and identity');
   }
   const contract = taskContractDigest(snapshot.body);
-  const deviations = parseDeviations(snapshot.body);
-  const allowedPaths = new Set([...(contract.projection?.allowed_paths ?? []), ...deviations.entries.map(entry => entry.path)]);
-  for (const path of wire.changedPaths ?? []) {
+  const allowedPaths = new Set([
+    ...(contract.projection?.allowed_paths ?? []),
+    ...(packet.task?.preAuthorizedDeviationPaths ?? []),
+  ]);
+  for (const path of wire.productChangedPaths ?? []) {
     if (PERMITTED_SCRATCH_PREFIXES.some(prefix => path === prefix.replace(/\/$/, '') || path.startsWith(prefix))) {
-      findings.negative(`role return changed path '${path}' is permitted scratch state and cannot be presented as implementation work`);
+      findings.negative(`role return product changed path '${path}' is scratch state and cannot be implementation work`);
       continue;
     }
-    if (![...allowedPaths].some(pattern => fileMatchesScopePattern(path, pattern))) findings.negative(`role return changed path '${path}' is outside task scope and current deviations`);
+    if (![...allowedPaths].some(pattern => fileMatchesScopePattern(path, pattern))) findings.negative(`role return product changed path '${path}' is outside packet-bound task scope`);
   }
 }
 
@@ -2789,7 +2895,8 @@ export function receiveRoleReturn(input = {}, options = {}) {
       raw,
       packet,
       refetchTask,
-      refetchRepositoryEvidence,
+       refetchRepositoryEvidence,
+       refetchCarrierLineage = null,
       producerReceipt,
       resolveTrustedAdapter,
       requestedOwner,
@@ -2901,6 +3008,14 @@ export function receiveRoleReturn(input = {}, options = {}) {
         `repository evidence refetch failed: ${error.message}`, producerDomain, fault.code
       );
     }
+    let carrierLineage = null;
+    if (typeof refetchCarrierLineage === 'function') {
+      try {
+        carrierLineage = refetchCarrierLineage({ packet, wire, snapshot });
+      } catch (error) {
+        return singleFailure(command, 'missing', 'blocked', `carrier lineage refetch failed: ${error.message}`, producerDomain);
+      }
+    }
     // Authentication happens here, at the authoritative boundary. No caller
     // callback can assert that a receipt was verified elsewhere: the raw
     // receipt is consumed and verified against the pinned adapter selected by
@@ -2960,13 +3075,13 @@ export function receiveRoleReturn(input = {}, options = {}) {
     const findings = findingSet(command);
     validateCurrentTask(snapshot, findings);
     validateReturnAgainstCurrent({
-      wire, packet, snapshot, repositoryEvidence, producerEvidence, runGit,
+      wire, packet, snapshot, repositoryEvidence, producerEvidence, carrierLineage, runGit,
       returnAssurance, historicalCloseout,
     }, findings);
     const degradedReports = packet.assignment.degradedEnforcementReports;
     const implementation = packet.assignment.hostRoleCapability.actionBindings
       .find(binding => binding.action === 'implementation_mutate');
-    if ((wire.changedPaths?.length ?? 0) > 0 && implementation?.policy !== 'allowed') {
+    if ((wire.productChangedPaths?.length ?? 0) > 0 && implementation?.policy !== 'allowed') {
       findings.negative(
         `${returnAssurance === 'host_receipt' ? 'authenticated' : 'session-reported'} role '${wire.producerRole}' ` +
         `returned implementation changes while implementation_mutate is ${implementation?.policy ?? 'unbound'}`,

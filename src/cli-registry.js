@@ -264,7 +264,7 @@ export const COMMAND_REGISTRY = {
   },
   'task-body': {
     summary: 'Guarded GitHub task-record body fetch, lint, and transactional apply.',
-    usage: 'agenticloop task-body <fetch|lint|apply|set-field|establish-baseline|authorize-correction|transition> --issue <number> [options]',
+    usage: 'agenticloop task-body <fetch|lint|apply|set-field|evidence|establish-baseline|authorize-correction|transition> --issue <number> [options]',
     details: [
       'Closed-loop task-record editing:',
       '  1. task-body fetch --issue <n> --output .agenticloop/tmp/issue-<n>.md',
@@ -294,6 +294,20 @@ export const COMMAND_REGISTRY = {
         summary: 'Set one top-level task frontmatter field through the guarded apply transaction.',
         usage: 'agenticloop task-body set-field --issue <number> --field <name> --value <text> --expect-digest <digest> (--dry-run|--yes) [--note <text>] [options]',
         options: [targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'), opt('field', 'string', 'Top-level frontmatter field. Required.'), opt('value', 'string', 'One-line field value. Required.'), opt('expect-digest', 'string', 'Exact digest printed by task-body fetch. Required.'), opt('repo', 'string', 'Target repository.'), opt('note', 'string', 'Transition note. Allowed only when the field mutation changes status; required for blocked or needs_context and persisted as an identified issue comment.'), opt('base', 'string', 'Optional Git base ref.'), opt('base-paths', 'string', 'Optional JSON base-tree path inventory.'), opt('dependencies', 'string', 'Exact JSON dependency-status snapshot required when status becomes agent-ready.'), dryRunOption, yesOption, jsonOption],
+      },
+      evidence: {
+        summary: 'Record one bounded Engineer evidence mutation and its durable carrier-lineage receipt.',
+        usage: 'agenticloop task-body evidence --issue <number> --class <class> --expect-digest <digest> (--dry-run|--yes) [--product-head <sha> | --summary <text> --check-evidence <text> | --outcome <implementation_ready_for_review|implementation_blocked>] [--repo <owner/name>] [--json]',
+        options: [
+          targetOption(), opt('issue', 'string', 'GitHub task issue number. Required.'),
+          opt('class', 'string', 'Engineer evidence class. Required.', { enum: ['implementation_artifact_evidence', 'implementation_summary_evidence', 'implementation_outcome_evidence'] }),
+          opt('expect-digest', 'string', 'Exact current GitHub task-body digest. Required.'),
+          opt('product-head', 'string', 'Exact current local product HEAD for implementation_artifact_evidence.'),
+          opt('summary', 'string', 'Engineer implementation summary for implementation_summary_evidence.'),
+          opt('check-evidence', 'string', 'Required-check evidence for implementation_summary_evidence.'),
+          opt('outcome', 'string', 'Non-authoritative Engineer outcome for implementation_outcome_evidence.', { enum: ['implementation_ready_for_review', 'implementation_blocked'] }),
+          opt('repo', 'string', 'Target repository.'), dryRunOption, yesOption, jsonOption,
+        ],
       },
       transition: {
         summary: 'Transition a task status through one guarded field mutation.',
@@ -584,6 +598,27 @@ export const COMMAND_REGISTRY = {
           hostTrustStoreOption,
           jsonOption,
         ],
+      },
+      evidence: {
+        summary: 'Record one bounded Engineer-owned task-evidence mutation through the carrier lineage.',
+        usage: 'agenticloop task evidence <id> --class <implementation_artifact_evidence|implementation_summary_evidence|implementation_outcome_evidence> --expect-digest <digest> [--product-head <git-object>] [--summary <text> --check-evidence <text>] [--outcome <implementation_ready_for_review|implementation_blocked>] [--json] [--target <dir>]',
+        positionals: [{ name: 'id', required: true }],
+        options: [
+          targetOption(),
+          opt('class', 'string', 'Closed Engineer evidence mutation class. Required.', { enum: ['implementation_artifact_evidence', 'implementation_summary_evidence', 'implementation_outcome_evidence'] }),
+          opt('expect-digest', 'string', 'Exact currentCarrierDigest before mutation. Required.'),
+          opt('product-head', 'string', 'Exact current product Git head. Required for implementation_artifact_evidence.'),
+          opt('summary', 'string', 'Engineer implementation summary. Required for implementation_summary_evidence.'),
+          opt('check-evidence', 'string', 'Bounded required-check evidence summary. Required for implementation_summary_evidence.'),
+          opt('outcome', 'string', 'Non-authoritative Engineer outcome. Required for implementation_outcome_evidence.', { enum: ['implementation_ready_for_review', 'implementation_blocked'] }),
+          jsonOption,
+        ],
+      },
+      'review-prepare': {
+        summary: 'Prepare one files-backed review entry from a current verified return and carrier lineage.',
+        usage: 'agenticloop task review-prepare <id> [--json] [--target <dir>]',
+        positionals: [{ name: 'id', required: true }],
+        options: [targetOption(), jsonOption],
       },
       status: {
         summary: 'Update task status.',

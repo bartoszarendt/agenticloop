@@ -358,6 +358,27 @@ describe('transactional GitHub task-body application', () => {
     }
   });
 
+  it('refuses GitHub Engineer evidence without the recognized local dispatch lineage', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'agenticloop-task-body-evidence-'));
+    try {
+      const state = { body: taskBody({ status: 'in-progress' }), edits: 0 };
+      const result = await runCliInProcess([
+        'task-body', 'evidence', '--issue', '31',
+        '--class', 'implementation_summary_evidence',
+        '--expect-digest', taskBodyDigest(state.body),
+        '--summary', 'Implemented the scoped change.', '--check-evidence', 'npm test passed',
+        '--yes', '--json', '--target', directory,
+      ], { cwd: directory, ghCommandRunner: issueRunner(state) });
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      const envelope = JSON.parse(result.stdout);
+      assert.equal(envelope.evidenceState, 'changed');
+      assert.match(envelope.errors.join('\n'), /Engineer evidence mutation refused/);
+      assert.equal(state.edits, 0, 'unreceipted evidence must not mutate the remote carrier');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('keeps the explicit-base transition and standalone lint positive paths successful', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'agenticloop-task-body-explicit-base-'));
     try {

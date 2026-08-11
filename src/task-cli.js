@@ -52,7 +52,7 @@ import {
 } from './public-error.js';
 import { commandFailure, printGateResult } from './public-result.js';
 import { presentGateResultForTarget } from './diagnostic-presentation.js';
-import { canonicalJson } from './canonical-json.js';
+import { canonicalJson, canonicalSha256 } from './canonical-json.js';
 import { loadAgenticLoopConfig } from './json.js';
 import { buildHostRoleCapabilityInventory } from './host-role-capabilities.js';
 import { resolveWorkflowRoleRegistry } from './workflow-roles.js';
@@ -60,6 +60,7 @@ import {
   createTaskReadinessEvidence,
   createTaskEvidenceContext,
   createTaskMutationReceipt,
+  createCarrierMutationReceipt,
   dependencyStatusMap,
   parseDependencySnapshot,
   shellQuoteArgument,
@@ -105,7 +106,11 @@ import {
 } from './activation-resolution.js';
 import { buildGitHubTaskIdentityInventory, resolveCoveredGitHubTask } from './github-task-identity.js';
 import { fetchGitHubTaskBody } from './github-task-body.js';
-import { createReturnVerification, writeReturnVerification } from './return-verification.js';
+import {
+  createReturnVerification,
+  listReturnVerifications,
+  writeReturnVerification,
+} from './return-verification.js';
 import {
   recognizeLifecycleReturn,
   recognizeRoleStart,
@@ -115,8 +120,10 @@ import { refetchGitHubReturnEvidence } from './github-return-evidence.js';
 import { refetchFilesReturnEvidence } from './files-return-evidence.js';
 import {
   createDispatchConsumption,
+  carrierMutationRelativePath,
   dispatchConsumptionRelativePath,
   listDispatchConsumptions,
+  resolveCarrierLineage,
 } from './handoff-consumption.js';
 
 function frontmatterString(value) {
@@ -241,6 +248,8 @@ const TASK_SUBCOMMAND_BACKENDS = Object.freeze({
   'prepare-decomposition': Object.freeze(['files', 'github']),
   'prepare-dispatch': Object.freeze(['files', 'github']),
   'verify-return': Object.freeze(['files', 'github']),
+  evidence: Object.freeze(['files']),
+  'review-prepare': Object.freeze(['files']),
   status: Object.freeze(['files']),
 });
 
@@ -953,7 +962,7 @@ function instantiateTaskTemplate(target, projectConfig, taskId, title) {
     .replaceAll('Short task title', title);
 }
 
-function appendComment(content, note) {
+export function appendComment(content, note) {
   const date = new Date().toISOString().slice(0, 10);
   const entry = `- ${date}: ${note.trim()}`;
   const comments = markdownSection(content, '## Comments');
@@ -1063,7 +1072,7 @@ export async function cmdTask(args, io = createIo()) {
     const suggestion = sub ? suggestName(sub, Object.keys(TASK_SUBCOMMANDS)) : null;
     io.err(suggestion
       ? `task: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
-      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, verify-return, status.');
+      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, verify-return, evidence, status.');
     io.err('Run "agenticloop help task" for usage.');
     return EXIT_USAGE;
   }
@@ -1746,6 +1755,13 @@ export async function cmdTask(args, io = createIo()) {
         packet,
         refetchTask,
         refetchRepositoryEvidence,
+        refetchCarrierLineage: ({ snapshot }) => {
+          const contract = taskContractDigest(snapshot.body);
+          return resolveCarrierLineage(target, taskId, {
+            backend, taskContractDigest: contract.ok ? contract.digest : null,
+            currentCarrierDigest: snapshot.digest,
+          });
+        },
         producerReceipt,
         resolveTrustedAdapter: adapterId => resolveTrustedHostAdapter(target, io, opts.hostTrustStore, adapterId),
         requestedOwner: opts.resumeOwner,
@@ -1830,6 +1846,307 @@ export async function cmdTask(args, io = createIo()) {
       }
       else for (const error of received.validation.errors) io.err(error);
       return received.ok ? 0 : 1;
+    }
+
+    if (sub === 'evidence') {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      const mutationClass = String(opts.class ?? '');
+      const evidenceClasses = new Set([
+        'implementation_artifact_evidence',
+        'implementation_summary_evidence',
+        'implementation_outcome_evidence',
+      ]);
+      if (!taskId || !opts.expectDigest || !evidenceClasses.has(mutationClass)) {
+        io.err('task evidence requires <id>, --expect-digest, and --class implementation_artifact_evidence|implementation_summary_evidence|implementation_outcome_evidence');
+        return EXIT_USAGE;
+      }
+      if (selectedBackend.backend !== 'files') {
+        return printGateResult('task evidence', commandFailure('task evidence', new VerificationContextError(
+          'GitHub task evidence mutation requires the task-body guarded transport and is not available through this files carrier command'
+        ), 'operational_error', {}, target), asJson, io);
+      }
+      const filePath = taskPathForId(target, projectConfig, taskId);
+      const carrier = relative(target, filePath).replace(/\\/g, '/');
+      if (!existsSync(filePath)) {
+        return printGateResult('task evidence', commandFailure('task evidence', new VerificationContextError(
+          `task record not found: ${carrier}`
+        ), 'operational_error', {}, target), asJson, io);
+      }
+      const current = readFileSync(filePath, 'utf8');
+      const priorCarrierDigest = taskRecordDigest(current);
+      if (priorCarrierDigest !== String(opts.expectDigest)) {
+        return printGateResult('task evidence', commandFailure('task evidence', new PublicCommandError(
+          staleCarrierDigestMessage(String(opts.expectDigest), priorCarrierDigest), STALE_CARRIER_DIGEST_CONTEXT
+        ), 'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);
+      }
+      const [frontmatter] = parseFrontmatter(current);
+      if (frontmatterString(frontmatter?.status) !== 'in-progress') {
+        return printGateResult('task evidence', commandFailure('task evidence', new PublicCommandError(
+          'Engineer evidence mutation requires the task to be in-progress through a recognized role start', {
+            code: 'task.evidence.not_in_progress', evidenceState: 'negative', disposition: 'blocked',
+          }
+        ), 'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);
+      }
+      const contract = taskContractDigest(current);
+      if (!contract.ok) {
+        return printGateResult('task evidence', commandFailure('task evidence', new VerificationContextMalformedError(contract.error), 'operational_error', {}, target), asJson, io);
+      }
+      const lineage = resolveCarrierLineage(target, taskId, {
+        backend: 'files', taskContractDigest: contract.digest, currentCarrierDigest: priorCarrierDigest,
+      });
+      if (!lineage.ok) {
+        return printGateResult('task evidence', commandFailure('task evidence', new PublicCommandError(
+          `Engineer evidence mutation refused: ${lineage.errors.join('; ')}`, {
+            code: 'task.evidence.lineage', evidenceState: 'changed', disposition: 'blocked',
+            safeRepair: 'Restore the recognized carrier lineage or prepare a fresh dispatch; do not edit task evidence directly.',
+          }
+        ), 'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);
+      }
+      let candidate = current;
+      let ownedFields;
+      if (mutationClass === 'implementation_artifact_evidence') {
+        const productHead = String(opts.productHead ?? '');
+        const observedHead = String(targetGitRunner(target)(['rev-parse', '--verify', 'HEAD']).stdout ?? '').trim();
+        if (!isGitObjectId(productHead) || productHead !== observedHead) {
+          return printGateResult('task evidence', commandFailure('task evidence', new PublicCommandError(
+            'implementation artifact evidence requires --product-head equal to the exact current repository HEAD before workflow evidence is committed', {
+              code: 'task.evidence.product_head', evidenceState: 'changed', disposition: 'blocked',
+            }
+          ), 'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);
+        }
+        candidate = replaceFrontmatterField(candidate, 'implementation_artifact', `commit:${productHead}`);
+        ownedFields = ['implementation_artifact'];
+      } else if (mutationClass === 'implementation_summary_evidence') {
+        if (typeof opts.summary !== 'string' || !opts.summary.trim() || typeof opts.checkEvidence !== 'string' || !opts.checkEvidence.trim()) {
+          io.err('task evidence --class implementation_summary_evidence requires --summary and --check-evidence');
+          return EXIT_USAGE;
+        }
+        candidate = appendComment(candidate, `Engineer summary: ${opts.summary.trim()} | Check evidence: ${opts.checkEvidence.trim()}`);
+        ownedFields = ['comments'];
+      } else {
+        if (!['implementation_ready_for_review', 'implementation_blocked'].includes(String(opts.outcome ?? ''))) {
+          io.err('task evidence --class implementation_outcome_evidence requires --outcome implementation_ready_for_review|implementation_blocked');
+          return EXIT_USAGE;
+        }
+        candidate = appendComment(candidate, `Engineer outcome (non-authoritative): ${String(opts.outcome)}`);
+        ownedFields = ['comments'];
+      }
+      const currentCarrierDigest = taskRecordDigest(candidate);
+      const candidateContract = taskContractDigest(candidate);
+      if (!candidateContract.ok || candidateContract.digest !== contract.digest || candidate === current) {
+        return printGateResult('task evidence', commandFailure('task evidence', new PublicCommandError(
+          'Engineer evidence candidate changes protected task contract or makes no bounded evidence change', {
+            code: 'task.evidence.contract_drift', evidenceState: 'changed', disposition: 'blocked',
+          }
+        ), 'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);
+      }
+      const receipt = createCarrierMutationReceipt({
+        receiptId: `task-mutation:${randomUUID()}`,
+        backend: 'files', task: { id: taskId, carrier }, taskContractDigest: contract.digest,
+        dispatchCarrierDigest: lineage.dispatchCarrierDigest, priorCarrierDigest, currentCarrierDigest,
+        mutationClass, ownedFields, changedFields: ownedFields,
+        producer: {
+          workflowRole: 'engineer', assuranceGrade: 'session_reported',
+          invocationId: lineage.dispatchConsumption.invocationId,
+          workUnitIdentity: lineage.dispatchConsumption.workUnitIdentity,
+          repositoryIdentity: lineage.dispatchConsumption.repositoryIdentity,
+        },
+        predecessor: {
+          kind: lineage.receipts.length === 0 ? 'dispatch_consumption' : 'task_mutation_receipt',
+          digest: lineage.receipts.length === 0 ? lineage.dispatchConsumption.digest : lineage.receipts.at(-1).digest,
+        },
+      });
+      const immediate = readFileSync(filePath, 'utf8');
+      if (taskRecordDigest(immediate) !== priorCarrierDigest) {
+        return printGateResult('task evidence', commandFailure('task evidence', new BaselineChangedError(
+          `The task record changed between evidence validation and mutation; nothing was written to ${carrier}.`
+        ), 'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);
+      }
+      const receiptPath = carrierMutationRelativePath(receipt);
+      const applied = executeMutationBatch(target, [
+        { type: 'write', path: carrier, content: candidate, expectedDigest: priorCarrierDigest, expectedKind: 'file' },
+        { type: 'create', path: receiptPath, content: `${JSON.stringify(receipt, null, 2)}\n` },
+      ]);
+      if (!applied.ok) {
+        return printGateResult('task evidence', commandFailure('task evidence', new PublicCommandError(
+          `Engineer evidence mutation failed: ${[...applied.errors, ...applied.rollbackErrors].join('; ')}`, {
+            code: 'task.evidence.atomic_write', evidenceState: 'negative', disposition: 'blocked',
+          }
+        ), 'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);
+      }
+      const final = readFileSync(filePath, 'utf8');
+      const finalLineage = resolveCarrierLineage(target, taskId, {
+        backend: 'files', taskContractDigest: contract.digest, currentCarrierDigest,
+      });
+      if (final !== candidate || !finalLineage.ok || taskContractDigest(final).digest !== contract.digest) {
+        return printGateResult('task evidence', commandFailure('task evidence', new PublicCommandError(
+          'Engineer evidence mutation did not refetch to one current schema-valid carrier lineage', {
+            code: 'task.evidence.final_validation', evidenceState: 'changed', disposition: 'blocked',
+          }
+        ), 'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);
+      }
+      const result = {
+        ok: true, task_id: taskId, mutationClass, taskContractDigest: contract.digest,
+        dispatchCarrierDigest: lineage.dispatchCarrierDigest, currentCarrierDigest,
+        receipt, receiptPath, productHead: mutationClass === 'implementation_artifact_evidence' ? opts.productHead : null,
+      };
+      if (asJson) io.out(JSON.stringify(result, null, 2));
+      else io.out(`Recorded ${mutationClass} for ${taskId}; current carrier: ${currentCarrierDigest}`);
+      return 0;
+    }
+
+    if (sub === 'review-prepare') {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      if (!taskId) {
+        io.err('task review-prepare requires <id>');
+        return EXIT_USAGE;
+      }
+      if (selectedBackend.backend !== 'files') {
+        return printGateResult('task review-prepare', commandFailure('task review-prepare', new VerificationContextError(
+          'files review preparation requires the files backend'
+        ), 'operational_error', {}, target), asJson, io);
+      }
+      const filePath = taskPathForId(target, projectConfig, taskId);
+      const carrier = relative(target, filePath).replace(/\\/g, '/');
+      if (!existsSync(filePath)) {
+        return printGateResult('task review-prepare', commandFailure('task review-prepare', new VerificationContextError(
+          `task record not found: ${carrier}`
+        ), 'operational_error', {}, target), asJson, io);
+      }
+      // One command-local carrier snapshot is used for every review-entry
+      // decision. A second fetch is only a final drift check, never input to a
+      // mixed snapshot.
+      const body = readFileSync(filePath, 'utf8');
+      const currentCarrierDigest = taskRecordDigest(body);
+      const contract = taskContractDigest(body);
+      const history = loadFilesTaskContractRecords(target, taskId);
+      const snapshot = {
+        backend: 'files', taskId, carrier, body, digest: currentCarrierDigest,
+        trustedRecords: history.trustedRecords, trustedRecordErrors: history.errors,
+      };
+      const recognition = recognizeLifecycleReturn({
+        target, io, transition: 'review_entry', backend: 'files', taskId,
+        taskContractDigest: contract.ok ? contract.digest : null,
+        currentCarrierDigest, productHead: implementationArtifactHead(body),
+        refetchTask: () => snapshot,
+        refetchRepositoryEvidence: record => refetchFilesReturnEvidence(
+          target, record.evidence.packet, record.evidence.repositoryEvidence
+        ),
+        hostTrustStore: opts.hostTrustStore,
+      });
+      if (!recognition.recognized) {
+        return printGateResult('task review-prepare', {
+          ok: false, task_id: taskId, diagnostics: recognition.diagnostics,
+          errors: recognition.diagnostics.map(item => item.message), warnings: [],
+          evidenceState: recognition.evidenceState, disposition: recognition.disposition,
+          handoff_recognition: recognition,
+        }, asJson, io);
+      }
+      const returnId = recognition.boundIdentity.returnId;
+      const verified = listReturnVerifications(target, taskId, {
+        taskContractDigest: contract.digest,
+      });
+      const matchingReturns = verified.records.filter(record =>
+        record.evidence?.roleReturn?.returnId === returnId
+      );
+      if (!verified.ok || matchingReturns.length !== 1) {
+        return printGateResult('task review-prepare', {
+          ok: false, task_id: taskId, diagnostics: [],
+          errors: verified.ok
+            ? ['the recognized verified return cannot be resolved uniquely for review entry']
+            : verified.errors,
+          warnings: [], evidenceState: 'changed', disposition: 'superseded',
+          handoff_recognition: recognition,
+        }, asJson, io);
+      }
+      const verifiedReturn = matchingReturns[0];
+      const terminalLineageDigest = verifiedReturn.evidence.roleReturn.carrierLineage
+        .evidenceMutationReceiptDigests.at(-1) ??
+        verifiedReturn.evidence.roleReturn.carrierLineage.dispatchConsumptionDigest;
+      const receipt = {
+        kind: 'agenticloop.files-review-entry-receipt', schemaVersion: 2,
+        backend: 'files', taskId, taskContractDigest: contract.digest,
+        dispatchCarrierDigest: recognition.boundIdentity.dispatchCarrierDigest,
+        currentCarrierDigest, productHead: recognition.boundIdentity.productHead,
+        workflowHead: recognition.boundIdentity.workflowHead,
+        candidateHead: recognition.boundIdentity.candidateHead,
+        verifiedReturn: {
+          recordId: verifiedReturn.recordId,
+          digest: verifiedReturn.digest,
+          returnGenerationDigest: verifiedReturn.returnGenerationDigest,
+        },
+        carrierLineageTerminalDigest: terminalLineageDigest,
+        handoffRecognitionDigest: recognition.digest,
+        // A review entry is an idempotent projection of one verified return.
+        // Reuse its trusted verification instant rather than minting a new
+        // identity on an otherwise exact retry.
+        observedAt: verifiedReturn.verifiedAt, digest: null,
+      };
+      const { digest: _digest, ...receiptProjection } = receipt;
+      receipt.digest = `sha256:agenticloop.files-review-entry-receipt.v2:${canonicalSha256(receiptProjection)}`;
+      // The receipt's human-readable record is intentionally not a source of
+      // authority. The recognized verified return remains the authority; this
+      // file merely records entry after the command-local drift check.
+      const returnToken = verifiedReturn.recordId.replace(/^return-verification:/, '');
+      const reviewPath = `.agenticloop/reviews/entries/${taskId}/${returnToken}.json`;
+      const receiptText = `${JSON.stringify(receipt, null, 2)}\n`;
+      const reviewAbsolute = resolve(target, reviewPath);
+      let alreadyCurrent = false;
+      if (existsSync(reviewAbsolute)) {
+        try {
+          const existing = JSON.parse(readFileSync(reviewAbsolute, 'utf8'));
+          alreadyCurrent = canonicalJson(existing) === canonicalJson(receipt);
+        } catch {
+          alreadyCurrent = false;
+        }
+        if (!alreadyCurrent) {
+          return printGateResult('task review-prepare', commandFailure('task review-prepare', new PublicCommandError(
+            `conflicting review-entry content already exists at ${reviewPath}`, {
+              code: 'review.entry.persistence', evidenceState: 'negative', disposition: 'blocked',
+            }
+          ), 'operational_error', { task_id: taskId }, target), asJson, io);
+        }
+      }
+      // The no-op carrier write is intentional: executeMutationBatch rechecks
+      // its exact bytes immediately before it creates the review entry, so a
+      // carrier race cannot leave an authoritative entry behind.
+      const applied = executeMutationBatch(target, [
+        { type: 'write', path: carrier, content: body, expectedDigest: currentCarrierDigest, expectedKind: 'file' },
+        ...(!alreadyCurrent ? [{ type: 'create', path: reviewPath, content: receiptText }] : []),
+      ]);
+      if (!applied.ok) {
+        const stale = applied.stale === true;
+        return printGateResult('task review-prepare', commandFailure('task review-prepare', new PublicCommandError(
+          `review-entry persistence failed: ${[...applied.errors, ...applied.rollbackErrors].join('; ')}`, {
+            code: 'review.entry.persistence', evidenceState: stale ? 'changed' : 'negative',
+            disposition: stale ? 'superseded' : 'blocked',
+          }
+        ), 'operational_error', { task_id: taskId }, target), asJson, io);
+      }
+      const finalCarrier = readFileSync(filePath, 'utf8');
+      const finalReceipt = readFileSync(reviewAbsolute, 'utf8');
+      if (finalCarrier !== body || finalReceipt !== receiptText) {
+        return printGateResult('task review-prepare', commandFailure('task review-prepare', new PublicCommandError(
+          'review-entry persistence did not refetch to the exact intended carrier and receipt bytes', {
+            code: 'review.entry.persistence', evidenceState: 'changed', disposition: 'superseded',
+          }
+        ), 'operational_error', { task_id: taskId }, target), asJson, io);
+      }
+      const result = {
+        ok: true, task_id: taskId, taskContractDigest: contract.digest,
+        dispatchCarrierDigest: receipt.dispatchCarrierDigest, currentCarrierDigest,
+        productHead: receipt.productHead, workflowHead: receipt.workflowHead, candidateHead: receipt.candidateHead,
+        reviewEntryPath: reviewPath,
+        mutationDisposition: alreadyCurrent ? 'already_current' : 'created',
+        verifiedReturn: receipt.verifiedReturn,
+        carrierLineageTerminalDigest: receipt.carrierLineageTerminalDigest,
+        handoff_recognition: recognition,
+      };
+      if (asJson) io.out(JSON.stringify(result, null, 2));
+      else io.out(`Prepared files review entry for ${taskId}: ${reviewPath}`);
+      return 0;
     }
 
     if (sub === 'establish-baseline') {
@@ -2162,7 +2479,7 @@ export async function cmdTask(args, io = createIo()) {
             backend: 'files',
             taskId,
             taskContractDigest: recordContract.ok ? recordContract.digest : null,
-            carrierDigest: currentDigest,
+            dispatchCarrierDigest: currentDigest,
             packetPath: opts.dispatchPacket ? String(opts.dispatchPacket) : null,
             hostTrustStore: opts.hostTrustStore,
             validatePreparedDispatch: currentDispatch
@@ -2189,9 +2506,6 @@ export async function cmdTask(args, io = createIo()) {
             ...domain,
           }, asJson, io);
         }
-        roleStartConsumption = createDispatchConsumption({
-          backend: 'files', taskId, recognition: roleStartRecognition,
-        });
       }
 
       if (nextStatus === 'closed' && currentStatus !== nextStatus) {
@@ -2221,8 +2535,8 @@ export async function cmdTask(args, io = createIo()) {
           backend: 'files',
           taskId,
           taskContractDigest: contract.ok ? contract.digest : null,
-          carrierDigest: currentDigest,
-          artifactHead: implementationArtifactHead(currentContent),
+          currentCarrierDigest: currentDigest,
+          productHead: implementationArtifactHead(currentContent),
           refetchTask: () => ({
             backend: 'files', taskId, carrier: relPath,
             body: readFileSync(filePath, 'utf8'),
@@ -2261,7 +2575,13 @@ export async function cmdTask(args, io = createIo()) {
       if (opts.note && opts.note !== true) {
         candidate = appendComment(candidate, String(opts.note));
       }
-      const candidateDigest = taskRecordDigest(candidate);
+       const candidateDigest = taskRecordDigest(candidate);
+      if (roleStartRecognition?.recognized) {
+        roleStartConsumption = createDispatchConsumption({
+          backend: 'files', taskId, recognition: roleStartRecognition,
+          currentCarrierDigest: candidateDigest,
+        });
+      }
       const candidateRoot = evaluateTaskRecordRoot(candidate);
       const candidateDiagnostics = candidateRoot.ok
         ? validateTaskRecordDiagnostics(candidate, relPath)
@@ -2307,11 +2627,14 @@ export async function cmdTask(args, io = createIo()) {
       // --- 4. Validated no-op: rerunning an already-current transition ---
       if (candidate === currentContent) {
         if (roleStartConsumption) {
-          const recorded = executeMutationBatch(target, [{
-            type: 'create',
-            path: dispatchConsumptionRelativePath(roleStartConsumption),
-            content: `${JSON.stringify(roleStartConsumption, null, 2)}\n`,
-          }]);
+          const recorded = executeMutationBatch(target, [
+            { type: 'write', path: relPath, content: currentContent, expectedDigest: currentDigest, expectedKind: 'file' },
+            {
+              type: 'create',
+              path: dispatchConsumptionRelativePath(roleStartConsumption),
+              content: `${JSON.stringify(roleStartConsumption, null, 2)}\n`,
+            },
+          ]);
           if (!recorded.ok) {
             for (const error of recorded.errors) io.err(`task status failed: ${error}`);
             return 1;
@@ -2345,7 +2668,10 @@ export async function cmdTask(args, io = createIo()) {
           `The task record changed between validation and mutation; nothing was written to ${relPath}.`
         ));
       }
-      const mutationActions = [{ type: 'write', path: relPath, content: candidate }];
+      const mutationActions = [{
+        type: 'write', path: relPath, content: candidate,
+        expectedDigest: currentDigest, expectedKind: 'file',
+      }];
       if (roleStartConsumption) mutationActions.push({
         type: 'create',
         path: dispatchConsumptionRelativePath(roleStartConsumption),
@@ -2397,6 +2723,16 @@ export async function cmdTask(args, io = createIo()) {
         ? validateTaskRecordDiagnostics(resulting, relPath)
         : resultingRoot.diagnostics;
       if (resulting !== candidate || resultingDiagnostics.length > 0) {
+        // A post-write validation failure on bytes this operation still owns is
+        // rolled back before reporting failure. If another writer replaced the
+        // bytes, leave that external progress intact and describe it precisely.
+        const rollback = resulting === candidate
+          ? executeMutationBatch(target, [{
+              type: 'write', path: relPath, content: currentContent,
+              expectedDigest: resultingDigest, expectedKind: 'file',
+            }])
+          : null;
+        const restored = rollback?.ok === true && readFileSync(filePath, 'utf8') === currentContent;
         const result = createValidationResult({
           command: 'task status', ok: false, evidenceState: 'changed', disposition: 'blocked',
           diagnostics: resultingDiagnostics,
@@ -2412,18 +2748,22 @@ export async function cmdTask(args, io = createIo()) {
           carrier: relPath,
           expectedDigest: currentDigest,
           candidateDigest,
-          resultingDigest,
+          resultingDigest: restored ? currentDigest : resultingDigest,
           verification: verificationOf(result),
           ownedProjections: ['task_record_status'],
-          changedPaths: [relPath],
-          mutationDisposition: 'unresolved',
-          recovery: `A mutation committed to ${relPath} (${resultingDigest}) but does not equal the validated candidate (${candidateDigest}). ` +
-            'Preserve the file, compare it against the candidate, and repair it through the correction-authority path before any further transition.',
+          changedPaths: restored ? [] : [relPath],
+          mutationDisposition: restored ? 'rolled_back' : 'unresolved',
+          recovery: restored
+            ? `The post-write validation failed and the transaction restored ${relPath} to ${currentDigest}; repair the candidate before retrying.`
+            : `A mutation committed to ${relPath} (${resultingDigest}) but does not equal the validated candidate (${candidateDigest}). ` +
+              'Preserve the file, compare it against the candidate, and repair it through the correction-authority path before any further transition.',
           revalidateCommand: readinessRevalidationCommand({
-            taskId, carrier: relPath, resultingDigest, context: evidenceContext,
+            taskId, carrier: relPath, resultingDigest: restored ? currentDigest : resultingDigest, context: evidenceContext,
           }),
         });
-        io.err(`task status: ${relPath} was written but could not be revalidated against the exact candidate.`);
+        io.err(restored
+          ? `task status: ${relPath} failed final validation and was restored to its exact predecessor.`
+          : `task status: ${relPath} was written but could not be revalidated against the exact candidate.`);
         io.err(receipt.recovery);
         if (asJson) io.out(JSON.stringify({ ...domain, receipt }, null, 2));
         return 1;
@@ -2450,7 +2790,7 @@ export async function cmdTask(args, io = createIo()) {
       }));
     }
 
-    io.err(`Unknown task subcommand '${sub}'. Expected: list, lint, new, establish-baseline, authorize-correction, prepare-dispatch, verify-return, status.`);
+    io.err(`Unknown task subcommand '${sub}'. Expected: list, lint, new, establish-baseline, authorize-correction, prepare-dispatch, verify-return, evidence, review-prepare, status.`);
     return EXIT_USAGE;
   } catch (error) {
     if (error instanceof CliUsageError) throw error;

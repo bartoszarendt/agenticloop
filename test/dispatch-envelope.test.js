@@ -94,7 +94,7 @@ describe('exceptional verification authority boundary', () => {
     git(fixture.root, ['commit', '-m', 'exception evidence\n\nTask: T-001\nAgent: engineer']);
     const returnHead = git(fixture.root, ['rev-parse', 'HEAD']);
     const evidence = repositoryEvidence(packet, { head: returnHead });
-    evidence.attribution = { range: { base: packet.repository.head, head: returnHead }, commits: [returnHead] };
+    evidence.productAttribution = { range: { base: packet.repository.head, head: returnHead }, commits: [returnHead] };
     const roleReturn = readyReturn(packet, evidence);
     const request = exceptionalRequest(packet);
     const exceptionalReceipt = createHostExceptionalVerificationReceipt({
@@ -166,7 +166,7 @@ describe('exceptional verification authority boundary', () => {
     git(fixture.root, ['commit', '-m', 'exception evidence\n\nTask: T-001\nAgent: engineer']);
     const returnHead = git(fixture.root, ['rev-parse', 'HEAD']);
     const evidence = repositoryEvidence(packet, { head: returnHead });
-    evidence.attribution = { range: { base: packet.repository.head, head: returnHead }, commits: [returnHead] };
+    evidence.productAttribution = { range: { base: packet.repository.head, head: returnHead }, commits: [returnHead] };
     const roleReturn = readyReturn(packet, evidence);
     const send = (request, extra = {}, options = fixture.options) => receiveRoleReturn({
       raw: JSON.stringify(roleReturn), packet, refetchTask: fixture.refetchTask,
@@ -242,7 +242,7 @@ describe('exceptional verification authority boundary', () => {
     git(fixture.root, ['commit', '-m', 'exception evidence\n\nTask: T-001\nAgent: engineer']);
     const returnHead = git(fixture.root, ['rev-parse', 'HEAD']);
     const evidence = repositoryEvidence(packet, { head: returnHead });
-    evidence.attribution = { range: { base: packet.repository.head, head: returnHead }, commits: [returnHead] };
+    evidence.productAttribution = { range: { base: packet.repository.head, head: returnHead }, commits: [returnHead] };
     const roleReturn = readyReturn(packet, evidence);
     const request = exceptionalRequest(packet);
     const exceptionalReceipt = createHostExceptionalVerificationReceipt({
@@ -295,30 +295,46 @@ function blockedRuntimeReturn(packet) {
   ];
   const evidence = {
     backend: packet.backend,
-    task: { id: packet.task.id, digest: packet.task.digest },
+    task: {
+      id: packet.task.id,
+      taskContractDigest: packet.task.taskContractDigest,
+      dispatchCarrierDigest: packet.task.dispatchCarrierDigest,
+      currentCarrierDigest: packet.task.dispatchCarrierDigest,
+    },
     worktree: packet.assignment.worktree,
     branch: packet.assignment.branch,
-    baseHead: packet.repository.head,
-    head: packet.repository.head,
-    changedPaths: [],
-    attribution: {
+    productBaseHead: packet.repository.head,
+    productHead: packet.repository.head,
+    workflowHead: packet.repository.head,
+    candidateHead: null,
+    productChangedPaths: [],
+    workflowChangedPaths: [],
+    productAttribution: {
       range: { base: packet.repository.head, head: packet.repository.head },
       commits: [],
     },
     checks,
+    carrierLineage: {
+      dispatchConsumptionDigest: `sha256:agenticloop.dispatch-consumption.v3:${'a'.repeat(64)}`,
+      evidenceMutationReceiptDigests: [],
+    },
     pr: { state: 'not_applicable', number: null, url: null },
   };
   const roleReturn = createRoleReturn({
     producerRole: 'engineer',
     packet: { packetId: packet.packetId, digest: packet.digest },
-    task: { backend: packet.backend, id: packet.task.id, digest: packet.task.digest },
+    task: { backend: packet.backend, ...evidence.task },
     worktree: evidence.worktree,
     branch: evidence.branch,
-    head: evidence.head,
-    baseHead: evidence.baseHead,
-    changedPaths: evidence.changedPaths,
+    productBaseHead: evidence.productBaseHead,
+    productHead: evidence.productHead,
+    workflowHead: evidence.workflowHead,
+    candidateHead: evidence.candidateHead,
+    productChangedPaths: evidence.productChangedPaths,
+    workflowChangedPaths: evidence.workflowChangedPaths,
     checks: evidence.checks,
-    attribution: evidence.attribution,
+    productAttribution: evidence.productAttribution,
+    carrierLineage: evidence.carrierLineage,
     pr: evidence.pr,
     outcome: {
       kind: 'implementation_blocked',
@@ -1009,7 +1025,7 @@ describe('role-return handoff evidence', () => {
     git(fixture.root, ['commit', '-m', 'implement return\n\nTask: T-001\nAgent: engineer']);
     const returnHead = git(fixture.root, ['rev-parse', 'HEAD']);
     const evidence = repositoryEvidence(prepared.packet, { head: returnHead });
-    evidence.attribution = {
+    evidence.productAttribution = {
       range: { base: prepared.packet.repository.head, head: returnHead },
       commits: git(fixture.root, ['rev-list', '--reverse', `${prepared.packet.repository.head}..${returnHead}`])
         .split(/\r?\n/)
@@ -1033,7 +1049,7 @@ describe('role-return handoff evidence', () => {
       ['allowedPaths', value => [...value, 'other/**']],
       ['activationCaptureRef', () => '.agenticloop/activation/other.json'],
       ['requiredChecks', value => value.map(check => check.id === 'RC-1' ? { ...check, command: 'npm run attacker' } : check)],
-      ['contractDigest', () => `sha256:v1:${'f'.repeat(64)}`],
+      ['taskContractDigest', () => `sha256:v1:${'f'.repeat(64)}`],
     ];
     for (const [field, mutate] of mutations) {
       const packet = structuredClone(prepared.packet);
@@ -1048,10 +1064,11 @@ describe('role-return handoff evidence', () => {
         refetchTask: fixture.refetchTask,
         refetchRepositoryEvidence: () => evidence,
         ...producerBinding(fixture.trust, packet, roleReturn, evidence),
+        runGit: fixture.runGit,
       }, fixture.options);
       assert.equal(received.ok, false, field);
       assert.equal(received.validation.producerRole, 'engineer', field);
-      assert.match(received.validation.errors.join('\n'), /authoritative task and contract/, field);
+      assert.match(received.validation.errors.join('\n'), /dispatch packet task contract/, field);
     }
   });
 
@@ -1062,9 +1079,9 @@ describe('role-return handoff evidence', () => {
     const changedBody = `${current.body}\n`;
     const changed = { ...current, body: changedBody, digest: sha256(changedBody) };
     const evidence = repositoryEvidence(prepared.packet);
-    evidence.task.digest = changed.digest;
+    evidence.task.currentCarrierDigest = changed.digest;
     const oldReturn = readyReturn(prepared.packet, evidence);
-    const roleReturn = createRoleReturn({ ...oldReturn, task: { ...oldReturn.task, digest: changed.digest }, digest: undefined });
+    const roleReturn = createRoleReturn({ ...oldReturn, task: { ...oldReturn.task, currentCarrierDigest: changed.digest }, digest: undefined });
     const received = receiveRoleReturn({
       raw: JSON.stringify(roleReturn),
       packet: prepared.packet,
@@ -1074,7 +1091,7 @@ describe('role-return handoff evidence', () => {
     }, fixture.options);
     assert.equal(received.ok, false);
     assert.equal(received.validation.producerRole, 'engineer');
-    assert.match(received.validation.errors.join('\n'), /packet task binding|persisted dispatch packet/);
+    assert.match(received.validation.errors.join('\n'), /Git reader|required to rederive/, 'v3 files evidence requires a trusted Git reader');
   });
 
   it('rejects changed backend, task id, carrier, digest, and activation binding even with a recomputed packet digest', async () => {
@@ -1084,7 +1101,7 @@ describe('role-return handoff evidence', () => {
       packet => { packet.backend = 'github'; },
       packet => { packet.task.id = 'T-002'; },
       packet => { packet.task.carrier = 'issue:77'; },
-      packet => { packet.task.digest = sha256('different task bytes'); },
+      packet => { packet.task.dispatchCarrierDigest = sha256('different task bytes'); },
       packet => { packet.task.activationDigest = sha256('different activation'); },
     ];
     for (const mutate of mutations) {
@@ -1113,7 +1130,7 @@ describe('role-return handoff evidence', () => {
         { id: 'RC-1', kind: 'command', command: 'npm test', outcome: 'passed', exitCode: 9, evidence: 'wrong' },
         { id: 'RC-2', kind: 'command', command: 'npm run typecheck', outcome: 'passed', exitCode: 0, evidence: 'ok' },
       ] },
-      { changedPaths: [] },
+      { productChangedPaths: [] },
     ];
     for (const patch of variants) {
       const candidate = { ...readyReturn(prepared.packet, repositoryEvidence(prepared.packet)), ...patch, digest: undefined };
@@ -1130,8 +1147,8 @@ describe('role-return handoff evidence', () => {
     assert.equal(missingEvidence.ok, false);
     assert.equal(missingEvidence.validation.evidenceState, 'missing');
     const emptyAttribution = structuredClone(goodEvidence);
-    emptyAttribution.attribution.commits = [];
-    const malformed = { ...candidate, attribution: emptyAttribution.attribution };
+    emptyAttribution.productAttribution.commits = [];
+    const malformed = { ...candidate, productAttribution: emptyAttribution.productAttribution };
     const received = receiveRoleReturn({
       raw: JSON.stringify(malformed),
       packet: prepared.packet,
@@ -1174,13 +1191,24 @@ describe('role-return handoff evidence', () => {
     const evidence = repositoryEvidence(prepared.packet);
     const invalid = {
       producerRole: 'engineer', packet: { packetId: prepared.packet.packetId, digest: prepared.packet.digest },
-      task: { backend: 'files', id: 'T-001', digest: prepared.packet.task.digest },
-      worktree: evidence.worktree, branch: evidence.branch, head: evidence.head, baseHead: evidence.baseHead,
-      changedPaths: [], checks: [
+      task: {
+        backend: 'files', id: 'T-001', taskContractDigest: prepared.packet.task.taskContractDigest,
+        dispatchCarrierDigest: prepared.packet.task.dispatchCarrierDigest,
+        currentCarrierDigest: prepared.packet.task.dispatchCarrierDigest,
+      },
+      worktree: evidence.worktree, branch: evidence.branch,
+      productBaseHead: evidence.productBaseHead, productHead: evidence.productHead,
+      workflowHead: evidence.workflowHead, candidateHead: null,
+      productChangedPaths: [], workflowChangedPaths: [], checks: [
         { id: 'RC-1', kind: 'command', command: 'npm test', outcome: 'blocked', exitCode: 1, evidence: 'blocked' },
         { id: 'RC-2', kind: 'command', command: 'npm run typecheck', outcome: 'not_run', exitCode: -1, evidence: 'not run' },
       ],
-      attribution: evidence.attribution, pr: evidence.pr,
+      productAttribution: evidence.productAttribution,
+      carrierLineage: {
+        dispatchConsumptionDigest: `sha256:agenticloop.dispatch-consumption.v3:${'a'.repeat(64)}`,
+        evidenceMutationReceiptDigests: [],
+      },
+      pr: evidence.pr,
       outcome: { kind: 'implementation_blocked', completion: false, authority: 'non_authoritative_role_outcome' }, disposition: 'blocked',
       blocker: { category: '', evidence: { kind: '', detail: '' }, resumeOwner: '', resumeTransition: '', resumePreconditions: { items: [], justification: '' } },
       freshness: {
@@ -1201,7 +1229,7 @@ describe('role-return handoff evidence', () => {
     git(fixture.root, ['commit', '-m', 'implement return\n\nTask: T-001\nAgent: engineer']);
     const returnHead = git(fixture.root, ['rev-parse', 'HEAD']);
     const evidence = repositoryEvidence(prepared.packet, { head: returnHead });
-    evidence.attribution = {
+    evidence.productAttribution = {
       range: { base: prepared.packet.repository.head, head: returnHead },
       commits: git(fixture.root, ['rev-list', '--reverse', `${prepared.packet.repository.head}..${returnHead}`])
         .split(/\r?\n/)
@@ -1285,7 +1313,7 @@ describe('role-return handoff evidence', () => {
     }, fixture.options);
     assert.equal(rejected.ok, false);
     assert.equal(rejected.validation.producerRole, 'engineer');
-    assert.match(rejected.validation.errors.join('\n'), /authoritative task and contract/);
+    assert.match(rejected.validation.errors.join('\n'), /dispatch packet task contract/);
   });
 });
 
@@ -1656,28 +1684,28 @@ function assuranceUnboundEnvelope(packet) {
 describe('documented envelope identity contract', () => {
   it('AGENTIC_LOOP.md names the exact schema versions and digests the implementation emits', async () => {
     const doc = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf8');
-    assert.match(doc, /agenticloop\.role-preparation`, schema version\s*\n?`6`/);
-    assert.match(doc, /sha256:agenticloop\.role-preparation\.v6:<64-lowercase-hex>/);
-    assert.match(doc, /agenticloop\.role-return`, schema version\s*\n?`2`/);
-    assert.match(doc, /sha256:agenticloop\.role-return\.v2:<64-lowercase-hex>/);
+    assert.match(doc, /agenticloop\.role-preparation`, schema version\s*\n?`7`/);
+    assert.match(doc, /sha256:agenticloop\.role-preparation\.v7:<64-lowercase-hex>/);
+    assert.match(doc, /agenticloop\.role-return`, schema version\s*\n?`3`/);
+    assert.match(doc, /sha256:agenticloop\.role-return\.v3:<64-lowercase-hex>/);
     assert.match(doc, /agenticloop\.decomposition-provenance`, schema\s*\n?version `2`/);
     assert.match(doc, /agenticloop\.decomposition-binding`,\s*\n?schema version `1`/);
     assert.doesNotMatch(doc, /agenticloop\.role-preparation\.v1/);
     assert.doesNotMatch(doc, /agenticloop\.role-return\.v1/);
-    assert.equal(DISPATCH_PREPARATION_SCHEMA_VERSION, 6);
+    assert.equal(DISPATCH_PREPARATION_SCHEMA_VERSION, 7);
     assert.equal(ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION, 5);
     assert.equal(SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION, 4);
     assert.equal(BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION, 2);
     assert.equal(LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION, 3);
     assert.equal(DECOMPOSITION_SCHEMA_VERSION, 2);
     assert.equal(DECOMPOSITION_BINDING_SCHEMA_VERSION, 1);
-    assert.equal(ROLE_RETURN_SCHEMA_VERSION, 2);
+    assert.equal(ROLE_RETURN_SCHEMA_VERSION, 3);
     const fixture = await currentFilesTask('doc-contract');
     const prepared = prepare(fixture);
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
-    assert.ok(prepared.packet.digest.startsWith('sha256:agenticloop.role-preparation.v6:'));
+    assert.ok(prepared.packet.digest.startsWith('sha256:agenticloop.role-preparation.v7:'));
     const roleReturn = readyReturn(prepared.packet, repositoryEvidence(prepared.packet));
-    assert.ok(roleReturn.digest.startsWith('sha256:agenticloop.role-return.v2:'));
+    assert.ok(roleReturn.digest.startsWith('sha256:agenticloop.role-return.v3:'));
   });
 
   it('classifies the shipped schemaVersion 2 baseline as typed stale without accepting it', async () => {
@@ -1700,7 +1728,7 @@ describe('documented envelope identity contract', () => {
       code: 'dispatch.packet.stale',
       evidenceState: 'changed',
       disposition: 'superseded',
-      message: 'dispatch preparation schemaVersion 2 is stale; regenerate the packet as schemaVersion 6 before dispatch or return import',
+      message: 'dispatch preparation schemaVersion 2 is stale; regenerate the packet as schemaVersion 7 before dispatch or return import',
     }]);
   });
 
@@ -1721,7 +1749,7 @@ describe('documented envelope identity contract', () => {
       code: 'dispatch.packet.stale',
       evidenceState: 'changed',
       disposition: 'superseded',
-      message: 'dispatch preparation schemaVersion 5 is stale; regenerate the packet as schemaVersion 6 before dispatch or return import',
+      message: 'dispatch preparation schemaVersion 5 is stale; regenerate the packet as schemaVersion 7 before dispatch or return import',
     }]);
   });
 
@@ -1744,7 +1772,7 @@ describe('documented envelope identity contract', () => {
       code: 'dispatch.packet.stale',
       evidenceState: 'changed',
       disposition: 'superseded',
-      message: 'dispatch preparation schemaVersion 3 is stale; regenerate the packet as schemaVersion 6 before dispatch or return import',
+      message: 'dispatch preparation schemaVersion 3 is stale; regenerate the packet as schemaVersion 7 before dispatch or return import',
     });
   });
 
@@ -1767,7 +1795,7 @@ describe('documented envelope identity contract', () => {
       code: 'dispatch.packet.stale',
       evidenceState: 'changed',
       disposition: 'superseded',
-      message: 'dispatch preparation schemaVersion 4 is stale; regenerate the packet as schemaVersion 6 before dispatch or return import',
+      message: 'dispatch preparation schemaVersion 4 is stale; regenerate the packet as schemaVersion 7 before dispatch or return import',
     }]);
   });
 

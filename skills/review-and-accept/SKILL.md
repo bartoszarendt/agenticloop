@@ -285,8 +285,7 @@ Check:
   documented exception location for an approved no-PR/no-edit backend exception. A local
   document, chat message, issue comment, or review comment is not enough unless that exception
   is recorded.
-- Evidence is concise: verdict lines and relevant excerpts, not full terminal dumps. The agent
-  is still required to have read the full command output before claiming success.
+- Evidence is concise; agents must read full output before claiming success.
 - Neutral rule: the implementation artifact is linked to the backend that
   `.agenticloop/project.md` configures (default: `files`), and review is performed against that
   artifact rather than against chat prose.
@@ -307,6 +306,7 @@ Check:
   typically `implementation_artifact` plus the current implementation summary. A chat summary or
   an unstated local diff is not enough. If the task file cites a commit or range, inspect that
   local git state; if it cites a patch or diff file, inspect that recorded artifact.
+- Files: current `task review-prepare` evidence is required; drift blocks review.
 - Files projection: if a revision changed a previously published claim, evidence block, check
   result, or artifact reference in the implementation summary but no dated `## Revision Log` or
   `## Comments` entry records the correction, mark `needs_revision`. Silent rewrite of published

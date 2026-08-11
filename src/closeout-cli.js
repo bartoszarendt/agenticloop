@@ -256,7 +256,7 @@ export function resolveCloseoutAssuranceContext(target, io, backend, params) {
       return {
         taskId,
         taskContractDigest: expectedContractDigest,
-        artifactHead: closeoutTaskArtifactHead(identity, backend),
+        productHead: closeoutTaskArtifactHead(identity, backend),
         usable: checked.length > 0 && checked.every(item => item.ok),
         records: valid,
         failureCategory: checked.length === 0

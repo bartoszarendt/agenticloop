@@ -180,6 +180,15 @@ task-record obligation.
   observation, not a project fact or strategy approval, and return it for
   maintainer triage.
 - Publish an implementation summary with fresh evidence.
+- For files-backed work, preserve the consumed dispatch carrier. After the
+  product commit, use only the guarded evidence commands for task updates:
+  `task evidence <id> --class implementation_artifact_evidence --expect-digest
+  <currentCarrierDigest> --product-head <productHead>`, then the bounded summary
+  and non-authoritative outcome classes. Each command advances one recognized
+  receipt chain while `taskContractDigest` remains unchanged. Do not edit scope,
+  deviations, checks, dependencies, activation, or work-unit fields to expand
+  authority after implementation. The raw return must separately name
+  `productBaseHead`, `productHead`, `workflowHead`, and the carrier lineage.
 - For files-backed work, keep the current implementation summary accurate but
   append a dated correction entry to `## Revision Log` or `## Comments` before
   changing any previously published claim, evidence block, check result, or

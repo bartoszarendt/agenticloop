@@ -5,10 +5,13 @@ import { join } from 'node:path';
 import { canonicalSha256 } from './canonical-json.js';
 import { GIT_OBJECT_ID_RE } from './git-oid.js';
 import { validateHandoffRecognition } from './handoff-recognition.js';
+import { executeMutationBatch } from './fs-mutation-kernel.js';
+import { validateCarrierMutationReceipt } from './task-evidence-contract.js';
 
 export const DISPATCH_CONSUMPTION_KIND = 'agenticloop.dispatch-consumption';
-export const DISPATCH_CONSUMPTION_SCHEMA_VERSION = 2;
+export const DISPATCH_CONSUMPTION_SCHEMA_VERSION = 3;
 export const DISPATCH_CONSUMPTION_CLOCK_SKEW_MS = 1000;
+export const TASK_CARRIER_MUTATION_ROOT = '.agenticloop/handoffs/task-mutations';
 
 const ISO_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const PACKET_ID_RE = /^dispatch:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -23,10 +26,12 @@ function safeSegment(value) {
 export function dispatchConsumptionDigest(record) {
   const projection = { ...record };
   delete projection.digest;
-  return `sha256:agenticloop.dispatch-consumption.v2:${canonicalSha256(projection)}`;
+  return `sha256:agenticloop.dispatch-consumption.v${DISPATCH_CONSUMPTION_SCHEMA_VERSION}:${canonicalSha256(projection)}`;
 }
 
-export function createDispatchConsumption({ backend, taskId, recognition, consumedAt = new Date().toISOString() }) {
+export function createDispatchConsumption({
+  backend, taskId, recognition, currentCarrierDigest, consumedAt = new Date().toISOString(),
+}) {
   const checked = validateHandoffRecognition(recognition);
   if (!checked.ok || recognition?.recognized !== true || recognition.transition !== 'role_start' ||
       recognition.requirement !== 'prepared_dispatch') {
@@ -40,12 +45,19 @@ export function createDispatchConsumption({ backend, taskId, recognition, consum
     taskId,
     packetId: identity.packetId,
     packetDigest: identity.packetDigest,
+    invocationId: identity.invocationId,
     taskContractDigest: identity.taskContractDigest,
-    carrierDigest: identity.carrierDigest,
+    dispatchCarrierDigest: identity.dispatchCarrierDigest,
+    // At role start the sealed dispatch carrier is the current carrier unless
+    // the caller observed a later authoritative carrier explicitly.
+    currentCarrierDigest: currentCarrierDigest ?? identity.currentCarrierDigest ?? identity.dispatchCarrierDigest,
     workUnitIdentity: identity.workUnitIdentity,
     repositoryIdentity: identity.repositoryIdentity,
     worktreeRoot: identity.worktreeRoot,
-    artifactHead: identity.artifactHead,
+    productBaseHead: identity.productBaseHead,
+    mutationClass: 'role_start_status',
+    workflowRole: identity.roleId,
+    assuranceGrade: recognition.observedGrade,
     recognitionDigest: recognition.digest,
     recognition,
     consumedAt,
@@ -65,9 +77,10 @@ export function validateDispatchConsumption(record, {
   backend = null, taskId = null, filename = null, now = Date.now(),
 } = {}) {
   const required = [
-    'kind', 'schemaVersion', 'backend', 'taskId', 'packetId', 'packetDigest',
-    'taskContractDigest', 'carrierDigest', 'workUnitIdentity', 'repositoryIdentity',
-    'worktreeRoot', 'artifactHead', 'recognitionDigest', 'recognition', 'consumedAt', 'digest',
+    'kind', 'schemaVersion', 'backend', 'taskId', 'packetId', 'packetDigest', 'invocationId',
+    'taskContractDigest', 'dispatchCarrierDigest', 'currentCarrierDigest', 'workUnitIdentity', 'repositoryIdentity',
+    'worktreeRoot', 'productBaseHead', 'mutationClass', 'workflowRole', 'assuranceGrade',
+    'recognitionDigest', 'recognition', 'consumedAt', 'digest',
   ];
   const errors = [];
   if (!record || typeof record !== 'object' || Array.isArray(record) ||
@@ -83,12 +96,17 @@ export function validateDispatchConsumption(record, {
   if (taskId !== null && record.taskId !== taskId) errors.push(`dispatch consumption taskId '${record.taskId}' does not match expected task '${taskId}'`);
   if (!PACKET_ID_RE.test(String(record.packetId ?? ''))) errors.push('dispatch consumption packetId is invalid');
   if (!SEMANTIC_DIGEST_RE.test(String(record.packetDigest ?? ''))) errors.push('dispatch consumption packetDigest is invalid');
+  if (typeof record.invocationId !== 'string' || !record.invocationId) errors.push('dispatch consumption invocationId is invalid');
   if (!CONTRACT_DIGEST_RE.test(String(record.taskContractDigest ?? ''))) errors.push('dispatch consumption taskContractDigest is invalid');
-  if (!TASK_DIGEST_RE.test(String(record.carrierDigest ?? ''))) errors.push('dispatch consumption carrierDigest is invalid');
+  if (!TASK_DIGEST_RE.test(String(record.dispatchCarrierDigest ?? ''))) errors.push('dispatch consumption dispatchCarrierDigest is invalid');
+  if (!TASK_DIGEST_RE.test(String(record.currentCarrierDigest ?? ''))) errors.push('dispatch consumption currentCarrierDigest is invalid');
   if (typeof record.workUnitIdentity !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,200}$/.test(record.workUnitIdentity)) errors.push('dispatch consumption workUnitIdentity is invalid');
   if (typeof record.repositoryIdentity !== 'string' || !record.repositoryIdentity) errors.push('dispatch consumption repositoryIdentity is invalid');
   if (typeof record.worktreeRoot !== 'string' || !record.worktreeRoot) errors.push('dispatch consumption worktreeRoot is invalid');
-  if (!GIT_OBJECT_ID_RE.test(String(record.artifactHead ?? ''))) errors.push('dispatch consumption artifactHead is invalid');
+  if (!GIT_OBJECT_ID_RE.test(String(record.productBaseHead ?? ''))) errors.push('dispatch consumption productBaseHead is invalid');
+  if (record.mutationClass !== 'role_start_status') errors.push("dispatch consumption mutationClass must be 'role_start_status'");
+  if (record.workflowRole !== 'engineer') errors.push("dispatch consumption workflowRole must be immutable 'engineer'");
+  if (!['operator_confirmed', 'host_signed'].includes(record.assuranceGrade)) errors.push('dispatch consumption assuranceGrade is invalid');
   if (!SEMANTIC_DIGEST_RE.test(String(record.recognitionDigest ?? ''))) errors.push('dispatch consumption recognitionDigest is invalid');
 
   const recognition = validateHandoffRecognition(record.recognition);
@@ -101,8 +119,8 @@ export function validateDispatchConsumption(record, {
     if (record.recognitionDigest !== record.recognition.digest) errors.push('dispatch consumption recognitionDigest does not match embedded recognition');
     const identity = record.recognition.boundIdentity;
     for (const field of [
-      'backend', 'taskId', 'packetId', 'packetDigest', 'taskContractDigest', 'carrierDigest',
-      'workUnitIdentity', 'repositoryIdentity', 'worktreeRoot', 'artifactHead',
+      'backend', 'taskId', 'packetId', 'packetDigest', 'invocationId', 'taskContractDigest', 'dispatchCarrierDigest',
+      'workUnitIdentity', 'repositoryIdentity', 'worktreeRoot', 'productBaseHead',
     ]) {
       if (record[field] !== identity[field]) errors.push(`dispatch consumption ${field} does not match embedded recognition`);
     }
@@ -145,4 +163,121 @@ export function currentDispatchConsumption(target, taskId, options = {}) {
   const ordered = [...listed.records].sort((a, b) =>
     Date.parse(a.consumedAt) - Date.parse(b.consumedAt) || a.packetId.localeCompare(b.packetId));
   return { ok: true, records: listed.records, errors: [], record: ordered.at(-1) };
+}
+
+export function carrierMutationRelativePath(receipt) {
+  return `${TASK_CARRIER_MUTATION_ROOT}/${safeSegment(receipt.task.id)}/${safeSegment(receipt.receiptId)}.json`;
+}
+
+export function writeCarrierMutationReceipt(target, receipt) {
+  const checked = validateCarrierMutationReceipt(receipt);
+  if (!checked.ok) return { ok: false, errors: checked.errors, path: null };
+  const path = carrierMutationRelativePath(receipt);
+  const applied = executeMutationBatch(target, [{
+    type: 'create', path, content: `${JSON.stringify(receipt, null, 2)}\n`,
+  }]);
+  return {
+    ok: applied.ok,
+    errors: [...applied.errors, ...applied.rollbackErrors],
+    path,
+    disposition: applied.ok ? 'created' : 'conflict',
+  };
+}
+
+export function listCarrierMutationReceipts(target, taskId, { backend = null } = {}) {
+  const directory = join(target, TASK_CARRIER_MUTATION_ROOT, safeSegment(taskId));
+  if (!existsSync(directory)) return { ok: true, records: [], errors: [] };
+  const records = [];
+  const errors = [];
+  for (const name of readdirSync(directory).filter(value => value.endsWith('.json')).sort()) {
+    try {
+      const record = JSON.parse(readFileSync(join(directory, name), 'utf8'));
+      const checked = validateCarrierMutationReceipt(record);
+      if (!checked.ok) errors.push(`${name}: ${checked.errors.join('; ')}`);
+      else if (record.task.id !== taskId || (backend !== null && record.backend !== backend)) {
+        errors.push(`${name}: carrier mutation receipt identity does not match its storage task/backend`);
+      } else if (name !== `${safeSegment(record.receiptId)}.json`) {
+        errors.push(`${name}: carrier mutation receipt filename does not match its identity`);
+      } else records.push(record);
+    } catch (error) {
+      errors.push(`${name}: carrier mutation receipt is unreadable: ${error.message}`);
+    }
+  }
+  return { ok: errors.length === 0, records, errors };
+}
+
+/**
+ * Verify the one ordered mutable-carrier lineage accepted during an Engineer
+ * run. No current task body can substitute for a missing edge.
+ */
+export function resolveCarrierLineage(target, taskId, {
+  backend, taskContractDigest, currentCarrierDigest,
+} = {}) {
+  const consumed = currentDispatchConsumption(target, taskId, { backend });
+  if (!consumed.ok || !consumed.record) {
+    return { ok: false, errors: consumed.errors?.length ? consumed.errors : ['no recognized dispatch consumption exists'], records: [] };
+  }
+  const start = consumed.record;
+  const listed = listCarrierMutationReceipts(target, taskId, { backend });
+  if (!listed.ok) return { ok: false, errors: listed.errors, records: [] };
+  const errors = [];
+  if (taskContractDigest !== undefined && start.taskContractDigest !== taskContractDigest) errors.push('dispatch consumption taskContractDigest does not match current task contract');
+  let predecessorDigest = start.digest;
+  let carrierDigest = start.currentCarrierDigest;
+  const records = [];
+  // Receipts from a completed/revised dispatch generation share a task
+  // directory but are not predecessor candidates for this dispatch. Scope the
+  // chain by the complete immutable dispatch tuple before looking for edges.
+  const isGenerationReceipt = receipt =>
+    receipt.taskContractDigest === start.taskContractDigest &&
+    receipt.dispatchCarrierDigest === start.dispatchCarrierDigest &&
+    receipt.producer.invocationId === start.invocationId &&
+    receipt.producer.workUnitIdentity === start.workUnitIdentity &&
+    receipt.producer.repositoryIdentity === start.repositoryIdentity;
+  const remaining = listed.records.filter(isGenerationReceipt);
+  // A receipt that reuses this dispatch carrier is an attempted member of this
+  // generation even if one of its other bindings is forged. It must fail here,
+  // not disappear as an unrelated historical record.
+  for (const receipt of listed.records.filter(receipt =>
+    (receipt.dispatchCarrierDigest === start.dispatchCarrierDigest || receipt.predecessor.digest === start.digest) &&
+    !isGenerationReceipt(receipt)
+  )) {
+    errors.push(`carrier mutation receipt '${receipt.receiptId}' claims the active dispatch generation with mismatched identity`);
+  }
+  while (remaining.length > 0) {
+    const matches = remaining.filter(receipt => receipt.predecessor.digest === predecessorDigest);
+    if (matches.length !== 1) {
+      errors.push(matches.length === 0
+        ? 'carrier mutation receipts contain an orphaned or interrupted predecessor chain'
+        : 'carrier mutation receipts fork from one predecessor');
+      break;
+    }
+    const receipt = matches[0];
+    remaining.splice(remaining.indexOf(receipt), 1);
+    if (receipt.taskContractDigest !== start.taskContractDigest ||
+        receipt.dispatchCarrierDigest !== start.dispatchCarrierDigest ||
+        receipt.priorCarrierDigest !== carrierDigest ||
+        receipt.predecessor.digest !== predecessorDigest ||
+        receipt.predecessor.kind !== (predecessorDigest === start.digest ? 'dispatch_consumption' : 'task_mutation_receipt') ||
+        receipt.producer.invocationId !== start.invocationId ||
+        receipt.producer.workUnitIdentity !== start.workUnitIdentity ||
+        receipt.producer.repositoryIdentity !== start.repositoryIdentity) {
+      errors.push(`carrier mutation receipt '${receipt.receiptId}' does not continue the recognized carrier lineage`);
+      break;
+    }
+    records.push(receipt);
+    predecessorDigest = receipt.digest;
+    carrierDigest = receipt.currentCarrierDigest;
+  }
+  if (currentCarrierDigest !== undefined && carrierDigest !== currentCarrierDigest) errors.push('carrier lineage terminal currentCarrierDigest does not equal the current task carrier');
+  return {
+    ok: errors.length === 0,
+    errors,
+    dispatchConsumption: start,
+    receipts: records,
+    taskContractDigest: start.taskContractDigest,
+    dispatchCarrierDigest: start.dispatchCarrierDigest,
+    currentCarrierDigest: carrierDigest,
+    productBaseHead: start.productBaseHead,
+  };
 }

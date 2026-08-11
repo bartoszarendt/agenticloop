@@ -341,7 +341,7 @@ export function runGitHubReviewPrepare({ pr, workspace, packet: packetPath, ...o
     issueBody: refreshed.input.issueData.body,
     issueNumber: refreshed.input.issueData.number,
     taskContractDigest: freshResult.contractBaseline?.digest ?? null,
-    artifactHead: freshHead,
+    productHead: freshHead,
     commandRunner,
     repo: options.repo,
   });
@@ -401,7 +401,7 @@ export function runGitHubReviewPrepare({ pr, workspace, packet: packetPath, ...o
  * nothing here is read back out of the evidence being judged.
  */
 function recognizeReviewEntryHandoff({
-  target, io, issueBody, issueNumber, taskContractDigest, artifactHead,
+  target, io, issueBody, issueNumber, taskContractDigest, productHead,
   commandRunner = defaultGhCommandRunner, repo,
 }) {
   const root = target ?? process.cwd();
@@ -427,8 +427,8 @@ function recognizeReviewEntryHandoff({
     backend: 'github',
     taskId,
     taskContractDigest,
-    carrierDigest: liveTask().digest,
-    artifactHead,
+    currentCarrierDigest: liveTask().digest,
+    productHead,
     refetchTask: liveTask,
     refetchRepositoryEvidence: record => refetchGitHubReturnEvidence(record.evidence.repositoryEvidence, {
       commandRunner,
@@ -563,7 +563,7 @@ export function verifyReviewPacket({
         issueBody: refreshed.input.issueData.body,
         issueNumber: refreshed.input.issueData.number,
         taskContractDigest: result.contractBaseline?.digest ?? null,
-        artifactHead: currentHead,
+        productHead: currentHead,
         commandRunner,
         repo,
       });

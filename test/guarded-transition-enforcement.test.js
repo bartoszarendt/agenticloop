@@ -576,7 +576,7 @@ describe('GitHub closeout resumes the terminal transition after publication', ()
     const pr = { state: 'open', number: 6, url: 'https://example.test/pull/6' };
     const evidence = repositoryEvidence(packet, { head: full, pr });
     evidence.branch = packet.assignment.branch;
-    evidence.attribution = { range: { base: packet.repository.head, head: full }, commits: [full] };
+    evidence.productAttribution = { range: { base: packet.repository.head, head: full }, commits: [full] };
     state.returnPr = { number: 6, state: 'OPEN', url: pr.url, headRefOid: full, headRefName: evidence.branch };
     const roleReturn = readyReturn(packet, evidence);
     const binding = producerBinding(fixture.trust, packet, roleReturn, evidence);

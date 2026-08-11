@@ -83,7 +83,8 @@ or contradictory evidence blocks before a digest-bound packet is emitted or
 accepted. The packet is transient handoff data, not task state.
 
 The receiving role verifies the packet before mutation and returns raw
-`agenticloop.role-return` JSON. Its full base/head, changed paths, checks,
+`agenticloop.role-return` JSON. Its explicit `productBaseHead`, `productHead`,
+`workflowHead`, product/workflow path sets, checks,
 canonical `Task:`/`Agent:` trailers, and attribution range are checked against
 repository evidence. Files CLI return verification requires that exact evidence
 plus an Ed25519 host receipt bound to the target repository, packet, invocation,
@@ -96,6 +97,16 @@ verifier first reconstructs the current branch, head, changed paths, commit rang
 and attribution from live Git and rejects dirty tracked or untracked in-scope
 state. Invalid wire returns retain the packet's producer route.
 `implementation_ready_for_review` is a non-authoritative outcome, not completion.
+
+The carrier is not restored after `in-progress`. `task evidence` is the bounded
+Engineer-owned files mutation path: artifact, summary/check, and outcome evidence
+each require the exact `currentCarrierDigest`, preserve `taskContractDigest`, and
+write a versioned receipt under `.agenticloop/handoffs/task-mutations/`. The
+receipt chain starts at `.agenticloop/handoffs/dispatch/`; a carrier edit without
+that continuous chain is refused at return and review. Task carriers and canonical
+workflow records are workflow paths, never implementation deviations. After a
+verified return, `task review-prepare <id>` writes a files review-entry receipt
+only when its one command-local carrier snapshot remains current.
 
 New files-backed tasks materialize `attempt_budget` from project
 `default_attempt_budget`, then built-in `5`. A task-specific override is an

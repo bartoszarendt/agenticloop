@@ -235,12 +235,12 @@ async function certify(target, {
   mkdirSync(join(consumptionPath, '..'), { recursive: true });
   writeFileSync(consumptionPath, `${JSON.stringify(consumption, null, 2)}\n`, 'utf8');
 
-  let artifact = `commit:${packet.repository.head}`;
-  if (skipAudit) {
-    writeFileSync(join(target, 'src', 'existing.js'), 'export const current = "closeout-ready";\n', 'utf8');
-    fixtureGit(target, ['add', 'src/existing.js']);
-    fixtureGit(target, ['commit', '-m', 'record closeout candidate\n\nTask: T-001\nAgent: engineer']);
-  } else {
+  writeFileSync(join(target, 'src', 'existing.js'), 'export const current = "closeout-ready";\n', 'utf8');
+  fixtureGit(target, ['add', 'src/existing.js']);
+  fixtureGit(target, ['commit', '-m', 'record closeout candidate\n\nTask: T-001\nAgent: engineer']);
+  const productHead = fixtureGit(target, ['rev-parse', 'HEAD']);
+  let artifact = `commit:${productHead}`;
+  if (!skipAudit) {
     const created = await audit([
       'new', '--work-unit', 'milestone:M00', '--covered-tasks', tasks.join(','),
       '--artifact', artifact, '--goal', 'Deliver the milestone.',
@@ -259,14 +259,23 @@ async function certify(target, {
   const returnHead = fixtureGit(target, ['rev-parse', 'HEAD']);
   const changedPaths = fixtureGit(target, ['diff', '--name-only', `${packet.repository.head}..${returnHead}`])
     .split(/\r?\n/).filter(Boolean);
-  const commits = fixtureGit(target, ['rev-list', '--reverse', `${packet.repository.head}..${returnHead}`])
+  const productChangedPaths = fixtureGit(target, ['diff', '--name-only', `${packet.repository.head}..${productHead}`])
+    .split(/\r?\n/).filter(Boolean);
+  const commits = fixtureGit(target, ['rev-list', '--reverse', `${packet.repository.head}..${productHead}`])
     .split(/\r?\n/).filter(Boolean);
   const evidence = repositoryEvidence(packet, {
-    head: returnHead, changedPaths,
+    head: productHead, changedPaths: productChangedPaths,
   });
-  evidence.attribution = {
-    range: { base: packet.repository.head, head: returnHead },
+  evidence.workflowHead = returnHead;
+  evidence.productChangedPaths = productChangedPaths;
+  evidence.workflowChangedPaths = changedPaths.filter(path => !productChangedPaths.includes(path));
+  evidence.productAttribution = {
+    range: { base: packet.repository.head, head: productHead },
     commits,
+  };
+  evidence.carrierLineage = {
+    dispatchConsumptionDigest: consumption.digest,
+    evidenceMutationReceiptDigests: [],
   };
   const roleReturn = readyReturn(packet, evidence);
   const returnPath = join(target, '.agenticloop', 'tmp', 'engineer-return.json');
@@ -278,7 +287,6 @@ async function certify(target, {
     '--repository-evidence', evidencePath, '--target', target,
   ], { operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: protectedHostBoundary(fixture.trust) });
   assert.equal(verified.status, 0, `${verified.stdout}${verified.stderr}`);
-  if (skipAudit) artifact = `commit:${returnHead}`;
   return artifact;
 }
 

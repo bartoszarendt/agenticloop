@@ -553,6 +553,13 @@ After dispatch, run `task verify-return`. Standard mode can persist an observed
 independently packet-bound protected return adapter and an authenticated host
 receipt. Capability registration alone is not evidence that a return occurred.
 
+For files-backed Engineer work, do not restore the pre-start task body. Commit
+the product artifact, then use `task evidence` for artifact, summary/check, and
+outcome evidence with the current carrier digest. These guarded mutations preserve
+the protected contract and record the carrier receipt chain. After
+`task verify-return` persists the result, use `task review-prepare <id>` to enter
+files review from one current carrier snapshot.
+
 Old work units completed before activation assurance do not pass through silent
 missing evidence. In standard mode, `closeout prepare --legacy-unactivated
 --legacy-reason <text>` creates or reuses one interactive, short-lived signed

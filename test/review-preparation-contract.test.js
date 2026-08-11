@@ -1518,7 +1518,7 @@ describe('review preparation contract - review preparation and packet freshness'
         head, changedPaths: ['src/existing.js'],
         pr: { state: 'open', number: 42, url: 'https://example.test/pull/42' },
       });
-      evidence.attribution = { range: { base: dispatchHead, head }, commits: [head] };
+      evidence.productAttribution = { range: { base: dispatchHead, head }, commits: [head] };
       const roleReturn = readyReturn(packet, evidence);
       const producer = producerBinding(fixture.trust, packet, roleReturn, evidence);
       const received = receiveRoleReturn({
@@ -1578,13 +1578,17 @@ describe('review preparation contract - review preparation and packet freshness'
       assert.equal(result.packet.task, 7);
       assert.equal(result.packet.pr, 42);
       assert.equal(result.packet.headRefOid, head);
-      assert.equal(result.packet.taskContract.digest, packet.task.contractDigest);
+      assert.equal(result.packet.taskContract.digest, packet.task.taskContractDigest);
       assert.equal(result.lifecycle.handoffRecognitionDigest, result.handoffRecognition.digest);
       assert.deepEqual(result.handoffRecognition.boundIdentity, {
         backend: 'github', taskId: 'T-007', roleId: 'engineer',
-        taskContractDigest: packet.task.contractDigest, carrierDigest: packet.task.digest,
+        taskContractDigest: packet.task.taskContractDigest,
+        dispatchCarrierDigest: packet.task.dispatchCarrierDigest,
+        currentCarrierDigest: packet.task.dispatchCarrierDigest,
+        invocationId: packet.assignment.invocationId,
         packetId: packet.packetId, packetDigest: packet.digest,
-        workUnitIdentity: packet.decomposition.workUnitId, artifactHead: head,
+        workUnitIdentity: packet.decomposition.workUnitId,
+        productBaseHead: packet.repository.head, productHead: head, workflowHead: head, candidateHead: null,
         worktreeRoot: packet.repository.worktree,
         repositoryIdentity: verification.repositoryIdentity,
         returnId: roleReturn.returnId, returnGrade: 'host_receipt',
