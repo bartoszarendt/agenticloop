@@ -521,11 +521,23 @@ Guarantees:
   the drift and automatic refresh does not create a second block.
 
 The block also states that the main agent may invoke the generated **engineer**
-as an ordinary bounded subagent. That **standalone engineer** delegation does not
-activate Agentic Loop and needs no task ID or task record; full Agentic Loop
-engineer mode is selected only by explicit activation or a named durable task
-record. See [`AGENTIC_LOOP.md`](AGENTIC_LOOP.md) and
-[`agents/engineer.md`](agents/engineer.md).
+or **auditor** as ordinary bounded subagents. Standalone delegation of either
+role does not activate Agentic Loop and creates no workflow state:
+
+- **Standalone engineer** needs no task ID or task record. Full Agentic Loop
+  engineer mode is selected only by explicit activation or a named durable task
+  record.
+- **Standalone auditor** is read-only and needs no task ID, audit ID, audit
+  record, or audit packet. It returns concise, evidence-backed, explicitly
+  non-certifying findings: it issues no Agentic Loop audit verdict and does not
+  satisfy the formal work-unit audit gate. Full Agentic Loop auditor mode is
+  selected only by explicit activation, or by an explicit request to certify or
+  re-audit a tracked work unit against an Agentic Loop audit record or packet -
+  and work-unit certification always requires a fresh, packet-bound Auditor
+  invocation.
+
+See [`AGENTIC_LOOP.md`](AGENTIC_LOOP.md), [`agents/engineer.md`](agents/engineer.md),
+and [`agents/auditor.md`](agents/auditor.md).
 
 ## Repository layout
 

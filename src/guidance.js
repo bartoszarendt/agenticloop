@@ -46,11 +46,13 @@ export const GUIDANCE_BLOCK = [
   '',
   'Agentic Loop is installed in this repository. `agenticloop/` contains the toolkit and `.agenticloop/` contains project-owned workflow state.',
   '',
-  'Installation, discovery, or reading the methodology does not activate Agentic Loop. Use the full methodology only when the user explicitly asks for Agentic Loop, invokes its host activation surface, or asks to implement, continue, review, accept, or close a tracked Agentic Loop work unit. Mentioning a task ID for discussion, orientation, or status does not activate it.',
+  'Installation, discovery, or reading the methodology does not activate Agentic Loop. Use the full methodology only when the user explicitly asks for Agentic Loop, invokes its host activation surface, or asks to implement, continue, review, accept, close, audit, certify, or re-audit a tracked Agentic Loop work unit. Mentioning a task ID, audit ID, or work-unit name for discussion, orientation, or status does not activate it.',
   '',
   'For ordinary questions, fixes, exploration, and one-off changes, follow this rules document directly. Do not create Agentic Loop workflow state for that work. Reading Agentic Loop files to answer a question about them is fine.',
   '',
-  'The main agent may use the generated engineer as a normal bounded subagent when that would help. Standalone engineer delegation does not activate Agentic Loop and requires no task ID or task record. Unless the delegation explicitly activates Agentic Loop or names an Agentic Loop task record as its contract, the engineer follows the parent request and repository rules without Agentic Loop bookkeeping.',
+  'The main agent may use the generated engineer or auditor as normal bounded subagents when that would help. Standalone delegation of either role does not activate Agentic Loop: the subagent follows the parent request and repository rules without Agentic Loop bookkeeping. Standalone engineer delegation requires no task ID or task record. Standalone auditor delegation is read-only and non-certifying, and requires no task ID, audit ID, audit record, or audit packet.',
+  '',
+  'Full Agentic Loop mode is selected only when the delegation explicitly activates Agentic Loop, names an Agentic Loop task record as the engineer\'s contract, or asks to certify or re-audit a tracked work unit against an Agentic Loop audit record or packet.',
   GUIDANCE_END_MARKER,
 ].join('\n');
 

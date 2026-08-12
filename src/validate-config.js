@@ -257,6 +257,20 @@ const CLAUDE_REQUIRED_REFERENCE_SKILLS = [
 ];
 const COPILOT_REQUIRED_BACKEND_REFERENCES = ['README.md', 'files.md', 'github.md'];
 const CURSOR_REQUIRED_BACKEND_REFERENCES = ['README.md', 'files.md', 'github.md'];
+// Stable semantic anchors every generated Auditor surface that customizes its
+// instructions must expose, so the dual-mode contract and its certification
+// firewall cannot be silently dropped by an adapter. Deliberately short phrases:
+// no whole paragraphs and no exact-whitespace dependencies. The Agentic
+// Loop-mode contract (auditor_report_v1, the four verdicts) is validated by the
+// canonical role body those surfaces embed and is not rejected here.
+const AUDITOR_DUAL_MODE_REQUIRED_SNIPPETS = Object.freeze([
+  'otherwise operate as a standalone auditor',
+  'Standalone assessment requires no audit packet or audit record',
+  'a standalone assessment is non-certifying',
+  'formal certification requires a fresh packet-bound Agentic Loop Auditor invocation',
+  'read-only with respect to implementation',
+  'Do not implement remediation',
+]);
 const CODEX_DANGLING_BACKEND_PATTERN = /(?<!references\/)backends\/(files|github)\.md/;
 const CODEX_FORBIDDEN_EVENT_LOGGING_PATTERNS = [
   {
@@ -2382,6 +2396,8 @@ function validateCodexAgentToml(config, roleName, agentName, tomlPath, errors, a
     requiredSnippets.push('otherwise operate as a standalone engineer');
     requiredSnippets.push('requires no task ID or task record');
     requiredSnippets.push('Do not perform final maintainer acceptance');
+  } else if (roleName === 'auditor') {
+    requiredSnippets.push(...AUDITOR_DUAL_MODE_REQUIRED_SNIPPETS);
   }
 
   for (const snippet of requiredSnippets) {
@@ -3012,8 +3028,7 @@ function validateCopilotAgent(config, repoRoot, roleName, agentName, mdPath, err
     if (tools.includes('edit')) {
       errors.push(`${mdPath.replace(/\\/g, '/')}: auditor must not be granted the 'edit' tool`);
     }
-    requiredSnippets.push('read-only with respect to implementation');
-    requiredSnippets.push('Do not implement remediation');
+    requiredSnippets.push(...AUDITOR_DUAL_MODE_REQUIRED_SNIPPETS);
   }
 
   for (const snippet of requiredSnippets) {
@@ -3255,6 +3270,8 @@ function validateCursorAgent(config, repoRoot, roleName, agentName, mdPath, erro
     requiredSnippets.push('otherwise operate as a standalone engineer');
     requiredSnippets.push('requires no task ID or task record');
     requiredSnippets.push('Do not perform final maintainer acceptance');
+  } else if (roleName === 'auditor') {
+    requiredSnippets.push(...AUDITOR_DUAL_MODE_REQUIRED_SNIPPETS);
   }
 
   for (const snippet of requiredSnippets) {

@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- The generated Auditor is now dual-mode. By default it runs as a **standalone
+  auditor**: an ordinary bounded, read-only, evidence-based assessment of
+  whatever scope the caller names. Standalone delegation does not activate
+  Agentic Loop, requires no task ID, audit ID, audit record, or audit packet,
+  creates no Agentic Loop workflow state, and returns explicitly non-certifying
+  findings. Missing Agentic Loop metadata no longer stops the Auditor or produces
+  an Agentic Loop verdict.
+- Existing formal work-unit certification is unchanged. Agentic Loop mode is
+  selected only by explicit Agentic Loop activation, or by an explicit request to
+  certify or re-audit a tracked work unit against a designated Agentic Loop audit
+  record or audit packet. It keeps the exact frozen candidate, covered-task
+  equality, all six perspectives, the four verdicts, the audit budget, invocation
+  provenance, audit-record persistence, the fresh-invocation and no-same-session
+  rules, non-substitutability, and the exact `auditor_report_v1` return format.
+  A formal certification request with a missing or ambiguous packet stays in
+  Agentic Loop mode and returns `needs_human_decision`; it is never silently
+  downgraded to a standalone assessment. The closeout certification gate is
+  unchanged.
+- The managed activation-guidance block now also describes standalone auditor
+  delegation. Because its canonical content changed, an unchanged owned block
+  installed by an earlier version reports `stale` from `agenticloop guidance
+  check` until `agenticloop guidance apply` or `agenticloop update` refreshes it
+  in place. User-modified owned blocks are still preserved and reported rather
+  than overwritten, and unowned marker blocks are still never adopted
+  automatically.
+- Generated Auditor description metadata changed across all five host adapters
+  (OpenCode, Codex, Claude Code, Copilot, Cursor) to describe both modes. Run
+  `npx agenticloop update` to regenerate. Auditor read-only enforcement is
+  unchanged: OpenCode `permission.edit: deny`, Claude Code `permissionMode: plan`,
+  Copilot withholds the `edit` tool, Cursor `readonly: true`, and Codex keeps its
+  binding advisory prohibition.
+
 ## 0.4.0 - 2026-08-10
 
 ### Highlights

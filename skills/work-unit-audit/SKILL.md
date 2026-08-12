@@ -23,6 +23,18 @@ Work-unit audit is **enabled by default**. Unless a human explicitly records
 `work_unit_audit: disabled` in `.agenticloop/project.md`, work-unit closeout
 cannot publish `AGENT_CLOSEOUT_STATUS: complete` without a current certificate.
 
+## 0. Entry guard
+
+This skill governs Agentic Loop-mode work-unit certification. It applies when
+the Auditor is invoked in Agentic Loop mode to certify or re-audit a tracked
+work unit against a designated audit record or audit packet.
+
+It does not automatically apply to a standalone Auditor assessment. A standalone
+auditor takes its scope from the parent request, needs no audit packet, audit
+record, covered-task set, or frozen candidate, and returns non-certifying
+findings; it may consult this file as a reference without adopting the procedure.
+A standalone assessment never satisfies the certification gate below.
+
 ## 1. Preconditions
 
 Do not start an audit until all of the following hold:

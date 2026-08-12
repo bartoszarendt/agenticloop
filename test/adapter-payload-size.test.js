@@ -60,6 +60,13 @@ const CATEGORIES = Object.freeze(['generatedPayload', 'agentDefinitions', 'activ
  *   measured: number|null,
  *   delta: number|null,
  *   valuesRecorded: boolean,
+ *   changes?: Array<{
+ *     adapter: string,
+ *     category: string,
+ *     previous: number,
+ *     measured: number,
+ *     delta: number,
+ *   }>,
  *   reason: string,
  *   evidence: string,
  * }>}
@@ -222,14 +229,56 @@ const BASELINE_RATIONALE = Object.freeze([
       'values, not a raised ceiling.',
     evidence: 'commands/start.md, AGENTIC_LOOP.md activation assurance, backends/files.md',
   },
+  {
+    pass: 'dual-mode auditor (2026-08-12)',
+    adapters: ['opencode', 'codex', 'claude-code', 'copilot', 'cursor'],
+    categories: ['generatedPayload', 'agentDefinitions', 'activationSurface', 'referenceLibrary'],
+    previous: null, measured: null, delta: null, valuesRecorded: true,
+    changes: [
+      { adapter: 'opencode', category: 'generatedPayload', previous: 12712, measured: 14061, delta: 1349 },
+      { adapter: 'opencode', category: 'agentDefinitions', previous: 11759, measured: 13084, delta: 1325 },
+      { adapter: 'opencode', category: 'activationSurface', previous: 953, measured: 977, delta: 24 },
+      { adapter: 'codex', category: 'generatedPayload', previous: 69922, measured: 71644, delta: 1722 },
+      { adapter: 'codex', category: 'agentDefinitions', previous: 12292, measured: 13516, delta: 1224 },
+      { adapter: 'codex', category: 'activationSurface', previous: 1236, measured: 1260, delta: 24 },
+      { adapter: 'codex', category: 'referenceLibrary', previous: 56394, measured: 56868, delta: 474 },
+      { adapter: 'claude-code', category: 'generatedPayload', previous: 53691, measured: 54913, delta: 1222 },
+      { adapter: 'claude-code', category: 'agentDefinitions', previous: 11105, measured: 12094, delta: 989 },
+      { adapter: 'claude-code', category: 'activationSurface', previous: 2109, measured: 2157, delta: 48 },
+      { adapter: 'claude-code', category: 'referenceLibrary', previous: 40477, measured: 40662, delta: 185 },
+      { adapter: 'copilot', category: 'generatedPayload', previous: 67876, measured: 69622, delta: 1746 },
+      { adapter: 'copilot', category: 'agentDefinitions', previous: 11945, measured: 13193, delta: 1248 },
+      { adapter: 'copilot', category: 'activationSurface', previous: 1290, measured: 1314, delta: 24 },
+      { adapter: 'copilot', category: 'referenceLibrary', previous: 54641, measured: 55115, delta: 474 },
+      { adapter: 'cursor', category: 'generatedPayload', previous: 67616, measured: 69370, delta: 1754 },
+      { adapter: 'cursor', category: 'agentDefinitions', previous: 11931, measured: 13187, delta: 1256 },
+      { adapter: 'cursor', category: 'activationSurface', previous: 1044, measured: 1068, delta: 24 },
+      { adapter: 'cursor', category: 'referenceLibrary', previous: 54641, measured: 55115, delta: 474 },
+    ],
+    reason:
+      'The Auditor gained a second operating mode, so its canonical role file now carries two ' +
+      'contracts instead of one: mode selection, a shared read-only boundary, the standalone ' +
+      'non-certifying assessment contract, and the unchanged Agentic Loop certification contract ' +
+      '(packet, six perspectives, four verdicts, auditor_report_v1, provenance, budget, ' +
+      're-audit). This is the same shape as the earlier dual-mode engineer rebaseline and is ' +
+      'authored once in agents/auditor.md, inherited by every host. agentDefinitions carries that ' +
+      'body plus the three-line shared STANDALONE_AUDITOR_PREAMBLE_LINES and the OpenCode ' +
+      'engineer preamble that host had been missing; the structured changes enumerate all 19 ' +
+      'raised adapter/category baselines. activationSurface moves +24 from the dual-mode role description in ' +
+      'config.json alone. referenceLibrary moves from the AGENTIC_LOOP.md standalone-auditor ' +
+      'activation and glossary text and the work-unit-audit entry guard. No canonical block was ' +
+      'copied into an adapter and no formal certification requirement was removed; a deliberate ' +
+      're-baseline against measured values, not a raised ceiling.',
+    evidence: 'agents/auditor.md, src/adapters/shared.js STANDALONE_AUDITOR_PREAMBLE_LINES, AGENTIC_LOOP.md, skills/work-unit-audit/SKILL.md',
+  },
 ]);
 
 const ADAPTERS = [
-  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 12712, agentDefinitions: 11759, activationSurface: 953 } },
-  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 69922, agentDefinitions: 12292, activationSurface: 1236, referenceLibrary: 56394 } },
-  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 53691, agentDefinitions: 11105, activationSurface: 2109, referenceLibrary: 40477 } },
-  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 67876, agentDefinitions: 11945, activationSurface: 1290, referenceLibrary: 54641 } },
-  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 67616, agentDefinitions: 11931, activationSurface: 1044, referenceLibrary: 54641 } },
+  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 14061, agentDefinitions: 13084, activationSurface: 977 } },
+  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 71644, agentDefinitions: 13516, activationSurface: 1260, referenceLibrary: 56868 } },
+  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 54913, agentDefinitions: 12094, activationSurface: 2157, referenceLibrary: 40662 } },
+  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 69622, agentDefinitions: 13193, activationSurface: 1314, referenceLibrary: 55115 } },
+  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 69370, agentDefinitions: 13187, activationSurface: 1068, referenceLibrary: 55115 } },
 ];
 
 let tmpDir;
@@ -290,11 +339,34 @@ describe('generated adapter payload-size budgets', () => {
       assert.ok(typeof record.reason === 'string' && record.reason.trim().length > 40, `${label}: reason`);
       assert.ok(typeof record.evidence === 'string' && record.evidence.trim(), `${label}: evidence`);
       if (record.valuesRecorded) {
-        // The record requirement adopted from P35-08 onward: a raise must state
-        // what it was, what it measured, and the difference between them.
-        assert.equal(typeof record.previous, 'number', `${label}: previous`);
-        assert.equal(typeof record.measured, 'number', `${label}: measured`);
-        assert.equal(record.delta, record.measured - record.previous, `${label}: delta must equal measured - previous`);
+        if (Array.isArray(record.changes)) {
+          const expectedPairs = new Set();
+          for (const adapterName of record.adapters) {
+            const adapter = ADAPTERS.find(candidate => candidate.name === adapterName);
+            for (const category of record.categories) {
+              if (Object.hasOwn(adapter.baseline, category)) expectedPairs.add(`${adapterName}:${category}`);
+            }
+          }
+          const actualPairs = new Set();
+          for (const change of record.changes) {
+            const pair = `${change.adapter}:${change.category}`;
+            assert.ok(expectedPairs.has(pair), `${label}: undeclared baseline change '${pair}'`);
+            assert.ok(!actualPairs.has(pair), `${label}: duplicate baseline change '${pair}'`);
+            actualPairs.add(pair);
+            assert.equal(typeof change.previous, 'number', `${label}: ${pair} previous`);
+            assert.equal(typeof change.measured, 'number', `${label}: ${pair} measured`);
+            assert.equal(change.delta, change.measured - change.previous, `${label}: ${pair} delta must equal measured - previous`);
+            const adapter = ADAPTERS.find(candidate => candidate.name === change.adapter);
+            assert.equal(change.measured, adapter.baseline[change.category], `${label}: ${pair} measured must equal its declared baseline`);
+          }
+          assert.deepEqual(actualPairs, expectedPairs, `${label}: every declared raised baseline must have numeric accounting`);
+        } else {
+          // Older numeric records captured one representative raise before the
+          // per-adapter/category changes shape was introduced.
+          assert.equal(typeof record.previous, 'number', `${label}: previous`);
+          assert.equal(typeof record.measured, 'number', `${label}: measured`);
+          assert.equal(record.delta, record.measured - record.previous, `${label}: delta must equal measured - previous`);
+        }
       }
     }
   });

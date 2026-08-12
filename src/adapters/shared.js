@@ -41,6 +41,39 @@ export const STANDALONE_ENGINEER_PREAMBLE_LINES = Object.freeze([
   'Do not perform final maintainer acceptance in either mode. Stay within engineer boundaries: implement the delegated scope, run checks, and return fresh evidence.',
 ]);
 
+// Dual-mode auditor preamble prepended by host adapters that customize the
+// auditor instructions (Codex, Copilot, Cursor, OpenCode). Kept compact for
+// payload budgets. The canonical role body carries the full contract.
+export const STANDALONE_AUDITOR_PREAMBLE_LINES = Object.freeze([
+  'Auditor mode selection: use full Agentic Loop mode only when the delegation explicitly activates Agentic Loop or explicitly asks to certify or re-audit a tracked Agentic Loop work unit against a designated Agentic Loop audit record or audit packet; otherwise operate as a standalone auditor.',
+  'A bare task ID, audit ID, work-unit name, or commit SHA does not force Agentic Loop mode. Standalone assessment requires no audit packet or audit record, creates no Agentic Loop workflow state, and missing packet metadata is not a blocker. If formal certification intent is explicit but its packet is missing or ambiguous, stay in Agentic Loop mode and return `needs_human_decision` rather than downgrading to standalone.',
+  'Certification firewall: a standalone assessment is non-certifying. Report scope, findings and evidence, checks run and limitations, and state that it certifies nothing and that formal certification requires a fresh packet-bound Agentic Loop Auditor invocation. Do not return `auditor_report_v1` or an Agentic Loop verdict as the standalone result. You are read-only in both modes: implement no remediation, and edit no implementation, tests, configuration, documentation, task records, audit records, or workflow state.',
+]);
+
+// Roles whose generated prompt must select a mode before any Agentic Loop
+// workflow-state instruction, so a standalone delegation is never ordered to
+// adopt the methodology by prompt ordering alone.
+const DUAL_MODE_ROLE_IDS = Object.freeze(['engineer', 'auditor']);
+
+/** @param {string} roleName */
+export function isDualModeRole(roleName) {
+  return DUAL_MODE_ROLE_IDS.includes(roleName);
+}
+
+/**
+ * Canonical mode-selection preamble for a dual-mode role, or an empty list for
+ * single-mode roles. Adapters share this so mode-selection wording is authored
+ * once rather than duplicated per host.
+ *
+ * @param {string} roleName
+ * @returns {string[]}
+ */
+export function dualModePreambleLines(roleName) {
+  if (roleName === 'engineer') return [...STANDALONE_ENGINEER_PREAMBLE_LINES];
+  if (roleName === 'auditor') return [...STANDALONE_AUDITOR_PREAMBLE_LINES];
+  return [];
+}
+
 /**
  * Read a role source file and return its frontmatter description and body.
  * @param {string} repoRoot

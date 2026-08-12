@@ -168,7 +168,7 @@
     },
     "auditor": {
       "sourceFile": "agenticloop/agents/auditor.md",
-      "description": "Independently audits a completed multi-task work unit against its intended outcome and certifies or rejects the exact integrated baseline. Read-only: implements nothing, accepts no task, and accepts no risk.",
+      "description": "Performs independent, evidence-based, read-only assessment. Runs as a standalone non-certifying auditor by default, or in full Agentic Loop mode when the delegation explicitly activates Agentic Loop or designates an Agentic Loop audit record or packet as the certification contract for a tracked work unit. Read-only: implements nothing, accepts no task, and accepts no risk.",
       "requiredSkills": [
         "work-unit-audit",
         "blocked-state"

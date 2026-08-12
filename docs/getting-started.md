@@ -613,6 +613,31 @@ Roles live in `agenticloop/agents/`. They define who does what:
 - `engineer` implements one scoped task record at a time
 - `auditor` certifies a finished work unit against its exact integrated baseline
 
+### Standalone engineer and auditor
+
+The engineer and the auditor are dual-mode. Besides their Agentic Loop roles,
+the main agent can delegate to either one directly as an ordinary bounded
+subagent. That standalone delegation does not activate Agentic Loop and creates
+no workflow state.
+
+- A standalone engineer implements a bounded engineering subtask. It needs no
+  task ID or task record.
+- A standalone auditor performs a bounded, read-only, evidence-based assessment
+  of whatever scope you name. It needs no task ID, audit ID, audit record, or
+  audit packet, and missing that metadata is not a blocker. It returns concise,
+  non-certifying findings: no `auditor_report_v1`, no Agentic Loop verdict, and
+  no contribution to the formal work-unit audit gate.
+
+Full Agentic Loop mode is selected only by explicit activation, by naming a
+durable task record as the engineer's contract, or by asking to certify or
+re-audit a tracked work unit against an Agentic Loop audit record or packet. A
+bare task ID, audit ID, or commit SHA mentioned for context selects neither. When
+formal certification is requested but its packet is missing or ambiguous, the
+auditor stays in Agentic Loop mode and returns `needs_human_decision` rather than
+quietly downgrading. Work-unit certification always requires a fresh,
+packet-bound Auditor invocation; a standalone assessment never substitutes for
+it.
+
 Host adapters bind their native agent, mode, command, or prompt mechanism to
 these role files. Generated role labels come from the canonical registry while
 durable config keys and filenames remain immutable `roleId`. Each generated

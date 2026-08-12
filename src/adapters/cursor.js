@@ -35,7 +35,8 @@ import {
 } from '../layout.js';
 import {
   AGENTIC_LOOP_OPERATION_DESCRIPTION,
-  STANDALONE_ENGINEER_PREAMBLE_LINES,
+  dualModePreambleLines,
+  isDualModeRole,
   buildRoleRecord,
   readCanonicalBackendEntries,
   readCanonicalSkillEntries,
@@ -360,11 +361,17 @@ function buildCursorAgentBody(
     'role-delegation',
     skillPathBuilder
   );
+  const dualMode = isDualModeRole(roleName);
   const lines = [];
   lines.push(`You are the Agentic Loop ${getWorkflowRoleLabel(roleName)} subagent for the target project in Cursor.`);
   lines.push(`Canonical role source: \`${roleSourceFile}\`.`);
-  lines.push('Read `.agenticloop/project.md` before acting for setup status, task backend, document selections, naming, grouping, and event logging.');
-  lines.push(`Follow \`${PROCESS_DOC_RELATIVE_PATH}\` as the workflow methodology.`);
+  // Dual-mode roles must select their mode before any workflow-state instruction,
+  // otherwise the prompt orders a standalone delegation to adopt the methodology.
+  if (dualMode) {
+    lines.push(...dualModePreambleLines(roleName));
+  }
+  lines.push(`${dualMode ? 'In Agentic Loop mode: ' : ''}Read \`.agenticloop/project.md\` before acting for setup status, task backend, document selections, naming, grouping, and event logging.`);
+  lines.push(`${dualMode ? 'In Agentic Loop mode: ' : ''}Follow \`${PROCESS_DOC_RELATIVE_PATH}\` as the workflow methodology.${dualMode ? ' In standalone mode, follow the parent request and the target repository rules instead.' : ''}`);
   lines.push('Path convention: toolkit source (agents/, skills/, backends/) lives under agenticloop/ (no leading dot); target project state (project.md, tasks/, decisions/, improvements/) lives under .agenticloop/ (leading dot). .agenticloop/agents, .agenticloop/skills, and .agenticloop/backends are invalid paths.');
 
   const skillLines = formatRequiredSkillLines(requiredSkills, skillReferenceMap, skillPathBuilder);
@@ -374,7 +381,7 @@ function buildCursorAgentBody(
   }
 
   if (backendEntries.length > 0) {
-    lines.push('Backend projection references:');
+    lines.push(dualMode ? 'Backend projection references (Agentic Loop mode only):' : 'Backend projection references:');
     for (const entry of backendEntries) {
       lines.push(`- \`${backendPathBuilder(entry.filename)}\``);
     }
@@ -395,12 +402,11 @@ function buildCursorAgentBody(
     lines.push('Honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, collision, or no-progress budget requires it.');
     lines.push('Do not implement code changes. Stop and hand control back after producing maintainer-owned output for the orchestrator or human.');
   } else if (roleName === 'engineer') {
-    lines.push(...STANDALONE_ENGINEER_PREAMBLE_LINES);
     lines.push('In Agentic Loop mode, honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, wrong branch/worktree, collision, or no-progress budget requires it. Stop and hand control back once implementation evidence is ready for maintainer review.');
   } else if (roleName === 'auditor') {
     lines.push('You are read-only with respect to implementation, tests, configuration, product documentation, commits, branches, pull requests, task acceptance, product decisions, and risk acceptance. This subagent is generated with `readonly: true`.');
-    lines.push('Inspect the repository, the exact frozen candidate, task records, decisions, and evidence, and run only safe bounded non-publishing verification. Do not implement remediation, accept or reopen tasks, expand scope, change accepted decisions, or accept a limitation or risk for the human.');
-    lines.push('Return one consolidated report to the orchestrator. Persistence into the audit record is mechanical and belongs to the orchestrator or the `agenticloop audit` CLI.');
+    lines.push('Inspect the repository, the assessed artifact, task records, decisions, and evidence, and run only safe bounded non-publishing verification. Do not implement remediation, accept or reopen tasks, expand scope, change accepted decisions, or accept a limitation or risk for the human.');
+    lines.push('In Agentic Loop mode, audit the exact frozen candidate named in the packet against its covered-task set, cover all six perspectives, and return one consolidated `auditor_report_v1` object with exactly one verdict to the orchestrator. Persistence into the audit record is mechanical and belongs to the orchestrator or the `agenticloop audit` CLI; never edit the audit record or any task record yourself.');
   }
 
   lines.push('');

@@ -1178,8 +1178,8 @@ record, run backend operations, worktrees, event logging, review, and closeout
 
 - The user explicitly asks to use Agentic Loop.
 - The user invokes the host's Agentic Loop activation command, prompt, or skill.
-- The user explicitly asks to implement, continue, review, accept, or close a
-  tracked Agentic Loop work unit.
+- The user explicitly asks to implement, continue, review, accept, close, audit,
+  certify, or re-audit a tracked Agentic Loop work unit.
 
 The following do not activate the methodology: merely discovering `agenticloop/`,
 reading this document, mentioning a task ID without operational intent, or asking
@@ -1188,11 +1188,15 @@ follow the target repository's rules document directly. Reading this document to
 answer a question about the methodology is expected and allowed; adopting it as
 the current process is not.
 
-**Standalone engineer delegation is not activation.** The main agent may invoke
-the generated engineer as an ordinary bounded subagent for a normal engineering
-subtask. Standalone engineer use requires no activation, task ID, or task record
-and creates no Agentic Loop workflow state. See the Glossary entries for
-**Activation** and **Standalone engineer**.
+**Standalone engineer and auditor delegation is not activation.** The main agent
+may invoke the generated engineer as an ordinary bounded subagent for a normal
+engineering subtask, and the generated auditor as an ordinary bounded read-only
+subagent for a normal assessment. Standalone use of either role requires no
+activation, task ID, task record, audit ID, audit record, or audit packet, and
+creates no Agentic Loop workflow state. A standalone auditor assessment certifies
+nothing: it cannot satisfy work-unit auditing, certification, or closeout, which
+require a fresh, packet-bound Agentic Loop Auditor invocation. See the Glossary
+entries for **Activation**, **Standalone engineer**, and **Standalone auditor**.
 
 ## Deactivation Boundary
 
@@ -1239,8 +1243,9 @@ target projects do not need toolkit-root `docs/` files at runtime.
 - **Activation**: the point at which the full methodology becomes the current
   process. Activation is explicit only: the user asks to use Agentic Loop,
   invokes the host activation surface, or asks to implement, continue, review,
-  accept, or close a tracked work unit. Installation, discovery, reading the
-  methodology, or mentioning a task ID for discussion does not activate it.
+  accept, close, audit, certify, or re-audit a tracked work unit. Installation,
+  discovery, reading the methodology, or mentioning a task ID for discussion does
+  not activate it.
 - **Deactivation**: current-conversation termination of Agentic Loop requested
   with the exact `stop` argument. It checkpoints unfinished work safely without
   changing task status solely because the user stopped. Reactivation is explicit.
@@ -1249,6 +1254,14 @@ target projects do not need toolkit-root `docs/` files at runtime.
   from the parent request and repository rules, requires no task ID or task
   record, and creates no Agentic Loop task records, events, worktrees, review, or
   closeout state. See `agenticloop/agents/engineer.md` for the two engineer modes.
+- **Standalone auditor**: the generated auditor invoked as an ordinary bounded
+  read-only subagent without activating Agentic Loop. It assesses whatever scope
+  the parent request names, requires no task ID, audit ID, audit record, audit
+  packet, work unit, covered-task set, or frozen candidate, and creates no
+  Agentic Loop workflow state. It is explicitly non-certifying: it issues no
+  Agentic Loop audit verdict and never satisfies work-unit auditing,
+  certification, or closeout. See `agenticloop/agents/auditor.md` for the two
+  auditor modes.
 - **Agent role**: a host-neutral role definition installed under
   `agenticloop/agents/<role>.md`.
 - **Skill**: a focused procedure installed under
@@ -1270,10 +1283,14 @@ target projects do not need toolkit-root `docs/` files at runtime.
   reviews implementation artifacts, triages follow-ups, and owns closeout.
 - **Engineer**: the scoped implementation role that changes files, runs checks,
   and publishes evidence.
-- **Auditor**: the read-only assurance role that evaluates a completed work unit
-  as a whole and certifies or rejects the exact integrated baseline. It has its
-  own model slot, runs as a fresh invocation every time, implements nothing,
-  accepts no task, and accepts no limitation or risk.
+- **Auditor**: the read-only assurance role. In Agentic Loop certification mode
+  it evaluates a completed work unit as a whole and certifies or rejects the
+  exact integrated baseline; that certification has its own model slot and
+  requires a fresh, packet-bound invocation every time, bound to the exact frozen
+  candidate and covered-task set. Delegated standalone it performs an ordinary
+  bounded non-certifying assessment instead (see **Standalone auditor**). In both
+  modes it implements nothing, accepts no task, and accepts no limitation or
+  risk.
 - **Work unit**: the certification boundary for an audit. In grouped projects it
   reuses the configured grouping (`phase:4`, `milestone:M2`, `epic:payments`,
   `custom:<id>`); flat projects name it explicitly as `work-unit:<name>` with an

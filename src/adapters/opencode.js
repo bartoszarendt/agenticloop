@@ -18,6 +18,8 @@ import {
 } from '../layout.js';
 import {
   AGENTIC_LOOP_OPERATION_DESCRIPTION,
+  dualModePreambleLines,
+  isDualModeRole,
   resolveRoleModel,
   buildRoleRecord,
 } from './shared.js';
@@ -63,9 +65,17 @@ export function rewriteOpencodeSkillReferences(text, skillsSrc) {
 
 function buildPrompt(roleName, roleSourceFile, requiredSkills, roleBody, skillsSourceDir, capabilityInventory) {
   const skillsSrc = normalizeSkillsSourceDir(skillsSourceDir);
+  const dualMode = isDualModeRole(roleName);
   let prompt = `You are the ${getWorkflowRoleLabel(roleName)} for the target project. `;
   prompt += `Follow ${roleSourceFile} as the canonical role contract. `;
-  prompt += `Follow the selected project documents from .agenticloop/project.md and ${PROCESS_DOC_RELATIVE_PATH} as the Agentic Loop methodology.`;
+  // Dual-mode roles select their mode before any workflow-state instruction,
+  // otherwise the prompt orders a standalone delegation to adopt the methodology.
+  if (dualMode) {
+    prompt += `${dualModePreambleLines(roleName).join(' ')} `;
+    prompt += `In Agentic Loop mode, follow the selected project documents from .agenticloop/project.md and ${PROCESS_DOC_RELATIVE_PATH} as the Agentic Loop methodology. In standalone mode, follow the parent request and the target repository rules instead.`;
+  } else {
+    prompt += `Follow the selected project documents from .agenticloop/project.md and ${PROCESS_DOC_RELATIVE_PATH} as the Agentic Loop methodology.`;
+  }
   prompt += ' Path convention: toolkit source (agents/, skills/, backends/) lives under agenticloop/ (no leading dot); target project state (project.md, tasks/, decisions/, improvements/) lives under .agenticloop/ (leading dot). .agenticloop/agents, .agenticloop/skills, and .agenticloop/backends are invalid paths.';
   if (roleName === 'orchestrator') {
     prompt += ' Agentic Loop is serial by default. For every authorized multi-task unit, complete a current Parallel Opportunity Scan after decomposition and include its durable result or not-currently-eligible rescan trigger in implementation delegation. Load parallel-delegation before choosing serial or parallel execution.';
@@ -74,8 +84,10 @@ function buildPrompt(roleName, roleSourceFile, requiredSkills, roleBody, skillsS
     prompt += ' Route work-unit certification to the auditor once every covered task is accepted and its artifacts are integrated into one exact frozen candidate. Auditor has no inline fallback: a same-session audit is not an audit. Persist the returned `auditor_report_v1` object through `agenticloop audit report` without rewriting its findings.';
   } else if (roleName === 'auditor') {
     prompt += ' You are read-only with respect to implementation, tests, configuration, product documentation, commits, branches, pull requests, task acceptance, product decisions, and risk acceptance.';
-    prompt += ' Inspect the repository, the exact frozen candidate, task records, decisions, and evidence, and run only safe bounded non-publishing verification. Do not implement remediation, accept or reopen tasks, expand scope, change accepted decisions, or accept a limitation or risk for the human.';
-    prompt += ' Return one consolidated report to the orchestrator; the orchestrator or the `agenticloop audit` CLI persists it. Do not edit the audit record yourself.';
+    prompt += ' Inspect the repository, the assessed artifact, task records, decisions, and evidence, and run only safe bounded non-publishing verification. Do not implement remediation, accept or reopen tasks, expand scope, change accepted decisions, or accept a limitation or risk for the human.';
+    prompt += ' In Agentic Loop mode, audit the exact frozen candidate named in the packet against its covered-task set, cover all six perspectives, and return one consolidated `auditor_report_v1` object with exactly one verdict to the orchestrator; the orchestrator or the `agenticloop audit` CLI persists it. Do not edit the audit record yourself.';
+  } else if (roleName === 'engineer') {
+    prompt += ' In Agentic Loop mode, honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, wrong branch/worktree, or no-progress budget requires it.';
   } else {
     prompt += ' Honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, wrong branch/worktree, or no-progress budget requires it.';
   }

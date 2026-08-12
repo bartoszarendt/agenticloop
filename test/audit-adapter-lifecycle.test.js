@@ -215,21 +215,101 @@ describe('generated-adapter auditor contract', () => {
     }
   });
 
-  it('every generated auditor role emits the auditor_report_v1 wire format from canonical source', () => {
-    const auditorFiles = {
-      opencode: ['.opencode', 'agents', 'auditor.md'],
-      codex: ['.codex', 'agents', 'auditor.toml'],
-      'claude-code': ['.claude', 'agents', 'auditor.md'],
-      copilot: ['.github', 'agents', 'auditor.agent.md'],
-      cursor: ['.cursor', 'agents', 'auditor.md'],
-    };
+  const AUDITOR_FILES = {
+    opencode: ['.opencode', 'agents', 'auditor.md'],
+    codex: ['.codex', 'agents', 'auditor.toml'],
+    'claude-code': ['.claude', 'agents', 'auditor.md'],
+    copilot: ['.github', 'agents', 'auditor.agent.md'],
+    cursor: ['.cursor', 'agents', 'auditor.md'],
+  };
+
+  /**
+   * Read a generated auditor surface with host string-escaping undone. Codex
+   * embeds the role body in a quoted TOML scalar and OpenCode in a quoted YAML
+   * scalar, so the same canonical sentence appears with literal `\n` and `\"`
+   * on those hosts; decoding keeps one set of contract assertions for all five.
+   */
+  function auditorText(host) {
+    const fx = makeFixture();
+    const cfg = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+    const out = mkdtempSync(join(tmpDir, `auditor-${host.name}-`));
+    host.generate(cfg, fx, out);
+    const raw = readFileSync(join(out, ...AUDITOR_FILES[host.name]), 'utf-8');
+    return raw.replace(/\\n/g, '\n').replace(/\\"/g, '"');
+  }
+
+  /**
+   * Split a generated auditor surface at the Agentic Loop-mode heading. Both
+   * modes ship in one file, so the certification firewall is only meaningful
+   * when it is checked against the standalone half specifically.
+   */
+  function splitModes(text) {
+    const marker = text.indexOf('## Agentic Loop Mode');
+    assert.notEqual(marker, -1, 'generated auditor must carry the canonical Agentic Loop Mode section');
+    const standaloneStart = text.indexOf('## Standalone Mode');
+    assert.notEqual(standaloneStart, -1, 'generated auditor must carry the canonical Standalone Mode section');
+    assert.ok(standaloneStart < marker, 'standalone mode must appear before Agentic Loop mode');
+    return { standalone: text.slice(standaloneStart, marker), agenticLoop: text.slice(marker) };
+  }
+
+  it('every generated auditor role emits the Agentic Loop-mode auditor_report_v1 wire format from canonical source', () => {
     for (const host of HOSTS) {
-      const fx = makeFixture();
-      const cfg = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
-      const out = mkdtempSync(join(tmpDir, `wire-${host.name}-`));
-      host.generate(cfg, fx, out);
-      const content = readFileSync(join(out, ...auditorFiles[host.name]), 'utf-8');
+      const content = auditorText(host);
       assert.match(content, /auditor_report_v1/, `${host.name}: generated auditor role must emit auditor_report_v1`);
+      // The formal wire format belongs to Agentic Loop mode specifically.
+      const { agenticLoop } = splitModes(content);
+      assert.match(agenticLoop, /Return exactly one `auditor_report_v1` JSON object/,
+        `${host.name}: the Agentic Loop-mode section must keep the exact auditor_report_v1 return contract`);
+      assert.match(agenticLoop, /"report_schema": "auditor_report_v1"/,
+        `${host.name}: the Agentic Loop-mode section must keep the exact report schema`);
+      assert.match(agenticLoop, /Return exactly one verdict: `certified`,\s*`certified_with_accepted_limitations`, `needs_remediation`, or\s*`needs_human_decision`/,
+        `${host.name}: the Agentic Loop-mode section must keep all four formal verdicts`);
+    }
+  });
+
+  it('every generated auditor also exposes a standalone non-certifying mode', () => {
+    for (const host of HOSTS) {
+      const content = auditorText(host);
+      assert.match(content, /## Mode Selection/, `${host.name}: generated auditor must carry mode selection`);
+      assert.match(content, /otherwise operate as a standalone auditor/i,
+        `${host.name}: standalone must be the default mode`);
+      const { standalone } = splitModes(content);
+      assert.match(standalone, /requires no task\s*ID, audit ID, audit packet, audit record/i,
+        `${host.name}: standalone mode must require no Agentic Loop packet metadata`);
+      assert.match(standalone, /non-certifying assessment/i,
+        `${host.name}: standalone mode must identify itself as non-certifying`);
+      assert.match(standalone, /certifies nothing and\s*cannot satisfy Agentic Loop work-unit auditing, certification, or closeout/i,
+        `${host.name}: standalone mode must disclaim work-unit certification`);
+      assert.match(standalone, /formal certification requires a fresh, packet-bound Agentic Loop\s*Auditor invocation/i,
+        `${host.name}: standalone mode must route certification to a fresh packet-bound invocation`);
+    }
+  });
+
+  it('the standalone section never offers auditor_report_v1 or a formal verdict as its return format', () => {
+    for (const host of HOSTS) {
+      const { standalone } = splitModes(auditorText(host));
+      assert.match(standalone, /Do not return `auditor_report_v1`, an Agentic Loop `verdict` field/,
+        `${host.name}: standalone mode must forbid the formal return shape`);
+      assert.ok(!/Return exactly one `auditor_report_v1`/.test(standalone),
+        `${host.name}: standalone mode must not present auditor_report_v1 as its return format`);
+      assert.ok(!/Return exactly one verdict/.test(standalone),
+        `${host.name}: standalone mode must not present a formal verdict as its return format`);
+    }
+  });
+
+  it('formal certification keeps its fresh, packet-bound, non-substitutable invocation', () => {
+    for (const host of HOSTS) {
+      const content = auditorText(host);
+      assert.match(content, /work-unit certification always requires a\s*fresh, packet-bound Auditor invocation/i,
+        `${host.name}: certification must stay packet-bound and fresh`);
+      assert.match(content, /Every re-audit is a new invocation with a new invocation reference/i,
+        `${host.name}: every re-audit must be a new invocation`);
+      assert.match(content, /no\s*same-session audit and no single-agent audit fallback/i,
+        `${host.name}: same-session audit must stay forbidden`);
+      assert.match(content, /non-substitutable/i,
+        `${host.name}: a maintainer invocation must not be able to serve as the Auditor`);
+      assert.match(content, /Never silently downgrade\s*(?:an activated or formal|a formal) certification request\s+to standalone mode/i,
+        `${host.name}: formal certification intent must never be silently downgraded`);
     }
   });
 });
