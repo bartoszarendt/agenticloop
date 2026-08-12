@@ -18,27 +18,15 @@ export const GROUPS = ['unit', 'integration', 'e2e'];
 
 const MANIFEST = {
   unit: [
-    'test/activation-grant.test.js',
-    'test/audit-record.test.js',
+    'test/activation-grant-contracts.test.js',
     'test/audit-report-schema.test.js',
-    'test/auditor-return-receipt.test.js',
     'test/blocked-result-authority.test.js',
     'test/candidate.test.js',
-    'test/cli-registry.test.js',
-    'test/cli-safety.test.js',
-    'test/cli-target-resolution.test.js',
     'test/closeout-assurance.test.js',
     'test/closeout-contract.test.js',
-    'test/closeout-waiver.test.js',
-    'test/committed-source.test.js',
-    'test/dispatch-envelope.test.js',
-    'test/files-task-contract.test.js',
-    'test/fs-mutation-kernel.test.js',
-    'test/git-oid.test.js',
     'test/github-backend.test.js',
     'test/github-preflight.test.js',
     'test/github-review-audit.test.js',
-    'test/github-task-body.test.js',
     'test/github-task-identity.test.js',
     'test/host-role-capabilities.test.js',
     'test/immutable.test.js',
@@ -47,27 +35,50 @@ const MANIFEST = {
     'test/markdown-contract-extraction.test.js',
     'test/model-catalog.test.js',
     'test/model-picker.test.js',
-    'test/review-preparation-contract.test.js',
     'test/resolution-matrix.test.js',
     'test/review-checkpoint.test.js',
     'test/review-lenses.test.js',
-    'test/required-checks.test.js',
-    'test/return-verification.test.js',
     'test/review-entry-receipt.test.js',
     'test/review-marker-contract.test.js',
     'test/schema-validation.test.js',
+    'test/transition-contract.test.js',
+    'test/trusted-actors.test.js',
+  ],
+  integration: [
+    'test/affected-tests.test.js',
+    'test/activation-grant-cli.test.js',
+    'test/activation-grant-dispatch.test.js',
+    'test/activation-grant-store.test.js',
+    'test/activation-assurance-docs.test.js',
+    'test/activation-scorer.test.js',
+    'test/audit-record.test.js',
+    'test/auditor-return-receipt.test.js',
+    'test/cli-registry.test.js',
+    'test/cli-safety.test.js',
+    'test/cli-target-resolution.test.js',
+    'test/closeout-waiver.test.js',
+    'test/committed-source.test.js',
+    'test/dispatch-envelope-activation.test.js',
+    'test/dispatch-envelope-blocked.test.js',
+    'test/dispatch-envelope-exceptional.test.js',
+    'test/dispatch-envelope-handoff.test.js',
+    'test/dispatch-envelope-identity.test.js',
+    'test/dispatch-envelope-preparation.test.js',
+    'test/dispatch-fixture.test.js',
+    'test/files-task-contract.test.js',
+    'test/fs-mutation-kernel.test.js',
+    'test/git-oid.test.js',
+    'test/github-task-body.test.js',
+    'test/protected-host-boundary.test.js',
+    'test/review-preparation-contract.test.js',
+    'test/required-checks.test.js',
+    'test/return-verification.test.js',
     'test/stop-contract.test.js',
     'test/task-contract-hardening.test.js',
     'test/task-contract-trust-regressions.test.js',
     'test/task-evidence-integrity.test.js',
-    'test/transition-contract.test.js',
-    'test/trusted-actors.test.js',
     'test/validation-result-diagnostics.test.js',
     'test/workflow-hardening.test.js',
-  ],
-  integration: [
-    'test/activation-assurance-docs.test.js',
-    'test/activation-scorer.test.js',
     'test/adapter-activation-capability.test.js',
     'test/adapter-config-reconciliation.test.js',
     'test/adapter-claude-code.test.js',
@@ -100,6 +111,8 @@ const MANIFEST = {
     'test/generation-transaction.test.js',
     'test/guidance.test.js',
     'test/guarded-transition-enforcement.test.js',
+    'test/handoff-integration-routes.test.js',
+    'test/handoff-recognition.test.js',
     'test/host-skill-surface.test.js',
     'test/host-trust.test.js',
     'test/improvement-cli.test.js',
@@ -107,9 +120,11 @@ const MANIFEST = {
     'test/maintainer-fixup.test.js',
     'test/parallel-ownership.test.js',
     'test/parallel-scan-provenance.test.js',
+    'test/profile-tests.test.js',
     'test/review-handoff-adapter-contract.test.js',
     'test/review-preparation-cli.test.js',
     'test/plugin-packaging.test.js',
+    'test/process-runner.test.js',
     'test/pr-body-workflow.test.js',
     'test/project-detection.test.js',
     'test/project-map.test.js',
@@ -137,9 +152,20 @@ const MANIFEST = {
     'test/cli-main.test.js',
     'test/cli-smoke.test.js',
     'test/closeout-adversarial.test.js',
-    'test/closeout-cli.test.js',
-    'test/closeout-plan-sync.test.js',
-    'test/closeout-workflow-deltas.test.js',
+    'test/closeout-event-deltas.test.js',
+    'test/closeout-event-integrity.test.js',
+    'test/closeout-improvement-refs.test.js',
+    'test/closeout-plan-sync-drift.test.js',
+    'test/closeout-plan-sync-evidence.test.js',
+    'test/closeout-plan-sync-failures.test.js',
+    'test/closeout-plan-sync-verification.test.js',
+    'test/closeout-prepare.test.js',
+    'test/closeout-prepare-waiver.test.js',
+    'test/closeout-record.test.js',
+    'test/closeout-record-drift.test.js',
+    'test/closeout-record-retry.test.js',
+    'test/closeout-transition-drift.test.js',
+    'test/closeout-transition-marker.test.js',
     'test/event-validate-cli.test.js',
     'test/github-ready.test.js',
     'test/guidance-lifecycle.test.js',
@@ -162,23 +188,42 @@ const MANIFEST = {
   ],
 };
 
-// Quick developer feedback includes pure logic plus the most relevant cheap
-// filesystem/command integration tests. Heavy init/generation/validation and
-// every real subprocess/Git scenario remain in the full or e2e suites.
-const FAST_INTEGRATION = [
+// Deliberately explicit cheap feedback set. It is not derived from a tier, so
+// adding a nominal unit file cannot silently make this workflow expensive.
+const FAST = [
+  'test/affected-tests.test.js',
+  'test/activation-grant-contracts.test.js',
+  'test/audit-report-schema.test.js',
+  'test/blocked-result-authority.test.js',
+  'test/candidate.test.js',
+  'test/closeout-assurance.test.js',
+  'test/closeout-contract.test.js',
+  'test/github-backend.test.js',
+  'test/github-preflight.test.js',
+  'test/github-review-audit.test.js',
+  'test/github-task-identity.test.js',
+  'test/host-role-capabilities.test.js',
+  'test/immutable.test.js',
+  'test/internal-planning-boundary.test.js',
+  'test/markdown.test.js',
+  'test/markdown-contract-extraction.test.js',
+  'test/model-catalog.test.js',
+  'test/model-picker.test.js',
+  'test/resolution-matrix.test.js',
+  'test/review-checkpoint.test.js',
+  'test/review-entry-receipt.test.js',
+  'test/review-lenses.test.js',
+  'test/review-marker-contract.test.js',
+  'test/schema-validation.test.js',
+  'test/transition-contract.test.js',
+  'test/trusted-actors.test.js',
   'test/activation-scorer.test.js',
   'test/adapter-support-contract.test.js',
-  'test/canonical-event-examples.test.js',
   'test/context-discipline.test.js',
   'test/contract-ownership.test.js',
-  'test/event-cli.test.js',
-  'test/event-logging.test.js',
   'test/plugin-packaging.test.js',
   'test/project-map.test.js',
-  'test/task-backend.test.js',
-  'test/task-cli.test.js',
   'test/template-contract.test.js',
-  'test/verification-learning.test.js',
 ];
 
 export function discoverTestFiles(rootDir = TEST_DIR) {
@@ -209,7 +254,7 @@ export function groupFiles() {
 }
 
 export function fastFiles() {
-  return [...MANIFEST.unit, ...FAST_INTEGRATION].map(absolute);
+  return FAST.map(absolute);
 }
 
 export function assertPartition(rootDir = TEST_DIR) {
@@ -223,16 +268,18 @@ export function assertPartition(rootDir = TEST_DIR) {
   const duplicateEntries = duplicates(entries);
   const missing = discovered.filter(file => !entries.includes(file));
   const extra = entries.filter(file => !discovered.includes(file));
-  const fast = [...MANIFEST.unit, ...FAST_INTEGRATION];
+  const fast = [...FAST];
   const duplicateFast = duplicates(fast);
+  const fastOutsideManifest = fast.filter(file => !entries.includes(file));
   const e2eFast = fast.filter(file => MANIFEST.e2e.includes(file));
 
-  if (duplicateEntries.length || missing.length || extra.length || duplicateFast.length || e2eFast.length) {
+  if (duplicateEntries.length || missing.length || extra.length || duplicateFast.length || fastOutsideManifest.length || e2eFast.length) {
     const details = [
       duplicateEntries.length && `duplicate manifest entries: ${duplicateEntries.join(', ')}`,
       missing.length && `unclassified files: ${missing.join(', ')}`,
       extra.length && `missing files referenced by manifest: ${extra.join(', ')}`,
       duplicateFast.length && `duplicate fast entries: ${duplicateFast.join(', ')}`,
+      fastOutsideManifest.length && `unclassified fast entries: ${fastOutsideManifest.join(', ')}`,
       e2eFast.length && `e2e files cannot be fast: ${e2eFast.join(', ')}`,
     ].filter(Boolean);
     throw new Error(`test group manifest mismatch: ${details.join('; ')}`);

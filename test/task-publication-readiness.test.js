@@ -25,6 +25,7 @@ import {
 } from './helpers/dispatch-fixture.js';
 import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
 import { protectedHostBoundary } from './helpers/host-trust-fixture.js';
+import { initTestGitRepository } from './helpers/git-fixture.js';
 import { applyGitHubTaskBody, taskBodyDigest } from '../src/github-task-body.js';
 import { createTaskProjectFixture } from './helpers/task-fixture.js';
 import { validateTaskStatusTransition } from '../src/task-transition.js';
@@ -1635,9 +1636,7 @@ describe('setup and init prior-gate receipts', () => {
 
   function gitFixture(name) {
     const root = mkdtempSync(join(temp, `${name}-`));
-    for (const args of [['init'], ['config', 'user.name', 'Test'], ['config', 'user.email', 'test@example.test']]) {
-      spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' });
-    }
+    initTestGitRepository(root, { userName: 'Test', userEmail: 'test@example.test' });
     return root;
   }
 

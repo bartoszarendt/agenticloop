@@ -7,8 +7,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 
 import {
   createTaskContractBaselineRecord,
@@ -17,6 +17,7 @@ import {
   validateTaskContractBaseline,
 } from '../src/task-contract-baseline.js';
 import { loadFilesTaskContractRecords } from '../src/files-task-contract.js';
+import { initTestGitRepository, spawnGit } from './helpers/git-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 import { createTaskProjectFixture } from './helpers/task-fixture.js';
 
@@ -74,14 +75,12 @@ function correctionFor(priorBody, resultingBody, recordId = 'record-correction')
 
 function makeRepo(name) {
   const target = mkdtempSync(join(tmpDir, `${name}-`));
-  for (const args of [['init'], ['config', 'user.name', AUTHOR], ['config', 'user.email', 'loop@example.test']]) {
-    git(target, args);
-  }
+  initTestGitRepository(target, { userName: AUTHOR, userEmail: 'loop@example.test' });
   return target;
 }
 
 function git(cwd, args, { check = true } = {}) {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  const result = spawnGit(cwd, args);
   if (check) assert.equal(result.status, 0, `git ${args.join(' ')}\n${result.stderr}`);
   return result;
 }
@@ -199,6 +198,7 @@ describe('files history append-only provenance', () => {
     const record = baselineFor(filesBody());
     writeHistory(target, [record]);
     commitHistory(target, 'baseline');
+    assert.deepEqual(loadFilesTaskContractRecords(target, 'T-900').errors, []);
 
     writeHistory(target, [record, correctionFor(filesBody(), filesBody('Guard all task bodies.'))]);
     const unstaged = loadFilesTaskContractRecords(target, 'T-900');
@@ -235,6 +235,7 @@ describe('files history append-only provenance', () => {
     const second = filesBody('Guard all task bodies.');
     writeHistory(target, [baselineFor(first)]);
     commitHistory(target, 'baseline');
+    assert.equal(loadFilesTaskContractRecords(target, 'T-900').trustedRecords.length, 1);
     git(target, ['checkout', '-b', 'lane']);
     writeHistory(target, [baselineFor(first), correctionFor(first, second)]);
     commitHistory(target, 'lane correction');
@@ -247,6 +248,64 @@ describe('files history append-only provenance', () => {
     assert.equal(loaded.trustedRecords.length, 2);
     assert.equal(loaded.trustedRecords[1].carrier.provenance.sha, mergeSha);
     assert.equal(loaded.trustedRecords[1].carrier.provenance.authorName, AUTHOR);
+  });
+
+  it('ignores Git replace refs when reading provenance history and blobs', () => {
+    const target = makeRepo('replace-ref');
+    const first = filesBody();
+    const second = filesBody('Guard all task bodies.');
+    writeHistory(target, [baselineFor(first)]);
+    const baselineSha = commitHistory(target, 'baseline');
+    writeHistory(target, [baselineFor(first), correctionFor(first, second)]);
+    const canonicalSha = commitHistory(target, 'canonical correction');
+
+    git(target, ['branch', 'canonical', canonicalSha]);
+    git(target, ['reset', '--hard', baselineSha]);
+    git(target, ['commit', '--allow-empty', '-m', 'replacement without correction']);
+    const replacementSha = git(target, ['rev-parse', 'HEAD']).stdout.trim();
+    git(target, ['checkout', '-q', 'canonical']);
+    git(target, ['replace', canonicalSha, replacementSha]);
+
+    const loaded = loadFilesTaskContractRecords(target, 'T-900');
+    assert.deepEqual(loaded.errors, []);
+    assert.deepEqual(loaded.trustedRecords.map(record => record.carrier.provenance.sha), [baselineSha, canonicalSha]);
+  });
+
+  it('refreshes cached provenance after unshallowing a same-HEAD file clone', () => {
+    const source = makeRepo('shallow-source');
+    const first = filesBody();
+    const second = filesBody('Guard all task bodies.');
+    writeHistory(source, [baselineFor(first)]);
+    const baselineSha = commitHistory(source, 'baseline');
+    writeHistory(source, [baselineFor(first), correctionFor(first, second)]);
+    const correctionSha = commitHistory(source, 'correction');
+    const shallow = join(tmpDir, 'shallow-provenance-clone');
+
+    git(tmpDir, ['clone', '--depth', '1', pathToFileURL(source).href, shallow]);
+    const cachedAtDepthOne = loadFilesTaskContractRecords(shallow, 'T-900');
+    assert.deepEqual(cachedAtDepthOne.errors, []);
+    assert.deepEqual(cachedAtDepthOne.trustedRecords.map(record => record.carrier.provenance.sha), [correctionSha, correctionSha]);
+
+    git(shallow, ['fetch', '--unshallow']);
+    assert.equal(git(shallow, ['rev-parse', 'HEAD']).stdout.trim(), correctionSha);
+    const refreshed = loadFilesTaskContractRecords(shallow, 'T-900');
+
+    assert.deepEqual(refreshed.errors, []);
+    assert.deepEqual(refreshed.trustedRecords.map(record => record.carrier.provenance.sha), [baselineSha, correctionSha]);
+  });
+
+  it('returns clones of cached records', () => {
+    const target = makeRepo('cache-clone');
+    writeHistory(target, [baselineFor(filesBody())]);
+    commitHistory(target, 'baseline');
+
+    const first = loadFilesTaskContractRecords(target, 'T-900');
+    first.trustedRecords[0].actor = 'tampered';
+    first.carriers[0].body = 'tampered';
+    const second = loadFilesTaskContractRecords(target, 'T-900');
+
+    assert.equal(second.trustedRecords[0].actor, AUTHOR);
+    assert.notEqual(second.carriers[0].body, 'tampered');
   });
 });
 

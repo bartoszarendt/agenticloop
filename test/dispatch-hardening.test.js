@@ -8,7 +8,7 @@
  * insertion point that silently produced an unmodified adapter artifact.
  */
 
-import { after, before, describe, it } from 'node:test';
+import { after, afterEach, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -65,7 +65,7 @@ import { recognizeHandoff } from '../src/handoff-recognition.js';
 import { createDispatchConsumption, dispatchConsumptionRelativePath } from '../src/handoff-consumption.js';
 import {
   activation,
-  createDispatchFixture,
+  createResettableDispatchFixturePool,
   filesScanInventory,
   git,
   gitRunner,
@@ -76,10 +76,16 @@ import {
   repositoryEvidence,
 } from './helpers/dispatch-fixture.js';
 import { createTestHostTrust, protectedHostBoundary as signedHostBoundary, writeHostTrustStore } from './helpers/host-trust-fixture.js';
+import { initTestGitRepository } from './helpers/git-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
 
 let temp;
+const fixturePool = createResettableDispatchFixturePool();
+
+async function createDispatchFixture(tempRoot, name, options = {}) {
+  return fixturePool.acquire(tempRoot, name, options);
+}
 
 const FUZZ_VALUES = Object.freeze([
   null, [], {}, '', 'text', 0, 1, -1, true, false, [1, 2], { unknown: true }, [[]], { nested: { deep: [] } },
@@ -90,6 +96,7 @@ function sha256Hex(text) {
 }
 
 before(() => { temp = mkdtempSync(join(tmpdir(), 'al-dispatch-hardening-')); });
+afterEach(() => fixturePool.releaseAll());
 after(() => rmSync(temp, { recursive: true, force: true }));
 
 describe('public envelope validators are total', () => {
@@ -546,9 +553,10 @@ describe('initial repository state binds the dispatch', () => {
 describe('return ancestry is proven, not assumed', () => {
   function scratchRepo(name) {
     const root = mkdtempSync(join(temp, `${name}-`));
-    for (const args of [['init'], ['config', 'user.name', 'Agentic Loop Test'], ['config', 'user.email', 'loop@example.test']]) {
-      git(root, args);
-    }
+    initTestGitRepository(root, {
+      userName: 'Agentic Loop Test',
+      userEmail: 'loop@example.test',
+    });
     return root;
   }
 

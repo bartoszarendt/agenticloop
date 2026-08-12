@@ -769,6 +769,9 @@ See [docs/host-adapters.md](host-adapters.md) for the host adapter status table
 and [docs/workflow-examples.md](workflow-examples.md) for a concrete software
 delivery example.
 
+For repository contributor commands and full-validation expectations, see
+[Developer Test Workflows](test-workflows.md).
+
 - [OpenCode setup](opencode-setup.md) - supported.
 - [Codex setup](codex-setup.md) - supported.
 - [Claude Code setup](claude-code-setup.md) - supported.

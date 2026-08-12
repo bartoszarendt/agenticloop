@@ -4,8 +4,8 @@
  *
  *   node scripts/run-tests.js fast          Deliberate unit + quick integration selection.
  *   node scripts/run-tests.js unit          Pure logic tests, no subprocess, no temp FS.
- *   node scripts/run-tests.js integration   Module-level filesystem integration.
- *   node scripts/run-tests.js e2e           Real binary, Git, packaging.
+ *   node scripts/run-tests.js integration   Filesystem, Git, and in-process CLI behavior.
+ *   node scripts/run-tests.js e2e           Real package, binary, host, and worktree boundaries.
  *   node scripts/run-tests.js check         Validate the partition and print the split.
  *
  * `npm test` remains a single `node --test "test/**\/*.test.js"` invocation over

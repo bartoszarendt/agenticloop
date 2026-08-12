@@ -11,9 +11,9 @@
  */
 
 import { copyFileSync, mkdirSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { git, initTestGitRepository } from './git-fixture.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 // Canonical sources that `init` itself installs.
@@ -23,9 +23,10 @@ const TASK_RECORD_TEMPLATE = join(REPO_ROOT, 'memory', 'task-record.md');
 /**
  * Populate `target` with the minimum files the `task` command requires.
  * @param {string} target  An existing, empty directory owned by the caller.
+ * @param {{ initialBranch?: string }} [options]
  * @returns {string} target
  */
-export function createTaskProjectFixture(target) {
+export function createTaskProjectFixture(target, options = {}) {
   mkdirSync(join(target, '.agenticloop', 'tasks'), { recursive: true });
   copyFileSync(SCAFFOLD_PROJECT_MAP, join(target, '.agenticloop', 'project.md'));
   mkdirSync(join(target, 'agenticloop', 'memory'), { recursive: true });
@@ -33,9 +34,10 @@ export function createTaskProjectFixture(target) {
     TASK_RECORD_TEMPLATE,
     join(target, 'agenticloop', 'memory', 'task-record.md')
   );
-  for (const args of [['init'], ['config', 'user.name', 'Agentic Loop Test'], ['config', 'user.email', 'loop@example.test'], ['add', '.'], ['commit', '-m', 'fixture']]) {
-    const result = spawnSync('git', args, { cwd: target, encoding: 'utf8' });
-    if (result.status !== 0) throw new Error(`fixture git ${args.join(' ')} failed: ${result.stderr}`);
-  }
+  // Repo-local identity remains below deliberate GIT_AUTHOR_* overrides while
+  // the shared initializer also disables unsafe ambient test behavior.
+  initTestGitRepository(target, { initialBranch: options.initialBranch });
+  git(target, ['add', '.']);
+  git(target, ['commit', '-m', 'fixture']);
   return target;
 }

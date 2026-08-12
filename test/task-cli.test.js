@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { initTestGitRepository } from './helpers/git-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 import { createTaskProjectFixture } from './helpers/task-fixture.js';
 
@@ -378,9 +379,12 @@ describe('task CLI', () => {
       .replace('# owned_paths:\n#   - src/example.js', 'owned_paths:\n  - src/expected.js');
     writeFileSync(path, content, 'utf-8');
 
-    git(target, ['init', '-q', '-b', 'main']);
-    git(target, ['config', 'user.email', 'agenticloop@example.invalid']);
-    git(target, ['config', 'user.name', 'Agentic Loop Test']);
+    initTestGitRepository(target, {
+      initialBranch: 'main',
+      quiet: true,
+      userName: 'Agentic Loop Test',
+      userEmail: 'agenticloop@example.invalid',
+    });
     git(target, ['add', '.']);
     git(target, ['commit', '-q', '-m', 'base']);
     const base = git(target, ['rev-parse', 'HEAD']);

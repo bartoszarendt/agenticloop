@@ -10,28 +10,23 @@ import {
 } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { spawnSync } from 'node:child_process';
 
 import {
   validateCommittedSourcePath,
   verifyCommittedAttributedSource,
 } from '../src/committed-source.js';
+import { git, initTestGitRepository } from './helpers/git-fixture.js';
 
 let temp;
 before(() => { temp = mkdtempSync(join(tmpdir(), 'agenticloop-committed-source-')); });
 after(() => { rmSync(temp, { recursive: true, force: true }); });
 
-function git(root, args) {
-  const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' });
-  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  return result.stdout.trim();
-}
-
 function fixture(name) {
   const root = mkdtempSync(join(temp, `${name}-`));
-  git(root, ['init']);
-  git(root, ['config', 'user.name', 'Agentic Loop Test']);
-  git(root, ['config', 'user.email', 'loop@example.test']);
+  initTestGitRepository(root, {
+    userName: 'Agentic Loop Test',
+    userEmail: 'loop@example.test',
+  });
   writeFileSync(join(root, 'README.md'), 'fixture\n', 'utf8');
   git(root, ['add', 'README.md']);
   git(root, ['commit', '-m', 'fixture']);

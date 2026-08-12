@@ -23,6 +23,7 @@ import {
   validateTaskEvidenceContext,
   validateTaskMutationReceipt,
 } from '../src/task-evidence-contract.js';
+import { initTestGitRepository } from './helpers/git-fixture.js';
 
 let temp;
 before(() => { temp = mkdtempSync(join(tmpdir(), 'agenticloop-evidence-integrity-')); });
@@ -211,9 +212,11 @@ describe('prior-gate receipts re-verify Git state, not only bytes', () => {
 
   it('reports drift when a recorded path leaves the index without changing bytes', () => {
     const root = mkdtempSync(join(temp, 'gate-git-'));
-    git(root, ['init', '-q']);
-    git(root, ['config', 'user.name', 'Test']);
-    git(root, ['config', 'user.email', 'test@example.test']);
+    initTestGitRepository(root, {
+      quiet: true,
+      userName: 'Test',
+      userEmail: 'test@example.test',
+    });
     mkdirSync(join(root, '.agenticloop'), { recursive: true });
     writeFileSync(join(root, 'tracked.md'), 'content\n');
     git(root, ['add', 'tracked.md']);
@@ -252,9 +255,11 @@ describe('prior-gate receipts re-verify Git state, not only bytes', () => {
 
   it('re-resolves the gate when the listed paths are committed', () => {
     const root = mkdtempSync(join(temp, 'gate-resolve-'));
-    git(root, ['init', '-q']);
-    git(root, ['config', 'user.name', 'Test']);
-    git(root, ['config', 'user.email', 'test@example.test']);
+    initTestGitRepository(root, {
+      quiet: true,
+      userName: 'Test',
+      userEmail: 'test@example.test',
+    });
     mkdirSync(join(root, '.agenticloop'), { recursive: true });
     writeFileSync(join(root, 'written.md'), 'content\n');
 

@@ -16,17 +16,17 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { runCliInProcess } from './helpers/run-cli.js';
+import { git, initTestGitRepository } from './helpers/git-fixture.js';
 
 let tmpDir;
-before(() => { tmpDir = mkdtempSync(join(tmpdir(), 'al-adversarial-')); });
+const TEST_TMP_ROOT = fileURLToPath(new URL('../.agenticloop/tmp/', import.meta.url));
+before(() => {
+  mkdirSync(TEST_TMP_ROOT, { recursive: true });
+  tmpDir = mkdtempSync(join(TEST_TMP_ROOT, 'al-adversarial-'));
+});
 after(() => { rmSync(tmpDir, { recursive: true, force: true }); });
-
-function git(target, args) {
-  return execSync(`git ${args}`, { cwd: target, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-}
 
 function makeTarget(name) {
   const target = mkdtempSync(join(tmpDir, `${name}-`));
@@ -45,20 +45,18 @@ function makeTarget(name) {
     '# Project',
     '',
   ].join('\n'), 'utf-8');
-  git(target, 'init -q');
-  git(target, 'config user.email test@example.com');
-  git(target, 'config user.name Test');
+  initTestGitRepository(target, { quiet: true, userEmail: 'test@example.com', userName: 'Test' });
   writeFileSync(join(target, 'app.js'), 'export const v = 1;\n', 'utf-8');
   writeFileSync(join(target, '.gitignore'), '.agenticloop/tmp/\n', 'utf-8');
-  git(target, 'add -A');
-  git(target, 'commit -qm init');
+  git(target, ['add', '-A']);
+  git(target, ['commit', '-q', '-m', 'init']);
   return target;
 }
 
 function commitAll(target, message) {
-  git(target, 'add -A');
-  git(target, `commit -qm "${message}"`);
-  return `commit:${git(target, 'rev-parse HEAD')}`;
+  git(target, ['add', '-A']);
+  git(target, ['commit', '-q', '-m', message]);
+  return `commit:${git(target, ['rev-parse', 'HEAD'])}`;
 }
 
 function writeTask(target, taskId, status, grouping) {
@@ -170,7 +168,7 @@ describe('reproduced closeout-integrity failure sequence', () => {
 
     // 6. The corrected workflow: audit creation succeeds on the first command
     //    with concise evidence (no magic substring required).
-    const artifact = `commit:${git(target, 'rev-parse HEAD')}`;
+    const artifact = `commit:${git(target, ['rev-parse', 'HEAD'])}`;
     const created = await run([
       'audit', 'new',
       '--work-unit', 'milestone:M00',

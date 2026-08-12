@@ -13,7 +13,7 @@
  */
 
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
-import { relative, join } from 'node:path';
+import { relative, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { FILES_TASK_CONTRACT_HISTORY_DIRECTORY } from './layout.js';
@@ -31,7 +31,21 @@ export function appendFilesTaskContractRecord(target, record) {
 }
 
 function git(target, args) {
-  return spawnSync('git', args, { cwd: target, encoding: 'utf8' });
+  // Ignore replace refs so provenance reads the repository's stored objects.
+  return spawnSync('git', args, { cwd: target, encoding: 'utf8', env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } });
+}
+
+const recordCache = new Map();
+const RECORD_CACHE_MAX_ENTRIES = 256;
+
+function cacheRecords(key, value) {
+  while (recordCache.size >= RECORD_CACHE_MAX_ENTRIES) recordCache.delete(recordCache.keys().next().value);
+  recordCache.set(key, structuredClone(value));
+  return value;
+}
+
+function historyDigest(history) {
+  return createHash('sha256').update(history, 'utf8').digest('hex');
 }
 
 function failure(path, errors, extra = {}) {
@@ -72,26 +86,31 @@ export function gitAuthorMatchesRecordActor(actor, { authorName, authorEmail }) 
 export function loadFilesTaskContractRecords(target, taskId) {
   const path = filesTaskContractHistoryPath(target, taskId);
   const relativePath = relative(target, path).replace(/\\/g, '/');
-  const head = git(target, ['rev-parse', '--verify', 'HEAD']);
-  if (head.status !== 0) {
+  const state = git(target, ['status', '--porcelain=v2', '--branch', '--untracked-files=all', '--', relativePath]);
+  if (state.status !== 0) return failure(path, `cannot inspect git state for files task-contract history '${relativePath}'`);
+  const stateLines = String(state.stdout ?? '').split(/\r?\n/).filter(Boolean);
+  const headOid = stateLines.find(line => line.startsWith('# branch.oid '))?.slice('# branch.oid '.length) ?? null;
+  if (!headOid || headOid === '(initial)') {
     // No commits yet: only a clean, absent history is trustworthy (empty).
     return existsSync(path)
       ? failure(path, `files task-contract history '${relativePath}' must be committed separately before it is trusted`)
       : { trustedRecords: [], rejectedRecords: [], errors: [], warnings: [], path, carriers: [], parseDiagnostics: [] };
   }
-  const dirty = git(target, ['status', '--porcelain', '--', relativePath]);
-  if (dirty.status !== 0) return failure(path, `cannot inspect git state for files task-contract history '${relativePath}'`);
-  if (String(dirty.stdout ?? '').trim() !== '') {
+  if (stateLines.some(line => !line.startsWith('# '))) {
     return failure(path, `files task-contract history '${relativePath}' must be committed separately before it is trusted`);
   }
   const history = git(target, ['log', '--first-parent', '--format=%H%x00%an%x00%ae%x00%aI', '--', relativePath]);
   if (history.status !== 0) return failure(path, `cannot read first-parent history for files task-contract history '${relativePath}'`);
-  const commits = String(history.stdout ?? '').split('\n').filter(Boolean).map(line => {
+  const historyOutput = String(history.stdout ?? '');
+  const cacheKey = `${resolve(target)}\0${taskId}\0${headOid}\0sha256:${historyDigest(historyOutput)}`;
+  const cached = recordCache.get(cacheKey);
+  if (cached) return structuredClone(cached);
+  const commits = historyOutput.split('\n').filter(Boolean).map(line => {
     const [sha = '', authorName = '', authorEmail = '', timestamp = ''] = line.split('\0');
     return { sha, authorName, authorEmail, timestamp };
   }).reverse();
   if (commits.length === 0) {
-    return { trustedRecords: [], rejectedRecords: [], errors: [], warnings: [], path, carriers: [], parseDiagnostics: [] };
+    return cacheRecords(cacheKey, { trustedRecords: [], rejectedRecords: [], errors: [], warnings: [], path, carriers: [], parseDiagnostics: [] });
   }
   const headContent = git(target, ['show', `HEAD:${relativePath}`]);
   if (headContent.status !== 0) {
@@ -141,7 +160,7 @@ export function loadFilesTaskContractRecords(target, taskId) {
     }
     trustedRecords.push(record);
   }
-  return { trustedRecords, rejectedRecords: trust.rejectedRecords, errors, warnings: [...parsed.parseWarnings, ...trust.warnings], path, carriers, parseDiagnostics: parsed.parseDiagnostics };
+  return cacheRecords(cacheKey, { trustedRecords, rejectedRecords: trust.rejectedRecords, errors, warnings: [...parsed.parseWarnings, ...trust.warnings], path, carriers, parseDiagnostics: parsed.parseDiagnostics });
 }
 
 function lineCarrier(commit, relativePath, lineIndex, body) {

@@ -22,6 +22,7 @@ import {
 } from '../src/task-contract-baseline.js';
 import { fetchGitHubTaskBody, lintGitHubTaskBody } from '../src/github-task-body.js';
 import { loadFilesTaskContractRecords } from '../src/files-task-contract.js';
+import { initTestGitRepository } from './helpers/git-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 import { createTaskProjectFixture } from './helpers/task-fixture.js';
 
@@ -169,10 +170,10 @@ describe('untrusted carrier noise cannot poison a valid trusted chain', () => {
 describe('files history is genuinely append-only', () => {
   function gitRepositoryWithHistory() {
     const target = mkdtempSync(join(tmpdir(), 'al-history-rewrite-'));
-    for (const args of [['init'], ['config', 'user.name', 'Loop Author'], ['config', 'user.email', 'loop@example.test']]) {
-      const result = spawnSync('git', args, { cwd: target, encoding: 'utf8' });
-      assert.equal(result.status, 0, result.stderr);
-    }
+    initTestGitRepository(target, {
+      userName: 'Loop Author',
+      userEmail: 'loop@example.test',
+    });
     return target;
   }
 

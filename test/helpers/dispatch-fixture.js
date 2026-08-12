@@ -9,9 +9,8 @@
 
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import {
   captureActivationInput,
@@ -34,6 +33,9 @@ import { loadFilesTaskContractRecords } from '../../src/files-task-contract.js';
 import { createTaskProjectFixture } from './task-fixture.js';
 import { createTestHostTrust, writeHostTrustStore } from './host-trust-fixture.js';
 import { runCliInProcess } from './run-cli.js';
+import { git, gitRunner } from './git-fixture.js';
+
+export { git, gitRunner } from './git-fixture.js';
 
 export const FULL_SHA_B = '2222222222222222222222222222222222222222';
 export const ACTIVATION_CARRIER = '.agenticloop/activation/T-001.json';
@@ -50,14 +52,31 @@ export function sha256(text) {
   return `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`;
 }
 
-export function git(cwd, args) {
-  const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr);
-  return result.stdout.trim();
+function filesystemState(path) {
+  if (!existsSync(path)) return { present: false };
+  if (!statSync(path).isDirectory()) {
+    return { present: true, type: 'file', digest: sha256(readFileSync(path, 'utf8')) };
+  }
+  const entries = readdirSync(path, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map(entry => entry.isDirectory()
+      ? { name: entry.name, type: 'directory', entries: filesystemState(join(path, entry.name)).entries }
+      : { name: entry.name, type: 'file', digest: sha256(readFileSync(join(path, entry.name), 'utf8')) });
+  return { present: true, entries };
 }
 
-export function gitRunner(cwd) {
-  return args => spawnSync('git', args, { cwd, encoding: 'utf8' });
+/**
+ * Returns a cache key only for a clean Git input, including every external
+ * harness path whose state can affect closeout certification.
+ */
+export function closeoutCertificationFingerprint(root, harnessOptions, externalPaths = []) {
+  if (git(root, ['status', '--porcelain', '--untracked-files=all']) !== '') return null;
+  return sha256(canonicalJson({
+    gitHead: git(root, ['rev-parse', 'HEAD']),
+    gitTree: git(root, ['rev-parse', 'HEAD^{tree}']),
+    harnessOptions,
+    externalState: externalPaths.map(path => ({ path: resolve(path), state: filesystemState(path) })),
+  }));
 }
 
 /** Build one host-signed capture through an operator-pinned test adapter. */
@@ -126,10 +145,34 @@ function canonicalReadiness(raw) {
 /**
  * Create a clean, committed, activation-bound files task fixture.
  *
+ * Building the committed git history costs a dozen-plus subprocess spawns.
+ * A host-signed capture binds the exact repository path into committed,
+ * trusted history, so the default fixture is rebuilt per call. A scaffold
+ * fixture carries no capture at all, so the first scaffold call for a (temp,
+ * options) pair builds a pristine template once and every call clones it
+ * byte-for-byte (including `.git`) and rebinds only the path-bound closures.
+ * Template roots are never handed to a caller, so clones stay fully
+ * independent and mutable.
+ *
  * @param {string} temp  Caller-owned temporary directory.
  * @param {string} name  Distinct fixture name.
  */
 export async function createDispatchFixture(temp, name, options = {}) {
+  if (options.scaffold !== true) return buildDispatchFixture(temp, name, options);
+  const key = `${resolve(temp)}::${canonicalJson(options)}`;
+  let template = fixtureTemplates.get(key);
+  if (!template) {
+    template = await buildDispatchFixture(temp, 'scaffold-template', options);
+    fixtureTemplates.set(key, template);
+  }
+  return cloneDispatchFixture(template, temp, name);
+}
+
+const fixtureTemplates = new Map();
+let fixtureCloneCounter = 0;
+const dispatchTemplate = Symbol('dispatchTemplate');
+
+async function buildDispatchFixture(temp, name, options = {}) {
   // `scaffold: true` builds the same project without any legacy activation
   // provenance: the task is authored as a plain scaffold record, exactly like a
   // project that predates activation or was created with `task new --scaffold`.
@@ -137,7 +180,7 @@ export async function createDispatchFixture(temp, name, options = {}) {
   const taskIds = options.taskIds ?? ['T-001'];
   assert.ok(taskIds.length > 0 && new Set(taskIds).size === taskIds.length, 'dispatch fixture task IDs must be unique');
   const root = mkdtempSync(join(temp, `${name}-`));
-  createTaskProjectFixture(root);
+  createTaskProjectFixture(root, { initialBranch: 'task/T-001' });
   if (typeof options.projectMapContent === 'string') {
     writeFileSync(join(root, '.agenticloop', 'project.md'), options.projectMapContent, 'utf8');
   }
@@ -185,9 +228,8 @@ export async function createDispatchFixture(temp, name, options = {}) {
     }
     writeFileSync(taskPath, body, 'utf8');
   }
-  git(root, ['add', 'src', '.agenticloop/tasks', ...(!scaffold ? ['.agenticloop/activation'] : [])]);
+  git(root, ['add', 'src', '.agenticloop/project.md', '.agenticloop/tasks', ...(!scaffold ? ['.agenticloop/activation'] : [])]);
   git(root, ['commit', '-m', 'task fixture']);
-  git(root, ['branch', '-M', 'task/T-001']);
   for (const taskId of taskIds) {
     const baseline = await runCliInProcess([
       'task', 'establish-baseline', taskId, '--actor', 'Agentic Loop Test', '--authority', `task:${taskId}`, '--target', root,
@@ -208,8 +250,7 @@ export async function createDispatchFixture(temp, name, options = {}) {
   writeFileSync(join(root, 'dependencies.json'), dependencySource, 'utf8');
   git(root, ['add', 'dependencies.json']);
   git(root, ['commit', '-m', 'record dependency snapshot\n\nTask: T-001\nAgent: maintainer']);
-  const dependencyCommit = git(root, ['rev-parse', 'HEAD']);
-  const dependencyBlob = git(root, ['rev-parse', 'HEAD:dependencies.json']);
+  const [dependencyCommit, dependencyBlob] = git(root, ['rev-parse', 'HEAD', 'HEAD:dependencies.json']).split(/\r?\n/);
   const dependency = parseDependencySnapshot(dependencySource, {
     sourceRef: 'dependencies.json',
     provenance: {
@@ -265,7 +306,7 @@ export async function createDispatchFixture(temp, name, options = {}) {
       }),
       decomposition: {
         source: 'task-decomposition', sourceRef: decompositionSource,
-        revision: `git-commit:${git(root, ['rev-parse', 'HEAD'])}`,
+        revision: `git-commit:${dependencyCommit}`,
         declaredCompleteness: 'complete', attribution: 'maintainer',
       },
       observedAt,
@@ -286,11 +327,83 @@ export async function createDispatchFixture(temp, name, options = {}) {
   const repository = () => ({ worktree: resolve(root), branch: 'task/T-001', head, baseHead: head, baseTree: tree });
   const refetchParallelScanInventory = () => {
     const entries = readdirSync(join(root, '.agenticloop', 'tasks'))
-      .filter(name => name.endsWith('.md'))
+      .filter(entry => entry.endsWith('.md'))
       .sort()
-      .map(name => ({
-        carrier: `.agenticloop/tasks/${name}`,
-        content: readFileSync(join(root, '.agenticloop', 'tasks', name), 'utf8'),
+      .map(entry => ({
+        carrier: `.agenticloop/tasks/${entry}`,
+        content: readFileSync(join(root, '.agenticloop', 'tasks', entry), 'utf8'),
+        readError: null,
+      }));
+    return normalizeFilesTaskInventory({
+      inventoryId: 'files:.agenticloop/tasks',
+      entries,
+      complete: true,
+      enumeration: createTaskInventoryEnumeration({
+        backend: 'files',
+        inventoryId: 'files:.agenticloop/tasks',
+        observedAt: new Date().toISOString(),
+        discovered: entries.length,
+        returned: entries.length,
+      }),
+    });
+  };
+  const template = {
+    root, trust, operatorTrustRoot, trustStorePath, tree, basePaths, head, observedAt,
+    taskIds, captures, readinessByTask, decompositions,
+  };
+  return scaffold ? template : bindDispatchFixture(template, root);
+}
+
+/**
+ * Byte-copy a pristine scaffold template (`.git` included) and rebind only the
+ * path-bound closures. Scaffold fixtures carry no host-signed capture, so no
+ * path-bound signed artifact is committed and clones are exact equivalents.
+ */
+function cloneDispatchFixture(template, temp, name) {
+  const root = join(temp, `clone-${name}-${fixtureCloneCounter += 1}`);
+  cpSync(template.root, root, { recursive: true });
+  const trust = createTestHostTrust({ target: root });
+  const operatorTrustRoot = join(temp, `clone-${name}-${fixtureCloneCounter}-operator-trust`);
+  const trustStorePath = writeHostTrustStore(operatorTrustRoot, trust);
+  return bindDispatchFixture({ ...template, trust, operatorTrustRoot, trustStorePath }, root);
+}
+
+function cloneTrust(trust) {
+  return {
+    ...trust,
+    adapter: structuredClone(trust.adapter),
+    document: structuredClone(trust.document),
+    capabilities: structuredClone(trust.capabilities),
+  };
+}
+
+function bindDispatchFixture(template, root) {
+  const { tree, head, observedAt } = template;
+  const trust = cloneTrust(template.trust);
+  const operatorTrustRoot = template.operatorTrustRoot;
+  const trustStorePath = template.trustStorePath;
+  const basePaths = [...template.basePaths];
+  const taskIds = [...template.taskIds];
+  const captures = structuredClone(template.captures);
+  const readinessByTask = structuredClone(template.readinessByTask);
+  const decompositions = structuredClone(template.decompositions);
+  const taskPaths = new Map(taskIds.map(taskId => [taskId, join(root, '.agenticloop', 'tasks', `${taskId}.md`)]));
+  const snapshots = new Map(taskIds.map(taskId => [taskId, () => {
+    const current = readFileSync(taskPaths.get(taskId), 'utf8');
+    const history = loadFilesTaskContractRecords(root, taskId);
+    return {
+      backend: 'files', taskId, carrier: `.agenticloop/tasks/${taskId}.md`, body: current,
+      digest: sha256(current), trustedRecords: history.trustedRecords, trustedRecordErrors: history.errors,
+    };
+  }]));
+  const repository = () => ({ worktree: resolve(root), branch: 'task/T-001', head, baseHead: head, baseTree: tree });
+  const refetchParallelScanInventory = () => {
+    const entries = readdirSync(join(root, '.agenticloop', 'tasks'))
+      .filter(entry => entry.endsWith('.md'))
+      .sort()
+      .map(entry => ({
+        carrier: `.agenticloop/tasks/${entry}`,
+        content: readFileSync(join(root, '.agenticloop', 'tasks', entry), 'utf8'),
         readError: null,
       }));
     return normalizeFilesTaskInventory({
@@ -338,7 +451,152 @@ export async function createDispatchFixture(temp, name, options = {}) {
     }];
   }));
   const primary = taskFixtures.get(taskIds[0]);
-  return { ...primary, taskFixtures };
+  const fixture = { ...primary, taskFixtures };
+  Object.defineProperty(fixture, dispatchTemplate, { value: template });
+  return fixture;
+}
+
+function ownedPath(temp, path) {
+  const owner = resolve(temp);
+  const target = resolve(path);
+  const rel = relative(owner, target);
+  assert.ok(rel && !isAbsolute(rel) && !rel.startsWith('..'), `fixture path must be below caller temp root: ${target}`);
+  return target;
+}
+
+/**
+ * Snapshot and reset one capture-bound fixture at the exact signed path.
+ * Callers must use the returned fixture anew after every reset so no mutated
+ * closures, maps, or evidence objects survive between serial tests.
+ */
+export async function createResettableDispatchFixture(temp, name, options = {}, { resetPaths = [] } = {}) {
+  const initial = await buildDispatchFixture(temp, name, options);
+  const template = initial[dispatchTemplate];
+  const livePaths = [initial.root, initial.operatorTrustRoot, ...resetPaths]
+    .map(path => ownedPath(temp, path));
+  const snapshotRoot = mkdtempSync(join(temp, '.dispatch-snapshot-'));
+  const snapshotSets = new Map();
+  let snapshotCounter = 0;
+  const capture = (label, { gitRestore = false } = {}) => {
+    if (gitRestore) {
+      assert.equal(
+        git(initial.root, ['status', '--porcelain', '--untracked-files=all']),
+        '',
+        `gitRestore checkpoint "${label}" requires a clean committed worktree`
+      );
+    }
+    const directory = join(snapshotRoot, String(snapshotCounter += 1));
+    const entries = livePaths.map((path, index) => {
+      const snapshot = join(directory, String(index));
+      const present = existsSync(path);
+      if (present) cpSync(path, snapshot, { recursive: true });
+      return { path, snapshot, present };
+    });
+    const gitHead = gitRestore ? git(initial.root, ['rev-parse', 'HEAD']) : null;
+    const gitTree = gitRestore ? git(initial.root, ['rev-parse', 'HEAD^{tree}']) : null;
+    const extraFiles = gitRestore
+      ? [...new Set([
+          ...git(initial.root, ['ls-files', '--others', '--exclude-standard']).split(/\r?\n/),
+          ...git(initial.root, ['ls-files', '--others', '--ignored', '--exclude-standard']).split(/\r?\n/),
+        ].filter(Boolean))]
+      : [];
+    const externalPaths = livePaths.filter(path => path !== initial.root);
+    const liveState = gitRestore
+      ? sha256(canonicalJson(externalPaths.map(path => ({ path, state: filesystemState(path) }))))
+      : null;
+    snapshotSets.set(label, { entries, gitHead, gitTree, extraFiles, liveState });
+  };
+  capture('initial', { gitRestore: true });
+  let pristine = initial;
+
+  return {
+    root: initial.root,
+    repositoryIdentity: initial.trust.repositoryIdentity,
+    hasCheckpoint(label) {
+      return snapshotSets.has(label);
+    },
+    checkpoint(label, options) {
+      assert.ok(typeof label === 'string' && label, 'fixture checkpoint label is required');
+      capture(label, options);
+    },
+    take(label = 'initial') {
+      if (pristine && label === 'initial') {
+        const fixture = pristine;
+        pristine = null;
+        return fixture;
+      }
+      const snapshotSet = snapshotSets.get(label);
+      assert.ok(snapshotSet, `unknown fixture checkpoint: ${label}`);
+      for (const entry of snapshotSet.entries) {
+        ownedPath(temp, entry.path);
+        if (entry.path === initial.root && snapshotSet.gitHead) {
+          git(initial.root, ['reset', '--mixed', snapshotSet.gitHead]);
+          git(initial.root, ['checkout-index', '-a', '-f']);
+          git(initial.root, ['clean', '-fdx']);
+          for (const extraFile of snapshotSet.extraFiles) {
+            const source = join(entry.snapshot, ...extraFile.split('/'));
+            const destination = ownedPath(initial.root, join(initial.root, ...extraFile.split('/')));
+            mkdirSync(dirname(destination), { recursive: true });
+            cpSync(source, destination, { recursive: true });
+          }
+          continue;
+        }
+        rmSync(entry.path, { recursive: true, force: true });
+        if (entry.present) cpSync(entry.snapshot, entry.path, { recursive: true });
+      }
+      if (snapshotSet.gitHead) {
+        assert.equal(git(initial.root, ['status', '--porcelain', '--untracked-files=all']), '', `restored checkpoint "${label}" must be clean`);
+        assert.equal(git(initial.root, ['rev-parse', 'HEAD']), snapshotSet.gitHead, `restored checkpoint "${label}" must reproduce HEAD`);
+        assert.equal(git(initial.root, ['rev-parse', 'HEAD^{tree}']), snapshotSet.gitTree, `restored checkpoint "${label}" must reproduce its tree`);
+        assert.equal(
+          sha256(canonicalJson(livePaths.filter(path => path !== initial.root).map(path => ({ path, state: filesystemState(path) })))),
+          snapshotSet.liveState,
+          `restored checkpoint "${label}" must reproduce external fixture state`
+        );
+      }
+      return bindDispatchFixture(template, initial.root);
+    },
+  };
+}
+
+/** Pool same-path fixtures across serial tests while allowing several leases in one test. */
+export function createResettableDispatchFixturePool() {
+  const entriesByKey = new Map();
+  const leased = new Set();
+  const controllersByRoot = new Map();
+  return {
+    async acquire(temp, name, options = {}, resetOptions = {}) {
+      const key = `${resolve(temp)}::${canonicalJson(options)}::${canonicalJson(resetOptions.resetPaths ?? [])}::${canonicalJson(resetOptions.cacheKey ?? null)}`;
+      const entries = entriesByKey.get(key) ?? [];
+      const preferredCheckpoint = resetOptions.preferredCheckpoint;
+      let entry = entries.find(candidate => !leased.has(candidate) && preferredCheckpoint && candidate.hasCheckpoint(preferredCheckpoint));
+      entry ??= entries.find(candidate => !leased.has(candidate));
+      if (!entry) {
+        entry = await createResettableDispatchFixture(temp, `${name}-pool-${entries.length}`, options, resetOptions);
+        entries.push(entry);
+        entriesByKey.set(key, entries);
+        controllersByRoot.set(entry.root, entry);
+      }
+      leased.add(entry);
+      return entry.take(preferredCheckpoint && entry.hasCheckpoint(preferredCheckpoint) ? preferredCheckpoint : 'initial');
+    },
+    hasCheckpoint(target, label) {
+      return controllersByRoot.get(target)?.hasCheckpoint(label) ?? false;
+    },
+    checkpoint(target, label, options) {
+      const controller = controllersByRoot.get(target);
+      assert.ok(controller, `no resettable fixture owns ${target}`);
+      controller.checkpoint(label, options);
+    },
+    restore(target, label) {
+      const controller = controllersByRoot.get(target);
+      assert.ok(controller, `no resettable fixture owns ${target}`);
+      return controller.take(label);
+    },
+    releaseAll() {
+      leased.clear();
+    },
+  };
 }
 
 /**

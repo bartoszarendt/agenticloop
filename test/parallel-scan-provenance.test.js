@@ -1,4 +1,4 @@
-import { after, describe, it } from 'node:test';
+import { after, afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -14,7 +14,7 @@ import {
   createDecompositionProvenance,
   prepareDecompositionSource,
 } from '../src/dispatch-envelope.js';
-import { createDispatchFixture, git, gitTreeBaseEvidence, prepare } from './helpers/dispatch-fixture.js';
+import { createResettableDispatchFixturePool, git, gitTreeBaseEvidence, prepare } from './helpers/dispatch-fixture.js';
 import { protectedHostBoundary } from './helpers/host-trust-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 import { COMMAND_REGISTRY } from '../src/cli-registry.js';
@@ -52,6 +52,13 @@ const TEMPLATE = readFileSync(fileURLToPath(new URL('../memory/task-record.md', 
 const OBSERVED_AT = '2026-08-07T10:00:00.000Z';
 const NOW = Date.parse(OBSERVED_AT) + 60_000;
 const BASE_PATHS = ['src/existing.js'];
+const fixturePool = createResettableDispatchFixturePool();
+
+async function createDispatchFixture(temp, name, options = {}) {
+  return fixturePool.acquire(temp, name, options);
+}
+
+afterEach(() => fixturePool.releaseAll());
 
 function taskBody({
   taskId,

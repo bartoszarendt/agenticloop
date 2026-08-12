@@ -18,6 +18,7 @@ import {
   validateManagedReconciliation,
   validateSharedMutationContents,
 } from '../src/parallel-ownership.js';
+import { initTestGitRepository } from './helpers/git-fixture.js';
 
 const BASE = 'a'.repeat(40);
 const LEFT_HEAD = 'b'.repeat(40);
@@ -79,9 +80,12 @@ function git(cwd, args, expectedStatus = 0) {
 
 function makeGitRepo() {
   const repo = mkdtempSync(join(tmpdir(), 'al-p30-git-'));
-  git(repo, ['init', '-q', '-b', 'main']);
-  git(repo, ['config', 'user.email', 'agenticloop@example.invalid']);
-  git(repo, ['config', 'user.name', 'Agentic Loop Test']);
+  initTestGitRepository(repo, {
+    initialBranch: 'main',
+    quiet: true,
+    userName: 'Agentic Loop Test',
+    userEmail: 'agenticloop@example.invalid',
+  });
   return repo;
 }
 
