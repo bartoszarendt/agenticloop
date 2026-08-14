@@ -1,6 +1,6 @@
 {
   "name": "agenticloop",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Graph engineering for AI coding agents – binding every state change, evidence requirement, and authorization boundary to durable artifacts for multi-hour work",
   "type": "module",
   "license": "MIT",

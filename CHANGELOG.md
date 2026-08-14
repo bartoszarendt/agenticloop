@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+## 0.4.1 - 2026-08-14
+
+### Highlights
+- **Public dispatch and return lifecycle.** Files-backend users can prepare a
+  dispatch, produce shell-neutral command evidence and an Engineer return, and
+  independently verify that return through supported CLI commands without
+  constructing internal JSON contracts by hand.
+- **Authenticated return evidence.** Protected host execution receipts bind the
+  exact repository, packet, invocation, task contract, work unit, carrier,
+  candidate heads, command artifacts, and producer return. Signed replay state
+  is prepared and committed through the protected host boundary and is
+  revalidated without re-consuming the receipt.
+- **Cross-platform execution.** One shell-free runner resolves Windows command
+  shims, records exact argv and bounded output, distinguishes startup and runtime
+  timeouts, and terminates descendant process trees on Windows and POSIX.
+
+### Added
+- Added public files-backend producers for dispatch preparation, required-check
+  execution evidence, Engineer role returns, and independently refetched return
+  verification. Advanced explicit inputs remain validated and cannot override
+  derived repository or lifecycle authority.
+- Added schema-v4 return-verification records with separate activation and
+  return-assurance grades, exact return-generation binding, durable disposition,
+  and a fixed version-1 freshness policy of 86,400 seconds.
+- Added canonical target/worktree path identities shared across dispatch,
+  execution evidence, host trust, return verification, and handoff recognition.
+  Public artifact selectors remain target-relative and reject absolute paths,
+  traversal, and supported symlink escapes.
+- Added typed lifecycle compatibility diagnostics and read-only lifecycle
+  orientation. Non-current records remain historical evidence and route safely
+  to fresh current evidence rather than being relabelled in place.
+- Added host-neutral cancellation provenance. Host end-turn, interruption,
+  budget-pause, or accepted-but-ignored interrupt state cannot establish
+  authoritative Agentic Loop cancellation without a protected receipt producer.
+- Added deterministic `status --json` lifecycle output and packaged public
+  lifecycle coverage across the supported host adapters.
+
 ### Changed
 - The generated Auditor is now dual-mode. By default it runs as a **standalone
   auditor**: an ordinary bounded, read-only, evidence-based assessment of
@@ -34,6 +71,44 @@
   unchanged: OpenCode `permission.edit: deny`, Claude Code `permissionMode: plan`,
   Copilot withholds the `edit` tool, Cursor `readonly: true`, and Codex keeps its
   binding advisory prohibition.
+- Blocked Engineer returns are persisted only as unverified observations and
+  cannot authorize review, acceptance, integration, or closeout. Successful
+  current returns and blocked returns now retain distinct durable dispositions.
+- Host-receipted verification replays target-confined execution artifacts and
+  verifies their exact packet, invocation, task, carrier, work-unit, repository
+  heads, argv, exit outcome, and path authorities. Recomputed digests alone do
+  not establish producer or execution provenance.
+- Generated role, backend, setup, CLI, and workflow guidance now uses the public
+  lifecycle commands and documents the protected-host durability boundary.
+
+### Fixed
+- Fixed Windows execution of `npm`, `npx`, and other command shims without
+  enabling shell interpretation, while retaining metacharacter refusal and
+  repository-declared command confinement.
+- Fixed the timeout race that could terminate a parent before a descendant PID
+  was recorded, and added bounded startup readiness before runtime timeout
+  accounting begins.
+- Fixed GNU tar handling of Windows drive-letter paths in the genuine 0.4.0
+  packaged-upgrade regression by using target-relative operands under one
+  working directory.
+- Fixed return-receipt recognition so a correctly re-signed receipt for another
+  work unit is rejected explicitly, with one shared packet work-unit derivation
+  used by receipt creation, receipt verification, and stored-return validation.
+- Fixed closeout and handoff paths to revalidate protected replay state without
+  consuming it again, and hardened GitHub refusal fixtures against ambient
+  repository state.
+
+### Migration and compatibility
+- Run `npx agenticloop update` after upgrading so generated host guidance and
+  Auditor metadata are refreshed. User-modified managed blocks remain preserved
+  and are reported rather than overwritten.
+- Every non-v4 `agenticloop.return-verification` record is a typed incompatibility,
+  including released schema v2 and interim schema v3. Retain those records as
+  history, but produce a fresh current packet, execution evidence, role return,
+  and verification before a protected transition.
+- Real protected host integrations must retain execution-receipt replay state
+  durably across process restarts. The package provides no in-process fallback
+  replay ledger for production use.
 
 ## 0.4.0 - 2026-08-10
 
