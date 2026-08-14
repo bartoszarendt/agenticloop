@@ -78,6 +78,18 @@ or refetched PR facts do not match current projected evidence. Injected transpor
 fixtures must invoke their transport and prove the same shared semantic verdict as
 files; no live GitHub call is required for that proof.
 
+The public GitHub flow starts with `task prepare-dispatch <id> --host <host>
+--role engineer --output <packet-path> --json` and a guarded role start. The
+configured GitHub host/role producer, not a public producer CLI command, derives
+the raw `agenticloop.role-return` from authoritative GitHub issue/PR facts; it is
+never hand-authored. During the run, bounded GitHub carrier mutations use
+`task-body evidence`. Public `task verify-return` imports and revalidates the raw
+return and current GitHub facts. Files-only `task check-evidence-*` and `task
+prepare-return` commands are not GitHub producer commands. Do not inspect or
+hand-author packet, evidence, return JSON, or digests, and do not substitute host
+status, messages, opaque handles, or cancellation observations for a raw return.
+Host cancellation/status alone does not establish cancellation.
+
 Shared identity names are never overloaded by the transport: `taskContractDigest`
 is protected authority, `dispatchCarrierDigest` is historical role-start evidence,
 and `currentCarrierDigest` is the current issue carrier only when a recognized

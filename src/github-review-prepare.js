@@ -402,7 +402,7 @@ export function runGitHubReviewPrepare({ pr, workspace, packet: packetPath, ...o
  */
 function recognizeReviewEntryHandoff({
   target, io, issueBody, issueNumber, taskContractDigest, productHead,
-  commandRunner = defaultGhCommandRunner, repo,
+  commandRunner = defaultGhCommandRunner, repo, hostTrustStore = undefined,
 }) {
   const root = target ?? process.cwd();
   const identity = resolveGitHubTaskIdentityStrict({ body: issueBody });
@@ -434,6 +434,7 @@ function recognizeReviewEntryHandoff({
       commandRunner,
       repo,
     }),
+    hostTrustStore,
   });
 }
 

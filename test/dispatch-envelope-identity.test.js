@@ -53,28 +53,28 @@ function assuranceUnboundEnvelope(packet) {
 describe('documented envelope identity contract', () => {
   it('AGENTIC_LOOP.md names the exact schema versions and digests the implementation emits', async () => {
     const doc = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf8');
-    assert.match(doc, /agenticloop\.role-preparation`, schema version\s*\n?`7`/);
-    assert.match(doc, /sha256:agenticloop\.role-preparation\.v7:<64-lowercase-hex>/);
-    assert.match(doc, /agenticloop\.role-return`, schema version\s*\n?`3`/);
-    assert.match(doc, /sha256:agenticloop\.role-return\.v3:<64-lowercase-hex>/);
+    assert.match(doc, /agenticloop\.role-preparation`, schema version\s*\n?`8`/);
+    assert.match(doc, /sha256:agenticloop\.role-preparation\.v8:<64-lowercase-hex>/);
+    assert.match(doc, /agenticloop\.role-return`, schema version\s*\n?`4`/);
+    assert.match(doc, /sha256:agenticloop\.role-return\.v4:<64-lowercase-hex>/);
     assert.match(doc, /agenticloop\.decomposition-provenance`, schema\s*\n?version `2`/);
     assert.match(doc, /agenticloop\.decomposition-binding`,\s*\n?schema version `1`/);
     assert.doesNotMatch(doc, /agenticloop\.role-preparation\.v1/);
     assert.doesNotMatch(doc, /agenticloop\.role-return\.v1/);
-    assert.equal(DISPATCH_PREPARATION_SCHEMA_VERSION, 7);
+    assert.equal(DISPATCH_PREPARATION_SCHEMA_VERSION, 8);
     assert.equal(ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION, 5);
     assert.equal(SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION, 4);
     assert.equal(BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION, 2);
     assert.equal(LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION, 3);
     assert.equal(DECOMPOSITION_SCHEMA_VERSION, 2);
     assert.equal(DECOMPOSITION_BINDING_SCHEMA_VERSION, 1);
-    assert.equal(ROLE_RETURN_SCHEMA_VERSION, 3);
+    assert.equal(ROLE_RETURN_SCHEMA_VERSION, 4);
     const fixture = await sharedFilesTask();
     const prepared = prepare(fixture);
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
-    assert.ok(prepared.packet.digest.startsWith('sha256:agenticloop.role-preparation.v7:'));
+    assert.ok(prepared.packet.digest.startsWith('sha256:agenticloop.role-preparation.v8:'));
     const roleReturn = readyReturn(prepared.packet, repositoryEvidence(prepared.packet));
-    assert.ok(roleReturn.digest.startsWith('sha256:agenticloop.role-return.v3:'));
+    assert.ok(roleReturn.digest.startsWith('sha256:agenticloop.role-return.v4:'));
   });
 
   it('classifies the shipped schemaVersion 2 baseline as typed stale without accepting it', async () => {
@@ -97,7 +97,7 @@ describe('documented envelope identity contract', () => {
       code: 'dispatch.packet.stale',
       evidenceState: 'changed',
       disposition: 'superseded',
-      message: 'dispatch preparation schemaVersion 2 is stale; regenerate the packet as schemaVersion 7 before dispatch or return import',
+      message: 'dispatch preparation schemaVersion 2 is stale; regenerate the packet as schemaVersion 8 before dispatch or return import',
     }]);
   });
 
@@ -118,7 +118,7 @@ describe('documented envelope identity contract', () => {
       code: 'dispatch.packet.stale',
       evidenceState: 'changed',
       disposition: 'superseded',
-      message: 'dispatch preparation schemaVersion 5 is stale; regenerate the packet as schemaVersion 7 before dispatch or return import',
+      message: 'dispatch preparation schemaVersion 5 is stale; regenerate the packet as schemaVersion 8 before dispatch or return import',
     }]);
   });
 
@@ -141,7 +141,7 @@ describe('documented envelope identity contract', () => {
       code: 'dispatch.packet.stale',
       evidenceState: 'changed',
       disposition: 'superseded',
-      message: 'dispatch preparation schemaVersion 3 is stale; regenerate the packet as schemaVersion 7 before dispatch or return import',
+      message: 'dispatch preparation schemaVersion 3 is stale; regenerate the packet as schemaVersion 8 before dispatch or return import',
     });
   });
 
@@ -164,7 +164,7 @@ describe('documented envelope identity contract', () => {
       code: 'dispatch.packet.stale',
       evidenceState: 'changed',
       disposition: 'superseded',
-      message: 'dispatch preparation schemaVersion 4 is stale; regenerate the packet as schemaVersion 7 before dispatch or return import',
+      message: 'dispatch preparation schemaVersion 4 is stale; regenerate the packet as schemaVersion 8 before dispatch or return import',
     }]);
   });
 

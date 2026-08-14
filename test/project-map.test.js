@@ -173,6 +173,19 @@ describe('validateProjectMap', () => {
     assert.ok(validation.errors.some(error => error.includes("work_unit_audit must be 'enabled' or 'disabled'")));
   });
 
+  it('rejects a malformed declared return-use freshness policy', () => {
+    const dir = makeProjectMap([
+      'return_use_freshness:',
+      '  kind: agenticloop.return-use-freshness',
+      '  schemaVersion: 2',
+      '  maxAgeSeconds: 86400',
+    ]);
+    const result = loadProjectMap(dir);
+    const validation = validateProjectMap(result.config, result.raw, dir);
+
+    assert.ok(validation.errors.some(error => error.includes('return-use freshness policy schemaVersion must be 1')));
+  });
+
   it('accepts engineer_context_window_tokens as a positive integer', () => {
     const dir = makeProjectMap([
       'engineer_context_window_tokens: 256000',

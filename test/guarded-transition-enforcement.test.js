@@ -590,9 +590,19 @@ describe('GitHub closeout resumes the terminal transition after publication', ()
     const verification = createReturnVerification({
       target, packet, roleReturn, repositoryEvidence: evidence,
       producerReceipt: binding.producerReceipt, received,
+      requiredCheckEvidenceAssurance: 'unverified',
     });
     const stored = writeReturnVerification(target, verification);
     assert.equal(stored.ok, true, stored.errors.join('\n'));
+
+    // The return truthfully records the still-open review PR.  Historical
+    // closeout begins after integration, so its refetch must see that same PR,
+    // URL, branch, and head as merged with complete merge metadata.
+    state.returnPr = {
+      number: 6, state: 'MERGED', mergedAt: '2026-08-10T01:00:00Z',
+      mergeCommit: { oid: full }, url: pr.url,
+      headRefOid: full, headRefName: evidence.branch,
+    };
 
     const options = {
       ghCommandRunner: runner,

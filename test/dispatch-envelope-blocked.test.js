@@ -41,6 +41,7 @@ function blockedRuntimeReturn(packet) {
       outcome: 'blocked',
       exitCode: 1,
       evidence: 'host state prevents execution',
+      executionEvidence: null,
     },
     {
       id: 'RC-2',
@@ -49,6 +50,7 @@ function blockedRuntimeReturn(packet) {
       outcome: 'blocked',
       exitCode: 1,
       evidence: 'host state prevents execution',
+      executionEvidence: null,
     },
   ];
   const evidence = {
@@ -71,7 +73,7 @@ function blockedRuntimeReturn(packet) {
       range: { base: packet.repository.head, head: packet.repository.head },
       commits: [],
     },
-    checks,
+    checks: checks.map(({ executionEvidence: _executionEvidence, ...check }) => check),
     carrierLineage: {
       dispatchConsumptionDigest: `sha256:agenticloop.dispatch-consumption.v3:${'a'.repeat(64)}`,
       evidenceMutationReceiptDigests: [],
@@ -90,7 +92,7 @@ function blockedRuntimeReturn(packet) {
     candidateHead: evidence.candidateHead,
     productChangedPaths: evidence.productChangedPaths,
     workflowChangedPaths: evidence.workflowChangedPaths,
-    checks: evidence.checks,
+    checks,
     productAttribution: evidence.productAttribution,
     carrierLineage: evidence.carrierLineage,
     pr: evidence.pr,

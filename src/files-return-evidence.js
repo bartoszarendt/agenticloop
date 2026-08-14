@@ -1,7 +1,6 @@
 /** Reconstruct files-backed return evidence from current durable Git state. */
 
 import { spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
 import { deriveCommitRange } from './commit-range.js';
 import { isGitObjectId, sameGitObjectFormat } from './git-oid.js';
 import {
@@ -15,6 +14,7 @@ import {
 } from './task-evidence-contract.js';
 import { validateAuditRecord } from './audit-record.js';
 import { VerificationContextMalformedError, VerificationContextStaleError } from './public-error.js';
+import { pathIdentity } from './path-identity.js';
 
 const SCRATCH_PREFIX = '.agenticloop/tmp/';
 
@@ -209,6 +209,16 @@ export function deriveReturnTopology(target, packet, signedEvidence, {
 
 export function refetchFilesReturnEvidence(target, packet, signedEvidence, options = {}) {
   const derived = deriveReturnTopology(target, packet, signedEvidence, options);
+  // Repository evidence records only the baseline observation grammar. Execution
+  // artifacts belong to the authenticated role return and are resolved at the
+  // public CLI boundary, where the target filesystem is available.
+  const checks = Array.isArray(signedEvidence?.checks)
+    ? signedEvidence.checks.map(check => {
+        if (!check || typeof check !== 'object' || Array.isArray(check)) return check;
+        const { executionEvidence: _executionEvidence, ...observation } = check;
+        return observation;
+      })
+    : signedEvidence?.checks;
   return {
     backend: 'files',
     task: {
@@ -219,7 +229,7 @@ export function refetchFilesReturnEvidence(target, packet, signedEvidence, optio
         ? signedEvidence?.task?.currentCarrierDigest
         : signedEvidence?.task?.currentCarrierDigest,
     },
-    worktree: resolve(target),
+    worktree: pathIdentity(target).authorityPath,
     branch: derived.branch,
     productBaseHead: derived.productBaseHead,
     productHead: derived.productHead,
@@ -228,9 +238,9 @@ export function refetchFilesReturnEvidence(target, packet, signedEvidence, optio
     productChangedPaths: derived.productChangedPaths,
     workflowChangedPaths: derived.workflowChangedPaths,
     productAttribution: derived.productAttribution,
-    // Required-check observations are role-return evidence, not a local Git
-    // fact. The receiving boundary validates their closed inventory separately.
-    checks: signedEvidence?.checks,
+    // Keep the stable check observation fields in their authenticated canonical
+    // order, without copying role-return execution artifact references.
+    checks,
     carrierLineage: derived.carrierLineage,
     pr: { state: 'not_applicable', number: null, url: null },
   };

@@ -20,16 +20,21 @@ import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
 import { activationCapabilityInventory, validateDispatchPreparation } from './dispatch-envelope.js';
-import { loadHostTrustStore, targetRepositoryIdentity } from './host-trust.js';
+import { createExecutionReceiptReplayAuthority, loadHostTrustStore, targetRepositoryIdentity } from './host-trust.js';
 import { resolveEffectiveActivationPolicy, resolvePacketActivationBinding } from './activation-resolution.js';
 import {
-  HANDOFF_RETURN_MAX_AGE_SECONDS,
   createPreparedDispatchValidation,
   recognizeHandoff,
   recognizeStoredReturnHandoff,
 } from './handoff-recognition.js';
+import { RETURN_USE_FRESHNESS_POLICY } from './return-use-freshness.js';
+import { resolveReturnUseFreshnessPolicy } from './return-use-freshness.js';
+import { loadProjectMap } from './project-map.js';
 import { VerificationContextMalformedError } from './public-error.js';
-import { revalidateReturnVerification } from './return-verification.js';
+import {
+  CURRENT_REQUIRED_CHECK_EVIDENCE_ASSURANCE,
+  revalidateReturnVerification,
+} from './return-verification.js';
 import { currentDispatchConsumption } from './handoff-consumption.js';
 
 /**
@@ -177,6 +182,10 @@ export function recognizeLifecycleReturn({
   refetchRepositoryEvidence,
   hostTrustStore = undefined,
 }) {
+  const returnUse = resolveReturnUseFreshnessPolicy(loadProjectMap(target)?.raw ?? {});
+  if (!returnUse.ok) {
+    return recognizeHandoff({ transition, expectation: { backend, taskId, roleId: 'engineer', taskContractDigest, minimumReturnAssurance: null }, observations: [{ label: `return-use freshness configuration is invalid: ${returnUse.errors.join('; ')}` }] });
+  }
   const consumed = currentDispatchConsumption(target, taskId, { backend });
   if (!consumed.ok || !consumed.record) {
     return recognizeHandoff({
@@ -239,21 +248,46 @@ export function recognizeLifecycleReturn({
       refetchRepositoryEvidence: () => refetchRepositoryEvidence(record),
       runGit: args => spawnSync('git', args, { cwd: target, encoding: 'utf8' }),
       minimumReturnAssurance: policy?.minimumReturn ?? null,
+      // Standard evidence is usable only when the independently resolved
+      // current policy explicitly selects standard mode.  Backend is transport,
+      // not a policy or an assurance grant.
+      minimumRequiredCheckEvidenceAssurance: policy?.mode === 'standard'
+        ? CURRENT_REQUIRED_CHECK_EVIDENCE_ASSURANCE
+        : 'authenticated_receipt',
+      executionReceiptReplayAuthority: createExecutionReceiptReplayAuthority({
+        target,
+        trustedAdapter: adapters[record.producerAuthentication?.adapterId],
+        protectedBoundary: io?.hostAuthority,
+      }),
     });
   };
   return recognizeStoredReturnHandoff({
     target,
     transition,
     validatePreparedDispatch: canonicalDispatchValidator({ target, io, hostTrustStore }),
+    returnVerificationContext: {
+      resolveTrustedAdapter: adapterId => {
+        const adapter = adapters[adapterId];
+        if (!adapter) throw new Error(`return adapter '${adapterId}' is not currently trusted through the protected boundary`);
+        return adapter;
+      },
+      resolveExecutionReceiptReplayAuthority: record => createExecutionReceiptReplayAuthority({
+        target,
+        trustedAdapter: adapters[record.producerAuthentication?.adapterId],
+        protectedBoundary: io?.hostAuthority,
+      }),
+    },
     validateVerifiedReturn,
-    maxEvidenceAgeSeconds: HANDOFF_RETURN_MAX_AGE_SECONDS,
+    maxEvidenceAgeSeconds: returnUse.policy.maxAgeSeconds,
     expectation: {
       backend,
       taskId,
       roleId: 'engineer',
       taskContractDigest,
        dispatchCarrierDigest: dispatch.dispatchCarrierDigest,
-       currentCarrierDigest,
+       currentCarrierDigest: transition === 'integration' || transition === 'closeout'
+         ? null
+         : currentCarrierDigest,
        invocationId: dispatch.invocationId,
       packetId: dispatch.packetId,
       packetDigest: dispatch.packetDigest,
@@ -263,6 +297,7 @@ export function recognizeLifecycleReturn({
       worktreeRoot: dispatch.worktreeRoot ?? resolve(target),
       repositoryIdentity: dispatch.repositoryIdentity ?? targetRepositoryIdentity(target),
       minimumReturnAssurance: policy?.minimumReturn ?? null,
+      returnUseFreshnessPolicy: returnUse.policy,
     },
   });
 }

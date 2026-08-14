@@ -50,7 +50,9 @@ import {
   returnAssuranceMeets,
 } from './activation-grant.js';
 import { ACTIVATION_MODES, MODE_MINIMUMS } from './activation-policy.js';
-import { HANDOFF_RETURN_MAX_AGE_SECONDS, recognizeHandoff } from './handoff-recognition.js';
+import { recognizeHandoff } from './handoff-recognition.js';
+import { RETURN_USE_FRESHNESS_POLICY } from './return-use-freshness.js';
+import { resolveReturnUseFreshnessPolicy } from './return-use-freshness.js';
 import { evaluatePullRequestLifecycle } from './closeout-github.js';
 import { validateEvent, DEFAULT_LOG_DIR } from './event-logging.js';
 import { deriveConfiguredGroupScopes, deriveExplicitScopes } from './terminal-scope.js';
@@ -466,6 +468,7 @@ export function verifyPlanSynchronization(target, params) {
  * mode passes with `operator_confirmed`/`session_reported` and says so.
  */
 export function summarizeCloseoutAssurance(input, coveredTasks = []) {
+  const returnUse = resolveReturnUseFreshnessPolicy(input?.projectConfig ?? {});
   const mode = ACTIVATION_MODES.includes(input?.mode) ? input.mode : 'hardened';
   const minimums = MODE_MINIMUMS[mode];
   const minimumActivation = input?.minimumActivation ?? minimums.activation;
@@ -477,6 +480,13 @@ export function summarizeCloseoutAssurance(input, coveredTasks = []) {
   const limitations = [];
   /** @type {string[]} */
   const unresolvedTasks = [];
+  if (!returnUse.ok) {
+    reasons.push({
+      category: 'return_use_freshness_invalid',
+      message: `return-use freshness configuration is invalid: ${returnUse.errors.join('; ')}`,
+      repair: 'restore a complete current return_use_freshness policy or remove the malformed declaration',
+    });
+  }
   const compatibilityWaiver = mode === 'standard'
     ? input?.legacyWaiver ?? (typeof input?.resolveLegacyWaiver === 'function' ? input.resolveLegacyWaiver(coveredTasks) : null)
     : null;
@@ -604,10 +614,12 @@ export function summarizeCloseoutAssurance(input, coveredTasks = []) {
         worktreeRoot: consumed?.worktreeRoot ?? null,
         repositoryIdentity: consumed?.repositoryIdentity ?? input.repositoryIdentity ?? null,
         minimumReturnAssurance: minimumReturn,
+        returnUseFreshnessPolicy: returnUse.policy ?? RETURN_USE_FRESHNESS_POLICY,
       },
       verifiedReturn: record,
       validatePreparedDispatch: input.validatePreparedDispatch ?? null,
-      maxEvidenceAgeSeconds: HANDOFF_RETURN_MAX_AGE_SECONDS,
+      validateVerifiedReturn: observed?.validateVerifiedReturn ?? null,
+       maxEvidenceAgeSeconds: (returnUse.policy ?? RETURN_USE_FRESHNESS_POLICY).maxAgeSeconds,
     }));
     recognition.push(...taskRecognition);
     const unrecognized = taskRecognition.filter(verdict => !verdict.recognized);

@@ -10,7 +10,7 @@ import { createCloseoutCliFixture } from './helpers/closeout-cli-fixture.js';
 import { git as fixtureGit } from './helpers/dispatch-fixture.js';
 
 const fixture = createCloseoutCliFixture();
-const { makeGitTarget, makeVerifiedGitTarget, writeTask, commitAll, closeout, certify } = fixture;
+const { makeVerifiedGitTarget, commitAll, closeout, certify } = fixture;
 let tmpDir;
 before(() => { tmpDir = fixture.setup(); });
 after(() => { fixture.cleanup(); });
@@ -37,28 +37,29 @@ describe('closeout record and status', () => {
   });
 
   it('only writes transient packets inside .agenticloop/tmp without overwriting other files', async () => {
-    const target = makeGitTarget('output-safety');
-    writeTask(target, 'T-001', 'accepted', 'milestone:M00');
+    const target = await makeVerifiedGitTarget('output-safety');
     const readme = join(target, 'README.md');
     writeFileSync(readme, 'do not overwrite\n', 'utf-8');
+    commitAll(target, 'add protected README');
+    const artifact = await certify(target);
     const readmeResult = await closeout([
-      'prepare', '--work-unit', 'milestone:M00', '--output', 'README.md',
+      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--output', 'README.md',
     ], target);
     assert.equal(readmeResult.status, 1);
     assert.equal(readFileSync(readme, 'utf-8'), 'do not overwrite\n');
 
     const external = join(tmpDir, 'outside-closeout.json');
     const externalResult = await closeout([
-      'prepare', '--work-unit', 'milestone:M00', '--output', external,
+      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--output', external,
     ], target);
     assert.equal(externalResult.status, 1);
     assert.equal(existsSync(external), false);
 
     const packetPath = join(target, '.agenticloop', 'tmp', 'path with spaces', 'packet.json');
     const valid = await closeout([
-      'prepare', '--work-unit', 'milestone:M00', '--output', packetPath,
+      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--output', packetPath,
     ], target);
-    assert.equal(valid.status, 1);
+    assert.equal(valid.status, 0, `${valid.stdout}${valid.stderr}`);
     assert.equal(existsSync(packetPath), true);
   });
 

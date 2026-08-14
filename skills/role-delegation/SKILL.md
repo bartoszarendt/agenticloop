@@ -73,46 +73,52 @@ must not repair Engineer-owned PR bodies or commits, or Maintainer-owned task
 records, while a legal delegation path exists.
 
 Use immutable `roleId` for dispatch, return, attribution, filenames, config, and
-authority. Resolve display labels from the canonical workflow-role registry.
-Every dispatch binds the selected host's closed role-capability declaration.
-Do not call prose enforcement: a non-native restriction is `advisory` or
-`unavailable` and must name the next authoritative detection boundary,
-limitation, and recovery route. `enforced` requires all shipped write-capable
-routes to be constrained. OpenCode retained `bash`, Copilot retained `execute`,
-and Codex instructions are therefore advisory. Dispatch binds one version 3
-report per degraded action, emits `capability.enforcement.degraded`, and return
-import checks it against authenticated actor/evidence.
+authority; resolve display labels from the canonical registry. Each dispatch
+binds the selected host's closed role-capability declaration. A non-native
+restriction is `advisory` or `unavailable`, not enforced, and names its next
+authoritative detection boundary, limitation, and recovery route. `enforced`
+requires every shipped write-capable route constrained. OpenCode's `bash`,
+Copilot's `execute`, and Codex instructions are advisory. Bind one version 3
+report per degraded action, emit `capability.enforcement.degraded`, and check it
+against authenticated actor/evidence on return import.
 
 ### Implementation dispatch
 
-Before Engineer delegation, the orchestrator runs
-`task prepare-dispatch` to emit one read-only `agenticloop.role-preparation`
-packet for the current task, binding
-the parser-controlled activation identity, trusted task and contract digests,
-current reevaluated readiness/base/dependency evidence, committed
-Maintainer-attributed decomposition provenance, scope, checks, role and invocation
-IDs, canonical references, selected host and host-role capability
-declaration, branch/worktree, attribution, liveness,
-and cancellation boundary. Its activation capture is verified by a target-scoped
-Ed25519 public key from the fixed host-owned operator registry; repository-local
-or caller-selected external adapter/key data cannot authorize it. The packet
-references canonical role, skill, and backend documents.
+Before Engineer delegation, the orchestrator runs `npx agenticloop task
+prepare-dispatch <id> --host <host> --role engineer --output <packet-path>
+--json`. The packet binds activation, task/contract, readiness, decomposition,
+scope/checks, role/invocation, host capability, worktree, and cancellation facts.
+Only its fixed operator-trust registry authorizes activation.
 
-Start the role through `task status <id> in-progress --dispatch-packet <packet>`;
-missing, stale, consumed, already-current, or noted starts fail closed without
-fresh packet. The Engineer invokes the read-only packet verifier before mutation.
-Its unkeyed validation record proves packet/result integrity, not validator
-identity or canonical origin. Public boundaries rerun validation and accept no
-caller-authored receipt option. The raw `agenticloop.role-return` binds the exact
-packet and uses `disposition: proceed` with a non-authoritative implementation
-outcome, never review or completion. The orchestrator validates or reroutes it;
-it never reconstructs it. Standard mode may persist a fully revalidated
+All artifact paths are target-relative. The ordinary public sequence is:
+
+```text
+npx agenticloop task prepare-dispatch <id> --host <host> --role engineer --output <packet-path> --json
+npx agenticloop task status <id> in-progress --dispatch-packet <packet-path> --expect-digest <digest> --json
+npx agenticloop task prepare-dispatch <id> --packet <packet-path> --role engineer --json
+npx agenticloop task check-evidence-init <id> --packet <packet-path> --output <checks-path> --json
+npx agenticloop task check-evidence-update <id> --packet <packet-path> --input <checks-path> --output <checks-path> --check <check-id> --outcome passed --evidence <text> --execution-output <execution-path> --json
+npx agenticloop task prepare-return <id> --packet <packet-path> --check-evidence <checks-path> --outcome implementation_ready_for_review --output <return-path> --json
+npx agenticloop task verify-return <id> --packet <packet-path> --return <return-path> --from-current-repository --json
+```
+
+For a non-passing or non-command check, use the same update command with its
+observed outcome and omit `--execution-output` as required by that check form.
+Missing, stale, consumed, already-current, or noted starts fail closed without a
+fresh packet. Engineer invokes the read-only verifier before mutation; its
+unkeyed record proves packet/result integrity, not validator identity or origin.
+Public boundaries rerun validation and accept no caller-authored receipt. The raw
+`agenticloop.role-return` binds that packet with `disposition: proceed` and only a
+non-authoritative implementation outcome; Orchestrator validates or reroutes,
+never reconstructs it. Standard mode may persist a fully revalidated
 `session_reported` return without producer authentication. Hardened mode requires
-host provenance bound to repository, adapter/key, invocation, packet, return,
-liveness, and repository evidence. The verifier uses the packet-selected
-adapter/key; replayed, unsigned, or self-attested receipts fail closed. The
-observed producer must match assignment and raw producer; trailers cannot repair
-a mismatch.
+host provenance for repository, adapter/key, invocation, packet, return,
+liveness, and repository evidence. The verifier uses the packet-selected key;
+replayed, unsigned, or self-attested receipts fail closed. The observed producer
+must match assignment and raw producer; trailers cannot repair a mismatch.
+
+Do not hand-author JSON/digests or substitute host status, messages, handles, or
+cancellation observations for a return; host status proves no cancellation.
 
 Files retain the `in-progress` carrier. Use `task evidence` with current
 digest for artifact, summary, and outcome evidence. Receipts preserve
@@ -124,36 +130,29 @@ return product/workflow heads and lineage. Then use
 Owner transfer or destructive recovery needs the exact pinned signed authority;
 digests, labels, trailers, keys, and self-minted records cannot substitute.
 
-Work-unit certification is auditor-owned and is a fresh, separate invocation
-every time; see [[work-unit-audit]]. The auditor never implements, never accepts
-a task, and never accepts a limitation or risk. A non-certifying report routes
-back through the ordinary maintainer/engineer remediation flow, not back to the
-auditor.
+Work-unit certification is auditor-owned and a fresh, separate invocation each
+time; see [[work-unit-audit]]. Auditors never implement, accept tasks, or accept
+limitations or risks. A non-certifying report uses ordinary maintainer/engineer
+remediation, not another auditor pass.
 
-Scoped implementation and ordinary revision remain engineer-owned. The single
-exception is a bounded Maintainer Review Fixup: during an active eligible review
-the maintainer already executing the review may apply one fully understood
-correction under [[review-and-accept]] and accept the result. A successful fixup
-requires no engineer invocation and is not a `needs_revision` round; an
-unsuccessful, ineligible, expanded, or independent-review finding returns to the
-normal engineer handoff. No extra single-agent role-assumption ceremony is
-needed beyond the maintainer's existing execution – the delegation-mode of the
-role invocation and the final `review_mode` are distinct, so a maintainer invoked
-via `host_subagent` still records `single_agent_fallback` when it accepts its own
-fixup.
+Engineer owns scoped implementation and ordinary revision. The sole exception is
+one fully understood Maintainer Review Fixup during an active eligible review
+under [[review-and-accept]]. It needs no Engineer invocation and is not a
+`needs_revision` round; an unsuccessful, ineligible, expanded, or
+independent-review finding returns to Engineer. Delegation mode and final
+`review_mode` differ: a `host_subagent` maintainer records
+`single_agent_fallback` when accepting its own fixup.
 
 ## Slice sizing
 
-Default: one independently verifiable task, the smallest useful slice. For a
-larger authorized run, prefer the largest safe slice that stays bounded,
-reversible, and independently verifiable. Broad authorization isn't permission to
-create one oversized record; task sets still decompose.
+Default to one smallest useful, independently verifiable task. An authorized
+larger run still uses bounded, reversible, independently verifiable slices;
+broad authorization does not permit one oversized record.
 
 ## Host Delegation Mechanism
 
-Real delegation starts a separate role, task, named-agent, or subagent execution
-for maintainer, engineer, or auditor. Narrating that role's actions is not
-delegation.
+Real delegation starts a separate maintainer, engineer, or auditor role, task,
+named-agent, or subagent execution; narration is not delegation.
 
 Auditor has no fallback. `single_agent_fallback` never satisfies a work-unit
 audit: a same-session continuation re-reads its own conclusions. If no real
@@ -162,103 +161,87 @@ auditing inline.
 
 ## Delegation Capability Check
 
-Before single-agent fallback, explicitly check for a host task, subagent, role,
-agent, type, mode, or `subagent_type` mechanism. If one exists, use it. Otherwise
-record in the delegation output how absence was verified, or the attempted
-mechanism and its failure reason.
+Before fallback, check for a host task, subagent, role, agent, type, mode, or
+`subagent_type` mechanism. Use one if available; otherwise record how absence was
+verified or the attempted mechanism and failure reason.
 
 ## Concurrency Policy
 
-Delegation is serial by default. Parallel writes need mutation independence plus
-knowledge independence. Every authorized multi-task unit carries a current
-Parallel Opportunity Scan after decomposition, produced by the read-only
-`npx agenticloop task prepare-decomposition <id>`. Completeness is derived by
-that authoritative enumeration, never asserted; the inventory and bound readiness
-context are refetched before dispatch.
+Delegation is serial by default. Parallel writes require mutation and knowledge
+independence. Every authorized multi-task unit carries a current post-decomposition
+Parallel Opportunity Scan from read-only `npx agenticloop task
+prepare-decomposition <id>`. Completeness is derived by that authoritative
+enumeration, never asserted. Inventory and bound readiness context are refetched
+before dispatch.
 
-Read inventory completeness before ready count, then route:
+Read inventory completeness before ready count:
 
 - incomplete inventory or decomposition -> `incomplete`; never an eligibility
   answer, never "no work"
 - complete, zero ready -> `no_eligible_work`
-- complete, one ready or no candidate pair -> `not_currently_eligible` plus ready
-  count and rescan trigger; two or more -> load [[parallel-delegation]]
+- complete, one ready or no candidate pair -> `not_currently_eligible` with ready
+  count and rescan trigger; two or more -> [[parallel-delegation]]
 - complete, fresh, fully accounted -> `parallel_candidates`
 
-The `Concurrency:` and `Lease:` lines are required for delegated work in the
-shapes given under Orchestrator Output Requirements. Parallel plans, lane rules,
-joins, and parallel liveness live in [[parallel-delegation]], loaded also when
-planning, reviewing, or joining lanes.
+`Concurrency:` and `Lease:` are required in the Output Requirements forms.
+[[parallel-delegation]] owns parallel plans, lanes, joins, and liveness; load it
+when planning, reviewing, or joining lanes.
 
 ## Event Logging
 
 Event logging is off by default. When enabled, follow [[event-logging]] and emit
-`role.invoked` only after real maintainer/engineer execution or bounded fallback
-begins, never for hypothetical routing. The orchestrator is the emitter: top-level
-`role` is `orchestrator`, and a maintainer or engineer must not emit a
-self-invocation event targeting itself. Record `target_role`, `delegation_mode`
-(`host_subagent`, `explicit_agent_invocation`, or `single_agent_fallback`), a
-boolean `fallback`, `adapter`, known `model`, and `reason` as applicable. For
-`single_agent_fallback`, also record `fallback: true`, a structured
-`fallback_cause` (`mechanism_absent` or `invocation_failed`), and a non-empty
-`reason`. Non-fallback modes record `fallback: false` and no fallback cause. The
-strict producer path rejects a new `role.invoked` that violates these rules.
+`role.invoked` only when real maintainer/engineer execution or bounded fallback
+begins, never for hypothetical routing. Orchestrator emits it with top-level
+`role: orchestrator`; a maintainer/engineer cannot self-invoke. Record
+`target_role`, `delegation_mode` (`host_subagent`, `explicit_agent_invocation`, or
+`single_agent_fallback`), `fallback`, `adapter`, known `model`, and applicable
+`reason`. Fallback records `fallback: true`, a structured `fallback_cause`
+(`mechanism_absent` or `invocation_failed`), and non-empty reason; other modes
+record `fallback: false` and no cause. The strict producer rejects violations.
 
 ## Two Meanings of single_agent_fallback
 
-Keep the delegation mode and the review mode distinct:
-
-- `delegation_mode: single_agent_fallback` on `role.invoked` means real role
-  delegation was unavailable or a concrete attempt failed. It requires a
-  structured `fallback_cause` and reason.
-- `review_mode: single_agent_fallback` on the review means the review happened in
-  the acting session and is not independent. It is legal for ordinary tasks even
-  when the role was delegated for real (for example a self-accepted Maintainer
-  Review Fixup by a `host_subagent` maintainer).
-
-A `review_mode: single_agent_fallback` does not by itself prove a delegation
-failure or a fixup; only the durable fixup subsection and maintainer attribution
-identify one.
+Keep modes distinct: `delegation_mode: single_agent_fallback` on `role.invoked`
+means delegation was unavailable or concretely failed and requires structured
+`fallback_cause` plus reason. `review_mode: single_agent_fallback` means an
+acting-session, non-independent review; it is legal after real delegation (such
+as a `host_subagent` Maintainer Review Fixup). Review mode alone proves neither a
+delegation failure nor a fixup; durable fixup data and maintainer attribution do.
 
 ## Single-Agent Fallback
 
-Single-agent fallback is legal only when the capability check found no relevant
-mechanism (`fallback_cause: mechanism_absent`), or a named mechanism was
-attempted and concretely failed (`fallback_cause: invocation_failed`). A request
-such as "re-review round 2" is not a fallback cause. If allowed, the agent may
-assume the requested role for one bounded role step only.
+Fallback is legal only when the capability check found no relevant mechanism
+(`fallback_cause: mechanism_absent`) or a named attempt concretely failed
+(`fallback_cause: invocation_failed`). "Re-review round 2" is not a cause. The
+agent may assume the requested role for one bounded step only.
 
 When using fallback:
 
-- announce it and record the capability-check result, `fallback_cause`, and reason,
-- follow the assumed role's boundaries and required skills,
-- stop at the role's normal stop condition, bounded to that one role step,
-- emit `role.invoked` with `fallback: true`, the `fallback_cause`, and the reason when event logging is enabled,
+- announce and record the capability-check result, `fallback_cause`, and reason,
+- follow the assumed role's boundaries/required skills and normal stop condition,
+- emit `role.invoked` with `fallback: true`, cause, and reason when enabled,
 - do not claim host delegation happened.
 
 If neither host delegation nor role assumption is allowed, use [[blocked-state]] with category `contract` and stop.
 
 ## Re-Review and Continuation
 
-Every orchestrator-routed implementation or review role step receives a fresh
-delegation decision, and every re-review round passes through delegation routing
-again. When host delegation is available, the orchestrator uses it for the new
-round rather than continuing the prior maintainer session. A new review round is
-not a reason to record `delegation_mode: single_agent_fallback`.
+Each orchestrator-routed implementation/review step and re-review round gets a
+fresh delegation decision. Use available host delegation rather than continue the
+prior maintainer session; a new round is not `single_agent_fallback` cause.
 
-A human may directly continue an already-active maintainer session for ordinary
-tasks, but that continuation:
+A human may directly continue an active maintainer session for ordinary tasks,
+but it:
 
 - is not a new role invocation, so it emits no new `role.invoked`;
 - does not satisfy an independent-review requirement;
 - must not be represented as a failed delegation attempt;
-- records a concise `continuation_reason` on `review.started` and/or
-  `review.result` and uses `review_mode: single_agent_fallback`;
+- records concise `continuation_reason` on `review.started` and/or `review.result`
+  with `review_mode: single_agent_fallback`;
 - stops with a clear status instead of accepting when the task record requires
   independent review.
 
-A successful Maintainer Review Fixup does not alter the original role invocation's
-delegation mode; the final fixup review still uses
+A successful Fixup keeps the original delegation mode; its final review uses
 `review_mode: single_agent_fallback`.
 
 ## Review Delegation and Artifact-Bound Dispatch
@@ -343,33 +326,27 @@ artifact:
 [[agent: orchestrator]]
 ```
 
-Choose one direction and cause. `targeted_revision` requires `Target`; the
-others require `Reference`.
+Choose one direction/cause. `targeted_revision` requires `Target`; others require
+`Reference`.
 
-A `targeted_revision` checkpoint binds artifact A and authorizes one
-Engineer revision B. After B's review, require a new checkpoint before another
-revision. Never erase review history. Reject missing, stale, malformed, or replayed
-checkpoint authorization.
+A `targeted_revision` checkpoint binds artifact A, authorizes Engineer revision B,
+and requires a new checkpoint after B review. Never erase history; reject missing,
+stale, malformed, or replayed authorization.
 
-Do not delete or supersede a trusted malformed checkpoint. The
-same-author `checkpoint_repair` carrier names its source, fills only
-derivable versioned `Corrected fields`, cannot change artifact,
-count, direction, cause, target, outcome, or authority, is never selected or
-counted, and needs reissuance for underivable actor identity. Declared fields
-must match source/replacement differences, including a restored
-`review_role_carrier`.
-`github-checkpoint repair-plan` renders but never posts it.
+For GitHub, append the checkpoint to the PR conversation with its HTML marker,
+full SHA, authenticated Orchestrator field, and final `[[agent: orchestrator]]`
+role trailer. For files, append it under `## Review History` / `### Review Round
+Checkpoint`, use the files `implementation_artifact`, and omit the HTML marker.
 
-For GitHub, append the checkpoint to the PR conversation with the marker, full
-SHA, authenticated Orchestrator field, and final role trailer. For files-backed,
-append the same semantic fields under `## Review History` / `### Review Round
-Checkpoint`; it uses the files `implementation_artifact` form and no HTML marker.
-
-Use `github-preflight` as the GitHub fail-closed backstop before over-budget
-work returns to review. The files task validation/status provides the equivalent
-backstop. Orchestrator's delegation contract still requires the checkpoint before
-implementation begins; the later preflight is not permission to start an
-unauthorized revision.
+A same-author `checkpoint_repair` preserves--never deletes or supersedes--its
+trusted malformed source, names that exact source, and is allowed once. It adds
+only derivable versioned `Corrected fields` whose list exactly matches the source/
+replacement differences, including `review_role_carrier`. Artifact, count,
+direction, cause, target, outcome, and authority are immutable; reissue an
+underivable actor. Repairs are never selected or counted.
+`github-checkpoint repair-plan` renders but never posts. GitHub preflight and
+files validation/status are backstops, not permission to begin an unauthorized
+revision; the checkpoint remains required before implementation.
 
 Review/audit returns need authenticated receipts; role IDs and accounts differ.
 
@@ -395,22 +372,19 @@ Scope:             <what the role should do>
 Out of scope:      <what the role must not do>
 Expected output:   <what the role should produce>
 Routed findings:   none | <finding ids with fact, evidence ref, and required disposition per finding>
-Parallel scan:     `completed - <durable reference>` | `not currently eligible - <reason and rescan trigger>` (required for multi-task implementation delegation)
+Parallel scan:     `completed - <durable reference>` | `not currently eligible - <reason and rescan trigger>` | `incomplete - <missing evidence and rescan trigger>` (required for multi-task implementation delegation)
 Stop condition:    <when the role must stop and return to orchestrator or human>
 Budgets:           <omit when all defaults/low; else `minimalism=<lite|full|ultra>; attempt_budget=<n>; review_budget=<n>; context_overflow_risk=<medium|high>` for non-default task-record constraints>
 Concurrency:       `serial -- reason: <concrete blocker>`, or `parallel batch <id> -- lanes: <n>/<configured maximum>; join: <condition>`
 Lease:             <observable-step checkpoint cadence, no-progress budget, and any relevant max duration or milestone>
 ```
 
-`Delegation mode` is always required and names the exact mechanism used. `Fallback
-cause` and `Fallback reason` are required only for `single_agent_fallback`: the
-cause is `mechanism_absent` (the capability check found no relevant mechanism) or
-`invocation_failed` (a named mechanism was attempted and concretely failed), and
-the reason states the mechanism checked and its concrete result. "Re-review
-requested" or "round 2" is never a fallback cause. Non-fallback modes omit both
-fallback fields. The receiving role uses the supplied `Delegation mode` when it
-records review provenance and event data; `Operating facts` remains required for
-real delegation but never substitutes for the explicit mode.
+`Delegation mode` always names the exact mechanism. `Fallback cause` and reason
+apply only to `single_agent_fallback`: `mechanism_absent` means no relevant
+mechanism; `invocation_failed` means a named, concrete failure; reason names it.
+"Re-review requested" and "round 2" are never causes. Other modes omit both.
+The receiving role uses the supplied mode for review/event provenance; required
+Operating facts never substitute for it.
 
 Do not omit scope, out of scope, expected output, stop condition, Delegation mode,
 or Operating facts for real delegation. Use explicit `none` for inapplicable fields. The payload mechanism is a doc pointer or `none`, never a copied command recipe.
@@ -422,11 +396,11 @@ recipient returns `applied`, `already satisfied`, `rejected` with evidence, or
 evidence. Deferral remains join-blocking pending non-blocking limitation or
 follow-up triage. Do not overload `Operating facts` with raw findings.
 
-For every multi-task implementation delegation, `Parallel scan:` is required.
-The `completed` form points to the current durable scan; the
-`not currently eligible` form names the truthful reason and rescan trigger. A
-source plan or maintainer recommendation does not substitute for this line. Do
-not delegate multi-task implementation work with the field missing.
+Every multi-task implementation delegation requires `Parallel scan:`: `completed`
+points to the current durable scan; `not currently eligible` names the truthful
+reason and rescan trigger; `incomplete` names missing evidence and its rescan
+trigger. A plan/recommendation never substitutes. Do not delegate multi-task
+implementation work with the field missing.
 
 `Budgets:` propagates non-default task-record minimalism, effort budgets, and
 medium/high context risk; omit it for defaults/low. At a budget or unexpected
@@ -445,11 +419,10 @@ operations. [[parallel-delegation]] owns the complete authorization and stop law
 
 ## Context Read Discipline
 
-`Source docs` are the closed normative set. The role may also read the task
-record, project map for backend/document selection, matching backend projection,
-and files explicitly named by the human or task record. Engineer reads stepped
-`## Implementation Notes` first; the orchestrator points to, rather than copies,
-that plan.
+`Source docs` are the closed normative set. Also permit the task record, project
+map for backend/document selection, matching backend projection, and files named
+by the human/task record. Engineer reads stepped `## Implementation Notes` first;
+Orchestrator points to rather than copies it.
 
 Follow the canonical Context Read Discipline in
 `agenticloop/AGENTIC_LOOP.md`. Bounded task-scoped implementation discovery is

@@ -28,6 +28,7 @@ import { formatGitGuardDoctor } from './worktree.js';
 import { deriveAuditDueWorkUnits } from './closeout.js';
 import { loadProjectMap } from './project-map.js';
 import { WORKFLOW_ROLE_IDS } from './workflow-roles.js';
+import { diagnoseLifecycleCompatibility, compatibilityMessage } from './lifecycle-compatibility.js';
 
 function hasModelSettings(adapterCfg, roles) {
   const rs = adapterCfg?.roleSettings ?? {};
@@ -318,6 +319,13 @@ export function printDoctor(repoRoot, io = createIo()) {
 
   io.out();
   io.out(formatGitGuardDoctor(repoRoot));
+
+  const compatibility = diagnoseLifecycleCompatibility(repoRoot);
+  if (compatibility.length > 0) {
+    io.out();
+    io.out('Lifecycle compatibility:');
+    for (const finding of compatibility) io.out(`  - ${finding.path}: ${compatibilityMessage(finding)}`);
+  }
 
   // Audit-due diagnostics: deterministic only where work-unit membership is
   // derivable (files backend, grouped projects). Reporting a due state is

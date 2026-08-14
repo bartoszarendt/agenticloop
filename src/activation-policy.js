@@ -20,9 +20,9 @@
  * configuration can never relax an operator's pinned floor.
  */
 
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 import {
   ACTIVATION_ASSURANCE_ORDER,
@@ -34,6 +34,7 @@ import {
 } from './activation-grant.js';
 import { defaultOperatorActivationRoot } from './activation-trust.js';
 import { targetRepositoryIdentity } from './host-trust.js';
+import { displayPath, isPathOutside } from './path-identity.js';
 
 export const ACTIVATION_POLICY_KIND = 'agenticloop.activation-policy-pin';
 export const ACTIVATION_POLICY_SCHEMA_VERSION = 1;
@@ -51,22 +52,14 @@ function isObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function canonicalPath(path) {
-  const resolved = resolve(String(path));
-  if (!existsSync(resolved)) return resolved;
-  const nativeRealpath = realpathSync.native ?? realpathSync;
-  return nativeRealpath(resolved);
-}
-
 function outsideTarget(target, path) {
-  const fromTarget = relative(canonicalPath(target), canonicalPath(path));
-  return Boolean(fromTarget) && (fromTarget.startsWith('..') || isAbsolute(fromTarget));
+  return isPathOutside(path, target);
 }
 
 /** Resolve the only operator activation-policy pin path permitted for a target. */
 export function activationPolicyPinPath(target, root = defaultOperatorActivationRoot()) {
   const digest = createHash('sha256').update(targetRepositoryIdentity(target), 'utf8').digest('hex');
-  return join(canonicalPath(root), `${digest}.policy.json`);
+  return join(displayPath(root), `${digest}.policy.json`);
 }
 
 /**
@@ -89,7 +82,7 @@ export function loadActivationPolicyPin(target, options = {}) {
   if (lstatSync(path).isSymbolicLink()) {
     return { ok: false, state: 'malformed', mode: null, errors: ['operator activation policy pin must not be a symbolic link'], path };
   }
-  const realPath = canonicalPath(path);
+  const realPath = displayPath(path);
   if (!outsideTarget(target, realPath)) {
     return { ok: false, state: 'malformed', mode: null, errors: ['operator activation policy pin resolves inside the target repository'], path: realPath };
   }

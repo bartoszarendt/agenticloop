@@ -20,6 +20,7 @@ import {
   targetRepositoryIdentity,
   verifyHostPayload,
 } from '../src/host-trust.js';
+import { assertSafeHostTrustStoreWritePath } from '../src/host-trust-cli.js';
 import { createTestHostTrust, protectedHostBoundary, writeHostTrustStore } from './helpers/host-trust-fixture.js';
 
 const temp = mkdtempSync(join(tmpdir(), 'agenticloop-host-trust-'));
@@ -141,6 +142,39 @@ describe('Ed25519 host signing keys', () => {
 });
 
 describe('fixed operator trust registry', () => {
+  it('refuses a preexisting operator trust root implemented as a symbolic link', t => {
+    const target = mkdtempSync(join(temp, 'write-root-target-'));
+    const root = join(temp, 'write-root-link');
+    const outside = mkdtempSync(join(temp, 'write-root-outside-'));
+    const destination = operatorTrustStorePath(target, root);
+    try {
+      symlinkSync(outside, root, 'dir');
+    } catch (error) {
+      if (error?.code === 'EPERM' || error?.code === 'EACCES') return t.skip(`symbolic links unavailable: ${error.code}`);
+      throw error;
+    }
+    assert.throws(() => assertSafeHostTrustStoreWritePath(target, root, destination), /symbolic link or junction/);
+  });
+
+  it('refuses a root replaced by a link during trust-store materialization', t => {
+    const target = mkdtempSync(join(temp, 'write-race-target-'));
+    const root = join(temp, 'write-race-root');
+    const destination = operatorTrustStorePath(target, root);
+    const outside = mkdtempSync(join(temp, 'write-race-outside-'));
+    // The first check models missing-root acceptance. Materialization occurs in
+    // the CLI between checks; replace it before the required second check.
+    assert.doesNotThrow(() => assertSafeHostTrustStoreWritePath(target, root, destination));
+    mkdirSync(root, { recursive: true });
+    try {
+      rmSync(root, { recursive: true });
+      symlinkSync(outside, root, 'dir');
+    } catch (error) {
+      if (error?.code === 'EPERM' || error?.code === 'EACCES') return t.skip(`symbolic links unavailable: ${error.code}`);
+      throw error;
+    }
+    assert.throws(() => assertSafeHostTrustStoreWritePath(target, root, destination), /symbolic link or junction/);
+  });
+
   it('loads closed schemaVersion 2 verification authorities from the fixed operator root', () => {
     const target = mkdtempSync(join(temp, 'authority-target-'));
     const operatorRoot = mkdtempSync(join(temp, 'authority-operator-'));

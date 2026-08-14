@@ -38,13 +38,18 @@ import {
   selectCurrentReturnVerifications,
   validateReturnVerification,
 } from './return-verification.js';
+import {
+  RETURN_USE_FRESHNESS_POLICY,
+  validateReturnUseFreshnessPolicy,
+} from './return-use-freshness.js';
 
 export const HANDOFF_RECOGNITION_KIND = 'agenticloop.handoff-recognition';
 export const HANDOFF_RECOGNITION_SCHEMA_VERSION = 2;
 export const PREPARED_DISPATCH_VALIDATION_KIND = 'agenticloop.prepared-dispatch-validation';
 export const PREPARED_DISPATCH_VALIDATION_SCHEMA_VERSION = 1;
 /** Maximum age of a return that may authorize a new protected transition. */
-export const HANDOFF_RETURN_MAX_AGE_SECONDS = 86_400;
+/** @deprecated Use RETURN_USE_FRESHNESS_POLICY; retained as a source-compatible value. */
+export const HANDOFF_RETURN_MAX_AGE_SECONDS = RETURN_USE_FRESHNESS_POLICY.maxAgeSeconds;
 
 /**
  * The digest domain is derived from the schema version so the two can never
@@ -108,6 +113,7 @@ export const HANDOFF_EXPECTATION_FIELDS = Object.freeze([
   'backend', 'taskId', 'roleId', 'invocationId', 'taskContractDigest', 'dispatchCarrierDigest', 'currentCarrierDigest',
   'packetId', 'packetDigest', 'workUnitIdentity', 'productBaseHead', 'productHead', 'workflowHead', 'candidateHead', 'worktreeRoot',
   'repositoryIdentity', 'minimumActivationAssurance', 'minimumReturnAssurance',
+  'returnUseFreshnessPolicy',
 ]);
 
 /** The closed recognition verdict. */
@@ -237,6 +243,10 @@ export function createHandoffExpectation(input) {
   if (normalized.minimumReturnAssurance !== undefined && normalized.minimumReturnAssurance !== null &&
       !HANDOFF_RETURN_GRADES.includes(normalized.minimumReturnAssurance)) {
     errors.push(`handoff expectation minimumReturnAssurance must be one of: ${HANDOFF_RETURN_GRADES.join(', ')}`);
+  }
+  if (normalized.returnUseFreshnessPolicy !== undefined && normalized.returnUseFreshnessPolicy !== null &&
+      (!isObject(normalized.returnUseFreshnessPolicy) || !Number.isSafeInteger(normalized.returnUseFreshnessPolicy.maxAgeSeconds))) {
+    errors.push('handoff expectation returnUseFreshnessPolicy must be a policy object when supplied');
   }
   if (errors.length > 0) return { ok: false, expectation: null, errors };
   const expectation = {};
@@ -722,6 +732,39 @@ function recognizeVerifiedReturn({
     }
     return { identity: {}, grade: null, authenticated: false };
   }
+  if (verification.disposition !== 'successful_current') {
+    diagnostics.push(diagnostic(
+      'handoff.evidence.unauthenticated', 'negative',
+      'a blocked role return is an observation and cannot authorize a protected lifecycle transition',
+      { field: 'disposition', observed: verification.disposition }
+    ));
+    return { identity: {}, grade: null, authenticated: false };
+  }
+  if (verification.requiredCheckEvidenceAssurance === 'authenticated_receipt' && (
+    verification.observedReturnGrade !== 'host_receipt' || verification.producerAuthentication === null
+  )) {
+    diagnostics.push(diagnostic(
+      'handoff.evidence.unauthenticated', 'negative',
+      'return verification claims authenticated execution assurance without host-verified producer identity',
+      { field: 'requiredCheckEvidenceAssurance' }
+    ));
+    return { identity: {}, grade: null, authenticated: false };
+  }
+  // An authenticated receipt is never self-authenticating merely because its
+  // persisted projection is structurally valid.  The only raw API escape hatch
+  // is an injected authority which must re-resolve external trust and prove the
+  // signed producer/execution receipts plus the exact committed replay binding.
+  // Stored/public callers supply that authority through the protected host
+  // boundary; callers that do not have one fail closed here.
+  if (verification.requiredCheckEvidenceAssurance === 'authenticated_receipt' &&
+      typeof validateVerifiedReturn !== 'function') {
+    diagnostics.push(diagnostic(
+      'handoff.evidence.unauthenticated', 'negative',
+      'authenticated return recognition requires current external verification of trusted adapter, signed receipts, and committed replay state',
+      { field: 'validateVerifiedReturn' }
+    ));
+    return { identity: {}, grade: null, authenticated: false };
+  }
   const roleReturn = verification.evidence?.roleReturn;
   const roleReturnValidation = validateRoleReturn(roleReturn);
   if (!roleReturnValidation.ok) {
@@ -777,7 +820,16 @@ function recognizeVerifiedReturn({
     // Structural validity proves the record is intact, never that the world it
     // describes still holds. The caller owns that refetch; its failures are
     // reported as supplied and default to stale rather than malformed.
-    const checked = validateVerifiedReturn(verification);
+    let checked;
+    try {
+      checked = validateVerifiedReturn(verification);
+    } catch (error) {
+      checked = {
+        ok: false,
+        errors: [`verified return external revalidation failed: ${error.message}`],
+        evidenceState: 'stale',
+      };
+    }
     if (!checked?.ok) {
       const state = checked?.evidenceState === 'malformed' ? 'malformed' : 'stale';
       const code = state === 'malformed' ? 'handoff.evidence.malformed' : 'handoff.evidence.stale';
@@ -786,10 +838,29 @@ function recognizeVerifiedReturn({
       }
     }
   }
-  if (Number.isFinite(maxEvidenceAgeSeconds) && maxEvidenceAgeSeconds > 0) {
+  const policy = validateReturnUseFreshnessPolicy(expectation.returnUseFreshnessPolicy ?? RETURN_USE_FRESHNESS_POLICY);
+  if (!policy.ok) {
+    diagnostics.push(diagnostic(
+      'handoff.evidence.malformed', 'malformed',
+      `return-use freshness policy is unusable: ${policy.errors.join('; ')}`,
+      { field: 'returnUseFreshnessPolicy' }
+    ));
+  } else if (maxEvidenceAgeSeconds !== null && maxEvidenceAgeSeconds !== undefined &&
+      (!Number.isFinite(maxEvidenceAgeSeconds) || maxEvidenceAgeSeconds <= 0)) {
+    diagnostics.push(diagnostic(
+      'handoff.evidence.malformed', 'malformed',
+      'return recognition received an unusable maximum evidence age',
+      { field: 'maxEvidenceAgeSeconds' }
+    ));
+  } else {
     evaluateFreshness({
       observedAt: verification.verifiedAt,
-      maxAgeSeconds: maxEvidenceAgeSeconds,
+      // Compatibility callers may tighten this bound for an immediate retry;
+      // they can never extend the versioned return-use policy.
+      maxAgeSeconds: Math.min(
+        (expectation.returnUseFreshnessPolicy ?? RETURN_USE_FRESHNESS_POLICY).maxAgeSeconds,
+        maxEvidenceAgeSeconds ?? (expectation.returnUseFreshnessPolicy ?? RETURN_USE_FRESHNESS_POLICY).maxAgeSeconds
+      ),
       now,
       label: 'verified return',
       diagnostics,
@@ -983,6 +1054,7 @@ export function recognizeStoredReturnHandoff({
   maxEvidenceAgeSeconds = null,
   validateVerifiedReturn = null,
   validatePreparedDispatch = null,
+  returnVerificationContext = null,
 } = {}) {
   const normalized = createHandoffExpectation(expectation);
   if (!normalized.ok) return recognizeHandoff({ transition, expectation, now });
@@ -992,11 +1064,17 @@ export function recognizeStoredReturnHandoff({
     const listed = listReturnVerifications(target, normalized.expectation.taskId, {
       taskContractDigest: normalized.expectation.taskContractDigest,
       workUnitIdentity: normalized.expectation.workUnitIdentity,
+      ...(returnVerificationContext ?? {}),
     });
     for (const error of listed.errors ?? []) {
+      const name = String(error).split(':', 1)[0];
+      const lifecycle = (listed.diagnostics ?? []).find(item => item.name === name);
       priorDiagnostics.push(diagnostic(
         'handoff.evidence.malformed', 'malformed',
-        `stored return verification is unusable: ${error}`, { field: 'verification' }
+        `stored return verification is unusable: ${error}`, {
+          field: 'verification',
+          ...(lifecycle ? { reason: lifecycle.reason, observedVersion: lifecycle.observedVersion } : {}),
+        }
       ));
     }
     const selected = selectCurrentReturnVerifications(listed.records ?? []);

@@ -107,6 +107,7 @@ function detectColor(env, stdoutIsTTY, ci) {
  * @param {string} [options.operatorTrustRoot] Test-only alternate registry root; it cannot authorize supported adapters.
  * @param {string} [options.operatorActivationRoot] Alternate per-user root for operator activation confirmation material and the activation policy pin. It must resolve outside the target.
  * @param {Function} [options.hostAuthority] Host transport for a nonce-bound, Ed25519-signed boundary challenge response.
+ * @param {Function} [options.requiredCheckCommandRunner] Test-only required-check argv runner.
  * @returns {object} io context
  */
 export function createIo(options = {}) {
@@ -140,6 +141,7 @@ export function createIo(options = {}) {
     operatorTrustRoot: options.operatorTrustRoot ?? null,
     operatorActivationRoot: options.operatorActivationRoot ?? null,
     hostAuthority: options.hostAuthority ?? null,
+    requiredCheckCommandRunner: options.requiredCheckCommandRunner ?? null,
     fsMutationOptions: options.fsMutationOptions ?? null,
   };
 

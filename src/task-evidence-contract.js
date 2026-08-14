@@ -49,6 +49,10 @@ export const ENGINEER_CARRIER_MUTATION_CLASSES = Object.freeze([
   'implementation_summary_evidence',
   'implementation_outcome_evidence',
 ]);
+export const LIFECYCLE_CARRIER_MUTATION_CLASSES = Object.freeze([
+  ...ENGINEER_CARRIER_MUTATION_CLASSES,
+  'acceptance_transition',
+]);
 export const DEPENDENCY_SNAPSHOT_KIND = 'agenticloop.dependency-snapshot';
 export const DEPENDENCY_SNAPSHOT_SCHEMA_VERSION = 1;
 
@@ -1100,16 +1104,19 @@ export function validateCarrierMutationReceipt(receipt) {
   for (const field of ['dispatchCarrierDigest', 'priorCarrierDigest', 'currentCarrierDigest']) {
     if (!DIGEST_PATTERN.test(String(receipt[field] ?? ''))) errors.push(`carrier mutation ${field} is invalid`);
   }
-  if (!ENGINEER_CARRIER_MUTATION_CLASSES.includes(receipt.mutationClass)) {
-    errors.push('carrier mutation class is not an Engineer-owned return-lineage class');
+  if (!LIFECYCLE_CARRIER_MUTATION_CLASSES.includes(receipt.mutationClass)) {
+    errors.push('carrier mutation class is not a recognized return-lineage class');
   }
   if (!sortedUniqueStrings(receipt.ownedFields) || !sortedUniqueStrings(receipt.changedFields) ||
       JSON.stringify(receipt.ownedFields) !== JSON.stringify(receipt.changedFields)) {
     errors.push('carrier mutation ownedFields and changedFields must be equal canonical string lists');
   }
   const producer = receipt.producer;
-  if (!isPlainObject(producer) || Object.keys(producer).length !== 5 || producer.workflowRole !== 'engineer' ||
-      producer.assuranceGrade !== 'session_reported' ||
+  const expectedProducer = receipt.mutationClass === 'acceptance_transition'
+    ? { workflowRole: 'maintainer', assuranceGrade: 'host_receipt' }
+    : { workflowRole: 'engineer', assuranceGrade: 'session_reported' };
+  if (!isPlainObject(producer) || Object.keys(producer).length !== 5 || producer.workflowRole !== expectedProducer.workflowRole ||
+      producer.assuranceGrade !== expectedProducer.assuranceGrade ||
       !['invocationId', 'workUnitIdentity', 'repositoryIdentity'].every(field => typeof producer[field] === 'string' && producer[field])) {
     errors.push('carrier mutation producer identity is invalid');
   }

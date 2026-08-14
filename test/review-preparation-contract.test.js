@@ -1531,6 +1531,7 @@ describe('review preparation contract - review preparation and packet freshness'
       const verification = createReturnVerification({
         target: fixture.root, packet, roleReturn, repositoryEvidence: evidence,
         producerReceipt: producer.producerReceipt, received,
+        requiredCheckEvidenceAssurance: 'unverified',
       });
       assert.equal(writeReturnVerification(fixture.root, verification).ok, true);
 

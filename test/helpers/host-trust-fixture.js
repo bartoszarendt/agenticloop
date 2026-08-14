@@ -13,11 +13,19 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { activationCapabilityInventory } from '../../src/dispatch-envelope.js';
+import { canonicalJson } from '../../src/canonical-json.js';
+import {
+  createHostExecutionReceipt,
+  createHostHandoffReceipt,
+} from '../../src/host-handoff.js';
 import {
   generateHostSigningKey,
   HOST_TRUST_BOUNDARY_RESPONSE_KIND,
   HOST_TRUST_BOUNDARY_SCHEMA_VERSION,
   hostTrustBoundarySignaturePayload,
+  EXECUTION_RECEIPT_REPLAY_BOUNDARY_KIND,
+  EXECUTION_RECEIPT_REPLAY_BOUNDARY_SCHEMA_VERSION,
+  executionReceiptReplaySignaturePayload,
   operatorTrustStorePath,
   signHostPayload,
   targetRepositoryIdentity,
@@ -80,7 +88,31 @@ export function writeHostTrustStore(operatorRoot, trust) {
 
 /** Return a challenge-signing host boundary backed by the fixture's private key. */
 export function protectedHostBoundary(trust, observe = () => {}) {
+  const replay = new Map();
   return challenge => {
+    if (challenge?.kind === EXECUTION_RECEIPT_REPLAY_BOUNDARY_KIND) {
+      observe(challenge);
+      const binding = challenge.binding;
+      const key = `${binding.adapterId}\u0000${binding.keyId}\u0000${binding.targetRepositoryIdentity}\u0000${binding.replayId}`;
+      const existing = replay.get(key);
+      let state = 'rejected';
+      let transactionId = null;
+      if (challenge.operation === 'prepare' && !existing) {
+        transactionId = `replay-tx:${Math.random().toString(36).slice(2)}`;
+        replay.set(key, { binding: structuredClone(binding), transactionId, state: 'prepared' });
+        state = 'prepared';
+      } else if (existing && canonicalJson(existing.binding) === canonicalJson(binding)) {
+        transactionId = existing.transactionId;
+        if (challenge.operation === 'commit' && existing.state === 'prepared' && challenge.transactionId === transactionId) {
+          existing.state = 'committed'; state = 'committed';
+        } else if (challenge.operation === 'abort' && existing.state === 'prepared' && challenge.transactionId === transactionId) {
+          replay.delete(key); state = 'aborted';
+        } else if (challenge.operation === 'verify' && existing.state === 'committed') state = 'current';
+      }
+      const response = { kind: EXECUTION_RECEIPT_REPLAY_BOUNDARY_KIND, schemaVersion: EXECUTION_RECEIPT_REPLAY_BOUNDARY_SCHEMA_VERSION, operation: challenge.operation, binding, transactionId, state, signature: null };
+      response.signature = signHostPayload(executionReceiptReplaySignaturePayload(challenge, response), trust.privateKey);
+      return response;
+    }
     observe(challenge);
     const response = {
       kind: HOST_TRUST_BOUNDARY_RESPONSE_KIND,
@@ -92,5 +124,38 @@ export function protectedHostBoundary(trust, observe = () => {}) {
     };
     response.signature = signHostPayload(hostTrustBoundarySignaturePayload(challenge, response), trust.privateKey);
     return response;
+  };
+}
+
+/**
+ * Model the only external-only part of an authenticated return: the protected
+ * host signs observations after the public CLI has produced its ordinary
+ * packet, execution artifact, and role-return wire values.
+ */
+export function createAuthenticatedReturnReceipts(trust, {
+  packet,
+  roleReturn,
+  repositoryEvidence,
+  executions,
+  replayId,
+}) {
+  return {
+    producerReceipt: createHostHandoffReceipt({
+      adapterId: trust.adapterId,
+      keyId: trust.keyId,
+      packet,
+      roleReturn,
+      repositoryEvidence,
+      observedProducerRole: 'engineer',
+    }, trust.privateKey),
+    executionReceipt: createHostExecutionReceipt({
+      adapterId: trust.adapterId,
+      keyId: trust.keyId,
+      packet,
+      roleReturn,
+      repositoryEvidence,
+      executions,
+      replayId,
+    }, trust.privateKey),
   };
 }

@@ -28,6 +28,7 @@
 
 import { canonicalJson, canonicalSha256 } from './canonical-json.js';
 import { createHash } from 'node:crypto';
+import { validateCommittedSourcePath } from './committed-source.js';
 import { parseFrontmatterStrict } from './frontmatter.js';
 import {
   classifyParallelPair,
@@ -49,10 +50,11 @@ import { evaluateTaskReadiness, parseTaskReadinessDeclaration } from './task-rea
 import { deepFreeze } from './transition-contract.js';
 
 export const PARALLEL_SCAN_KIND = 'agenticloop.parallel-scan';
-export const PARALLEL_SCAN_SCHEMA_VERSION = 1;
-export const PARALLEL_SCAN_DIGEST_DOMAIN = 'agenticloop.parallel-scan.v1';
+export const LEGACY_PARALLEL_SCAN_SCHEMA_VERSION = 1;
+export const PARALLEL_SCAN_SCHEMA_VERSION = 2;
+export const PARALLEL_SCAN_DIGEST_DOMAIN = 'agenticloop.parallel-scan.v2';
 export const PARALLEL_SCAN_SEMANTIC_DIGEST_DOMAIN = 'agenticloop.parallel-scan-semantics.v1';
-export const PARALLEL_SCAN_READINESS_DIGEST_DOMAIN = 'agenticloop.parallel-scan-readiness.v1';
+export const PARALLEL_SCAN_READINESS_DIGEST_DOMAIN = 'agenticloop.parallel-scan-readiness.v2';
 export const PARALLEL_SCAN_COMMAND = 'parallel scan';
 
 /**
@@ -201,9 +203,11 @@ const READINESS_BASE_FIELDS = Object.freeze(['kind', 'identity', 'inventoryDiges
 // The dependency *identity*, not the moment some process happened to evaluate
 // it. `evaluatedAt` is deliberately excluded: it changes on every read of the
 // same snapshot, which would make an otherwise identical scan non-deterministic
-// while proving nothing about the evidence.
+// while proving nothing about the evidence. `sourceRef` is the target-relative
+// artifact path used to reopen the exact snapshot; it is distinct from the
+// semantic `source` identity the snapshot declares about itself.
 const READINESS_DEPENDENCY_FIELDS = Object.freeze([
-  'source', 'digest', 'observedAt', 'freshnessState', 'evaluatedState',
+  'source', 'sourceRef', 'digest', 'observedAt', 'freshnessState', 'evaluatedState',
   'statusCount', 'statusDigest',
 ]);
 const READINESS_OBSERVATION_FIELDS = Object.freeze(['observedAt', 'maxAgeSeconds']);
@@ -712,8 +716,20 @@ function bindReadinessContext(input, observation, errors) {
     if (flatten(boundMap) !== flatten(statusMap)) {
       errors.push('parallel scan readinessContext dependency evidence does not match the dependency statuses the scan evaluated');
     }
+    // The semantic snapshot identity (`source`) and the target-relative
+    // artifact reference used to reopen that exact snapshot (`sourceRef`) are
+    // distinct facts. The scan persists both so dispatch never has to guess a
+    // path from a semantic identifier.
+    const revalidationArgs = evidence.revalidationArgs;
+    const sourceRef = Array.isArray(revalidationArgs) && revalidationArgs.length === 2 &&
+      revalidationArgs[0] === '--dependencies' ? revalidationArgs[1] : null;
+    if (sourceRef === null || !validateCommittedSourcePath(sourceRef).ok) {
+      errors.push('parallel scan readinessContext dependency evidence must carry an exact target-relative --dependencies revalidation selector');
+      return null;
+    }
     dependencies = {
       source: evidence.source,
+      sourceRef,
       digest: evidence.digest,
       observedAt: evidence.observedAt,
       freshnessState: evidence.freshnessState,
@@ -1198,16 +1214,23 @@ export function validateParallelScanReadinessBinding(record, current) {
     }
     if (bound.dependencies === null) {
       errors.push('the authoritative refetch reports dependency evidence the scan never bound');
-    } else if (
-      evidence.source !== bound.dependencies.source ||
-      evidence.digest !== bound.dependencies.digest ||
-      evidence.observedAt !== bound.dependencies.observedAt ||
-      evidence.freshnessState !== bound.dependencies.freshnessState ||
-      evidence.evaluatedState !== bound.dependencies.evaluatedState ||
-      evidence.statuses.length !== bound.dependencies.statusCount ||
-      dependencyStatusDigest(evidence.statuses) !== bound.dependencies.statusDigest
-    ) {
-      errors.push('authoritative dependency status evidence changed after the scan; the bound ready set is stale');
+    } else {
+      const refetchSourceRef = Array.isArray(evidence.revalidationArgs) && evidence.revalidationArgs.length === 2 &&
+        evidence.revalidationArgs[0] === '--dependencies' ? evidence.revalidationArgs[1] : null;
+      if (refetchSourceRef !== bound.dependencies.sourceRef) {
+        errors.push('authoritative dependency revalidation selector changed after the scan; the bound ready set is stale');
+      }
+      if (
+        evidence.source !== bound.dependencies.source ||
+        evidence.digest !== bound.dependencies.digest ||
+        evidence.observedAt !== bound.dependencies.observedAt ||
+        evidence.freshnessState !== bound.dependencies.freshnessState ||
+        evidence.evaluatedState !== bound.dependencies.evaluatedState ||
+        evidence.statuses.length !== bound.dependencies.statusCount ||
+        dependencyStatusDigest(evidence.statuses) !== bound.dependencies.statusDigest
+      ) {
+        errors.push('authoritative dependency status evidence changed after the scan; the bound ready set is stale');
+      }
     }
   }
   return { ok: errors.length === 0, errors };
@@ -1272,7 +1295,13 @@ function validateParallelScanRecordInner(record, options) {
   if (!isPlainObject(record)) return { ok: false, errors: ['parallel scan record must be an object'] };
   exactKeys(record, PARALLEL_SCAN_FIELDS, 'parallel scan record', errors);
   if (record.kind !== PARALLEL_SCAN_KIND) errors.push(`parallel scan kind must be '${PARALLEL_SCAN_KIND}'`);
-  if (record.schemaVersion !== PARALLEL_SCAN_SCHEMA_VERSION) {
+  if (record.kind === PARALLEL_SCAN_KIND && record.schemaVersion === LEGACY_PARALLEL_SCAN_SCHEMA_VERSION) {
+    errors.push(
+      `parallel scan schemaVersion ${LEGACY_PARALLEL_SCAN_SCHEMA_VERSION} is superseded and lacks the exact dependency revalidation selector; ` +
+      `regenerate the decomposition source as schemaVersion ${PARALLEL_SCAN_SCHEMA_VERSION} with ` +
+      `'agenticloop task prepare-decomposition <id> --work-unit <id> --source-ref <path> --source-revision <ref> --base <ref-or-tree> --dependencies <path>'`
+    );
+  } else if (record.schemaVersion !== PARALLEL_SCAN_SCHEMA_VERSION) {
     errors.push(`parallel scan schemaVersion must be ${PARALLEL_SCAN_SCHEMA_VERSION}`);
   }
   if (!PARALLEL_SCAN_CONCLUSIONS.includes(record.conclusion)) errors.push('parallel scan conclusion is invalid');
@@ -1561,6 +1590,9 @@ function validateReadinessContextShape(record, errors) {
       const dependencies = context.dependencies;
       if (typeof dependencies.source !== 'string' || !dependencies.source) {
         errors.push('parallel scan readinessContext dependency source is required');
+      }
+      if (!validateCommittedSourcePath(dependencies.sourceRef).ok) {
+        errors.push('parallel scan readinessContext dependency sourceRef must be a canonical target-relative artifact path');
       }
       if (!SHA256.test(String(dependencies.digest ?? ''))) {
         errors.push('parallel scan readinessContext dependency digest must be a sha256 digest');

@@ -47,6 +47,16 @@ export const RETURN_INVALIDATORS = Object.freeze([
   'check_or_transport_evidence_changes',
   'initial_repository_state_changes',
 ]);
+const FIXTURE_EXECUTION_EVIDENCE = Object.freeze({
+  path: '.agenticloop/tmp/evidence.json',
+  digest: `sha256:agenticloop.execution-evidence.v3:${'a'.repeat(64)}`,
+});
+
+function withExecutionEvidence(checks) {
+  return checks.map(check => check.kind === 'command' && check.outcome === 'passed'
+    ? { ...check, executionEvidence: check.executionEvidence ?? FIXTURE_EXECUTION_EVIDENCE }
+    : check);
+}
 
 export function sha256(text) {
   return `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`;
@@ -694,7 +704,7 @@ export function readyReturn(packet, evidence = repositoryEvidence(packet)) {
     productBaseHead: evidence.productBaseHead, productHead: evidence.productHead,
     workflowHead: evidence.workflowHead, candidateHead: evidence.candidateHead,
     productChangedPaths: evidence.productChangedPaths, workflowChangedPaths: evidence.workflowChangedPaths,
-    checks: evidence.checks, productAttribution: evidence.productAttribution, pr: evidence.pr,
+    checks: withExecutionEvidence(evidence.checks), productAttribution: evidence.productAttribution, pr: evidence.pr,
     carrierLineage: evidence.carrierLineage,
     outcome: { kind: 'implementation_ready_for_review', completion: false, authority: 'non_authoritative_role_outcome' },
     disposition: 'proceed', blocker: null, freshness: { invalidatedBy: [...RETURN_INVALIDATORS] },

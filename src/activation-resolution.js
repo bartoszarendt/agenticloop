@@ -165,6 +165,103 @@ function packetDecomposition(target, binding) {
   try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
 }
 
+/**
+ * Map one canonical resolution failure to an orientation authorization state.
+ * The distinctions exist so a snapshot can never collapse "no record",
+ * "broken record", and "valid record" into one another.
+ */
+function authorizationStateForErrors(errors) {
+  const codes = (errors ?? []).map(error => String(error?.code ?? error));
+  if (codes.some(code => code.endsWith('.expired'))) return 'expired';
+  if (codes.some(code => code.endsWith('.revoked'))) return 'revoked';
+  if (codes.some(code => code.endsWith('.stale_contract') || code.endsWith('.decomposition_changed'))) return 'stale';
+  if (codes.some(code =>
+    code.endsWith('.task_mismatch') || code.endsWith('.repository_mismatch') ||
+    code.endsWith('.out_of_scope') || code.endsWith('.binding.mismatch'))) return 'mismatched';
+  if (codes.some(code =>
+    code.endsWith('.unauthenticated') || code.endsWith('.assurance.insufficient') ||
+    code.endsWith('.policy.invalid'))) return 'unauthenticated';
+  return 'malformed';
+}
+
+/**
+ * Resolve the current authorization state of one task through the canonical
+ * activation-resolution and policy-validation path.
+ *
+ * This is the same grant/binding resolution dispatch uses; it never
+ * interprets raw store JSON on its own. `present` is reported only when a
+ * current, valid, authenticated binding authorizes the exact repository,
+ * backend, task, carrier, and contract digest under the effective policy.
+ *
+ * @param {string} target
+ * @param {object} io  CLI io; operator trust material is resolved externally.
+ * @param {{ backend: string, taskId: string, carrier: string, taskContractDigest: string|null, now?: number }} task
+ * @returns {{ state: string, binding: object|null, grant: object|null, assurance: string|null, errors: string[] }}
+ */
+export function resolveCurrentTaskAuthorization(target, io, task) {
+  const bindingRead = readTaskActivationBinding(target, task.backend, task.taskId);
+  if (!bindingRead.ok) {
+    return { state: 'malformed', binding: null, grant: null, assurance: null, errors: [...bindingRead.errors].sort() };
+  }
+  if (bindingRead.state !== 'present') {
+    return { state: 'missing', binding: null, grant: null, assurance: null, errors: [] };
+  }
+  const binding = bindingRead.record;
+  const grantRead = readActivationGrant(target, binding?.grantId);
+  if (!grantRead.ok) {
+    return { state: 'malformed', binding, grant: null, assurance: null, errors: [...grantRead.errors].sort() };
+  }
+  if (grantRead.state !== 'present') {
+    return {
+      state: 'mismatched', binding, grant: null, assurance: null,
+      errors: [`task activation binding names grant '${String(binding?.grantId)}', which is not present in this repository`],
+    };
+  }
+  let verification;
+  let policy;
+  try {
+    verification = resolveActivationVerification(target, io);
+    policy = resolveEffectiveActivationPolicy(target, io);
+  } catch (error) {
+    return { state: 'malformed', binding, grant: grantRead.record, assurance: null, errors: [error.message] };
+  }
+  const external = readExternalActivationRevocations(target, {
+    operatorActivationRoot: io?.operatorActivationRoot ?? undefined,
+  });
+  const local = readActivationRevocations(target);
+  const revocationErrors = [...(external.errors ?? []), ...(local.errors ?? [])];
+  const resolved = resolveTaskActivationBinding({
+    grant: grantRead.record,
+    binding,
+    repositoryIdentity: targetRepositoryIdentity(target),
+    backend: task.backend,
+    taskId: task.taskId,
+    carrier: task.carrier,
+    taskContractDigest: task.taskContractDigest,
+    verifySignature: verification.verify,
+    revocations: [...external.revocations, ...local.revocations],
+    decomposition: packetDecomposition(target, binding),
+    now: task.now,
+  });
+  const errors = [
+    ...resolved.errors.map(error => error.message),
+    ...revocationErrors.map(error => `revocation inventory: ${error}`),
+  ].sort();
+  if (!resolved.ok) {
+    return {
+      state: authorizationStateForErrors(resolved.errors),
+      binding, grant: grantRead.record, assurance: null, errors,
+    };
+  }
+  if (policy.minimumActivation === 'host_signed' && resolved.assurance !== 'host_signed') {
+    return {
+      state: 'unauthenticated', binding, grant: grantRead.record, assurance: resolved.assurance,
+      errors: [`activation assurance '${resolved.assurance}' is below the effective minimum 'host_signed'`],
+    };
+  }
+  return { state: 'present', binding, grant: grantRead.record, assurance: resolved.assurance, errors };
+}
+
 /** Revalidate a packet-carried signed authority against current external deny and policy state. */
 export function resolvePacketActivationBinding(target, io, packet, options = {}) {
   const envelope = packet?.activationBinding;

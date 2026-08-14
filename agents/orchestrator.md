@@ -60,13 +60,28 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   the current review round rather than a `needs_revision` round. Route any failed,
   expanded, uncertain, repeated, or independent-review finding to the engineer.
    This does not grant the orchestrator implementation or review authority.
-- Before one Engineer delegation, use the read-only `task prepare-dispatch`
-  packet for the exact current task. It refetches task/contract facts, reruns
+- Before one Engineer delegation, produce the read-only packet for the exact
+  current task with `npx agenticloop task prepare-dispatch <id> --host <host>
+  --role engineer --output <packet-path> --json`. It refetches task/contract facts, reruns
   readiness from exact base/dependency sources, and rereads committed
   Maintainer-attributed decomposition provenance before binding activation identity,
   role, scope, checks, branch/worktree, the selected host's exact closed
   Engineer capability declaration, attribution, liveness, and
-  cancellation. Route a failed packet; do not summarize or repair it inline.
+  cancellation. `<packet-path>` is target-relative. Route a failed packet; do
+  not summarize or repair it inline. Guarded role start must consume and
+  revalidate the exact packet through `task status <id> in-progress
+  --dispatch-packet <packet-path>` before Engineer mutation.
+- Treat CLI-authored dispatch, check-evidence, raw-return, and verified-return
+  artifacts as the only handoffs. Do not inspect their internals, hand-author
+  JSON or digests, or substitute host status, messages, opaque handles, or
+  cancellation observations for a return. Host cancellation/status alone does
+  not establish cancellation.
+- Give the Engineer the packet path and require the public sequence: packet
+  revalidation after role start; `task check-evidence-init`; one `task
+  check-evidence-update` per required check (with `--execution-output` for each
+  passed command check); then `task prepare-return`. Do not prepare a review
+  packet or treat a raw return as current until `task verify-return <id> --packet
+  <packet-path> --return <return-path> --from-current-repository` succeeds.
 - Treat activation coverage, exact operator task authorization, and current task
   readiness as separate facts. A work-unit activation does not authorize every
   activated task; route a draft, missing/untrusted baseline, stale carrier or
@@ -96,7 +111,8 @@ doc or agents are siblings of `.agenticloop/project.md`. The process doc is
   status, or invalid provenance rejects the result; review is freshly delegated
   on the new prepared head. For files-backed review, `reviewed_artifact` must
    equal the exact `implementation_artifact` captured at dispatch. For files,
-   run `task review-prepare <id>` after `task verify-return`; it consumes one
+   run `task review-prepare <id>` only after `task verify-return` has verified
+   the current return; it consumes one
    command-local carrier snapshot and refuses drift without creating review state.
 - A stale review is invalid as a whole. Do not salvage, sustain, or withdraw
   individual findings from it; a fresh Maintainer review decides what remains

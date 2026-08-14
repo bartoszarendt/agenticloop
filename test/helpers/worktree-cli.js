@@ -104,6 +104,8 @@ export function createWorktreeHarness(label = 'al-worktree-cli-') {
 
     const seed = mkdtempSync(join(tmpDir, 'bare-seed-'));
     assertGitOk(git(seed, ['init', '-q']));
+    assertGitOk(git(seed, ['config', 'user.email', 'agenticloop@example.invalid']));
+    assertGitOk(git(seed, ['config', 'user.name', 'Agentic Loop Test']));
     assertGitOk(git(seed, ['remote', 'add', 'origin', bare]));
     writeFileSync(join(seed, 'README.md'), '# Test\n', 'utf-8');
     assertGitOk(git(seed, ['add', 'README.md']));
@@ -153,6 +155,8 @@ export function createWorktreeHarness(label = 'al-worktree-cli-') {
 
     const seed = mkdtempSync(join(tmpDir, 'bare-coord-seed-'));
     assertGitOk(git(seed, ['init', '-q']));
+    assertGitOk(git(seed, ['config', 'user.email', 'agenticloop@example.invalid']));
+    assertGitOk(git(seed, ['config', 'user.name', 'Agentic Loop Test']));
     assertGitOk(git(seed, ['remote', 'add', 'origin', gitDir]));
     writeFileSync(join(seed, 'README.md'), '# Test\n', 'utf-8');
     assertGitOk(git(seed, ['add', 'README.md']));

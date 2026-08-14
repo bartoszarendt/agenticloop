@@ -25,6 +25,7 @@ import {
   TRUSTED_ACTORS_DEPRECATED_ALIAS,
   TRUSTED_ACTORS_FIELD,
 } from './trusted-actors.js';
+import { resolveReturnUseFreshnessPolicy } from './return-use-freshness.js';
 
 export { isValidTaskId } from './task-id.js';
 
@@ -380,6 +381,13 @@ export function validateProjectMap(config, raw, repoRoot) {
     errors.push(
       `project.md: work_unit_audit must be ${[...VALID_WORK_UNIT_AUDIT_VALUES].map(v => `'${v}'`).join(' or ')}, got: ${JSON.stringify(config.work_unit_audit)}`
     );
+  }
+
+  const returnUseFreshness = resolveReturnUseFreshnessPolicy(raw);
+  if (!returnUseFreshness.ok) {
+    for (const error of returnUseFreshness.errors) {
+      errors.push(`project.md: ${error}`);
+    }
   }
 
   const trustedActors = resolveTrustedTaskContractActors(raw);

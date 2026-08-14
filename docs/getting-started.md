@@ -310,11 +310,21 @@ task_id_pattern: "T-<number>"
 task_id_regex: "^T-\\d{3,}$"
 task_file_template: ".agenticloop/tasks/{taskId}.md"
 grouping_profile: flat
+# Optional only to pin the shipped 24-hour verified-return reuse ceiling:
+# return_use_freshness:
+#   kind: agenticloop.return-use-freshness
+#   schemaVersion: 1
+#   maxAgeSeconds: 86400
 # engineer_context_window_tokens: 256000
 # documents:
 #   plan: "ROADMAP.md"
 ---
 ```
+
+Verified returns can authorize protected follow-on transitions for 24 hours by
+default. `return_use_freshness` is optional, but if declared it must use the
+complete versioned policy shown above; partial, old, future, or extended values
+fail validation and protected transitions fail closed.
 
 Default task IDs use `T-001`, `T-002`, and similar neutral numbering. Projects
 that choose grouping may override this. For example, a phase-grouped project
@@ -552,6 +562,17 @@ After dispatch, run `task verify-return`. Standard mode can persist an observed
 `session_reported` return without a plugin; hardened mode requires the
 independently packet-bound protected return adapter and an authenticated host
 receipt. Capability registration alone is not evidence that a return occurred.
+
+The ordinary public handoff is CLI-artifact based: the orchestrator runs `npx
+agenticloop task prepare-dispatch <id> --host <host> --role engineer --output
+<packet-path> --json`; guarded role start consumes and revalidates it; the
+engineer runs `task check-evidence-init` and `task check-evidence-update`, then
+`task prepare-return`; and the receiver runs `task verify-return <id> --packet
+<packet-path> --return <return-path> --from-current-repository` before review.
+Use target-relative artifact paths. Do not inspect internals or hand-author the
+packet, evidence, return JSON, or digests. Host statuses, messages, opaque
+handles, and cancellation observations are not returns; cancellation/status alone
+does not establish cancellation.
 
 For files-backed Engineer work, do not restore the pre-start task body. Commit
 the product artifact, then use `task evidence` for artifact, summary/check, and

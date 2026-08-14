@@ -15,6 +15,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { canonicalJson, canonicalSha256 } from './canonical-json.js';
+import { CANCELLATION_PROVENANCE_KIND } from './cancellation-provenance.js';
 import { deriveCommitRange } from './commit-range.js';
 import { gitTreeObjectId, isGitObjectId, sameGitObjectFormat } from './git-oid.js';
 import { deepFreeze, frozenClone } from './immutable.js';
@@ -51,6 +52,7 @@ import {
   verifyHostHandoffReceipt,
 } from './host-handoff.js';
 import { HOST_SIGNATURE_ALGORITHM, targetRepositoryIdentity } from './host-trust.js';
+import { pathIdentity } from './path-identity.js';
 import {
   CLEAN_DISPATCH_STATE_IDENTITY,
   PERMITTED_OPERATOR_STATE_PREFIXES,
@@ -65,6 +67,7 @@ import { validateTaskReadinessEvidence } from './task-evidence-contract.js';
 import { taskContractDigest, validateTaskContractBaseline } from './task-contract-baseline.js';
 import {
   parseRequiredCheckInventory,
+  REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION,
   requiredCheckEvidenceMatchesInventory,
   validateRequiredCheckEvidence,
   validateRequiredCheckInventory,
@@ -119,7 +122,9 @@ export const ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION = 5;
  * for protected-contract drift.
  */
 export const CARRIER_NAMED_DISPATCH_PREPARATION_SCHEMA_VERSION = 6;
-export const DISPATCH_PREPARATION_SCHEMA_VERSION = 7;
+/** Schema 7 authenticated no required-check execution-evidence contract. */
+export const REQUIRED_CHECK_EVIDENCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION = 7;
+export const DISPATCH_PREPARATION_SCHEMA_VERSION = 8;
 /** Packet-carried authenticated envelope containing a complete signed grant and binding. */
 export const ACTIVATION_BINDING_KIND = 'agenticloop.activation-binding';
 export const ACTIVATION_BINDING_SCHEMA_VERSION = 1;
@@ -142,7 +147,8 @@ export const DECOMPOSITION_SCHEMA_VERSION = 2;
 export const DECOMPOSITION_BINDING_KIND = 'agenticloop.decomposition-binding';
 export const DECOMPOSITION_BINDING_SCHEMA_VERSION = 1;
 export const ROLE_RETURN_KIND = 'agenticloop.role-return';
-export const ROLE_RETURN_SCHEMA_VERSION = 3;
+export const CANCELLATION_BLOCKER_CATEGORY = 'cancellation_requested';
+export const ROLE_RETURN_SCHEMA_VERSION = 4;
 
 const SHA256_RE = /^sha256:[a-f0-9]{64}$/;
 const CONTRACT_DIGEST_RE = /^sha256:v1:[a-f0-9]{64}$/;
@@ -1776,6 +1782,7 @@ function packetTaskBinding(snapshot, contract) {
     acceptanceCriteria: projection.acceptance_criteria,
     preAuthorizedDeviationPaths: parseDeviations(snapshot.body).entries.map(entry => entry.path).sort(),
     requiredChecks: requiredChecks.ok ? requiredChecks.checks : [],
+    requiredCheckEvidenceContract: REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION,
     independentReviewRequired: projection.independent_review_required,
     lockedDecisionRefs: projection.locked_decision_refs,
   };
@@ -1890,6 +1897,7 @@ const LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSIONS = Object.freeze([
   SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION,
   ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION,
   CARRIER_NAMED_DISPATCH_PREPARATION_SCHEMA_VERSION,
+  REQUIRED_CHECK_EVIDENCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION,
 ]);
 
 /**
@@ -1975,6 +1983,7 @@ export function prepareRoleDispatch(input = {}, options = {}) {
     try {
       boundAssignment = {
         ...assignment,
+        worktree: pathIdentity(assignment?.worktree).authorityPath,
         degradedEnforcementReports: createDegradedEnforcementReports(assignment?.hostRoleCapability),
       };
     } catch (error) {
@@ -1995,7 +2004,7 @@ export function prepareRoleDispatch(input = {}, options = {}) {
       readCarrierDigest,
     }, findings);
     if (!cleanState) return failure(command, findings);
-    const bound = { ...repository, cleanState };
+    const bound = { ...repository, worktree: pathIdentity(repository?.worktree).authorityPath, cleanState };
     const checked = dispatchBindings({
       snapshot,
       activationEvidence,
@@ -2134,10 +2143,12 @@ function legacyDispatchCandidate(packet, schemaVersion) {
     ? V2_ASSIGNMENT_FIELDS
     : schemaVersion === SCAN_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION ||
       schemaVersion === ASSURANCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION ||
-      schemaVersion === CARRIER_NAMED_DISPATCH_PREPARATION_SCHEMA_VERSION
+      schemaVersion === CARRIER_NAMED_DISPATCH_PREPARATION_SCHEMA_VERSION ||
+      schemaVersion === REQUIRED_CHECK_EVIDENCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION
       ? V4_ASSIGNMENT_FIELDS
       : V3_ASSIGNMENT_FIELDS;
-  const fields = schemaVersion === CARRIER_NAMED_DISPATCH_PREPARATION_SCHEMA_VERSION
+  const fields = schemaVersion === CARRIER_NAMED_DISPATCH_PREPARATION_SCHEMA_VERSION ||
+    schemaVersion === REQUIRED_CHECK_EVIDENCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION
     ? V6_DISPATCH_FIELDS
     : ASSURANCE_UNBOUND_DISPATCH_FIELDS;
   return packet?.kind === DISPATCH_PREPARATION_KIND &&
@@ -2161,6 +2172,7 @@ function currentProjectionOfLegacy(packet, schemaVersion, options) {
     delete projected.task.digest;
     delete projected.task.contractDigest;
   }
+  projected.task.requiredCheckEvidenceContract = REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION;
   if (schemaVersion === BASELINE_DISPATCH_PREPARATION_SCHEMA_VERSION) {
     const inventory = options.hostRoleCapabilities ?? HOST_ROLE_CAPABILITIES;
     const host = inventory.opencode ? 'opencode' : Object.keys(inventory)[0];
@@ -2175,7 +2187,8 @@ function currentProjectionOfLegacy(packet, schemaVersion, options) {
   // and no assurance statement. The projection restates that truthfully so the
   // packet can be recognized as authentic prior evidence and routed to typed
   // regeneration; it never lets that evidence authorize a dispatch.
-  if (schemaVersion !== CARRIER_NAMED_DISPATCH_PREPARATION_SCHEMA_VERSION) {
+  if (schemaVersion !== CARRIER_NAMED_DISPATCH_PREPARATION_SCHEMA_VERSION &&
+      schemaVersion !== REQUIRED_CHECK_EVIDENCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION) {
     projected.activationBinding = null;
     projected.returnAdapter = null;
     projected.assurance = dispatchAssurance({
@@ -2254,7 +2267,7 @@ function validateCurrentDispatchPreparation(packet, options = {}) {
     exactKeys(packet?.task, [
       'id', 'carrier', 'dispatchCarrierDigest', 'taskContractDigest', 'activationDigest', 'activationCaptureRef',
       'scope', 'outOfScope', 'allowedPaths', 'intendedCreations',
-      'acceptanceCriteria', 'preAuthorizedDeviationPaths', 'requiredChecks', 'independentReviewRequired', 'lockedDecisionRefs',
+      'acceptanceCriteria', 'preAuthorizedDeviationPaths', 'requiredChecks', 'requiredCheckEvidenceContract', 'independentReviewRequired', 'lockedDecisionRefs',
     ], 'dispatch preparation task', findings);
     for (const key of ['id', 'carrier', 'scope']) {
       if (typeof packet?.task?.[key] !== 'string' || !packet.task[key]) findings.malformed(`dispatch preparation task ${key} is required`);
@@ -2271,6 +2284,9 @@ function validateCurrentDispatchPreparation(packet, options = {}) {
       label: 'dispatch preparation task requiredChecks',
     });
     for (const error of inventory.errors) findings.malformed(error);
+    if (packet?.task?.requiredCheckEvidenceContract !== REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION) {
+      findings.malformed(`dispatch preparation task requiredCheckEvidenceContract must be ${REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION}`);
+    }
     if (!SHA256_RE.test(packet?.task?.dispatchCarrierDigest ?? '')) findings.malformed('dispatch preparation task dispatchCarrierDigest must be sha256:<64 lowercase hex>');
     if (!CONTRACT_DIGEST_RE.test(packet?.task?.taskContractDigest ?? '')) findings.malformed('dispatch preparation task taskContractDigest must be sha256:v1:<64 lowercase hex>');
     const grantBound = packet?.assurance?.activationSource === 'activation_grant';
@@ -2435,8 +2451,8 @@ export function verifyDispatchBeforeMutation(input = {}, options = {}) {
   }
 }
 
-function validateChecks(checks, findings, label = 'role return') {
-  const checked = validateRequiredCheckEvidence(checks, { label });
+function validateChecks(checks, findings, label = 'role return', contractVersion = null) {
+  const checked = validateRequiredCheckEvidence(checks, { label, contractVersion });
   for (const error of checked.errors) findings.malformed(error);
 }
 
@@ -2448,7 +2464,7 @@ export function validateRoleReturn(value) {
     const shapeOk = exactKeys(value, [
       'kind', 'schemaVersion', 'returnId', 'producerRole', 'packet', 'task', 'worktree', 'branch',
       'productBaseHead', 'productHead', 'workflowHead', 'candidateHead',
-      'productChangedPaths', 'workflowChangedPaths', 'checks', 'productAttribution', 'pr', 'carrierLineage',
+      'productChangedPaths', 'workflowChangedPaths', 'requiredCheckEvidenceContract', 'checks', 'productAttribution', 'pr', 'carrierLineage',
       'outcome', 'disposition', 'blocker', 'freshness', 'digest',
     ], 'role return', findings);
     // A closed-shape failure is the root cause. Continuing into children would
@@ -2492,7 +2508,13 @@ export function validateRoleReturn(value) {
     if (productChangedPaths && workflowChangedPaths && productChangedPaths.some(path => workflowChangedPaths.includes(path))) {
       findings.malformed('role return productChangedPaths and workflowChangedPaths must be disjoint');
     }
-    if (has('checks')) validateChecks(value.checks, findings);
+    if (value.requiredCheckEvidenceContract !== REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION) findings.malformed(`role return requiredCheckEvidenceContract must be ${REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION}`);
+    if (has('checks')) validateChecks(
+      value.checks,
+      findings,
+      'role return',
+      value.requiredCheckEvidenceContract
+    );
     if (has('carrierLineage') && exactKeys(value.carrierLineage, [
       'dispatchConsumptionDigest', 'evidenceMutationReceiptDigests',
     ], 'role return carrierLineage', findings)) {
@@ -2556,6 +2578,18 @@ export function validateRoleReturn(value) {
            typeof value.blocker.evidence.detail !== 'string' || !value.blocker.evidence.detail.trim())) {
         findings.malformed('blocked role return requires typed blocker evidence');
       }
+      // A cancellation claim is evidence-bound, never inferred: the blocker
+      // must name the cancellation-provenance contract and the exact digest of
+      // the Agentic Loop-controlled observation, which the producing and
+      // receiving CLI boundaries validate against the consumed invocation.
+      if (value.blocker.category === CANCELLATION_BLOCKER_CATEGORY) {
+        if (value.blocker.evidence?.kind !== CANCELLATION_PROVENANCE_KIND ||
+            !/^sha256:agenticloop\.cancellation-provenance\.v1:[a-f0-9]{64}$/.test(String(value.blocker.evidence?.detail ?? ''))) {
+          findings.malformed('a cancellation-blocked role return must carry the exact cancellation-provenance evidence kind and observation digest');
+        }
+      } else if (value.blocker.evidence?.kind === CANCELLATION_PROVENANCE_KIND) {
+        findings.malformed('cancellation-provenance blocker evidence requires the canonical cancellation blocker category');
+      }
       if (value.blocker.resumeOwner !== value?.producerRole) findings.malformed('blocked role return resumeOwner must remain the producing role without a separate redelegation authority');
       if (typeof value.blocker.resumeTransition !== 'string' || !value.blocker.resumeTransition.trim()) findings.malformed('blocked role return resumeTransition is required');
       if (exactKeys(value.blocker.resumePreconditions, ['items', 'justification'], 'blocked role return resumePreconditions', findings)) {
@@ -2590,6 +2624,12 @@ export function createRoleReturn(input = {}) {
     kind: ROLE_RETURN_KIND,
     schemaVersion: ROLE_RETURN_SCHEMA_VERSION,
     returnId: input.returnId ?? `return:${randomUUID()}`,
+    requiredCheckEvidenceContract: input.requiredCheckEvidenceContract ?? REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION,
+    checks: Array.isArray(input.checks)
+      ? input.checks.map(check => check && typeof check === 'object' && !Array.isArray(check)
+        ? { ...check }
+        : check)
+      : input.checks,
   };
   value.digest = semanticDigest(`agenticloop.role-return.v${ROLE_RETURN_SCHEMA_VERSION}`, projection(value));
   const checked = validateRoleReturn(value);
@@ -2731,9 +2771,24 @@ function validateReturnAgainstCurrent({
   for (const key of ['productChangedPaths', 'workflowChangedPaths', 'productAttribution', 'pr', 'carrierLineage']) {
     if (!sameCanonical(wire[key], repositoryEvidence?.[key])) findings.changed(`role return ${key} does not match refetched repository evidence`);
   }
-  const wireChecks = validateRequiredCheckEvidence(wire.checks);
-  const repositoryChecks = validateRequiredCheckEvidence(repositoryEvidence?.checks, { label: 'repository evidence' });
-  if (!wireChecks.ok || !repositoryChecks.ok || !sameCanonical(wireChecks.checks, repositoryChecks.checks)) {
+  // Repository evidence carries the baseline observation projection only. The
+  // wire return uses the packet-bound current grammar, whose execution-artifact
+  // references are validated separately at the CLI boundary that can read them.
+  const wireChecks = validateRequiredCheckEvidence(wire.checks, {
+    contractVersion: wire.requiredCheckEvidenceContract,
+  });
+  const repositoryChecks = validateRequiredCheckEvidence(repositoryEvidence?.checks, {
+    label: 'repository evidence',
+  });
+  const stableCheckObservations = checks => Array.isArray(checks)
+    ? checks.map(check => {
+        if (!check || typeof check !== 'object' || Array.isArray(check)) return check;
+        const { executionEvidence: _executionEvidence, ...observation } = check;
+        return observation;
+      })
+    : null;
+  if (!wireChecks.ok || !repositoryChecks.ok ||
+      !sameCanonical(stableCheckObservations(wireChecks.checks), repositoryChecks.checks)) {
     findings.changed('role return checks do not match refetched repository evidence by stable required-check id');
   }
   // Files-backend returns are verified against durable Git state, never
@@ -2802,7 +2857,9 @@ function validateReturnAgainstCurrent({
     }
   }
   const requiredChecks = authoritative.ok ? authoritative.binding.task.requiredChecks : packet.task.requiredChecks;
-  if (!requiredCheckEvidenceMatchesInventory(wire.checks, requiredChecks)) {
+  if (!requiredCheckEvidenceMatchesInventory(wire.checks, requiredChecks, {
+    contractVersion: packet?.task?.requiredCheckEvidenceContract,
+  })) {
     findings.negative('role return checks do not match the authoritative required-check inventory by id, kind, and identity');
   }
   const contract = taskContractDigest(snapshot.body);
@@ -2931,6 +2988,16 @@ export function receiveRoleReturn(input = {}, options = {}) {
       const findings = findingSet(command);
       findings.extend(packetValidation.findings);
       return failure(command, findings, producerDomain);
+    }
+    if (wire.requiredCheckEvidenceContract !== packet.task.requiredCheckEvidenceContract) {
+      return singleFailure(
+        command,
+        'malformed',
+        'rejected',
+        'role return required-check evidence contract does not match the authenticated dispatch packet',
+        producerDomain,
+        'role_return.invalid'
+      );
     }
     // Exception requests and blocked-result recovery are separate authority
     // edges. Reject every contradictory combination before either edge can

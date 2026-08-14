@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createDispatchConsumption, dispatchConsumptionRelativePath } from '../../src/handoff-consumption.js';
 import { recognizeHandoff } from '../../src/handoff-recognition.js';
 import { createTaskReadinessEvidence } from '../../src/task-evidence-contract.js';
+import { produceExecutionEvidence } from '../../src/execution-evidence.js';
 import {
   createResettableDispatchFixturePool,
   closeoutCertificationFingerprint,
@@ -206,10 +207,10 @@ export function createCloseoutWorkflowDeltaFixture() {
     const prepared = prepare(fixture);
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
     const packet = prepared.packet;
-    const packetPath = join(target, '.agenticloop', 'tmp', 'T-001-dispatch.json');
+    const packetPath = '.agenticloop/tmp/T-001-dispatch.json';
     fixture.packet = packet;
     fixture.packetPath = packetPath;
-    writeFileSync(packetPath, JSON.stringify(packet, null, 2), 'utf8');
+    writeFileSync(join(target, packetPath), JSON.stringify(packet, null, 2), 'utf8');
     const recognition = recognizeHandoff({
       transition: 'role_start', expectation: {
         backend: 'files', taskId: 'T-001', roleId: 'engineer', taskContractDigest: packet.task.contractDigest,
@@ -260,10 +261,32 @@ export function createCloseoutWorkflowDeltaFixture() {
       dispatchConsumptionDigest: consumption.digest,
       evidenceMutationReceiptDigests: [],
     };
-    const returnPath = join(target, '.agenticloop', 'tmp', 'T-001-return.json');
-    const evidencePath = join(target, '.agenticloop', 'tmp', 'T-001-evidence.json');
-    writeFileSync(returnPath, JSON.stringify(readyReturn(packet, evidence), null, 2), 'utf8');
-    writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), 'utf8');
+    const executionReferences = new Map(evidence.checks.filter(check => check.kind === 'command').map(check => {
+      const [command, ...args] = check.command.split(' ');
+      const path = check.id === 'RC-1' ? '.agenticloop/tmp/evidence.json' : `.agenticloop/tmp/${check.id}-evidence.json`;
+      const execution = produceExecutionEvidence({
+        checkId: check.id, instruction: check.command, command, args,
+        carrierRoot: target, artifactWorktreeRoot: target, workingDirectory: target,
+        projectScratchRoot: join(target, '.agenticloop', 'tmp'),
+        binding: {
+          packetId: packet.packetId, packetDigest: packet.digest, invocationId: packet.assignment.invocationId,
+          taskId: 'T-001', taskContractDigest: evidence.task.taskContractDigest,
+          currentCarrierDigest: evidence.task.currentCarrierDigest, repositoryHead: workflowHead, productHead,
+        },
+      }, { run: () => ({ exitCode: 0, stdout: `${check.id} passed`, stderr: '' }) });
+      writeFileSync(join(target, path), JSON.stringify(execution, null, 2), 'utf8');
+      return [check.id, { path, digest: execution.digest }];
+    }));
+    const returnedEvidence = {
+      ...evidence,
+      checks: evidence.checks.map(check => executionReferences.has(check.id)
+        ? { ...check, executionEvidence: executionReferences.get(check.id) }
+        : check),
+    };
+    const returnPath = '.agenticloop/tmp/T-001-return.json';
+    const evidencePath = '.agenticloop/tmp/T-001-evidence.json';
+    writeFileSync(join(target, returnPath), JSON.stringify(readyReturn(packet, returnedEvidence), null, 2), 'utf8');
+    writeFileSync(join(target, evidencePath), JSON.stringify(evidence, null, 2), 'utf8');
     const verified = await runCliInProcess([
       'task', 'verify-return', 'T-001', '--packet', packetPath, '--return', returnPath,
       '--repository-evidence', evidencePath, '--target', target,

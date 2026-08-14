@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+import { produceExecutionEvidence } from '../src/execution-evidence.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 import {
   createDispatchFixture,
@@ -605,6 +606,7 @@ async function closeoutFixture(name) {
   assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
   const packet = prepared.packet;
   const packetPath = join(root, '.agenticloop', 'tmp', 'engineer-dispatch.json');
+  const packetRelPath = '.agenticloop/tmp/engineer-dispatch.json';
   writeFileSync(packetPath, JSON.stringify(packet, null, 2), 'utf8');
   const recognition = recognizeHandoff({
     transition: 'role_start',
@@ -681,14 +683,36 @@ async function closeoutFixture(name) {
     dispatchConsumptionDigest: consumption.digest,
     evidenceMutationReceiptDigests: [],
   };
-  const roleReturn = readyReturn(packet, evidence);
+  const returnedEvidence = {
+    ...evidence,
+    checks: evidence.checks.map(check => {
+      if (check.kind !== 'command') return check;
+      const [command, ...args] = check.command.split(' ');
+      const path = check.id === 'RC-1' ? '.agenticloop/tmp/evidence.json' : `.agenticloop/tmp/${check.id}-evidence.json`;
+      const execution = produceExecutionEvidence({
+        checkId: check.id, instruction: check.command, command, args,
+        carrierRoot: root, artifactWorktreeRoot: root, workingDirectory: root,
+        projectScratchRoot: join(root, '.agenticloop', 'tmp'),
+        binding: {
+          packetId: packet.packetId, packetDigest: packet.digest, invocationId: packet.assignment.invocationId,
+          taskId: 'T-001', taskContractDigest: evidence.task.taskContractDigest,
+          currentCarrierDigest: evidence.task.currentCarrierDigest, repositoryHead: workflowHead, productHead,
+        },
+      }, { run: () => ({ exitCode: 0, stdout: `${check.id} passed`, stderr: '' }) });
+      writeFileSync(join(root, path), JSON.stringify(execution, null, 2), 'utf8');
+      return { ...check, executionEvidence: { path, digest: execution.digest } };
+    }),
+  };
+  const roleReturn = readyReturn(packet, returnedEvidence);
   const returnPath = join(root, '.agenticloop', 'tmp', 'engineer-return.json');
+  const returnRelPath = '.agenticloop/tmp/engineer-return.json';
   const evidencePath = join(root, '.agenticloop', 'tmp', 'engineer-evidence.json');
+  const evidenceRelPath = '.agenticloop/tmp/engineer-evidence.json';
   writeFileSync(returnPath, JSON.stringify(roleReturn, null, 2), 'utf8');
   writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), 'utf8');
   const verified = await runCliInProcess([
-    'task', 'verify-return', 'T-001', '--packet', packetPath, '--return', returnPath,
-    '--repository-evidence', evidencePath, '--target', root,
+    'task', 'verify-return', 'T-001', '--packet', packetRelPath, '--return', returnRelPath,
+    '--repository-evidence', evidenceRelPath, '--target', root,
   ], {
     operatorTrustRoot: fixture.operatorTrustRoot,
     hostAuthority: protectedHostBoundary(fixture.trust),

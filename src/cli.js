@@ -155,6 +155,8 @@ import {
   promptModelSettingsInteractive,
 } from './configure-models.js';
 import { printAdapterDiscovery, printDoctor } from './adapter-discovery.js';
+import { lifecycleOrientationSnapshot } from './lifecycle-orientation.js';
+import { diagnoseLifecycleCompatibility, compatibilityMessage } from './lifecycle-compatibility.js';
 import { setup } from './setup.js';
 import { removeAgenticLoop } from './remove.js';
 import { applyGuidance, checkGuidance, removeGuidance } from './guidance.js';
@@ -518,6 +520,11 @@ async function cmdInit(args, io) {
   const adapter = Array.isArray(opts.adapter) ? opts.adapter[0] : opts.adapter;
   const setup = Boolean(opts.setup);
   const guidanceEnabled = !opts.noAgentsGuidance && opts.agentsGuidance !== 'off' && opts.agentsGuidance !== false;
+  const compatibility = diagnoseLifecycleCompatibility(target);
+  if (compatibility.length > 0) {
+    for (const finding of compatibility) io.err(`  ERROR: ${finding.path}: ${compatibilityMessage(finding)}`);
+    return 1;
+  }
 
   if (opts.updateAssets) {
     io.err("init --update-assets has been removed. Use 'agenticloop update' instead.");
@@ -594,6 +601,11 @@ async function cmdInit(args, io) {
 async function cmdUpdate(args, io) {
   const { opts } = parseCommandArgs('update', COMMAND_REGISTRY.update, args);
   const target = resolveCliTarget(io, opts.target);
+  const compatibility = diagnoseLifecycleCompatibility(target);
+  if (compatibility.length > 0) {
+    for (const finding of compatibility) io.err(`  ERROR: ${finding.path}: ${compatibilityMessage(finding)}`);
+    return 1;
+  }
   const configResult = loadOptionalAlConfig(target);
   if (configResult.error) {
     io.err(`  ERROR: ${configResult.error}`);
@@ -2182,7 +2194,7 @@ async function cmdTaskBody(args, io) {
     // Requesting in-progress is a role start on both carriers, even when the
     // durable status is already current. Recognition and one-time consumption
     // precede the separate decision whether a carrier write is necessary.
-    if (toStatus === 'in-progress' && sub !== 'evidence') {
+    if (toStatus === 'in-progress' && sub === 'transition') {
       const identity = resolveGitHubTaskIdentityStrict({ body: current.body, number: current.issue });
       const taskId = identity.ok ? identity.identity?.taskId ?? null : null;
       const contract = taskContractDigest(current.body);
@@ -2476,6 +2488,36 @@ async function cmdTaskBody(args, io) {
         receiptPath,
       };
     }
+    if (result.ok && !result.dryRun && protectedTransition === 'acceptance') {
+      const identity = resolveGitHubTaskIdentityStrict({ body: current.body, number: current.issue }).identity;
+      const contract = taskContractDigest(current.body);
+      const lineage = resolveCarrierLineage(target, identity?.taskId, {
+        backend: 'github', taskContractDigest: contract.digest, currentCarrierDigest: current.digest,
+      });
+      const resultingCarrierDigest = result.receipt?.resultingDigest ?? result.remote?.digest;
+      if (!identity?.taskId || !contract.ok || !lineage.ok || typeof resultingCarrierDigest !== 'string') {
+        return printGateResult(`task-body ${sub}`, {
+          ...result, ok: false,
+          errors: ['Accepted GitHub transition did not retain the required pre-transition carrier lineage.'],
+          recovery: 'Restore the recognized return lineage before retrying acceptance.',
+        }, asJson, io);
+      }
+      const receipt = createCarrierMutationReceipt({
+        receiptId: `task-mutation:${randomUUID()}`, backend: 'github', task: { id: identity.taskId, carrier: `issue:${current.issue}` },
+        taskContractDigest: contract.digest, dispatchCarrierDigest: lineage.dispatchCarrierDigest,
+        priorCarrierDigest: current.digest, currentCarrierDigest: resultingCarrierDigest,
+        mutationClass: 'acceptance_transition', ownedFields: ['status'], changedFields: ['status'],
+        producer: {
+          workflowRole: 'maintainer', assuranceGrade: 'host_receipt', invocationId: lineage.dispatchConsumption.invocationId,
+          workUnitIdentity: lineage.dispatchConsumption.workUnitIdentity, repositoryIdentity: lineage.dispatchConsumption.repositoryIdentity,
+        },
+        predecessor: {
+          kind: lineage.receipts.length === 0 ? 'dispatch_consumption' : 'task_mutation_receipt',
+          digest: lineage.receipts.length === 0 ? lineage.dispatchConsumption.digest : lineage.receipts.at(-1).digest,
+        },
+      });
+      atomicWriteUtf8(join(target, carrierMutationRelativePath(receipt)), `${JSON.stringify(receipt, null, 2)}\n`);
+    }
     if (asJson) {
       return printGateResult(
         `task-body ${sub}`,
@@ -2580,7 +2622,13 @@ async function cmdGithubReviewPrepare(args, io) {
   const target = resolveCliTarget(io, opts.target);
   try {
     if (!opts.pr) return printGateResult('github-review-prepare', commandFailure('github-review-prepare', new CliUsageError('github-review-prepare requires --pr <number>'), 'usage', {}, target), asJson, io, EXIT_USAGE);
-    const result = runGitHubReviewPrepare({ ...opts, packet: opts.packet ? resolveCliTarget(io, opts.packet) : undefined, target, io });
+    const result = runGitHubReviewPrepare({
+      ...opts,
+      packet: opts.packet ? resolveCliTarget(io, opts.packet) : undefined,
+      commandRunner: io.ghCommandRunner ?? defaultGhCommandRunner,
+      target,
+      io,
+    });
     if (asJson) return printGateResult('github-review-prepare', result, true, io);
     const code = printGateResult('github-review-prepare', result, false, io);
     if (result.ok) io.out(JSON.stringify(result.packet, null, 2));
@@ -3157,6 +3205,10 @@ async function cmdDoctor(args, io) {
 async function cmdStatus(args, io) {
   const { opts } = parseCommandArgs('status', COMMAND_REGISTRY.status, args);
   const target = resolveCliTarget(io, opts.target);
+  if (opts.json) {
+    io.out(JSON.stringify(lifecycleOrientationSnapshot(target, { io }), null, 2));
+    return 0;
+  }
   printAdapterDiscovery(target, io);
   io.out('Task state: run "agenticloop task list" to inspect files-backed task records.');
   return 0;

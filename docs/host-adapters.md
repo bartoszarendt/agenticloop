@@ -10,6 +10,15 @@ into host-native artifacts (for example `.opencode/agents/*.md`,
 Host-native output is generated shim material. The shim directories are not the
 source of truth.
 
+Host UI status, messages, opaque handles, and cancellation notifications are
+transport observations, not Agentic Loop role returns. The ordinary public
+handoff uses target-relative CLI artifacts: `task prepare-dispatch` with
+`--host`, `--role engineer`, `--output`, and `--json`; guarded role start;
+`task check-evidence-init`/`task check-evidence-update`; `task prepare-return`;
+then `task verify-return --from-current-repository` before review. Hosts and
+agents must not inspect internals, hand-author JSON/digests, substitute those
+observations for a return, or infer cancellation from host status alone.
+
 Adapters are status-bearing in `agenticloop.json` so downstream projects can
 see what is supported and what is reserved.
 

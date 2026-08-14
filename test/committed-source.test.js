@@ -46,9 +46,8 @@ describe('committed attributed source verification', () => {
       ok: true,
       path: 'evidence/dependencies.json',
     });
-    const absolute = isAbsolute('C:/outside.json') ? 'C:/outside.json' : '/outside.json';
     for (const path of [
-      '', absolute, '/outside.json', '../outside.json', 'evidence/../outside.json',
+      '', '/outside.json', 'C:/outside.json', '../outside.json', 'evidence/../outside.json',
       './evidence.json', 'evidence//dependencies.json', 'evidence\\dependencies.json',
       'evidence/',
     ]) {

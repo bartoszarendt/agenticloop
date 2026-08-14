@@ -107,6 +107,28 @@ describe('shipped adapter activation projection', () => {
 
 describe('production planner activation surfaces', () => {
   const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const adapterIds = {
+    opencode: OPENCODE_ACTIVATION_ADAPTER_ID,
+    'claude-code': CLAUDE_CODE_ACTIVATION_ADAPTER_ID,
+    codex: CODEX_ACTIVATION_ADAPTER_ID,
+    copilot: COPILOT_ACTIVATION_ADAPTER_ID,
+    cursor: CURSOR_ACTIVATION_ADAPTER_ID,
+  };
+
+  function normalizedDeclaration(text) {
+    return text.replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+
+  function assertTypedUnsupportedActivation(text, adapterId, label) {
+    const declaration = normalizedDeclaration(locateAdapterSlot(text, 'activation_capability').inner);
+    assert.match(declaration, new RegExp(`activation adapter:\\s*${escape(adapterId.toLowerCase())}\\.`), label);
+    assert.match(declaration, /activation capture capability:\s*unsupported\./, label);
+    assert.match(
+      declaration,
+      /model-visible prompt or command text is advisory only and must never be serialized as activation proof\./,
+      label
+    );
+  }
 
   it('all five adapters fill both slots through the shared production planner', () => {
     const target = mkdtempSync(join(temp, 'planner-target-'));
@@ -181,9 +203,9 @@ describe('production planner activation surfaces', () => {
       const init = await runCliInProcess(['init', '--adapter', adapter, '--target', target]);
       assert.equal(init.status, 0, `${adapter}: ${init.stderr}`);
       const delegation = readFileSync(join(target, 'agenticloop', 'skills', 'role-delegation', 'SKILL.md'), 'utf8');
-      assert.match(delegation, /task status <id> in-progress --dispatch-packet <packet>/, adapter);
+      assert.match(delegation, /task status <id> in-progress --dispatch-packet <packet-path>/, adapter);
       assert.match(delegation, /task verify-return/, adapter);
-      assert.match(delegation, /missing, stale, consumed, already-current, or noted starts fail closed without\s+fresh packet/, adapter);
+      assert.match(delegation, /missing, stale, consumed, already-current, or noted starts fail closed without\s+a\s+fresh packet/i, adapter);
       for (const relPath of relPaths) {
         const surfacePath = join(target, ...relPath.split('/'));
         assert.ok(existsSync(surfacePath), `${adapter} must render ${relPath}`);
@@ -191,6 +213,7 @@ describe('production planner activation surfaces', () => {
         for (const slotId of ADAPTER_SLOT_IDS) {
           assert.ok(locateAdapterSlot(text, slotId).inner.trim(), `${relPath} slot '${slotId}' must exist once with content`);
         }
+        assertTypedUnsupportedActivation(text, adapterIds[adapter], relPath);
         assert.match(text, /Activation capture capability: `unsupported`/, relPath);
         assert.match(text, /advisory/i, relPath);
         assert.doesNotMatch(text, /\$ARGUMENTS|\$1|\$2/, relPath);

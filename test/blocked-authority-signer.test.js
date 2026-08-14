@@ -54,6 +54,7 @@ function blockedReturn() {
       outcome: 'blocked',
       exitCode: 1,
       evidence: 'host state prevents execution',
+      executionEvidence: null,
     }],
     productAttribution: {
       range: { base: FULL_SHA_A, head: FULL_SHA_B },

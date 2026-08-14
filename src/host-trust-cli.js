@@ -19,8 +19,8 @@
  * - Nothing here writes into the target repository.
  */
 
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, chmodSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readFileSync, chmodSync } from 'node:fs';
+import { isAbsolute, parse, relative, resolve } from 'node:path';
 
 import { CliUsageError, EXIT_USAGE, createIo, resolveCliTarget } from './cli-io.js';
 import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
@@ -41,20 +41,13 @@ import {
   VerificationContextMalformedError,
 } from './public-error.js';
 import { resolveEffectiveActivationPolicy } from './activation-resolution.js';
+import { displayPath, isPathOutside, pathIdentity } from './path-identity.js';
 
 const HOST_TRUST_SUBCOMMANDS = ['status', 'register', 'rotate', 'revoke'];
 const CAPABILITY_STATES = ['supported', 'unsupported'];
 
-function canonicalPath(path) {
-  const resolved = resolve(String(path));
-  if (!existsSync(resolved)) return resolved;
-  const nativeRealpath = realpathSync.native ?? realpathSync;
-  return nativeRealpath(resolved);
-}
-
 function outsideTarget(target, path) {
-  const fromTarget = relative(canonicalPath(target), canonicalPath(path));
-  return Boolean(fromTarget) && (fromTarget.startsWith('..') || isAbsolute(fromTarget));
+  return isPathOutside(path, target);
 }
 
 /**
@@ -69,7 +62,7 @@ function resolveStorePath(target, io) {
   if (!outsideTarget(target, root)) {
     throw new VerificationContextMalformedError('operator host trust root must be outside the target repository');
   }
-  return { root: canonicalPath(root), path: operatorTrustStorePath(target, root) };
+  return { root: displayPath(root), path: operatorTrustStorePath(target, root) };
 }
 
 function readStoreDocument(target, path) {
@@ -121,9 +114,47 @@ function assertLoadable(document, target) {
   return parsed;
 }
 
-function writeStore(path, document) {
+function assertNoLinkComponents(path, label) {
+  const absolute = resolve(path);
+  const parsed = parse(absolute);
+  let current = parsed.root;
+  for (const segment of relative(parsed.root, absolute).split(/[\\/]/).filter(Boolean)) {
+    current = resolve(current, segment);
+    const entry = lstatSync(current, { throwIfNoEntry: false });
+    if (!entry) break;
+    if (entry.isSymbolicLink()) {
+      throw new VerificationContextMalformedError(`${label} must not contain a symbolic link or junction component`);
+    }
+  }
+}
+
+/**
+ * Revalidate a materialized trust root immediately before its destination is
+ * atomically updated. A missing root is only a provisional lexical fact: it
+ * can be replaced with a link between the initial acceptance and mkdir/write.
+ */
+export function assertSafeHostTrustStoreWritePath(target, root, path) {
+  const canonicalTarget = pathIdentity(target).authorityPath;
+  const canonicalRoot = pathIdentity(root).authorityPath;
+  const canonicalPath = pathIdentity(path).authorityPath;
+  const rootToDestination = relative(resolve(root), resolve(path));
+  if (!rootToDestination || rootToDestination === '..' || rootToDestination.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rootToDestination)) {
+    throw new VerificationContextMalformedError('host trust destination must remain below the operator trust root');
+  }
+  if (!isPathOutside(canonicalRoot, canonicalTarget) || !isPathOutside(canonicalPath, canonicalTarget)) {
+    throw new VerificationContextMalformedError('operator host trust root and destination must remain outside the target repository');
+  }
+  assertNoLinkComponents(root, 'operator host trust root');
+  assertNoLinkComponents(path, 'host trust destination');
+}
+
+function writeStore(target, root, path, document) {
+  // First check preserves the normal clear error for a pre-existing link.
+  assertSafeHostTrustStoreWritePath(target, root, path);
   const directory = resolve(path, '..');
   mkdirSync(directory, { recursive: true });
+  // This second check closes the missing-root materialization window.
+  assertSafeHostTrustStoreWritePath(target, root, path);
   if (process.platform !== 'win32') {
     try { chmodSync(directory, 0o700); } catch { /* reported, never claimed */ }
   }
@@ -177,7 +208,7 @@ export async function cmdHostTrust(args, io = createIo()) {
   const command = `host-trust ${sub}`;
 
   try {
-    const { path } = resolveStorePath(target, io);
+    const { root, path } = resolveStorePath(target, io);
     const document = readStoreDocument(target, path);
 
     if (sub === 'status') {
@@ -269,7 +300,7 @@ export async function cmdHostTrust(args, io = createIo()) {
         }
         return 0;
       }
-      writeStore(path, candidate);
+      writeStore(target, root, path, candidate);
       const report = { command, storePath: path, adapter: entry, rotated: sub === 'rotate' };
       if (asJson) io.out(JSON.stringify(report, null, 2));
       else {
@@ -294,7 +325,7 @@ export async function cmdHostTrust(args, io = createIo()) {
         else io.out(`Dry run: would revoke adapter ${adapterId} in ${path}`);
         return 0;
       }
-      writeStore(path, candidate);
+      writeStore(target, root, path, candidate);
       if (asJson) io.out(JSON.stringify({ command, storePath: path, adapterId, revoked: true }, null, 2));
       else {
         io.out(`Revoked host adapter ${adapterId} from ${path}.`);

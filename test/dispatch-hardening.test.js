@@ -15,6 +15,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+import { produceExecutionEvidence } from '../src/execution-evidence.js';
 import {
   activationCaptureDisposition,
   createDecompositionProvenance,
@@ -1063,6 +1064,7 @@ describe('OpenCode activation transport corruption regression', () => {
 });
 
 describe('role-return core boundary authenticates evidence itself', () => {
+  let blockedExecutionCounter = 0;
   async function committed(name) {
     const fixture = await createDispatchFixture(temp, name);
     const prepared = prepare(fixture);
@@ -1130,6 +1132,30 @@ describe('role-return core boundary authenticates evidence itself', () => {
   }
 
   function blockedRoleReturn(packet, evidence) {
+    const returnedEvidence = {
+      ...evidence,
+      checks: evidence.checks.map(check => {
+        if (check.kind !== 'command' || check.outcome !== 'passed') return { ...check, executionEvidence: null };
+        const [command, ...args] = check.command.split(' ');
+        const path = `.agenticloop/tmp/${check.id}-execution-evidence-${blockedExecutionCounter += 1}.json`;
+        const execution = produceExecutionEvidence({
+          checkId: check.id, instruction: check.command, command, args,
+          carrierRoot: evidence.worktree, artifactWorktreeRoot: evidence.worktree, workingDirectory: evidence.worktree,
+          projectScratchRoot: join(evidence.worktree, '.agenticloop', 'tmp'),
+          binding: {
+            packetId: packet.packetId, packetDigest: packet.digest, invocationId: packet.assignment.invocationId,
+            taskId: packet.task.id, taskContractDigest: evidence.task.taskContractDigest,
+            currentCarrierDigest: evidence.task.currentCarrierDigest, repositoryHead: evidence.workflowHead, productHead: evidence.productHead,
+          },
+        }, { run: () => ({
+          exitCode: 0, stdout: `${check.id} passed`, stderr: '', logicalCommand: command,
+          resolvedExecutable: command, wrapperKind: 'native', wrapperProgram: null, wrapperArgs: [],
+        }) });
+        mkdirSync(join(evidence.worktree, '.agenticloop', 'tmp'), { recursive: true });
+        writeFileSync(join(evidence.worktree, path), JSON.stringify(execution, null, 2), 'utf8');
+        return { ...check, executionEvidence: { path, digest: execution.digest } };
+      }),
+    };
     return createRoleReturn({
       producerRole: 'engineer',
       packet: { packetId: packet.packetId, digest: packet.digest },
@@ -1142,7 +1168,7 @@ describe('role-return core boundary authenticates evidence itself', () => {
       candidateHead: evidence.candidateHead,
       productChangedPaths: evidence.productChangedPaths,
       workflowChangedPaths: evidence.workflowChangedPaths,
-      checks: evidence.checks,
+      checks: returnedEvidence.checks,
       productAttribution: evidence.productAttribution,
       carrierLineage: evidence.carrierLineage,
       pr: evidence.pr,

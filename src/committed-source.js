@@ -1,11 +1,12 @@
 /** Verify one repository-relative file as exact, committed, attributed evidence. */
 
 import { lstatSync, readFileSync } from 'node:fs';
-import { isAbsolute, resolve, sep } from 'node:path';
+import { resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { evaluateCommitAttribution } from './commit-attribution.js';
 import { GIT_OBJECT_ID_RE } from './git-oid.js';
+import { isAbsoluteOrDriveQualifiedPath } from './path-identity.js';
 
 function git(target, args, encoding = 'utf8') {
   return spawnSync('git', args, { cwd: target, encoding });
@@ -14,7 +15,7 @@ function git(target, args, encoding = 'utf8') {
 /** Require the canonical forward-slash repository-relative wire form. */
 export function validateCommittedSourcePath(value) {
   const path = typeof value === 'string' ? value : '';
-  if (!path || isAbsolute(path) || path.includes('\\') || path.startsWith('/') || path.endsWith('/')) {
+  if (!path || isAbsoluteOrDriveQualifiedPath(path) || path.includes('\\') || path.endsWith('/')) {
     return { ok: false, error: 'source path must be a non-empty canonical repository-relative path using forward slashes' };
   }
   const segments = path.split('/');

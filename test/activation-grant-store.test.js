@@ -11,6 +11,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -29,10 +30,15 @@ import {
 } from '../src/activation-policy.js';
 import {
   createActivationSignatureVerifier,
+  assertSafeOperatorActivationKeyWritePath,
+  assertSafeExternalActivationRevocationPath,
+  externalActivationRevocationPath,
   loadOperatorActivationKey,
   operatorActivationKeyPath,
   provisionOperatorActivationKey,
+  readExternalActivationRevocations,
   signOperatorActivationPayload,
+  writeExternalActivationRevocation,
 } from '../src/activation-trust.js';
 import {
   ACTIVATION_STORE_ROOT,
@@ -91,6 +97,39 @@ describe('operator activation material', () => {
     assert.match(loaded.errors[0], /outside the target repository/);
   });
 
+  it('refuses a preexisting external activation root implemented as a link', t => {
+    const target = mkdtempSync(join(temp, 'key-link-target-'));
+    const root = join(temp, 'key-link-root');
+    const outside = mkdtempSync(join(temp, 'key-link-outside-'));
+    try {
+      symlinkSync(outside, root, 'dir');
+    } catch (error) {
+      if (error?.code === 'EPERM' || error?.code === 'EACCES') return t.skip(`symbolic links unavailable: ${error.code}`);
+      throw error;
+    }
+    const provisioned = provisionOperatorActivationKey(target, { operatorActivationRoot: root });
+    assert.equal(provisioned.ok, false);
+    assert.match(provisioned.errors.join('\n'), /symbolic link or junction/);
+    assert.equal(existsSync(operatorActivationKeyPath(target, outside)), false);
+  });
+
+  it('rejects an activation root replaced by a link during key-root materialization', t => {
+    const target = mkdtempSync(join(temp, 'key-race-target-'));
+    const root = join(temp, 'key-race-root');
+    const destination = operatorActivationKeyPath(target, root);
+    const outside = mkdtempSync(join(temp, 'key-race-outside-'));
+    assert.doesNotThrow(() => assertSafeOperatorActivationKeyWritePath(target, root, destination));
+    mkdirSync(root, { recursive: true });
+    try {
+      rmSync(root, { recursive: true });
+      symlinkSync(outside, root, 'dir');
+    } catch (error) {
+      if (error?.code === 'EPERM' || error?.code === 'EACCES') return t.skip(`symbolic links unavailable: ${error.code}`);
+      throw error;
+    }
+    assert.throws(() => assertSafeOperatorActivationKeyWritePath(target, root, destination), /symbolic link or junction/);
+  });
+
   it('fails closed on a key bound to another repository', () => {
     const target = mkdtempSync(join(temp, 'mismatch-target-'));
     const other = mkdtempSync(join(temp, 'mismatch-other-'));
@@ -137,6 +176,60 @@ describe('operator activation material', () => {
     assert.equal(createActivationSignatureVerifier({ operatorKey: foreign })(payload, signature, 'operator_confirmed'), false);
     // The operator key never satisfies a host_signed claim.
     assert.equal(createActivationSignatureVerifier({ operatorKey: key })(payload, signature, 'host_signed'), false);
+  });
+});
+
+describe('external activation revocation authority', () => {
+  function revocationFor(target) {
+    return createActivationRevocation({ grant: grantFor({ repositoryIdentity: targetRepositoryIdentity(target) }) });
+  }
+
+  it('refuses an external revocation root inside the target on both write and read', () => {
+    const target = mkdtempSync(join(temp, 'external-revocation-inside-target-'));
+    const root = join(target, '.agenticloop', 'operator-activation');
+    const revocation = revocationFor(target);
+    const written = writeExternalActivationRevocation(target, revocation, { operatorActivationRoot: root });
+    assert.equal(written.ok, false);
+    assert.match(written.errors.join('; '), /outside the target repository/);
+    const read = readExternalActivationRevocations(target, { operatorActivationRoot: root });
+    assert.equal(read.ok, false);
+    assert.match(read.errors.join('; '), /outside the target repository/);
+  });
+
+  it('refuses an external revocation root implemented as a link', t => {
+    const target = mkdtempSync(join(temp, 'external-revocation-link-target-'));
+    const root = join(temp, 'external-revocation-link-root');
+    const outside = mkdtempSync(join(temp, 'external-revocation-link-outside-'));
+    try {
+      symlinkSync(outside, root, 'dir');
+    } catch (error) {
+      if (error?.code === 'EPERM' || error?.code === 'EACCES') return t.skip(`symbolic links unavailable: ${error.code}`);
+      throw error;
+    }
+    const written = writeExternalActivationRevocation(target, revocationFor(target), { operatorActivationRoot: root });
+    assert.equal(written.ok, false);
+    assert.match(written.errors.join('; '), /symbolic link or junction/);
+    const read = readExternalActivationRevocations(target, { operatorActivationRoot: root });
+    assert.equal(read.ok, false);
+    assert.match(read.errors.join('; '), /symbolic link or junction/);
+  });
+
+  it('rechecks external revocation authority after materialization before atomic write', t => {
+    const target = mkdtempSync(join(temp, 'external-revocation-race-target-'));
+    const root = join(temp, 'external-revocation-race-root');
+    const revocation = revocationFor(target);
+    const destination = externalActivationRevocationPath(target, revocation.revocationId, root);
+    const outside = mkdtempSync(join(temp, 'external-revocation-race-outside-'));
+    assert.doesNotThrow(() => assertSafeExternalActivationRevocationPath(target, root, destination));
+    mkdirSync(root, { recursive: true });
+    try {
+      rmSync(root, { recursive: true });
+      symlinkSync(outside, root, 'dir');
+    } catch (error) {
+      if (error?.code === 'EPERM' || error?.code === 'EACCES') return t.skip(`symbolic links unavailable: ${error.code}`);
+      throw error;
+    }
+    assert.throws(() => assertSafeExternalActivationRevocationPath(target, root, destination), /symbolic link or junction/);
   });
 });
 

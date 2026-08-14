@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createDispatchConsumption, dispatchConsumptionRelativePath } from '../../src/handoff-consumption.js';
+import { produceExecutionEvidence } from '../../src/execution-evidence.js';
 import { recognizeHandoff } from '../../src/handoff-recognition.js';
 import { createTaskReadinessEvidence } from '../../src/task-evidence-contract.js';
 import {
@@ -204,8 +205,8 @@ export function createCloseoutPlanSyncFixture() {
       assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
       const packet = prepared.packet;
       packets.set(taskId, packet);
-      const packetPath = join(target, '.agenticloop', 'tmp', `${taskId}-dispatch.json`);
-      writeFileSync(packetPath, JSON.stringify(packet, null, 2), 'utf8');
+      const packetPath = `.agenticloop/tmp/${taskId}-dispatch.json`;
+      writeFileSync(join(target, packetPath), JSON.stringify(packet, null, 2), 'utf8');
     }
     for (const [taskId, packet] of packets) {
       const taskFixture = fixture.taskFixtures.get(taskId);
@@ -259,12 +260,35 @@ export function createCloseoutPlanSyncFixture() {
         dispatchConsumptionDigest: consumption.digest,
         evidenceMutationReceiptDigests: [],
       };
-      const returnPath = join(target, '.agenticloop', 'tmp', `${taskId}-return.json`);
-      const evidencePath = join(target, '.agenticloop', 'tmp', `${taskId}-evidence.json`);
-      writeFileSync(returnPath, JSON.stringify(readyReturn(packet, evidence), null, 2), 'utf8');
-      writeFileSync(evidencePath, JSON.stringify(evidence, null, 2), 'utf8');
+      const packetPath = `.agenticloop/tmp/${taskId}-dispatch.json`;
+      const returnPath = `.agenticloop/tmp/${taskId}-return.json`;
+      const evidencePath = `.agenticloop/tmp/${taskId}-evidence.json`;
+      const executionReferences = new Map(evidence.checks.filter(check => check.kind === 'command').map(check => {
+        const [command, ...args] = check.command.split(' ');
+        const path = check.id === 'RC-1' ? '.agenticloop/tmp/evidence.json' : `.agenticloop/tmp/${check.id}-evidence.json`;
+        const execution = produceExecutionEvidence({
+          checkId: check.id, instruction: check.command, command, args,
+          carrierRoot: target, artifactWorktreeRoot: target, workingDirectory: target,
+          projectScratchRoot: join(target, '.agenticloop', 'tmp'),
+          binding: {
+            packetId: packet.packetId, packetDigest: packet.digest, invocationId: packet.assignment.invocationId,
+            taskId, taskContractDigest: evidence.task.taskContractDigest,
+            currentCarrierDigest: evidence.task.currentCarrierDigest, repositoryHead: verifiedHead, productHead,
+          },
+        }, { run: () => ({ exitCode: 0, stdout: `${check.id} passed`, stderr: '' }) });
+        writeFileSync(join(target, path), JSON.stringify(execution, null, 2), 'utf8');
+        return [check.id, { path, digest: execution.digest }];
+      }));
+      const returnedEvidence = {
+        ...evidence,
+        checks: evidence.checks.map(check => executionReferences.has(check.id)
+          ? { ...check, executionEvidence: executionReferences.get(check.id) }
+          : check),
+      };
+      writeFileSync(join(target, returnPath), JSON.stringify(readyReturn(packet, returnedEvidence), null, 2), 'utf8');
+      writeFileSync(join(target, evidencePath), JSON.stringify(evidence, null, 2), 'utf8');
       const verified = await runCliInProcess([
-        'task', 'verify-return', taskId, '--packet', join(target, '.agenticloop', 'tmp', `${taskId}-dispatch.json`),
+        'task', 'verify-return', taskId, '--packet', packetPath,
         '--return', returnPath, '--repository-evidence', evidencePath, '--target', target,
       ], { operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: protectedHostBoundary(fixture.trust) });
       assert.equal(verified.status, 0, `${verified.stdout}${verified.stderr}`);

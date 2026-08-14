@@ -15,6 +15,13 @@
 const CHECK_ID_RE = /^RC-([1-9]\d*)$/;
 const OUTCOMES = new Set(['passed', 'failed', 'blocked', 'not_run']);
 
+/**
+ * Current packets bind this contract version into their semantic digest. It is
+ * intentionally not inferred from optional per-check properties: a caller
+ * cannot remove a property to select the historical grammar.
+ */
+export const REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION = 2;
+
 function compareChecks(left, right) {
   const leftId = typeof left?.id === 'string' ? left.id : '';
   const rightId = typeof right?.id === 'string' ? right.id : '';
@@ -129,7 +136,11 @@ export function validateRequiredCheckInventory(value, { allowEmpty = false, labe
 }
 
 /** Validate the closed role-return evidence shape for required checks. */
-export function validateRequiredCheckEvidence(value, { allowEmpty = false, label = 'role return' } = {}) {
+export function validateRequiredCheckEvidence(value, {
+  allowEmpty = false,
+  label = 'role return',
+  contractVersion = null,
+} = {}) {
   const errors = [];
   if (!Array.isArray(value)) {
     return { ok: false, checks: [], errors: [`${label} checks must be an array`] };
@@ -146,7 +157,10 @@ export function validateRequiredCheckEvidence(value, { allowEmpty = false, label
       continue;
     }
     const common = ['id', 'kind', 'outcome', 'evidence', 'exitCode'];
-    const expected = check.kind === 'command' ? [...common, 'command'] : check.kind === 'manual' ? [...common, 'instruction'] : common;
+    const currentContract = contractVersion === REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION;
+    const expected = check.kind === 'command'
+      ? [...common, 'command', ...(currentContract ? ['executionEvidence'] : [])]
+      : check.kind === 'manual' ? [...common, 'instruction'] : common;
     const missing = expected.filter(key => !Object.hasOwn(check, key));
     const unknown = Object.keys(check).filter(key => !expected.includes(key));
     if (missing.length) errors.push(`${label} check is missing field(s): ${missing.join(', ')}`);
@@ -169,6 +183,21 @@ export function validateRequiredCheckEvidence(value, { allowEmpty = false, label
         errors.push(`blocked ${label} command checks require a non-zero exitCode`);
       }
       if (check.outcome === 'not_run' && check.exitCode !== -1) errors.push(`not_run ${label} command checks require exitCode -1`);
+      // Current evidence has an authenticated packet-selected contract. Passed
+      // observations bind a closed artifact reference; all other outcomes carry
+      // null so stale success evidence cannot be reused after a failure.
+      if (currentContract && check.executionEvidence !== null) {
+        const reference = check.executionEvidence;
+        if (typeof reference !== 'object' || Array.isArray(reference) ||
+            Object.keys(reference).length !== 2 ||
+            typeof reference.path !== 'string' || !reference.path.trim() ||
+            !/^sha256:agenticloop\.execution-evidence\.v3:[a-f0-9]{64}$/.test(String(reference.digest ?? ''))) {
+          errors.push(`${label} command check executionEvidence must be null or a closed { path, digest } schema-v3 artifact reference`);
+        }
+      }
+      if (currentContract && check.outcome !== 'passed' && check.executionEvidence !== null) {
+        errors.push(`${label} non-passed command checks must carry null executionEvidence`);
+      }
     }
     if (check.kind === 'manual') {
       if (typeof check.instruction !== 'string' || !check.instruction.trim()) errors.push(`${label} manual check instruction is required`);
@@ -185,8 +214,8 @@ export function validateRequiredCheckEvidence(value, { allowEmpty = false, label
 }
 
 /** Compare returned evidence with the packet/current contract by stable RC id. */
-export function requiredCheckEvidenceMatchesInventory(evidence, inventory) {
-  const checked = validateRequiredCheckEvidence(evidence);
+export function requiredCheckEvidenceMatchesInventory(evidence, inventory, options = {}) {
+  const checked = validateRequiredCheckEvidence(evidence, options);
   if (!checked.ok || !Array.isArray(inventory)) return false;
   if (checked.checks.length !== inventory.length) return false;
   return inventory.every((required, index) => {

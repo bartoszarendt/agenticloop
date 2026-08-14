@@ -4,13 +4,36 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, copyFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execSync, spawnSync } from 'node:child_process';
 import { loadJsonFile } from '../src/json.js';
 import { seedTargetLayout } from './helpers/layout-fixture.js';
+import { validateLifecycleOrientationSnapshot } from '../src/lifecycle-orientation.js';
+import { runCliInProcess } from './helpers/run-cli.js';
+import { createDispatchFixture } from './helpers/dispatch-fixture.js';
+import { interactiveOptions } from './helpers/activation-fixture.js';
+import {
+  CLI_OPERATOR_PRODUCER_ID,
+  OPERATOR_CONFIRMATION_PHRASE,
+  activationGrantSignaturePayload,
+  createActivationGrant,
+  createActivationRevocation,
+  createTaskActivationBinding,
+  taskActivationBindingSignaturePayload,
+} from '../src/activation-grant.js';
+import { loadOperatorActivationKey, signOperatorActivationPayload } from '../src/activation-trust.js';
+import {
+  activationScopeSummaryDigest,
+  bindingRecordPath,
+  grantRecordPath,
+  writeActivationRecords,
+  writeActivationRevocation,
+} from '../src/activation-store.js';
+import { targetRepositoryIdentity } from '../src/host-trust.js';
+import { taskContractDigest } from '../src/task-contract-baseline.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BIN = join(REPO_ROOT, 'bin', 'agenticloop.js');
@@ -109,7 +132,67 @@ function status(target) {
   return execSync(`node "${BIN}" status --target "${target}"`, { encoding: 'utf-8' });
 }
 
+function statusJson(target) {
+  return JSON.parse(execSync(`node "${BIN}" status --json --target "${target}"`, { encoding: 'utf-8' }));
+}
+
 describe('status CLI', () => {
+  it('emits one deterministic fail-closed orientation snapshot', () => {
+    const d = makeTarget();
+    const first = statusJson(d);
+    const second = statusJson(d);
+    assert.deepEqual(first, second);
+    assert.equal(first.kind, 'agenticloop.lifecycle-orientation');
+    assert.equal(first.schemaVersion, 2);
+    assert.equal(first.state, 'no_work');
+    assert.deepEqual(Object.keys(first.legalNextAction).sort(), ['command', 'taskId', 'type']);
+    assert.equal(first.activationScope.source, '.agenticloop/activations');
+    assert.equal(first.operatorAuthorizedSet.source, 'canonical_activation_resolution');
+    assert.deepEqual(validateLifecycleOrientationSnapshot(first), { ok: true, errors: [] });
+  });
+
+  it('rejects snapshots with an unvalidated nested authority field', () => {
+    const snapshot = statusJson(makeTarget());
+    snapshot.operatorAuthorizedSet.bindings = [{ taskId: 'T-001', bindingId: null, grantId: null, path: 'x', injected: true }];
+    assert.equal(validateLifecycleOrientationSnapshot(snapshot).ok, false);
+  });
+
+  it('rejects adversarial types, enum values, and adapter output in closed snapshots', () => {
+    const snapshot = statusJson(makeTarget());
+    for (const mutate of [
+      value => { value.target = 7; },
+      value => { value.roots.working = null; },
+      value => { value.legalNextAction.type = 'run_anything'; },
+      value => { value.adapters = { adapters: [{ host: 'x' }], nextSteps: [] }; },
+    ]) {
+      const candidate = structuredClone(snapshot);
+      mutate(candidate);
+      assert.equal(validateLifecycleOrientationSnapshot(candidate).ok, false);
+    }
+  });
+
+  it('does not report no_work when a task carrier is incomplete', () => {
+    const d = makeTarget();
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(join(d, '.agenticloop', 'tasks', 'T-001.md'), '---\ntask_id: T-001\n');
+    const snapshot = statusJson(d);
+    assert.equal(snapshot.state, 'incomplete');
+    assert.equal(snapshot.legalNextAction.type, 'repair_lifecycle_context');
+  });
+
+  it('keeps lint, dependency, and activation provenance distinct from operator authorization', () => {
+    const d = makeTarget();
+    mkdirSync(join(d, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(join(d, '.agenticloop', 'tasks', 'T-001.md'), [
+      '---', 'task_id: T-001', 'status: agent-ready', 'depends_on:', '  - T-999', '---', '', '# T-001: Task',
+    ].join('\n'));
+    const task = statusJson(d).tasks[0];
+    assert.equal(task.lint.state, 'invalid');
+    assert.equal(task.activationProvenance.inputDigest, null);
+    assert.ok(['missing', 'present'].includes(task.operatorAuthorization.state));
+    assert.deepEqual(task.dependencies, [{ id: 'T-999', disposition: 'missing' }]);
+  });
+
   it('reports no adapters before init', () => {
     const d = mkdtempSync(join(tmpDir, 'empty-'));
     const out = status(d);
@@ -284,5 +367,386 @@ describe('status CLI', () => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /requires one concrete adapter/);
     assert.ok(!existsSync(join(d, 'agenticloop.json')), 'init should not scaffold after rejecting setup all');
+  });
+});
+
+describe('status --json orientation scenarios', () => {
+  async function orientationFixture(name, options = {}) {
+    const fixture = await createDispatchFixture(tmpDir, name, { scaffold: true, ...options });
+    fixture.operatorTrustRoot = mkdtempSync(join(tmpDir, `${name}-trust-`));
+    fixture.operatorActivationRoot = mkdtempSync(join(tmpDir, `${name}-activation-`));
+    fixture.contractDigest = taskContractDigest(readFileSync(fixture.taskPath, 'utf8')).digest;
+    return fixture;
+  }
+
+  async function activate(fixture, taskId = 'T-001') {
+    const result = await runCliInProcess(
+      ['activate', taskId, '--json', '--target', fixture.root],
+      interactiveOptions(fixture)
+    );
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  }
+
+  async function orientation(fixture) {
+    const result = await runCliInProcess(['status', '--json', '--target', fixture.root], {
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      operatorActivationRoot: fixture.operatorActivationRoot,
+    });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const snapshot = JSON.parse(result.stdout);
+    assert.deepEqual(validateLifecycleOrientationSnapshot(snapshot), { ok: true, errors: [] });
+    return snapshot;
+  }
+
+  function signGrant(fixture, overrides = {}) {
+    const repositoryIdentity = targetRepositoryIdentity(fixture.root);
+    const operatorKey = loadOperatorActivationKey(fixture.root, {
+      operatorActivationRoot: fixture.operatorActivationRoot,
+    }).key;
+    assert.ok(operatorKey, 'the operator key must be provisioned before custom signing');
+    const issuedAt = new Date().toISOString();
+    const skeleton = createActivationGrant({
+      repositoryIdentity,
+      backend: 'files',
+      scope: { type: 'exact_tasks', taskIds: ['T-001'] },
+      assurance: 'operator_confirmed',
+      producer: { id: CLI_OPERATOR_PRODUCER_ID, channel: 'cli_interactive_confirmation' },
+      evidence: {
+        confirmedAt: issuedAt,
+        confirmationPhrase: OPERATOR_CONFIRMATION_PHRASE,
+        channel: 'cli_interactive_confirmation',
+        operatorKeyId: operatorKey.keyId,
+        scopeSummaryDigest: activationScopeSummaryDigest('orientation scenario'),
+      },
+      ...overrides,
+    });
+    return Object.freeze({
+      ...skeleton,
+      authentication: signOperatorActivationPayload(activationGrantSignaturePayload(skeleton), {
+        key: operatorKey, repositoryIdentity,
+      }),
+    });
+  }
+
+  function signBinding(fixture, grant, overrides = {}) {
+    const repositoryIdentity = targetRepositoryIdentity(fixture.root);
+    const operatorKey = loadOperatorActivationKey(fixture.root, {
+      operatorActivationRoot: fixture.operatorActivationRoot,
+    }).key;
+    const skeleton = createTaskActivationBinding({
+      grant,
+      backend: 'files',
+      taskId: 'T-001',
+      carrier: '.agenticloop/tasks/T-001.md',
+      taskContractDigest: fixture.contractDigest,
+      derivation: 'direct_operator_confirmation',
+      ...overrides,
+    });
+    return Object.freeze({
+      ...skeleton,
+      authentication: signOperatorActivationPayload(taskActivationBindingSignaturePayload(skeleton), {
+        key: operatorKey, repositoryIdentity,
+      }),
+    });
+  }
+
+  function writeActivation(fixture, grant, bindings) {
+    const written = writeActivationRecords(fixture.root, { grant, bindings });
+    assert.equal(written.ok, true, written.receipt?.errors?.join('; '));
+  }
+
+  it('reports zero candidates and no_action for an empty target', async () => {
+    const fixture = await orientationFixture('orient-zero');
+    rmSync(join(fixture.root, '.agenticloop', 'tasks', 'T-001.md'));
+    const snapshot = await orientation(fixture);
+    assert.equal(snapshot.state, 'no_work');
+    assert.equal(snapshot.candidates.length, 0);
+    assert.equal(snapshot.legalNextAction.type, 'no_action');
+    assert.equal(snapshot.legalNextAction.command, null);
+  });
+
+  it('reports exactly one valid candidate with a present authorization and a dispatch action', async () => {
+    const fixture = await orientationFixture('orient-one');
+    await activate(fixture);
+    const snapshot = await orientation(fixture);
+    assert.equal(snapshot.state, 'one_candidate');
+    assert.equal(snapshot.candidates.length, 1);
+    const authorization = snapshot.candidates[0].operatorAuthorization;
+    assert.equal(authorization.state, 'present');
+    assert.ok(authorization.bindingId && authorization.grantId, 'present authorization must name exact records');
+    assert.equal(authorization.errors.length, 0);
+    assert.equal(snapshot.legalNextAction.type, 'prepare_dispatch');
+    assert.equal(snapshot.legalNextAction.taskId, 'T-001');
+    assert.match(snapshot.legalNextAction.command, /^agenticloop task prepare-dispatch T-001 --host <host> --role engineer$/);
+  });
+
+  it('reports an active broad grant scope separately from its exact task authorization', async () => {
+    const fixture = await orientationFixture('orient-broad-scope');
+    await activate(fixture);
+    const grant = signGrant(fixture, {
+      scope: { type: 'captured_request', operatorIntentDigest: `sha256:${'b'.repeat(64)}` },
+    });
+    writeActivation(fixture, grant, [signBinding(fixture, grant)]);
+    const snapshot = await orientation(fixture);
+    assert.deepEqual(snapshot.activationScope.scopes.find(scope => scope.grantId === grant.grantId), {
+      grantId: grant.grantId,
+      repositoryIdentity: grant.repositoryIdentity,
+      assurance: grant.assurance,
+      scope: grant.scope,
+    });
+    assert.deepEqual(snapshot.operatorAuthorizedSet.bindings.map(binding => binding.taskId), ['T-001']);
+    assert.equal(snapshot.operatorAuthorizedSet.bindings[0].provenance.scope.type, 'captured_request');
+    assert.equal(snapshot.tasks[0].operatorAuthorization.state, 'present');
+  });
+
+  it('reports an active grant scope even when no exact current task binding is authorized', async () => {
+    const fixture = await orientationFixture('orient-scope-without-binding');
+    await activate(fixture);
+    rmSync(join(fixture.root, bindingRecordPath('files', 'T-001')));
+    const grant = signGrant(fixture, {
+      scope: { type: 'captured_request', operatorIntentDigest: `sha256:${'c'.repeat(64)}` },
+    });
+    writeActivation(fixture, grant, []);
+    const snapshot = await orientation(fixture);
+    assert.equal(snapshot.activationScope.scopes.some(scope => scope.grantId === grant.grantId), true);
+    assert.equal(snapshot.operatorAuthorizedSet.bindings.length, 0);
+    assert.equal(snapshot.tasks[0].operatorAuthorization.state, 'missing');
+    assert.notEqual(snapshot.legalNextAction.type, 'prepare_dispatch');
+  });
+
+  it('rejects authorized-set metadata that drifts from the canonical per-task authorization', async () => {
+    const fixture = await orientationFixture('orient-authorized-set-provenance');
+    await activate(fixture);
+    const snapshot = await orientation(fixture);
+    const mutations = [
+      entry => { entry.repositoryIdentity = 'file:tampered'; },
+      entry => { entry.assurance = 'host_signed'; },
+      entry => { entry.issuedAt = '2000-01-01T00:00:00.000Z'; },
+      entry => { entry.expiresAt = '2099-01-01T00:00:00.000Z'; },
+      entry => { entry.provenance.source = 'other'; },
+      entry => { entry.provenance.derivation = 'direct_protected_host_binding'; },
+      entry => { entry.provenance.scope = { type: 'exact_tasks', taskIds: ['T-999'], workUnitId: null, operatorIntentDigest: null }; },
+    ];
+    for (const mutate of mutations) {
+      const adversarial = structuredClone(snapshot);
+      mutate(adversarial.operatorAuthorizedSet.bindings[0]);
+      assert.equal(validateLifecycleOrientationSnapshot(adversarial).ok, false);
+    }
+    const reordered = structuredClone(snapshot);
+    reordered.operatorAuthorizedSet.bindings.push(structuredClone(reordered.operatorAuthorizedSet.bindings[0]));
+    reordered.operatorAuthorizedSet.bindings[1].taskId = 'T-000';
+    assert.equal(validateLifecycleOrientationSnapshot(reordered).ok, false);
+  });
+
+  it('reports multiple valid candidates with a select action', async () => {
+    const fixture = await orientationFixture('orient-multi', { taskIds: ['T-001', 'T-002'] });
+    await activate(fixture, 'T-001');
+    await activate(fixture, 'T-002');
+    const snapshot = await orientation(fixture);
+    assert.equal(snapshot.state, 'multiple_candidates');
+    assert.equal(snapshot.candidates.length, 2);
+    assert.ok(snapshot.candidates.every(task => task.operatorAuthorization.state === 'present'));
+    assert.equal(snapshot.legalNextAction.type, 'select_task');
+    assert.match(snapshot.legalNextAction.command, /task list --status agent-ready/);
+  });
+
+  it('reports missing activation without present authorization or a dispatch recommendation', async () => {
+    const fixture = await orientationFixture('orient-missing');
+    const snapshot = await orientation(fixture);
+    const task = snapshot.tasks.find(item => item.taskId === 'T-001');
+    // Regression: an absent activation record is `ok: true, state: 'absent'`
+    // at the store boundary and must never collapse into authorization
+    // `present` with null identities or a dispatch recommendation.
+    assert.equal(task.operatorAuthorization.state, 'missing');
+    assert.equal(task.operatorAuthorization.bindingId, null);
+    assert.equal(task.operatorAuthorization.grantId, null);
+    assert.equal(task.operatorAuthorization.provenance, null);
+    assert.equal(task.state, 'incomplete');
+    assert.ok(task.reasons.includes('activation_missing'));
+    assert.equal(snapshot.candidates.length, 0);
+    assert.notEqual(snapshot.legalNextAction.type, 'prepare_dispatch');
+    assert.equal(snapshot.legalNextAction.type, 'repair_lifecycle_context');
+  });
+
+  it('reports a malformed activation record as malformed, never present', async () => {
+    const fixture = await orientationFixture('orient-malformed');
+    mkdirSync(join(fixture.root, '.agenticloop', 'activations', 'bindings'), { recursive: true });
+    writeFileSync(join(fixture.root, bindingRecordPath('files', 'T-001')), '{ not json', 'utf8');
+    const snapshot = await orientation(fixture);
+    const task = snapshot.tasks.find(item => item.taskId === 'T-001');
+    assert.equal(task.operatorAuthorization.state, 'malformed');
+    assert.ok(task.operatorAuthorization.errors.length > 0);
+    assert.equal(snapshot.candidates.length, 0);
+    assert.notEqual(snapshot.legalNextAction.type, 'prepare_dispatch');
+  });
+
+  it('fails closed with deterministic inventory diagnostics for a malformed unrelated activation record', async () => {
+    const fixture = await orientationFixture('orient-malformed-unrelated');
+    mkdirSync(join(fixture.root, '.agenticloop', 'activations', 'bindings'), { recursive: true });
+    writeFileSync(join(fixture.root, bindingRecordPath('files', 'T-999')), '{ not json', 'utf8');
+    const first = await orientation(fixture);
+    const second = await orientation(fixture);
+    assert.deepEqual(first, second);
+    assert.equal(first.tasks[0].operatorAuthorization.state, 'missing');
+    assert.equal(first.operatorAuthorizedSet.bindings.length, 0);
+    assert.equal(first.activationScope.state, 'invalid');
+    assert.equal(first.operatorAuthorizedSet.state, 'invalid');
+    assert.ok(first.activationScope.errors.some(error => /files--T-999\.json is unreadable or invalid JSON/.test(error)));
+    assert.ok(first.diagnostics.some(error => error.startsWith('activation_inventory:binding:')));
+    assert.equal(first.legalNextAction.type, 'repair_lifecycle_context');
+  });
+
+  it('reports an expired activation as expired', async () => {
+    const fixture = await orientationFixture('orient-expired');
+    await activate(fixture);
+    const grant = signGrant(fixture, {
+      issuedAt: new Date(Date.now() - 7_200_000).toISOString(),
+      expiresAt: new Date(Date.now() - 3_600_000).toISOString(),
+    });
+    writeActivation(fixture, grant, [signBinding(fixture, grant)]);
+    const snapshot = await orientation(fixture);
+    const task = snapshot.tasks.find(item => item.taskId === 'T-001');
+    assert.equal(task.operatorAuthorization.state, 'expired');
+    assert.equal(snapshot.operatorAuthorizedSet.bindings.length, 0);
+    assert.equal(snapshot.candidates.length, 0);
+    assert.notEqual(snapshot.legalNextAction.type, 'prepare_dispatch');
+  });
+
+  it('reports a revoked activation as revoked', async () => {
+    const fixture = await orientationFixture('orient-revoked');
+    await activate(fixture);
+    const grants = readdirSync(join(fixture.root, '.agenticloop', 'activations', 'grants'));
+    const grant = JSON.parse(readFileSync(
+      join(fixture.root, '.agenticloop', 'activations', 'grants', grants[0]), 'utf8'));
+    const revoked = writeActivationRevocation(fixture.root, createActivationRevocation({ grant }));
+    assert.equal(revoked.ok, true, revoked.receipt?.errors?.join('; '));
+    const snapshot = await orientation(fixture);
+    const task = snapshot.tasks.find(item => item.taskId === 'T-001');
+    assert.equal(task.operatorAuthorization.state, 'revoked');
+    assert.equal(snapshot.operatorAuthorizedSet.bindings.length, 0);
+    assert.equal(snapshot.candidates.length, 0);
+    assert.notEqual(snapshot.legalNextAction.type, 'prepare_dispatch');
+  });
+
+  it('excludes a signed future-issued grant from scope and reports deterministic context diagnostics', async () => {
+    const fixture = await orientationFixture('orient-future-grant');
+    await activate(fixture);
+    const issuedAt = new Date(Date.now() + 60_000).toISOString();
+    const grant = signGrant(fixture, {
+      issuedAt,
+      expiresAt: new Date(Date.parse(issuedAt) + 60_000).toISOString(),
+    });
+    writeActivation(fixture, grant, [signBinding(fixture, grant)]);
+    const snapshot = await orientation(fixture);
+    assert.equal(snapshot.activationScope.scopes.some(scope => scope.grantId === grant.grantId), false);
+    assert.equal(snapshot.activationScope.state, 'invalid');
+    assert.ok(snapshot.activationScope.errors.includes(`grant:.agenticloop/activations/grants/${grant.grantId.slice('grant:'.length)}.json: activation grant is issued in the future`));
+    assert.equal(snapshot.tasks[0].operatorAuthorization.state, 'malformed');
+    assert.equal(snapshot.operatorAuthorizedSet.bindings.length, 0);
+  });
+
+  it('reports a binding for a different task as mismatched', async () => {
+    const fixture = await orientationFixture('orient-wrong-task');
+    await activate(fixture);
+    rmSync(join(fixture.root, bindingRecordPath('files', 'T-001')));
+    const grant = signGrant(fixture, { scope: { type: 'exact_tasks', taskIds: ['T-999'] } });
+    const written = writeActivationRecords(fixture.root, { grant, bindings: [] });
+    assert.equal(written.ok, true, written.receipt?.errors?.join('; '));
+    // A binding that names another task but sits at this task's record path is
+    // an authority mismatch, not a usable authorization.
+    const binding = signBinding(fixture, grant, { taskId: 'T-999' });
+    writeFileSync(join(fixture.root, bindingRecordPath('files', 'T-001')), `${JSON.stringify(binding, null, 2)}\n`, 'utf8');
+    const snapshot = await orientation(fixture);
+    const task = snapshot.tasks.find(item => item.taskId === 'T-001');
+    assert.equal(task.operatorAuthorization.state, 'mismatched');
+    assert.equal(snapshot.candidates.length, 0);
+    assert.notEqual(snapshot.legalNextAction.type, 'prepare_dispatch');
+  });
+
+  it('reports activation records copied from another repository as mismatched', async () => {
+    const source = await orientationFixture('orient-source-repo');
+    await activate(source);
+    const fixture = await orientationFixture('orient-copied-repo');
+    await activate(fixture);
+    for (const [directory, recordPath] of [
+      ['grants', readdirSync(join(source.root, '.agenticloop', 'activations', 'grants'))[0]],
+      ['bindings', bindingRecordPath('files', 'T-001')],
+    ]) {
+      mkdirSync(join(fixture.root, '.agenticloop', 'activations', directory), { recursive: true });
+      copyFileSync(
+        join(source.root, '.agenticloop', 'activations', directory, recordPath.split('/').pop()),
+        join(fixture.root, '.agenticloop', 'activations', directory, recordPath.split('/').pop())
+      );
+    }
+    const snapshot = await orientation(fixture);
+    const task = snapshot.tasks.find(item => item.taskId === 'T-001');
+    assert.equal(task.operatorAuthorization.state, 'mismatched');
+    assert.equal(snapshot.candidates.length, 0);
+    assert.notEqual(snapshot.legalNextAction.type, 'prepare_dispatch');
+  });
+
+  it('reports a binding for a superseded contract as stale', async () => {
+    const fixture = await orientationFixture('orient-wrong-contract');
+    await activate(fixture);
+    const grant = signGrant(fixture);
+    writeActivation(fixture, grant, [signBinding(fixture, grant, {
+      taskContractDigest: `sha256:v1:${'0'.repeat(64)}`,
+    })]);
+    const snapshot = await orientation(fixture);
+    const task = snapshot.tasks.find(item => item.taskId === 'T-001');
+    assert.equal(task.operatorAuthorization.state, 'stale');
+    assert.equal(snapshot.candidates.length, 0);
+    assert.notEqual(snapshot.legalNextAction.type, 'prepare_dispatch');
+  });
+
+  it('reports a stale task baseline as an invalid baseline with no dispatch action', async () => {
+    const fixture = await orientationFixture('orient-stale-baseline');
+    await activate(fixture);
+    // A protected-contract change after baseline establishment invalidates
+    // both the baseline and the contract-bound authorization.
+    writeFileSync(
+      fixture.taskPath,
+      readFileSync(fixture.taskPath, 'utf8').replace(
+        '- [RC-1] command: `npm test`',
+        '- [RC-1] command: `npm run lint`'
+      ),
+      'utf8'
+    );
+    const snapshot = await orientation(fixture);
+    const task = snapshot.tasks.find(item => item.taskId === 'T-001');
+    assert.equal(task.baseline.state, 'invalid');
+    assert.equal(task.operatorAuthorization.state, 'stale');
+    assert.equal(task.state, 'incomplete');
+    assert.equal(snapshot.candidates.length, 0);
+    assert.notEqual(snapshot.legalNextAction.type, 'prepare_dispatch');
+  });
+
+  it('reports a binding whose grant is absent as an incomplete mismatched state', async () => {
+    const fixture = await orientationFixture('orient-dangling-grant');
+    await activate(fixture);
+    const grants = readdirSync(join(fixture.root, '.agenticloop', 'activations', 'grants'));
+    assert.equal(grants.length, 1);
+    rmSync(join(fixture.root, '.agenticloop', 'activations', 'grants', grants[0]));
+    const snapshot = await orientation(fixture);
+    const task = snapshot.tasks.find(item => item.taskId === 'T-001');
+    assert.equal(task.operatorAuthorization.state, 'mismatched');
+    assert.ok(task.operatorAuthorization.errors.some(error => /not present/.test(error)));
+    assert.equal(snapshot.candidates.length, 0);
+    assert.notEqual(snapshot.legalNextAction.type, 'prepare_dispatch');
+  });
+
+  it('does not let a declared legacy capture widen exact operator authorization', async () => {
+    const fixture = await orientationFixture('orient-legacy-capture');
+    const task = readFileSync(fixture.taskPath, 'utf8').replace(
+      'status: agent-ready',
+      `status: agent-ready\nactivation_input_digest: sha256:${'a'.repeat(64)}\nactivation_capture_ref: .agenticloop/activation.json`
+    );
+    writeFileSync(fixture.taskPath, task, 'utf8');
+    const snapshot = await orientation(fixture);
+    assert.equal(snapshot.tasks[0].activationProvenance.state, 'declared');
+    assert.equal(snapshot.tasks[0].operatorAuthorization.state, 'missing');
+    assert.equal(snapshot.operatorAuthorizedSet.bindings.length, 0);
+    assert.equal(snapshot.candidates.length, 0);
+    assert.notEqual(snapshot.legalNextAction.type, 'prepare_dispatch');
   });
 });

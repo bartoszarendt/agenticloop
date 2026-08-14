@@ -18,6 +18,8 @@
     "./host-trust": "./src/host-trust.js",
     "./activation-grant": "./src/activation-grant.js",
     "./activation-policy": "./src/activation-policy.js",
+    "./path-identity": "./src/path-identity.js",
+    "./execution-evidence": "./src/execution-evidence.js",
     "./protected-host-boundary": "./src/protected-host-boundary.js",
     "./package.json": "./package.json",
     "./src/*": "./src/*",

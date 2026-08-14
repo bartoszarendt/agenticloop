@@ -25,13 +25,13 @@ All commands:
 | `init` | Deterministic scaffold: toolkit source, target state, optional adapter |
 | `update` (alias `upgrade`) | Refresh toolkit-owned assets and regenerate adapters |
 | `doctor` | Read-only setup checklist, adapter state, next steps |
-| `status` | Configured adapters, generated artifacts, next steps |
+| `status` | Configured adapters, generated artifacts, next steps, or a closed lifecycle orientation snapshot with `--json` |
 | `validate` | Validate skills, config, links, role-capability bindings, and host setup |
 | `remove` | Remove Agentic Loop assets (`--dry-run` or `--yes` required) |
 | `guidance` | Manage the activation-guidance block (`apply`, `check`, `remove`) |
 | `generate` | Generate adapter artifacts (`opencode`, `codex`, `claude-code`, `copilot`, `cursor`, `all`) |
 | `configure models` | Set per-host role model settings in `agenticloop.json` |
-| `task` | Task records and lifecycle preparation (`list`, `lint`, `new`, `establish-baseline`, `authorize-correction`, `prepare-decomposition`, `prepare-dispatch`, `verify-return`, `evidence`, `review-prepare`, `status`) |
+| `task` | Task records and lifecycle preparation (`list`, `lint`, `new`, `establish-baseline`, `authorize-correction`, `prepare-decomposition`, `prepare-dispatch`, `prepare-return`, `verify-return`, `check-evidence-init`, `check-evidence-show`, `check-evidence-update`, `evidence`, `review-prepare`, `status`) |
 | `audit` | Work-unit audit certificates (`new`, `baseline`, `report`, `status`, `gate`, `lint`, `repair-structure`, `disposition`, `override`, `resolve`) |
 | `closeout` | Composite closeout packets (`prepare`, `status`, `record`) |
 | `improvement` | Bounded improvement proposals (`new`, `lint`, `status`) |
@@ -151,6 +151,108 @@ rerun-repairable** — not globally atomic:
   prompts and progress are disabled and diagnostics use stderr.
 - Default setup/init output reports step and mutation summaries. Individual
   planned/applied paths and detailed detection evidence require `--verbose`.
+
+## `status --json` lifecycle orientation
+
+`npx agenticloop status --json [--target <dir>]` emits one deterministic,
+read-only, closed lifecycle-orientation snapshot. It is an orientation and
+dispatch recommendation, not a mutation, activation grant, or proof that a host
+execution occurred. The current schema is
+`agenticloop.lifecycle-orientation` version `2`; unknown, missing, or extra
+fields make the snapshot invalid.
+
+For an otherwise clean files target with no task records, the shape is:
+
+```json
+{
+  "kind": "agenticloop.lifecycle-orientation",
+  "schemaVersion": 2,
+  "state": "no_work",
+  "target": "<absolute target path>",
+  "backend": "files",
+  "roots": { "carrier": ".agenticloop/tasks", "artifact": ".", "working": "<path>" },
+  "activationScope": {
+    "source": ".agenticloop/activations", "state": "current", "scopes": [], "errors": []
+  },
+  "operatorAuthorizedSet": {
+    "source": "canonical_activation_resolution", "state": "current", "bindings": [], "errors": []
+  },
+  "adapters": { "adapters": [], "nextSteps": [] },
+  "candidates": [],
+  "excluded": [],
+  "tasks": [],
+  "diagnostics": [],
+  "legalNextAction": { "type": "no_action", "taskId": null, "command": null }
+}
+```
+
+The complete closed schema is:
+
+- Top-level fields are exactly `kind`, `schemaVersion`, `state`, `target`,
+  `backend`, `roots`, `activationScope`, `operatorAuthorizedSet`, `adapters`,
+  `candidates`, `excluded`, `tasks`, `diagnostics`, and `legalNextAction`.
+  `state` is `incomplete`, `no_work`, `one_candidate`, or
+  `multiple_candidates`; `backend` is `files` or `github`.
+- `roots` is exactly `{ carrier, artifact, working }`. `carrier` is a nonempty
+  string; `artifact` is a string or `null`; `working` is a nonempty string for
+  the top-level root and may be `null` on a task root.
+- Each `tasks` and `candidates` entry is exactly `{ taskId, carrier, status,
+  state, reasons, baseline, lint, activationProvenance, operatorAuthorization,
+  roots, dependencies }`. `taskId` and `status` are strings or `null`; `carrier`
+  is nonempty; `state` is `current` or `incomplete`; `reasons` is a string array;
+  and `dependencies` is an array of `{ id, disposition }` nonempty-string pairs.
+  `baseline` is exactly `{ state, digest, trustedRecordCount, errors }` with
+  state `current`, `invalid`, or `unavailable`, a string-or-null digest, a
+  nonnegative safe-integer trusted-record count, and string-array errors.
+  `lint` is exactly `{ state, rootDiagnostics, errors }` with the same state
+  vocabulary and string arrays. `activationProvenance` is exactly `{ state,
+  inputDigest, captureRef }` with state `declared` or `missing` and
+  string-or-null input digest and capture reference.
+- `operatorAuthorization` is exactly `{ state, bindingId, grantId, provenance,
+  errors }`. Its state is one of `present`, `missing`, `malformed`, `expired`,
+  `revoked`, `stale`, `mismatched`, or `unauthenticated`; identifiers are
+  strings or `null`, and errors are strings. A non-null `provenance` is exactly
+  `{ repositoryIdentity, assurance, issuedAt, expiresAt, source, derivation,
+  scope }`, where all fields other than `scope` are nonempty strings, assurance
+  is `operator_confirmed` or `host_signed`, source is `activation_grant`, and
+  scope is exactly one of `{ type: "exact_tasks", taskIds, workUnitId: null,
+  operatorIntentDigest: null }` with nonempty unique sorted task-id strings,
+  `{ type: "work_unit", taskIds: null, workUnitId, operatorIntentDigest: null
+  }` with a nonempty work-unit id, or `{ type: "captured_request", taskIds:
+  null, workUnitId: null, operatorIntentDigest }` with a nonempty intent digest.
+- `activationScope` is exactly `{ source, state, scopes, errors }`, with source
+  `.agenticloop/activations`, state `current` or `invalid`, and sorted `scopes`
+  entries exactly `{ grantId, repositoryIdentity, assurance, scope }`.
+  `operatorAuthorizedSet` is exactly `{ source, state, bindings, errors }`,
+  with source `canonical_activation_resolution`, state `current` or `invalid`,
+  and task-sorted bindings exactly `{ taskId, bindingId, grantId,
+  repositoryIdentity, assurance, issuedAt, expiresAt, provenance }`; their
+  provenance is exactly `{ source, derivation, scope }` and must agree with the
+  corresponding task authorization.
+- `adapters` is exactly `{ adapters, nextSteps }`. Each adapter is exactly
+  `{ host, status, enabled, required, present, missingModelRoles }`, where the
+  first two fields are strings, the next two are booleans, and the final two are
+  string arrays. `nextSteps` is a string array. `diagnostics` is a string array.
+  `excluded` has one entry for every non-candidate task and each entry is exactly
+  `{ taskId, carrier, reason }`, with a string-or-null task id and nonempty
+  carrier and reason strings.
+- `legalNextAction` is exactly `{ type, taskId, command }`. It is
+  `repair_lifecycle_context` with no task id, `no_action` with no task id and a
+  null command, `prepare_dispatch` with a task id and an Engineer-role command,
+  or `select_task` with no task id. Every legal action other than `no_action`
+  has a nonempty command. For example, one current authorized `agent-ready`
+  task yields `prepare_dispatch` and a command shaped as `agenticloop task
+  prepare-dispatch <task-id> --host <host> --role engineer`.
+
+The assurance model is intentionally narrow. `activationScope.scopes` reports
+the authenticated grant's declared breadth, while
+`operatorAuthorizedSet.bindings` reports only current, exact task authorization
+resolved through the canonical activation policy. A broad grant scope is never
+itself dispatch authorization. `present` therefore requires a current,
+authenticated binding for the exact repository, backend, task, carrier, and
+contract digest under effective policy. The snapshot exposes provenance and
+diagnostics so callers can repair context, but it does not promote raw store
+records, adapter capability, a digest, or a status message into authority.
 
 ## GitHub review audit
 
@@ -475,7 +577,7 @@ and outcome with `exitCode: null`. Matching is order-insensitive by RC ID.
 Prepare one exact Engineer handoff without task mutation:
 
 ```text
-npx agenticloop task prepare-dispatch T-001 --input .agenticloop/tmp/dispatch-input.json [--host-trust-store <expected-registered-path>] --json
+npx agenticloop task prepare-dispatch T-001 --host opencode --role engineer --output .agenticloop/tmp/dispatch.json --json
 ```
 
 Produce the committed decomposition source first with `task
@@ -492,10 +594,27 @@ enumerated and no GitHub call is made. `--repo` names a GitHub repository, so
 supplying it while `task_backend: files` is configured is a usage error rather
 than a silently ignored flag.
 
-The input supplies verified activation capture, selected role/worktree facts,
-and only the source selectors from prior readiness/decomposition evidence.
-Caller-authored readiness results and decomposition claims are ignored. The
-command reruns readiness from the exact Git tree and dependency snapshot, reads
+The ordinary producer derives the Engineer assignment and safe existing durable
+facts; it does not require hand-authored dispatch input. `--input` remains an
+advanced compatibility route for projects where durable source selectors are
+unavailable; it is validated normally and may not override refetched durable
+authority. Input and output paths are relative to the selected target and must
+remain inside it.
+
+The committed decomposition source persists the exact dispatch revalidation
+selectors. Its scan binds the base as an exact `git-tree:<oid>` identity and
+each dependency snapshot twice: the semantic `source` identity the snapshot
+declares about itself (for example `files:.agenticloop/tasks`) and the
+target-relative `sourceRef` artifact path used to reopen that exact snapshot.
+The selector is confined like every committed source: no absolute or
+drive-qualified paths, no backslashes, no `.`/`..` segments, no symlink
+traversal, and no resolution outside the repository. The committed scan is
+schema version 2. A genuine schema-version-1 scan or decomposition cannot
+supply the selector and fails with typed regeneration guidance; repair it by
+re-running `task prepare-decomposition <id> --work-unit <id> --source-ref
+<path> --source-revision <ref> --base <ref-or-tree> --dependencies <path>` with
+the same inputs rather than editing the record. The command reruns readiness
+from the exact Git tree and dependency snapshot, reads
 decomposition from its committed `sourceRef`, and requires the source commit to
 carry canonical `Task:` and `Agent: maintainer` attribution before emitting a versioned
 `agenticloop.role-preparation` packet only when every binding is current. The
@@ -530,8 +649,13 @@ Public files and GitHub mutation commands accept the prepared-dispatch packet,
 not a validation-receipt option, and rerun the complete current
 `canonicalDispatchValidator` immediately before mutation. A persisted receipt
 or verdict crossing a process or trust boundary must be rederived from its
-underlying packet or verified return. `task verify-return` persists observed version-2 evidence under
-`.agenticloop/returns/verifications/`; closeout revalidates it and never treats a
+underlying packet or verified return. `task verify-return` persists observed schema-v4
+`agenticloop.return-verification` evidence under `.agenticloop/returns/verifications/`;
+every non-v4 record is a fail-closed typed incompatibility, including released
+schema v2 and interim schema v3. Those records remain historical evidence but
+cannot be relabelled, migrated, or consumed as current; safely resume with
+freshly produced current evidence.
+Closeout revalidates current records and never treats a
 registered capability as proof an event happened. Standard plugin-free operation
 uses `operator_confirmed` activation and freshly revalidated `session_reported`
 returns. Optional protected host integration is required for `host_signed`
@@ -543,6 +667,85 @@ history and an equal-time conflict fails closed. GitHub verification and
 closeout refetch the live PR identity. Git rederives the exact returned commit
 range and requires its head to remain an ancestor of the current checkout, so
 later contract-preserving workflow commits do not erase valid return evidence.
+
+For a files-backed Engineer return, construct closed check evidence and derive
+the raw return from current task/Git facts:
+
+```text
+npx agenticloop task check-evidence-init T-001 --packet .agenticloop/tmp/dispatch.json --output .agenticloop/tmp/checks.json --json
+npx agenticloop task check-evidence-update T-001 --packet .agenticloop/tmp/dispatch.json --input .agenticloop/tmp/checks.json --output .agenticloop/tmp/checks.json --check RC-1 --outcome passed --evidence "npm test passed" --execution-output .agenticloop/tmp/rc-1.execution.json --json
+npx agenticloop task prepare-return T-001 --packet .agenticloop/tmp/dispatch.json --check-evidence .agenticloop/tmp/checks.json --outcome implementation_ready_for_review --output .agenticloop/tmp/return.json --json
+npx agenticloop task verify-return T-001 --packet .agenticloop/tmp/dispatch.json --return .agenticloop/tmp/return.json --from-current-repository --json
+```
+
+Cancellation is evidence-bound and never inferred. No shipped public runtime
+currently has a protected, non-agent-callable Agentic Loop cancellation receipt
+producer, so `prepare-return` and `verify-return` refuse a positive
+`cancellation_requested` claim. A structural
+`agenticloop.cancellation-provenance` JSON record is not authority and cannot
+be promoted by its digest or by host status:
+
+```text
+npx agenticloop task prepare-return T-001 --packet .agenticloop/tmp/dispatch.json --check-evidence .agenticloop/tmp/checks.json --outcome implementation_blocked --blocker-category cancellation_requested --cancellation-evidence .agenticloop/tmp/cancellation.json --output .agenticloop/tmp/return.json --json
+npx agenticloop task verify-return T-001 --packet .agenticloop/tmp/dispatch.json --return .agenticloop/tmp/return.json --from-current-repository --cancellation-evidence .agenticloop/tmp/cancellation.json --json
+```
+
+Host idle/completed/terminated state, stop reasons, messages, timestamps, and
+unkeyed digests are never consulted. Until a pinned protected receipt producer
+exists, record the outcome as unknown/needs-context and obtain the required host
+integration rather than claim cancellation. The future receipt must bind the
+exact logical invocation, request, packet, task, controller, observed result,
+strict UTC request/observation times, freshness, and replay policy.
+
+A verified return authorizes reuse for a fixed window. The version 1
+return-use freshness policy is exactly 86,400 seconds (24 hours). Omitting the
+`return_use_freshness` project configuration selects that stable default; a
+declared policy must match the closed version-1 shape and value exactly, and
+missing, malformed, old, future, or extended policies fail closed.
+The 86,400-second value is the only supported value for policy version 1. A
+future tunable policy requires a new policy version or a separately authorized
+contract change.
+
+All public artifact paths are relative to the selected target, must remain
+inside it, and must name regular files rather than links. A `passed` command
+check requires `--execution-output`: the CLI itself parses the exact required
+command as inert argv (no shell), runs it at the target root with a five-minute
+timeout, and writes target-confined schema-v3
+`agenticloop.execution-evidence` JSON with the actual argv, child exit code,
+and output. A caller-supplied execution artifact or `--outcome passed
+--exit-code 0` cannot prove execution. Manual, failed, blocked, and not-run
+observations retain their existing bounded observation form.
+
+On Windows, the runner resolves `.cmd` and `.bat` shims on `PATH` (preferring
+them over an extensionless shim such as `npm`) and invokes the resolved shim
+through `cmd.exe /d /s /c` with reviewed argument quoting. This wrapper support
+does not permit shell syntax in a required-check command; the required command
+is still parsed as inert argv and shell metacharacters are rejected.
+At role start, the current dispatch is revalidated through the live canonical
+dispatch boundary before its single-use consumption. `prepare-return` is
+Engineer-owned and read-only: it authenticates that packet and requires the
+matching already-consumed invocation and current carrier lineage. Host admission,
+task status, and free-form messages cannot substitute for its derived return. The ordinary
+files verifier uses `--from-current-repository` to rederive evidence
+independently from current Git and task facts; `--repository-evidence <path>` remains advanced compatibility,
+and the two options are mutually exclusive. `--from-current-repository` is
+files-only: on the GitHub backend it is refused with a typed usage error
+before any refetch, because caller-independent rederivation requires the local
+trusted checkout.
+
+A passed command check in a files-backed return is proved by the closed
+schema-v3 `agenticloop.execution-evidence` artifact, never by exit-code prose.
+Schema-v2 execution evidence and its digest domain are typed incompatible and
+must be regenerated rather than relabeled or re-digested.
+Current packets bind required-check evidence contract v2 into their semantic
+digest: every command check carries `executionEvidence`; a passed check carries
+its `{ path, digest }` artifact reference and every non-passed check carries
+`null`. Both the return producer and `verify-return` revalidate the artifact
+against the exact packet, invocation, task, carrier, repository, and product
+identities it binds. Removing this property is malformed, not legacy
+compatibility. Packets authenticated as schema 7 or older are typed stale and
+must be regenerated; they cannot authorize a current return or protected
+transition.
 `closeout prepare --legacy-unactivated --legacy-reason <text>` is the interactive,
 standard-only, exact-work-unit compatibility exception. New waivers name only
 missing activation evidence. An authentic, unexpired schema-v1 waiver that also
@@ -555,11 +758,20 @@ the unchanged signed source record as `compatibility_waiver`. It never hides rev
 stale, malformed, conflicting, mismatched, or cryptographically invalid evidence,
 and hardened mode rejects it.
 
-A raw return is checked with the exact repository evidence and an authenticated
-host-adapter receipt:
+`task verify-return` authenticates the raw return, independently derives or
+checks repository evidence, and persists the closed
+`agenticloop.return-verification` schema-v4 record. Every non-v4 verification
+record is fail-closed typed incompatible lifecycle evidence, including released
+schema v2 and interim schema v3. It remains historical evidence but cannot be
+edited, relabelled, migrated, or consumed as current; safely resume with a fresh
+current packet, check evidence, raw return, and verification.
+Standard mode permits an explicitly `session_reported`, freshly revalidated
+return at reduced/unverified assurance. For `host_receipt` assurance, the
+packet-bound producer receipt and protected host-issued execution receipt are
+required as applicable:
 
 ```text
-npx agenticloop task verify-return T-001 --packet packet.json --return role-return.json [--repository-evidence repository-evidence.json] [--producer-receipt producer-receipt.json] [--repo <owner/name>] [--resume-owner <role-id> --redelegation-authority redelegation.json | --recovery-request recovery.json --human-disposition disposition.json --human-disposition-authority <authority-id> --human-disposition-key-id <key-id>] [--host-trust-store <expected-registered-path>] --json
+npx agenticloop task verify-return T-001 --packet packet.json --return role-return.json [--from-current-repository | --repository-evidence repository-evidence.json] [--producer-receipt producer-receipt.json --execution-receipt execution-receipt.json] [--cancellation-evidence cancellation.json] [--repo <owner/name>] [--resume-owner <role-id> --redelegation-authority redelegation.json | --recovery-request recovery.json --human-disposition disposition.json --human-disposition-authority <authority-id> --human-disposition-key-id <key-id>] [--host-trust-store <expected-registered-path>] --json
 ```
 
 For a files-backed Engineer run, retain the role-start carrier and record only
@@ -581,23 +793,31 @@ resulting `currentCarrierDigest`. Raw returns and repository evidence name
 product/workflow paths, and exact chain references. `task review-prepare` uses
 one command-local carrier snapshot and writes no review receipt when it changes.
 
-The CLI never receives a signing secret. The operator registry contains only
+The CLI never receives signing material. The operator registry contains only
 Ed25519 public keys and scopes them to one canonical target checkout. A host or
 OS policy must keep that fixed registry non-writable by agents; the CLI rejects
-caller-selected alternative stores. The
-receipt binds its target repository, adapter/key identity, invocation ID, packet,
-return, host-observed producer role, liveness, and canonical repository evidence
-digest. Receipt-controlled semantic fields are evaluated only after the pinned
-key verifies the signature over canonical bytes. A forged `producerRole`
-therefore yields generic authentication failure; an authentically signed wrong
-producer yields `role_return.producer_mismatch`. After authentication, the
-observed producer must match both packet assignment and return claim;
-cooperative `Task:`/`Agent:` trailers cannot repair a mismatch. The files
-verifier also reconstructs the current branch, head, changed paths, durable
-commit range, and canonical attribution from Git and rejects dirty tracked or
-untracked in-scope state. The GitHub verifier additionally refetches the live PR
-number, state, URL, branch, and head; a closed or changed PR is stale. Missing, stale, or invalid authentication blocks
-rather than trusting Orchestrator assertions. The shipped receipt baseline,
+caller-selected alternative stores. The producer-receipt and execution-receipt
+selectors are target-relative and confined. The producer receipt binds its target
+repository, adapter/key identity, invocation ID, packet, return, host-observed
+producer role, liveness, and canonical repository evidence digest.
+Receipt-controlled semantic fields are evaluated only after the pinned key
+verifies the signature over canonical bytes. A forged `producerRole` therefore
+yields generic authentication failure; an authentically signed wrong producer
+yields `role_return.producer_mismatch`. After authentication, the observed
+producer must match both packet assignment and return claim; cooperative
+`Task:`/`Agent:` trailers cannot repair a mismatch. The protected host-issued
+execution receipt is verified through the external protected host boundary, not
+by CLI-held signing material or self-attestation. Its replay binding is prepared
+and committed by the protected replay authority, then revalidated as current on
+later verification; a missing, replayed, stale, or invalid required receipt
+blocks rather than trusting Orchestrator assertions. The CLI supplies no fallback
+replay ledger: a real protected host integration must retain durable replay state
+across process restarts. In-memory replay authorities are test fixtures only.
+The files verifier also
+reconstructs the current branch, head, changed paths, durable commit range, and
+canonical attribution from Git and rejects dirty tracked or untracked in-scope
+state. The GitHub verifier additionally refetches the live PR number, state, URL,
+branch, and head; a closed or changed PR is stale. The shipped receipt baseline,
 schema version 1, receives typed `role_return.receipt_stale` reissue guidance
 only when its complete canonical bytes authenticate. A successful result uses
 `disposition: proceed` plus a separate non-completion implementation outcome; it

@@ -56,8 +56,8 @@ export function verifiedReturnFixture(target, packet, options = {}) {
   const changedPaths = ['src/existing.js'];
   const baseHead = packet.repository.head;
   const checks = [
-    { id: 'RC-1', kind: 'command', command: 'npm test', outcome: 'passed', exitCode: 0, evidence: 'fixture pass' },
-    { id: 'RC-2', kind: 'command', command: 'npm run typecheck', outcome: 'passed', exitCode: 0, evidence: 'fixture pass' },
+    { id: 'RC-1', kind: 'command', command: 'npm test', outcome: 'passed', exitCode: 0, evidence: 'fixture pass', executionEvidence: null },
+    { id: 'RC-2', kind: 'command', command: 'npm run typecheck', outcome: 'passed', exitCode: 0, evidence: 'fixture pass', executionEvidence: null },
   ];
   const roleReturn = createRoleReturn({
     returnId,
@@ -131,6 +131,9 @@ export function verifiedReturnFixture(target, packet, options = {}) {
     roleReturn,
     repositoryEvidence,
     received: { ok: true, returnAssurance },
+    requiredCheckEvidenceAssurance: packet.task.requiredChecks?.some(check => check?.kind === 'command')
+      ? 'unverified'
+      : 'not_applicable',
     ...(verifiedAt ? { verifiedAt } : {}),
   });
   return {
@@ -195,6 +198,8 @@ export function syntheticRecognizedVerdict(target, transition, options = {}) {
       taskContractDigest: contractDigest,
       dispatchCarrierDigest: taskDigest,
       currentCarrierDigest: taskDigest,
+      requiredCheckEvidenceContract: 2,
+      requiredChecks: [{ id: 'RC-1', kind: 'command', command: 'npm test' }],
     },
     activation: null,
     activationBinding: { grant: { repositoryIdentity, digest: 'grant' }, binding: { digest: 'binding' } },
@@ -226,6 +231,7 @@ export function syntheticRecognizedVerdict(target, transition, options = {}) {
     checks: [{
       id: 'RC-1', kind: 'command', command: 'npm test',
       outcome: 'passed', exitCode: 0, evidence: 'synthetic fixture pass',
+      executionEvidence: { path: '.agenticloop/tmp/evidence.json', digest: `sha256:agenticloop.execution-evidence.v3:${'a'.repeat(64)}` },
     }],
     productAttribution: { range: { base: baseHead, head }, commits: [head] },
     carrierLineage: {

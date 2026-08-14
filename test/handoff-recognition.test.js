@@ -9,10 +9,11 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
+import { canonicalSha256 } from '../src/canonical-json.js';
 
 import {
   HANDOFF_OBSERVATION_GRADE,
@@ -30,7 +31,7 @@ import {
   validateHandoffRecognition,
 } from '../src/handoff-recognition.js';
 import { canonicalDispatchValidator } from '../src/handoff-binding.js';
-import { createReturnVerification, returnVerificationPath } from '../src/return-verification.js';
+import { createReturnVerification, returnGenerationDigest, returnVerificationPath } from '../src/return-verification.js';
 import {
   DISPATCH_PREPARATION_SCHEMA_VERSION,
   dispatchPreparationDigest,
@@ -606,6 +607,58 @@ describe('verified return recognition', () => {
     assert.equal(validateHandoffRecognition({ ...forged, digest: handoffRecognitionDigest(forged) }).ok, false);
   });
 
+  it('refuses a self-digested CLI-bound assurance record even when every digest is recomputed', () => {
+    const fixture = verifiedReturnFixture(dispatch.root, packet);
+    const direct = createReturnVerification({
+      target: dispatch.root,
+      packet: fixture.packet,
+      roleReturn: fixture.roleReturn,
+      repositoryEvidence: fixture.repositoryEvidence,
+      received: { ok: true, returnAssurance: 'session_reported' },
+    });
+    const executionBound = structuredClone(direct);
+    executionBound.requiredCheckEvidenceAssurance = 'cli_execution_bound';
+    executionBound.returnGenerationDigest = returnGenerationDigest(executionBound);
+    const { digest, ...unsigned } = executionBound;
+    executionBound.digest = `sha256:agenticloop.return-verification.v3:${canonicalSha256(unsigned)}`;
+    const verdict = recognizeHandoff({
+      transition: 'acceptance', expectation: handoffExpectation(fixture), verifiedReturn: executionBound,
+      validatePreparedDispatch: validator(),
+    });
+    assert.equal(verdict.recognized, false);
+    assert.match(verdict.diagnostics.map(item => item.message).join('; '), /required-check evidence assurance is invalid/);
+  });
+
+  it('refuses a blocked return observation for every protected post-role transition', () => {
+    const fixture = verifiedReturnFixture(dispatch.root, packet);
+    const blockedReturn = structuredClone(fixture.roleReturn);
+    blockedReturn.disposition = 'blocked';
+    blockedReturn.outcome = {
+      kind: 'implementation_blocked', completion: false, authority: 'non_authoritative_role_outcome',
+    };
+    blockedReturn.blocker = {
+      category: 'environment', evidence: { kind: 'command_failure', detail: 'sandbox unavailable' },
+      resumeOwner: 'engineer', resumeTransition: 'implementation_resume',
+      resumePreconditions: { items: ['Restore the execution environment.'], justification: null },
+    };
+    const { digest, ...unsigned } = blockedReturn;
+    blockedReturn.digest = `sha256:agenticloop.role-return.v4:${canonicalSha256(unsigned)}`;
+    const blocked = createReturnVerification({
+      target: dispatch.root, packet: fixture.packet, roleReturn: blockedReturn,
+      repositoryEvidence: fixture.repositoryEvidence,
+      received: { ok: true, returnAssurance: 'session_reported' },
+    });
+    assert.equal(blocked.disposition, 'blocked');
+    for (const transition of laterTransitions) {
+      const verdict = recognizeHandoff({
+        transition, expectation: handoffExpectation(fixture), verifiedReturn: blocked,
+        validatePreparedDispatch: validator(),
+      });
+      assert.equal(verdict.recognized, false, transition);
+      assert.ok(codes(verdict).includes('handoff.evidence.unauthenticated'), transition);
+    }
+  });
+
   it('refuses a raw role return handed in as its own verification', () => {
     const fixture = verifiedReturnFixture(dispatch.root, packet);
     for (const transition of laterTransitions) {
@@ -1027,6 +1080,49 @@ describe('task status role start', () => {
     assert.equal(payload.handoff_recognition.boundIdentity.packetId, packet.packetId);
     assert.match(readFileSync(taskFile, 'utf8'), /^status: in-progress$/m);
     writeFileSync(taskFile, before, 'utf8');
+  });
+
+  it('rejects absolute, escaping, and linked public dispatch packet selectors', async t => {
+    const root = dispatch.root;
+    const taskFile = join(root, '.agenticloop', 'tasks', 'T-001.md');
+    const before = readFileSync(taskFile, 'utf8');
+    const digest = currentTaskDigest(before);
+    const packetPath = join(root, '.agenticloop', 'tmp', 'packet.json');
+
+    for (const selector of [packetPath, '../outside-packet.json']) {
+      const result = await runCliInProcess([
+        'task', 'prepare-dispatch', 'T-001', '--packet', selector,
+        '--role', 'engineer', '--json', '--target', root,
+      ], cliOptions());
+      assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+      assert.match(result.stdout, /dispatch packet must be a non-empty target-relative path|dispatch packet must resolve inside the selected target/);
+    }
+    const linkedPacket = join(root, '.agenticloop', 'tmp', 'linked-packet.json');
+    let linkKind = 'file';
+    try {
+      symlinkSync(packetPath, linkedPacket, 'file');
+    } catch (error) {
+      if ((error?.code === 'EPERM' || error?.code === 'EACCES') && process.platform === 'win32') {
+        // File symlinks need a privilege this host may not grant, but a
+        // directory junction exercises the same product rejection boundary:
+        // lstat reports it as a symbolic link, so this is real runtime proof
+        // rather than an environment skip.
+        linkKind = 'junction';
+        symlinkSync(join(root, '.agenticloop', 'tmp'), linkedPacket, 'junction');
+      } else if (error?.code === 'EPERM' || error?.code === 'EACCES') {
+        t.skip(`symbolic links unavailable on this host: ${error.code}; product rejection proof requires a POSIX run or a privileged Windows run`);
+        return;
+      }
+      else throw error;
+    }
+    const linked = await runCliInProcess([
+      'task', 'prepare-dispatch', 'T-001', '--packet', '.agenticloop/tmp/linked-packet.json',
+      '--role', 'engineer', '--json', '--target', root,
+    ], cliOptions());
+    assert.equal(linked.status, 1, `${linkKind}: ${linked.stdout}\n${linked.stderr}`);
+    assert.match(linked.stdout, /dispatch packet must be a target-confined regular file/);
+    assert.equal(readFileSync(taskFile, 'utf8'), before);
+    assert.equal(digest, currentTaskDigest(before));
   });
 
   it('refuses replay of a packet already consumed by a role start', async () => {

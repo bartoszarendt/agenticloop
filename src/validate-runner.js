@@ -29,6 +29,7 @@ import {
 } from './validate-skills.js';
 import { validateLinks, formatLinkErrors } from './link-validator.js';
 import { validateProjectRoleCapabilities } from './role-capabilities.js';
+import { diagnoseLifecycleCompatibility, compatibilityMessage } from './lifecycle-compatibility.js';
 
 /**
  * @param {{ write(s: string): void }} output
@@ -75,6 +76,7 @@ function formatValidationOptions(options = {}) {
  *   roleCapabilityWarnings: string[],
  *   eventLogErrors: string[],
  *   eventLogWarnings: string[],
+ *   lifecycleCompatibilityErrors: string[],
  *   linkErrors: object[],
  * }}
  */
@@ -205,8 +207,18 @@ export function runValidation(target, options = {}) {
     writeLine(output);
   }
 
+  const lifecycleCompatibilityErrors = diagnoseLifecycleCompatibility(target)
+    .map(finding => `${finding.path}: ${compatibilityMessage(finding)}`);
+  if (lifecycleCompatibilityErrors.length > 0) {
+    writeLine(output, '='.repeat(70));
+    writeLine(output, ' Lifecycle Compatibility');
+    writeLine(output, '='.repeat(70));
+    for (const error of lifecycleCompatibilityErrors) writeLine(output, `  ERROR: ${error}`);
+    writeLine(output);
+  }
+
   const totalErrors = errorCount(skillReport) + configErrors.length + activationErrors.length + eventLogErrors.length +
-    roleCapabilityErrors.length;
+    roleCapabilityErrors.length + lifecycleCompatibilityErrors.length;
   const totalWarnings = warningCount(skillReport) + configWarnings.length + activationWarnings.length + eventLogWarnings.length +
     roleCapabilityWarnings.length;
 
@@ -222,6 +234,7 @@ export function runValidation(target, options = {}) {
     roleCapabilityWarnings,
     eventLogErrors,
     eventLogWarnings,
+    lifecycleCompatibilityErrors,
     linkErrors,
   };
 }

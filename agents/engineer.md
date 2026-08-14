@@ -143,8 +143,10 @@ task-record obligation.
   `## Implementation Notes` plan, treat it as the primary execution prior, verify
   its assumptions, and record divergences under `## Deviations From Plan` instead
    of blindly following stale steps.
-- Before the first mutation, invoke the read-only `task prepare-dispatch <id>
-  --packet <packet.json> --role engineer` verifier. It refetches the task and
+- Before the first mutation, receive the CLI-authored packet only after guarded
+  role start has consumed and revalidated it through `task status <id> in-progress
+  --dispatch-packet <packet-path>`. Then invoke the read-only `task
+  prepare-dispatch <id> --packet <packet-path> --role engineer` verifier. It refetches the task and
   current Git branch/head/base facts, reruns readiness from the bound dependency
   source, rereads the committed Maintainer decomposition source, and checks every
   packet and invocation binding, including the selected host's exact canonical
@@ -153,6 +155,17 @@ task-record obligation.
   Shipped and public in-process adapters cannot establish this authority.
   Without an externally authenticated packet, return blocked; never substitute
   callbacks, repository keys, environment values, or model-authored capture.
+- Use target-relative artifacts only. Initialize packet-required evidence with
+  `task check-evidence-init <id> --packet <packet-path> --output
+  <evidence-path>`. For each passed command check, use `task
+  check-evidence-update` with `--execution-output <path>` so the CLI executes
+   the exact inert argv and produces schema-v3 execution evidence; schema-v2
+   evidence is typed incompatible and must be regenerated, never relabeled; do not claim a
+  pass with prose or `--exit-code 0`. After final checks, derive the raw return
+  only with `task prepare-return <id> --packet <packet-path> --check-evidence
+  <evidence-path> --outcome implementation_ready_for_review --output
+  <return-path>`. Do not inspect or hand-author packet, evidence, return JSON,
+  or digests.
 - Confirm scope, out of scope, acceptance criteria, required checks, proof
   pressure when present, and expected files or areas.
 - Read the confirmed `development_stage` as a task-shaping prior. Use it only
@@ -267,6 +280,16 @@ task-record obligation.
   result uses `disposition: proceed` and the separate non-authoritative
   `implementation_ready_for_review` outcome; it is eligible only for a later
   review-preparation gate and never claims review entry or completion.
+- The receiving boundary must verify it with `task verify-return <id> --packet
+  <packet-path> --return <return-path> --from-current-repository` before review.
+  Host status, messages, opaque handles, or cancellation observations do not
+  replace a return or establish cancellation by themselves.
+- For files-backed work, the only permitted Engineer task-carrier updates after
+  role start are guarded `task evidence` mutations in the three closed classes:
+  `implementation_artifact_evidence`, `implementation_summary_evidence`, and
+  `implementation_outcome_evidence`. Check-evidence and raw-return artifacts do
+  not authorize a carrier edit; each carrier mutation requires the current
+  digest and extends the dispatch-consumption lineage.
 - A blocked return remains Engineer-owned unless `role_return_receive` verifies
   a fresh version 2 redelegation signed by the exact operator-pinned authority
   for that return, packet, producer, and new owner. Comments, labels, commit

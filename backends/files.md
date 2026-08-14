@@ -70,32 +70,63 @@ dependency status, makes the scan stale and refuses dispatch.
 
 ## Dispatch and return
 
-`task prepare-dispatch <id> --input <dispatch-input.json>` is the read-only files
-projection for one role handoff. `task prepare-dispatch <id> --packet
+The ordinary files handoff starts with `task prepare-dispatch <id> --host <host>
+--role engineer --output <packet-path> --json`; guarded role start consumes and
+revalidates it through `task status <id> in-progress --dispatch-packet
+<packet-path>`. `task prepare-dispatch <id> --input <dispatch-input.json>` is an
+advanced compatibility route, while `task prepare-dispatch <id> --packet
 <packet.json> --role engineer` is the matching receive-side revalidator. An
 optional `--host-trust-store` can assert, but cannot select, the target's
 pre-registered path under the fixed operator registry. They
 refetch task/Git facts, rerun readiness from its exact base/dependency sources,
 and reread decomposition from a byte-current committed source whose last change
-has canonical Maintainer attribution. Inline readiness results or decomposition
+has canonical Maintainer attribution. The committed decomposition persists its
+own revalidation selectors: the base as an exact `git-tree:<oid>` identity and
+each dependency snapshot as the semantic `source` identity plus a confined
+target-relative `sourceRef` artifact path. Inline readiness results or decomposition
 authority strings cannot authorize dispatch. Missing, malformed, stale, changed,
 or contradictory evidence blocks before a digest-bound packet is emitted or
 accepted. The packet is transient handoff data, not task state.
 
+The Engineer creates required-check evidence with `task check-evidence-init`,
+updates it with `task check-evidence-update`, and derives the raw return with
+`task prepare-return`. The receiver runs `task verify-return <id> --packet
+<packet-path> --return <return-path> --from-current-repository` before `task
+review-prepare <id>` or review. All these artifact paths are target-relative.
+Do not inspect artifact internals, hand-author JSON or digests, or replace a
+return with host status, messages, opaque handles, or cancellation observations;
+host cancellation/status alone does not establish cancellation. A cancellation
+claim requires the Agentic Loop-controlled observation documented in
+docs/cli-reference.md (`--cancellation-evidence` on both `prepare-return` and
+`verify-return`); without it the outcome is unknown, not cancelled or complete.
+A passed command check is proved only by the closed schema-v3 CLI execution
+artifact it references; new check records must carry that evidence, while
+artifact-free legacy records verify under the documented reduced-assurance
+compatibility rule. Schema-v2 evidence and its digest domain are typed
+incompatible with v3 and must be regenerated.
+
 The receiving role verifies the packet before mutation and returns raw
-`agenticloop.role-return` JSON. Its explicit `productBaseHead`, `productHead`,
-`workflowHead`, product/workflow path sets, checks,
-canonical `Task:`/`Agent:` trailers, and attribution range are checked against
-repository evidence. Files CLI return verification requires that exact evidence
-plus an Ed25519 host receipt bound to the target repository, packet, invocation,
-return, liveness, adapter/key identity, and evidence digest. The verifier
-receives only the packet-bound public key from the fixed host-owned operator
-registry; it never reads a shared secret, repository-local trust file, or
-caller-selected alternative store.
-Missing, replayed, target-mismatched, or caller-edited receipts block. The
-verifier first reconstructs the current branch, head, changed paths, commit range,
-and attribution from live Git and rejects dirty tracked or untracked in-scope
-state. Invalid wire returns retain the packet's producer route.
+`agenticloop.role-return` JSON. `task verify-return --from-current-repository`
+derives the branch, three-head topology, changed paths, commit range, and trailer
+attribution from Git; it never accepts caller-supplied path classification. A
+path outside `.agenticloop/` is product. The exact task carrier is a workflow
+path only when its receipt lineage is current; active dispatch/evidence receipts
+and validated workflow audits are workflow evidence; scratch paths and unknown
+`.agenticloop/` paths fail closed. A product path changed after the declared
+`productHead` also fails stale. The resulting product/workflow sets, checks, and
+canonical `Task:`/`Agent:` trailers are compared with the raw return.
+
+Standard mode accepts an explicitly `session_reported`, freshly revalidated raw
+return at reduced/unverified assurance. Hardened mode, or any effective
+`host_receipt` requirement, requires the appropriate packet-bound Ed25519
+producer receipt and protected host-issued execution receipt. The producer receipt
+binds the target repository, packet, invocation, return, liveness, adapter/key
+identity, and evidence digest. The verifier receives only the packet-bound public
+key from the fixed host-owned operator registry; it never reads a shared secret,
+repository-local trust file, or caller-selected alternative store. Trust-registry,
+binding, replay, invalid, missing, target-mismatched, or caller-edited required
+receipts fail closed.
+Invalid wire returns retain the packet's producer route.
 `implementation_ready_for_review` is a non-authoritative outcome, not completion.
 
 The carrier is not restored after `in-progress`. `task evidence` is the bounded

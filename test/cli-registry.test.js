@@ -597,4 +597,15 @@ describe('emitted command consistency', () => {
     }
     assert.deepEqual(offenders, [], `registry usage strings rejected by the parser:\n${offenders.join('\n')}`);
   });
+
+  it('keeps check-evidence-update usage to parser-valid flags and arguments', () => {
+    const usage = COMMAND_REGISTRY.task.subcommands['check-evidence-update'].usage;
+    assert.doesNotMatch(usage, /for passed command checks/);
+    assert.doesNotThrow(() => {
+      parseCommandArgs('task check-evidence-update', COMMAND_REGISTRY.task.subcommands['check-evidence-update'], [
+        'T-001', '--packet', 'packet.json', '--input', 'checks.json', '--output', 'checks.json',
+        '--check', 'RC-1', '--outcome', 'passed', '--evidence', 'green', '--execution-output', 'rc-1.json',
+      ]);
+    });
+  });
 });

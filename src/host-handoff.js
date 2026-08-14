@@ -13,6 +13,7 @@
 
 import { canonicalSha256 } from './canonical-json.js';
 import { deepFreeze } from './immutable.js';
+import { validateExecutionEvidence } from './execution-evidence.js';
 import {
   HOST_SIGNATURE_ALGORITHM,
   signHostPayload,
@@ -25,6 +26,8 @@ export const LEGACY_ROLE_RETURN_RECEIPT_SCHEMA_VERSION = 1;
 export const ROLE_RETURN_RECEIPT_SCHEMA_VERSION = 2;
 export const EXCEPTIONAL_VERIFICATION_RECEIPT_KIND = 'agenticloop.exceptional-verification-producer';
 export const EXCEPTIONAL_VERIFICATION_RECEIPT_SCHEMA_VERSION = 1;
+export const EXECUTION_RECEIPT_KIND = 'agenticloop.execution-receipt';
+export const EXECUTION_RECEIPT_SCHEMA_VERSION = 1;
 export const ACTIVATION_SIGNATURE_KIND = 'agenticloop.activation-capture-signature';
 export const ACTIVATION_SIGNATURE_SCHEMA_VERSION = 2;
 
@@ -73,6 +76,27 @@ export function repositoryEvidenceDigest(evidence) {
 
 function packetRepositoryIdentity(packet) {
   return packet?.activationBinding?.grant?.repositoryIdentity ?? packet?.activation?.repositoryIdentity ?? null;
+}
+
+/** Canonical work-unit identity bound by packets, returns, and host receipts. */
+export function packetWorkUnitIdentity(packet) {
+  return packet?.decomposition?.workUnitId ??
+    packet?.decomposition?.scan?.workUnit?.id ??
+    packet?.decomposition?.workUnit?.id ??
+    null;
+}
+
+function executionEvidenceBinding(packet, roleReturn, repositoryEvidence) {
+  return {
+    packetId: packet?.packetId,
+    packetDigest: packet?.digest,
+    invocationId: packet?.assignment?.invocationId,
+    taskId: packet?.task?.id,
+    taskContractDigest: packet?.task?.taskContractDigest,
+    currentCarrierDigest: roleReturn?.task?.currentCarrierDigest,
+    repositoryHead: repositoryEvidence?.workflowHead,
+    productHead: roleReturn?.productHead,
+  };
 }
 
 /**
@@ -132,6 +156,95 @@ export function hostHandoffReceiptSignaturePayload(receipt) {
       keyId: receipt?.authentication?.keyId,
     },
   };
+}
+
+function exactExecutionReceiptArtifact(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).length === 10 &&
+    ['checkId', 'path', 'digest', 'logicalCommand', 'args', 'resolvedExecutable', 'wrapperKind', 'wrapperProgram', 'wrapperArgs', 'childExitCode']
+      .every(key => Object.hasOwn(value, key)) &&
+    typeof value.checkId === 'string' && value.checkId &&
+    typeof value.path === 'string' && value.path && !value.path.startsWith('/') && !value.path.includes('\\') && !value.path.split('/').some(part => !part || part === '.' || part === '..') &&
+    /^sha256:agenticloop\.execution-evidence\.v3:[a-f0-9]{64}$/.test(value.digest) &&
+    typeof value.logicalCommand === 'string' && value.logicalCommand &&
+    Array.isArray(value.args) && value.args.every(arg => typeof arg === 'string') &&
+    typeof value.resolvedExecutable === 'string' && value.resolvedExecutable &&
+    typeof value.wrapperKind === 'string' &&
+    (value.wrapperProgram === null || typeof value.wrapperProgram === 'string') &&
+    Array.isArray(value.wrapperArgs) && value.wrapperArgs.every(arg => typeof arg === 'string') &&
+    value.childExitCode === 0;
+}
+
+/** The execution receipt signature excludes only its signature value. */
+export function hostExecutionReceiptSignaturePayload(receipt) {
+  return {
+    ...receipt,
+    authentication: {
+      algorithm: receipt?.authentication?.algorithm,
+      keyId: receipt?.authentication?.keyId,
+    },
+  };
+}
+
+/**
+ * Protected adapters issue this only after they have re-read each listed
+ * target-confined execution artifact. The target CLI never receives a key.
+ */
+export function createHostExecutionReceipt(input = {}, privateKey) {
+  const { adapterId, keyId, packet, roleReturn, repositoryEvidence, executions, replayId } = input;
+  if (typeof adapterId !== 'string' || !adapterId || typeof keyId !== 'string' || !keyId) throw new TypeError('host execution receipt adapter identity is required');
+  if (!packet?.packetId || !SEMANTIC_DIGEST_RE.test(packet?.digest ?? '') || !packet?.assignment?.invocationId || !packet?.assignment?.liveness?.expiry) throw new TypeError('host execution receipt requires an exact live dispatch packet');
+  if (!roleReturn?.returnId || !SEMANTIC_DIGEST_RE.test(roleReturn?.digest ?? '') || !Array.isArray(executions) || executions.length === 0 || !executions.every(exactExecutionReceiptArtifact)) throw new TypeError('host execution receipt requires passed closed execution artifacts');
+  if (new Set(executions.map(item => item.checkId)).size !== executions.length || typeof replayId !== 'string' || !replayId) throw new TypeError('host execution receipt requires unique check and replay identities');
+  const receipt = {
+    kind: EXECUTION_RECEIPT_KIND, schemaVersion: EXECUTION_RECEIPT_SCHEMA_VERSION,
+    adapterId, source: 'host_adapter', invocationId: packet.assignment.invocationId,
+    targetRepository: packetRepositoryIdentity(packet), backend: packet.backend,
+    task: { id: packet.task.id, workUnitIdentity: packetWorkUnitIdentity(packet), taskContractDigest: packet.task.taskContractDigest, dispatchCarrierDigest: packet.task.dispatchCarrierDigest, currentCarrierDigest: roleReturn.task?.currentCarrierDigest },
+    packet: { packetId: packet.packetId, digest: packet.digest },
+    roleReturn: { returnId: roleReturn.returnId, digest: roleReturn.digest },
+    repositoryEvidenceDigest: repositoryEvidenceDigest(repositoryEvidence),
+    heads: { productBaseHead: roleReturn.productBaseHead, productHead: roleReturn.productHead, workflowHead: roleReturn.workflowHead, candidateHead: roleReturn.candidateHead },
+    executions: structuredClone(executions), replayId, issuedAt: input.issuedAt ?? new Date().toISOString(),
+    freshness: { expiry: input.expiry ?? packet.assignment.liveness.expiry },
+    authentication: { algorithm: HOST_SIGNATURE_ALGORITHM, keyId, value: null },
+  };
+  receipt.authentication.value = signHostPayload(hostExecutionReceiptSignaturePayload(receipt), privateKey);
+  return deepFreeze(receipt);
+}
+
+/** Authenticate a protected execution receipt without re-running any command. */
+export function verifyHostExecutionReceipt(receipt, {
+  trustedAdapter, packet, roleReturn, repositoryEvidence, target, readExecutionArtifact, now = Date.now(),
+} = {}) {
+  const keys = ['kind', 'schemaVersion', 'adapterId', 'source', 'invocationId', 'targetRepository', 'backend', 'task', 'packet', 'roleReturn', 'repositoryEvidenceDigest', 'heads', 'executions', 'replayId', 'issuedAt', 'freshness', 'authentication'];
+  exactKeys(receipt, keys, 'host execution receipt');
+  exactKeys(receipt.task, ['id', 'workUnitIdentity', 'taskContractDigest', 'dispatchCarrierDigest', 'currentCarrierDigest'], 'host execution receipt task');
+  exactKeys(receipt.packet, ['packetId', 'digest'], 'host execution receipt packet');
+  exactKeys(receipt.roleReturn, ['returnId', 'digest'], 'host execution receipt return');
+  exactKeys(receipt.heads, ['productBaseHead', 'productHead', 'workflowHead', 'candidateHead'], 'host execution receipt heads');
+  exactKeys(receipt.freshness, ['expiry'], 'host execution receipt freshness');
+  exactKeys(receipt.authentication, ['algorithm', 'keyId', 'value'], 'host execution receipt authentication');
+  if (receipt.kind !== EXECUTION_RECEIPT_KIND || receipt.schemaVersion !== EXECUTION_RECEIPT_SCHEMA_VERSION || receipt.source !== 'host_adapter' || !Array.isArray(receipt.executions) || !receipt.executions.length || !receipt.executions.every(exactExecutionReceiptArtifact)) throw new TypeError('host execution receipt identity is invalid');
+  if (!trustedAdapter || trustedAdapter.capabilities?.returnReceipt !== 'supported' || receipt.adapterId !== trustedAdapter.adapterId || receipt.authentication.algorithm !== HOST_SIGNATURE_ALGORITHM || receipt.authentication.keyId !== trustedAdapter.keyId || !verifyHostPayload(hostExecutionReceiptSignaturePayload(receipt), receipt.authentication.value, trustedAdapter.publicKey)) throw new TypeError('host execution receipt authentication failed');
+  if (!ISO_INSTANT_RE.test(receipt.issuedAt ?? '') || !ISO_INSTANT_RE.test(receipt.freshness.expiry ?? '') || Date.parse(receipt.issuedAt) > now + 1000 || Date.parse(receipt.issuedAt) > Date.parse(receipt.freshness.expiry) || now > Date.parse(receipt.freshness.expiry)) throw new TypeError('host execution receipt freshness is invalid or expired');
+  if (receipt.targetRepository !== trustedAdapter.repositoryIdentity || receipt.targetRepository !== packetRepositoryIdentity(packet) || receipt.targetRepository !== targetRepositoryIdentity(target) || receipt.backend !== packet.backend || receipt.invocationId !== packet.assignment?.invocationId || receipt.packet.packetId !== packet.packetId || receipt.packet.digest !== packet.digest || receipt.roleReturn.returnId !== roleReturn.returnId || receipt.roleReturn.digest !== roleReturn.digest || receipt.repositoryEvidenceDigest !== repositoryEvidenceDigest(repositoryEvidence) || receipt.task.id !== packet.task?.id || receipt.task.workUnitIdentity !== packetWorkUnitIdentity(packet) || receipt.task.taskContractDigest !== packet.task?.taskContractDigest || receipt.task.dispatchCarrierDigest !== packet.task?.dispatchCarrierDigest || receipt.task.currentCarrierDigest !== roleReturn.task?.currentCarrierDigest || receipt.heads.productBaseHead !== roleReturn.productBaseHead || receipt.heads.productHead !== roleReturn.productHead || receipt.heads.workflowHead !== roleReturn.workflowHead || receipt.heads.candidateHead !== roleReturn.candidateHead) throw new TypeError('host execution receipt does not bind the exact return generation');
+  if (typeof readExecutionArtifact !== 'function') throw new TypeError('host execution receipt verification requires target artifact rereading');
+  const commandChecks = (roleReturn.checks ?? []).filter(check => check.kind === 'command' && check.outcome === 'passed');
+  if (commandChecks.length !== receipt.executions.length || new Set(receipt.executions.map(item => item.checkId)).size !== receipt.executions.length) throw new TypeError('host execution receipt does not cover every passed command check');
+  for (const artifact of receipt.executions) {
+    const check = commandChecks.find(item => item.id === artifact.checkId);
+    if (!check || check.executionEvidence?.path !== artifact.path || check.executionEvidence?.digest !== artifact.digest) throw new TypeError('host execution receipt execution target does not match the role return');
+    const execution = readExecutionArtifact(artifact.path);
+    // The receipt's artifact projection is not authority for the execution
+    // binding.  Rebuild it from the authoritative packet, current return, and
+    // independently supplied repository evidence on every verification.
+    const checked = validateExecutionEvidence(execution, {
+      expectedBinding: executionEvidenceBinding(packet, roleReturn, repositoryEvidence),
+    });
+    if (!checked.ok || execution.digest !== artifact.digest || execution.execution.outcome !== 'passed' || execution.execution.childExitCode !== 0 || execution.check.command !== artifact.logicalCommand || JSON.stringify(execution.check.args) !== JSON.stringify(artifact.args) || execution.runner.resolvedExecutable !== artifact.resolvedExecutable || execution.runner.wrapperKind !== artifact.wrapperKind || execution.runner.wrapperProgram !== artifact.wrapperProgram || JSON.stringify(execution.runner.wrapperArgs) !== JSON.stringify(artifact.wrapperArgs)) throw new TypeError(`host execution receipt artifact '${artifact.checkId}' drifted or is invalid`);
+  }
+  return receipt;
 }
 
 /**

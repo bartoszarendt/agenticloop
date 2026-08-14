@@ -220,6 +220,7 @@ describe('canonical handoff GitHub integration public routes', () => {
     const verification = createReturnVerification({
       target: fixture.root, packet: prepared.packet, roleReturn, repositoryEvidence: evidence,
       producerReceipt: binding.producerReceipt, received,
+      requiredCheckEvidenceAssurance: 'unverified',
     });
     const stored = writeReturnVerification(fixture.root, verification);
     assert.equal(stored.ok, true, stored.errors.join('\n'));

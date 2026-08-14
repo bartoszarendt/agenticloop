@@ -13,12 +13,13 @@
  */
 
 import { KeyObject, createHash, createPublicKey, createPrivateKey, generateKeyPairSync, randomBytes, sign, verify } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 import { canonicalJson } from './canonical-json.js';
+import { displayPath, filePathIdentity, isPathOutside, samePathAuthority } from './path-identity.js';
 
 export const HOST_TRUST_KIND = 'agenticloop.host-trust';
 export const HOST_TRUST_SCHEMA_VERSION = 1;
@@ -168,6 +169,79 @@ export function verifyHostPayload(payload, signatureText, publicKey) {
   }
 }
 
+export const EXECUTION_RECEIPT_REPLAY_BOUNDARY_KIND = 'agenticloop.execution-receipt-replay-boundary';
+export const EXECUTION_RECEIPT_REPLAY_BOUNDARY_SCHEMA_VERSION = 1;
+
+/** The host signs both the exact request and its closed response projection. */
+export function executionReceiptReplaySignaturePayload(request, response) {
+  return {
+    kind: EXECUTION_RECEIPT_REPLAY_BOUNDARY_KIND,
+    schemaVersion: EXECUTION_RECEIPT_REPLAY_BOUNDARY_SCHEMA_VERSION,
+    request: {
+      kind: request?.kind,
+      schemaVersion: request?.schemaVersion,
+      operation: request?.operation,
+      binding: request?.binding,
+      transactionId: request?.transactionId ?? null,
+    },
+    response: {
+      kind: response?.kind,
+      schemaVersion: response?.schemaVersion,
+      operation: response?.operation,
+      binding: response?.binding,
+      transactionId: response?.transactionId ?? null,
+      state: response?.state,
+    },
+  };
+}
+
+function exactReplayBinding(binding, adapter) {
+  return exactKeys(binding, ['adapterId', 'keyId', 'targetRepositoryIdentity', 'replayId', 'recordId', 'recordDigest']) &&
+    binding.adapterId === adapter.adapterId && binding.keyId === adapter.keyId &&
+    binding.targetRepositoryIdentity === adapter.repositoryIdentity &&
+    typeof binding.replayId === 'string' && binding.replayId &&
+    typeof binding.recordId === 'string' && binding.recordId &&
+    typeof binding.recordDigest === 'string' && /^sha256:agenticloop\.return-verification\.v4:[a-f0-9]{64}$/.test(binding.recordDigest);
+}
+
+/**
+ * Adapt a host-owned operation channel into the only replay authority accepted
+ * by return-verification persistence. The target supplies no storage location,
+ * key, or mutable replay state; every result is signed by the pinned adapter.
+ */
+export function createExecutionReceiptReplayAuthority({ target, trustedAdapter, protectedBoundary } = {}) {
+  if (!trustedAdapter || typeof protectedBoundary !== 'function') return null;
+  const targetRepository = targetRepositoryIdentity(target);
+  if (trustedAdapter.repositoryIdentity !== targetRepository || trustedAdapter.capabilities?.returnReceipt !== 'supported') return null;
+  const invoke = (operation, binding, transactionId = null) => {
+    if (!exactReplayBinding(binding, trustedAdapter)) return { ok: false, error: 'execution-receipt replay binding is invalid' };
+    const request = Object.freeze({
+      kind: EXECUTION_RECEIPT_REPLAY_BOUNDARY_KIND,
+      schemaVersion: EXECUTION_RECEIPT_REPLAY_BOUNDARY_SCHEMA_VERSION,
+      operation,
+      binding: Object.freeze({ ...binding }),
+      transactionId,
+    });
+    let response;
+    try { response = protectedBoundary(request); } catch { return { ok: false, error: 'protected execution-receipt replay boundary is unavailable' }; }
+    const expected = ['kind', 'schemaVersion', 'operation', 'binding', 'transactionId', 'state', 'signature'];
+    if (!exactKeys(response, expected) || response.kind !== EXECUTION_RECEIPT_REPLAY_BOUNDARY_KIND ||
+        response.schemaVersion !== EXECUTION_RECEIPT_REPLAY_BOUNDARY_SCHEMA_VERSION || response.operation !== operation ||
+        canonicalJson(response.binding) !== canonicalJson(binding) ||
+        !['prepared', 'committed', 'aborted', 'current', 'rejected'].includes(response.state) ||
+        !verifyHostPayload(executionReceiptReplaySignaturePayload(request, response), response.signature, trustedAdapter.publicKey)) {
+      return { ok: false, error: 'protected execution-receipt replay boundary returned an unauthenticated response' };
+    }
+    return response.state === 'rejected' ? { ok: false, error: 'execution receipt replay identity is already bound to a different record' } : { ok: true, transactionId: response.transactionId, state: response.state };
+  };
+  return Object.freeze({
+    prepare: binding => invoke('prepare', binding),
+    commit: (binding, transactionId) => invoke('commit', binding, transactionId),
+    abort: (binding, transactionId) => invoke('abort', binding, transactionId),
+    verify: binding => invoke('verify', binding),
+  });
+}
+
 /**
  * Canonical payload signed by the protected host for one fresh loader challenge.
  * The callback transports this proof; returning a boolean never grants authority.
@@ -272,15 +346,8 @@ function authenticatedBoundaryAdapters(parsed, supported, options, context) {
   return authorized.size === requested.length ? authorized : null;
 }
 
-function canonicalPath(path) {
-  const resolved = resolve(String(path));
-  if (!existsSync(resolved)) return resolved;
-  const nativeRealpath = realpathSync.native ?? realpathSync;
-  return nativeRealpath(resolved);
-}
-
 export function targetRepositoryIdentity(target) {
-  return `file:${canonicalPath(String(target ?? '.')).replace(/\\/g, '/')}`;
+  return filePathIdentity(String(target ?? '.'));
 }
 
 /** Fixed per-user trust root used by the public CLI. */
@@ -295,7 +362,7 @@ export function defaultOperatorTrustRoot() {
 export function operatorTrustStorePath(target, operatorTrustRoot = defaultOperatorTrustRoot()) {
   const identity = targetRepositoryIdentity(target);
   const targetDigest = createHash('sha256').update(identity, 'utf8').digest('hex');
-  return join(canonicalPath(operatorTrustRoot), `${targetDigest}.json`);
+  return join(displayPath(operatorTrustRoot), `${targetDigest}.json`);
 }
 
 function validateEntry(entry, index, errors, repositoryIdentity) {
@@ -509,20 +576,19 @@ export function loadHostTrustStore(target, options = {}) {
       path: null,
     };
   }
-  const root = canonicalPath(String(target ?? '.'));
+  const root = displayPath(String(target ?? '.'));
   const configuredRoot = options.operatorTrustRoot ?? defaultOperatorTrustRoot();
   if (typeof configuredRoot !== 'string' || !configuredRoot.trim() || !isAbsolute(configuredRoot)) {
     return { ok: false, adapters: Object.freeze({}), authorities: Object.freeze({}), errors: ['operator host trust root must be an absolute path'], path: null };
   }
-  const operatorRoot = canonicalPath(configuredRoot);
-  const rootFromTarget = relative(root, operatorRoot);
-  if (!rootFromTarget || (!rootFromTarget.startsWith('..') && !isAbsolute(rootFromTarget))) {
+  const operatorRoot = displayPath(configuredRoot);
+  if (!isPathOutside(operatorRoot, root)) {
     return { ok: false, adapters: Object.freeze({}), authorities: Object.freeze({}), errors: ['operator host trust root must be outside the target repository'], path: null };
   }
   const path = operatorTrustStorePath(root, operatorRoot);
   if (options.assertedPath !== undefined) {
     if (typeof options.assertedPath !== 'string' || !isAbsolute(options.assertedPath) ||
-        canonicalPath(options.assertedPath) !== canonicalPath(path)) {
+        !samePathAuthority(options.assertedPath, path)) {
       return {
         ok: false,
         adapters: Object.freeze({}),
@@ -545,9 +611,8 @@ export function loadHostTrustStore(target, options = {}) {
   if (lstatSync(path).isSymbolicLink()) {
     return { ok: false, adapters: Object.freeze({}), authorities: Object.freeze({}), errors: ['host trust store must not be a symbolic link'], path };
   }
-  const realPath = canonicalPath(path);
-  const realPathFromTarget = relative(root, realPath);
-  if (!realPathFromTarget || (!realPathFromTarget.startsWith('..') && !isAbsolute(realPathFromTarget))) {
+  const realPath = displayPath(path);
+  if (!isPathOutside(realPath, root)) {
     return { ok: false, adapters: Object.freeze({}), authorities: Object.freeze({}), errors: ['host trust store resolves inside the target repository'], path: realPath };
   }
   let text;

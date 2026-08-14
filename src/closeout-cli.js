@@ -67,7 +67,7 @@ import { getProjectRoleCapabilities } from './role-capabilities.js';
 import { PublicCommandError } from './public-error.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
 import { taskContractDigest } from './task-contract-baseline.js';
-import { loadHostTrustStore, targetRepositoryIdentity } from './host-trust.js';
+import { createExecutionReceiptReplayAuthority, loadHostTrustStore, targetRepositoryIdentity } from './host-trust.js';
 import { resolveTaskActivationBinding } from './activation-grant.js';
 import {
   ACTIVATION_BINDING_KIND,
@@ -83,6 +83,7 @@ import {
 } from './activation-resolution.js';
 import { readCommittedDecomposition } from './activation-cli.js';
 import {
+  CURRENT_REQUIRED_CHECK_EVIDENCE_ASSURANCE,
   listReturnVerifications,
   revalidateReturnVerification,
   returnActivationAuthorityDigest,
@@ -219,11 +220,21 @@ export function resolveCloseoutAssuranceContext(target, io, backend, params) {
         taskContractDigest: identity.contract.digest,
         activationAuthorityDigest: activation?.authorityDigest ?? null,
         workUnitIdentity: params.workUnit,
+        resolveTrustedAdapter: adapterId => {
+          const adapter = trustedAdapters[adapterId];
+          if (!adapter) throw new PublicCommandError(`return adapter '${adapterId}' is not currently trusted through the protected boundary`);
+          return adapter;
+        },
+        resolveExecutionReceiptReplayAuthority: record => createExecutionReceiptReplayAuthority({
+          target,
+          trustedAdapter: trustedAdapters[record.producerAuthentication?.adapterId],
+          protectedBoundary: io?.hostAuthority,
+        }),
       });
       if (!listed.ok) return { taskId, usable: false, records: [], failureCategory: 'return_evidence_malformed', reasons: listed.errors };
       const selected = selectCurrentReturnVerifications(listed.records);
       if (!selected.ok) return { taskId, usable: false, records: [], failureCategory: 'ambiguous_or_conflicting_evidence', reasons: selected.errors };
-      const checked = selected.records.map(record => revalidateReturnVerification(record, {
+      const validateVerifiedReturn = record => revalidateReturnVerification(record, {
         target,
         capabilities: activationCapabilityInventory(trustedAdapters),
         resolveActivationBinding: packet => resolvePacketActivationBinding(target, io, packet),
@@ -245,13 +256,31 @@ export function resolveCloseoutAssuranceContext(target, io, backend, params) {
           ? refetchGitHubReturnEvidence(record.evidence.repositoryEvidence, {
               commandRunner: params.ghRunner ?? defaultGhCommandRunner,
               repo: params.repo,
+              // The return was verified while review/integration required an
+              // open PR. Terminal closeout alone revalidates that same exact
+              // PR after its required merge; every identity and receipt check
+              // still runs through the normal protected verifier.
+              historicalCloseout: true,
             })
           : refetchFilesReturnEvidence(target, record.evidence.packet, record.evidence.repositoryEvidence, {
               historicalCloseout: true,
             }),
         runGit: args => spawnSync('git', args, { cwd: target, encoding: 'utf8' }),
         minimumReturnAssurance: policy.minimumReturn,
-      }));
+        // GitHub is not a substitute for an assurance policy.  The resolved
+        // external policy must explicitly be standard before its unverified
+        // command observations can be used by either backend.
+        minimumRequiredCheckEvidenceAssurance: policy.mode === 'standard'
+          ? CURRENT_REQUIRED_CHECK_EVIDENCE_ASSURANCE
+          : 'authenticated_receipt',
+        executionReceiptReplayAuthority: createExecutionReceiptReplayAuthority({
+          target,
+          trustedAdapter: trustedAdapters[record.producerAuthentication?.adapterId],
+          protectedBoundary: io?.hostAuthority,
+        }),
+        historicalCloseout: true,
+      });
+      const checked = selected.records.map(validateVerifiedReturn);
       const valid = checked.filter(item => item.ok).map(item => item.record);
       return {
         taskId,
@@ -259,6 +288,7 @@ export function resolveCloseoutAssuranceContext(target, io, backend, params) {
         productHead: closeoutTaskArtifactHead(identity, backend),
         usable: checked.length > 0 && checked.every(item => item.ok),
         records: valid,
+        validateVerifiedReturn,
         failureCategory: checked.length === 0
           ? (listed.supersededCount > 0 || selected.supersededCount > 0 ? 'return_for_another_generation' : 'return_evidence_absent')
           : (checked.every(item => item.ok) ? null : returnFailureCategory(checked.flatMap(item => item.errors ?? []))),
@@ -746,7 +776,9 @@ export async function cmdCloseout(args, io = createIo()) {
         return 1;
       }
       const packetPath = resolvePacketOutputPath(target, optionString(opts.output), packet.work_unit || 'work-unit');
-      writePacket(packetPath, packet);
+      // A rejected preparation is a read-only gate: do not leave a caller-named
+      // packet behind that could later be mistaken for a prepared closeout.
+      if (packet.publishable) writePacket(packetPath, packet);
       if (opts.json) {
         io.out(JSON.stringify(packet, null, 2));
       } else {

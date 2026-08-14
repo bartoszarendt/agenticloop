@@ -347,7 +347,7 @@ Existing `activation_input_digest` and `activation_capture_ref` task frontmatter
 remain valid legacy provenance. Grant records are an alternate authorized
 source, not a forced rewrite: existing tasks and projects never need recreation.
 
-Dispatch packet schema version `7` carries the complete signed grant and task
+Dispatch packet schema version `8` carries the complete signed grant and task
 binding in `activationBinding`; its packet digest is integrity, not
 authentication. Preparation, pre-mutation revalidation, return import, and
 closeout revalidate signatures, repository/backend/carrier/task-contract
@@ -355,7 +355,10 @@ binding, expiry, decomposition, effective policy, and external revocation state.
 Authentic packet versions `2` through `5` are typed stale.
 
 Successful returns are persisted as `agenticloop.return-verification` version
-`2` under `.agenticloop/returns/verifications/`. Closeout derives return
+`4` under `.agenticloop/returns/verifications/`. Every non-v4 record is a typed
+incompatibility, including released schema v2 and interim schema v3. Those
+records remain historical evidence but cannot be relabelled, migrated, or
+consumed as current; safely resume with freshly produced current evidence. Closeout derives return
 assurance only from these observed records and reauthenticates retained host
 receipts. Missing activation or return evidence is below both mode minimums.
 Genuinely pre-activation work has one explicit, interactive, standard-only
@@ -384,10 +387,10 @@ operator input.
 ### Single-role dispatch and return
 
 One implementation handoff uses `agenticloop.role-preparation`, schema version
-`7`, defined in the bundled `src/dispatch-envelope.js` module. It is a read-only
+`8`, defined in the bundled `src/dispatch-envelope.js` module. It is a read-only
 handoff artifact, not a controller, lane-result store, task mutation, or shared
 durable-state import. Its canonical digest is
-`sha256:agenticloop.role-preparation.v7:<64-lowercase-hex>` and it binds the
+`sha256:agenticloop.role-preparation.v8:<64-lowercase-hex>` and it binds the
 current task/contract/activation identities, both assurance dimensions, freshly
 reevaluated P35-03
 readiness and base/dependency sources, committed Maintainer-attributed
@@ -446,7 +449,7 @@ committed source cannot hide an omitted or newly authored task behind its own
 `complete` field.
 
 The single-role execution result is `agenticloop.role-return`, schema version
-`3`, with digest `sha256:agenticloop.role-return.v3:<64-lowercase-hex>`. It
+`4`, with digest `sha256:agenticloop.role-return.v4:<64-lowercase-hex>`. It
 binds a unique return ID, immutable producer, exact packet ID/digest, backend and
 task digest, exact branch/worktree and full 40- or 64-character base/head, changed paths,
 structured checks, actual contiguous commit-range attribution, PR state,
@@ -463,11 +466,42 @@ operator-pinned Ed25519 public key from the fixed host-owned registry outside th
 target repository. A malformed,
 stale, replayed, abbreviated, mismatched, repository-self-attested, or manually
 reconstructed return is a typed rejection routed only to its producer.
+
+A passed command check is proved only by the closed
+`agenticloop.execution-evidence` schema version `3` artifact produced by the
+public CLI. It binds the exact parsed required-check argv, packet and invocation,
+task and carrier digests, repository and product heads, target paths, strict
+timing, actual child exit code, and filtered output. Check prose or a claimed
+zero exit code cannot substitute for this artifact. Schema-v2 evidence and its
+digest domain are typed incompatible with v3 and must be regenerated, never
+relabeled or re-digested.
 The receipt records the producer role observed by the host boundary; it is not
 derived from the packet assignment or return claim. That observed role must
 match both. Commit attribution is reconstructed from durable full identities
 and one final contiguous `Task: <resolved task id>` / `Agent: <immutable role
 id>` pair, but those cooperative trailers cannot repair a producer mismatch.
+
+#### Ordinary public handoff sequence
+
+The ordinary public handoff uses CLI-authored artifacts, in this order:
+
+1. The Orchestrator runs `npx agenticloop task prepare-dispatch <id> --host
+   <host> --role engineer --output <packet-path> --json`.
+2. Guarded role start consumes and revalidates that packet through `task status
+   <id> in-progress --dispatch-packet <packet-path>`.
+3. The Engineer uses `task check-evidence-init` and `task check-evidence-update`
+   for packet-required checks, then derives the raw return with `task
+   prepare-return`.
+4. The receiving boundary runs `task verify-return <id> --packet <packet-path>
+   --return <return-path> --from-current-repository`; only verified evidence
+   proceeds to review preparation and review.
+
+`--input`, `--output`, `--packet`, `--return`, and check-evidence paths are
+target-relative, resolving below the selected target (the caller's current
+directory unless `--target` selects another target). Do not inspect artifact
+internals, hand-author JSON or digests, or substitute host status, messages,
+opaque handles, or cancellation observations for a return. Host
+cancellation/status alone does not establish cancellation.
 
 ### Canonical handoff recognition
 
@@ -1091,7 +1125,7 @@ plan is an artifact of that relation, not a new `managed_join_plan` synonym. Use
 `cancellation_boundary`, `review_no_mutation_window`, and
 `digest_guarded_rollback` precisely. None is a lock or authority transfer.
 
-A blocked role return has kind `agenticloop.role-return`, schema version `3`,
+A blocked role return has kind `agenticloop.role-return`, schema version `4`,
 and separately declares required fields plus constant `disposition: blocked`.
 Its fields include return ID, producing role, consumed transition ID/digest,
 blocker category/evidence, resume owner/transition, and resume preconditions. An exceptional-verification return has kind

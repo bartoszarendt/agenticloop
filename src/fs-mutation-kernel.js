@@ -30,12 +30,13 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  realpathSync,
   rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 /**
@@ -108,6 +109,27 @@ export function resolveTargetPath(targetRoot, relPath) {
     }
   }
   return candidate;
+}
+
+/**
+ * Resolve and read one existing target-owned regular file.  Unlike a lexical
+ * selector this rejects both a leaf link and every linked ancestor, then checks
+ * the real filesystem identity before returning bytes.  It is deliberately
+ * shared by readers of signed artifact selectors as well as mutation paths.
+ */
+export function readConfinedTargetFile(targetRoot, relPath, encoding = 'utf8') {
+  const path = resolveTargetPath(targetRoot, relPath);
+  const entry = lstatSync(path, { throwIfNoEntry: false });
+  if (!entry || entry.isSymbolicLink() || !entry.isFile()) {
+    throw new Error(`target artifact is not a confined regular file: ${relPath}`);
+  }
+  const root = realpathSync.native?.(resolve(targetRoot)) ?? realpathSync(resolve(targetRoot));
+  const actual = realpathSync.native?.(path) ?? realpathSync(path);
+  const fromRoot = relative(root, actual);
+  if (!fromRoot || fromRoot.startsWith('..') || isAbsolute(fromRoot)) {
+    throw new Error(`target artifact escapes the selected target: ${relPath}`);
+  }
+  return { path: actual, content: readFileSync(actual, encoding) };
 }
 
 /**

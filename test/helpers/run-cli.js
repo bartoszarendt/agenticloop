@@ -43,6 +43,7 @@ class MemoryStream {
  * @param {string} [options.operatorTrustRoot]  Injectable host-owned trust registry root.
  * @param {string} [options.operatorActivationRoot]  Injectable per-user operator activation root.
  * @param {Function} [options.hostAuthority] Test transport for a signed host-boundary challenge response.
+ * @param {Function} [options.requiredCheckCommandRunner] Test-only required-check argv runner.
  * @param {Function|null} [options.auditProvenanceVerifier] Protected test-only Auditor receipt verifier.
  * @param {object} [options.fsMutationOptions]  Injectable filesystem mutation hooks.
  * @returns {Promise<{ status: number, stdout: string, stderr: string }>}
@@ -66,6 +67,7 @@ export async function runCliInProcess(argv, options = {}) {
     operatorTrustRoot: options.operatorTrustRoot,
     operatorActivationRoot: options.operatorActivationRoot,
     hostAuthority: options.hostAuthority,
+    requiredCheckCommandRunner: options.requiredCheckCommandRunner,
     auditProvenanceVerifier: Object.hasOwn(options, 'auditProvenanceVerifier')
       ? options.auditProvenanceVerifier
       : ({ reportDigest }) => ({ verified: true, reportDigest }),

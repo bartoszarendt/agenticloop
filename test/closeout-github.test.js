@@ -467,7 +467,7 @@ describe('github closeout evaluation', () => {
     return { full, carrier, comments, issues, mergedPr, state, runner };
   }
 
-  async function establishGitHubHandoff(name, harness) {
+  async function establishGitHubHandoff(name, harness, policy = null) {
     const fixture = await createDispatchFixture(tmpDir, `${name}-dispatch`, { workUnit: 'milestone:M00' });
     const target = fixture.root;
     writeFileSync(join(target, '.agenticloop', 'project.md'), [
@@ -475,7 +475,10 @@ describe('github closeout evaluation', () => {
       'task_backend: github', 'work_unit_audit: disabled', 'grouping_profile: milestone',
       '---', '', '# Project', '',
     ].join('\n'), 'utf8');
-    fixtureGit(target, ['add', '.agenticloop/project.md']);
+    if (policy) {
+      writeFileSync(join(target, 'agenticloop.json'), JSON.stringify({ activation: { mode: policy } }, null, 2));
+    }
+    fixtureGit(target, ['add', '.agenticloop/project.md', ...(policy ? ['agenticloop.json'] : [])]);
     fixtureGit(target, ['commit', '-m', 'configure GitHub closeout fixture']);
     const repository = fixture.repository;
     const currentHead = fixtureGit(target, ['rev-parse', 'HEAD']);
@@ -569,6 +572,7 @@ describe('github closeout evaluation', () => {
     const verification = createReturnVerification({
       target, packet, roleReturn, repositoryEvidence: evidence,
       producerReceipt: binding.producerReceipt, received,
+      requiredCheckEvidenceAssurance: 'unverified',
     });
     const stored = writeReturnVerification(target, verification);
     assert.equal(stored.ok, true, stored.errors.join('\n'));
@@ -629,9 +633,9 @@ describe('github closeout evaluation', () => {
     assert.ok(packet.reasons.some(item => item.category === 'inventory_incomplete'));
   });
 
-  it('records a trusted GitHub marker and reconstructs status after the packet is deleted', async () => {
+  it('refuses persisted GitHub return evidence before closeout publication', async () => {
     const harness = closeoutHarness();
-    const { target, fixture } = await establishGitHubHandoff('lifecycle', harness);
+    const { target, fixture } = await establishGitHubHandoff('lifecycle', harness, 'hardened');
     const options = {
       ghCommandRunner: harness.runner, operatorTrustRoot: fixture.operatorTrustRoot,
       hostAuthority: protectedHostBoundary(fixture.trust),
@@ -641,67 +645,48 @@ describe('github closeout evaluation', () => {
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
       '--artifact', `commit:${harness.full}`, '--output', packetPath, '--target', target,
     ], options);
-    assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
-    const recorded = await runCliInProcess([
-      'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
-    ], options);
-    assert.equal(recorded.status, 0, `${recorded.stdout}${recorded.stderr}`);
-    assert.equal(harness.comments.length, 1);
-    assert.match(recorded.stdout, /closeout_owned_accepted_to_closed/);
-    assert.match(harness.carrier.body, /status: "?closed"?/);
-    (await import('node:fs')).unlinkSync(packetPath);
-    const status = await runCliInProcess([
-      'closeout', 'status', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001', '--target', target,
-    ], options);
-    assert.equal(status.status, 0, `${status.stdout}${status.stderr}`);
-    assert.match(status.stdout, /complete \(current\)/);
+    assert.equal(prepared.status, 1);
+    assert.match(prepared.stdout, /required-check evidence assurance 'unverified'.*'authenticated_receipt'/);
+    assert.deepEqual(harness.comments, []);
+    // The fixture begins closed; refusal must not publish any new marker or
+    // mutate its carrier state.
+    assert.match(harness.carrier.body, /status: closed/);
   });
 
-  it('does not close covered tasks when a successful post is not remotely visible', async () => {
+  it('refuses persisted GitHub evidence before an unavailable closeout post can run', async () => {
     const harness = closeoutHarness({ publishVisible: false });
-    const { target, fixture } = await establishGitHubHandoff('post-not-visible', harness);
+    const { target, fixture } = await establishGitHubHandoff('post-not-visible', harness, 'hardened');
     const options = { ghCommandRunner: harness.runner, operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: protectedHostBoundary(fixture.trust) };
     const packetPath = join(target, '.agenticloop', 'tmp', 'github-packet.json');
     const prepared = await runCliInProcess([
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
       '--artifact', `commit:${harness.full}`, '--output', packetPath, '--target', target,
     ], options);
-    assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
-    harness.state.recording = true;
-    const recorded = await runCliInProcess([
-      'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
-    ], options);
-    assert.equal(recorded.status, 1);
-    assert.match(recorded.stderr, /not the unique current packet/);
-    assert.equal(harness.state.postAttempts, 1);
+    assert.equal(prepared.status, 1);
+    assert.match(prepared.stdout, /required-check evidence assurance 'unverified'.*'authenticated_receipt'/);
+    assert.equal(harness.state.postAttempts, 0);
     assert.deepEqual(harness.comments, []);
     assert.match(harness.carrier.body, /status: closed/);
   });
 
-  it('refuses publication when the trusted marker carrier changes after final evaluation', async () => {
+  it('refuses persisted GitHub evidence before marker-carrier publication checks', async () => {
     const harness = closeoutHarness({ conflictOnFinalRead: true });
-    const { target, fixture } = await establishGitHubHandoff('marker-race', harness);
+    const { target, fixture } = await establishGitHubHandoff('marker-race', harness, 'hardened');
     const options = { ghCommandRunner: harness.runner, operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: protectedHostBoundary(fixture.trust) };
     const packetPath = join(target, '.agenticloop', 'tmp', 'github-packet.json');
     const prepared = await runCliInProcess([
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
       '--artifact', `commit:${harness.full}`, '--output', packetPath, '--target', target,
     ], options);
-    assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
-    harness.state.recording = true;
-    const recorded = await runCliInProcess([
-      'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
-    ], options);
-    assert.equal(recorded.status, 1);
-    assert.match(recorded.stderr, /marker carrier changed after final evaluation/);
+    assert.equal(prepared.status, 1);
+    assert.match(prepared.stdout, /required-check evidence assurance 'unverified'.*'authenticated_receipt'/);
     assert.equal(harness.state.postAttempts, 0);
-    assert.equal(harness.comments.length, 1);
-    assert.match(harness.carrier.body, /status: closed/);
+    assert.deepEqual(harness.comments, []);
   });
 
   it('refuses GitHub publication when a covered task reopens in the final snapshot', async () => {
     const harness = closeoutHarness();
-    const { target, fixture } = await establishGitHubHandoff('final-reopen', harness);
+    const { target, fixture } = await establishGitHubHandoff('final-reopen', harness, 'hardened');
     let inventoryReads = 0;
     const runner = (command, args) => {
       if (args[0] === 'issue' && args[1] === 'list') {
@@ -717,15 +702,12 @@ describe('github closeout evaluation', () => {
       hostAuthority: protectedHostBoundary(fixture.trust),
     };
     const packetPath = join(target, '.agenticloop', 'tmp', 'github-packet.json');
-    assert.equal((await runCliInProcess([
+    const prepared = await runCliInProcess([
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
       '--artifact', `commit:${harness.full}`, '--output', packetPath, '--target', target,
-    ], options)).status, 0);
-    const recorded = await runCliInProcess([
-      'closeout', 'record', '--packet', packetPath, '--yes', '--target', target,
     ], options);
-    assert.equal(recorded.status, 1);
-    assert.match(recorded.stderr, /GitHub state changed/);
+    assert.equal(prepared.status, 1);
+    assert.match(prepared.stdout, /required-check evidence assurance 'unverified'.*'authenticated_receipt'/);
     assert.deepEqual(harness.comments, []);
   });
 });

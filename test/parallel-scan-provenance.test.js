@@ -2040,3 +2040,78 @@ describe('task backend selection', () => {
     assert.equal(decomposition.scan.inventory.enumeration.enumerator, 'agenticloop.files-task-directory.v1');
   });
 });
+
+describe('dependency revalidation selector persistence', () => {
+  it('persists a target-relative sourceRef distinct from the semantic source identity', () => {
+    const { scan } = filesScan([{ taskId: 'T-001', dependsOn: ['T-000'] }], {
+      dependencies: { 'T-000': 'resolved' },
+    });
+    const dependencies = scan.readinessContext.dependencies;
+    // The semantic identity the snapshot declares about itself is not a path;
+    // the artifact selector used to reopen the exact snapshot is.
+    assert.equal(dependencies.source, 'files:.agenticloop/dependencies.json');
+    assert.equal(dependencies.sourceRef, 'dependencies.json');
+    assert.equal(validateParallelScanRecord(scan, { now: NOW }).ok, true);
+  });
+
+  it('refuses dependency evidence without an exact confined revalidation selector', () => {
+    for (const sourceRef of ['/absolute/dependencies.json', '../escape.json', 'C:/deps.json', 'a/../b.json', '']) {
+      const evidence = dependencyEvidence({ 'T-000': 'resolved' });
+      evidence.revalidationArgs = ['--dependencies', sourceRef];
+      const result = filesScan([{ taskId: 'T-001', dependsOn: ['T-000'] }], {
+        dependencies: { 'T-000': 'resolved' },
+        readinessContext: { base: BASE_EVIDENCE, dependencies: evidence },
+      });
+      assert.equal(result.ok, false, sourceRef);
+      assert.ok(
+        result.result.errors.some(error => /revalidation selector/.test(error)),
+        `${sourceRef}: ${result.result.errors.join('\n')}`
+      );
+    }
+  });
+
+  it('rejects a record whose persisted selector escapes the target', () => {
+    const { scan } = filesScan([{ taskId: 'T-001', dependsOn: ['T-000'] }], {
+      dependencies: { 'T-000': 'resolved' },
+    });
+    for (const sourceRef of ['/absolute/dependencies.json', '../escape.json', 'C:/deps.json']) {
+      const tampered = structuredClone(scan);
+      tampered.readinessContext.dependencies.sourceRef = sourceRef;
+      rehashScan(rehashReadinessContext(tampered));
+      const checked = validateParallelScanRecord(tampered, { now: NOW });
+      assert.equal(checked.ok, false, sourceRef);
+      assert.ok(
+        checked.errors.some(error => /sourceRef must be a canonical target-relative artifact path/.test(error)),
+        `${sourceRef}: ${checked.errors.join('\n')}`
+      );
+    }
+  });
+
+  it('revalidates the bound selector against the authoritative refetch', () => {
+    const { scan } = filesScan([{ taskId: 'T-001', dependsOn: ['T-000'] }], {
+      dependencies: { 'T-000': 'resolved' },
+    });
+    const moved = dependencyEvidence({ 'T-000': 'resolved' });
+    moved.revalidationArgs = ['--dependencies', 'other/dependencies.json'];
+    const rebound = validateParallelScanReadinessBinding(scan, {
+      base: BASE_EVIDENCE,
+      dependencies: moved,
+    });
+    assert.equal(rebound.ok, false);
+    assert.ok(rebound.errors.some(error => /revalidation selector changed/.test(error)));
+  });
+
+  it('routes an authentic schemaVersion 1 record to typed regeneration with the exact repair command', () => {
+    const { scan } = filesScan([{ taskId: 'T-001', dependsOn: ['T-000'] }], {
+      dependencies: { 'T-000': 'resolved' },
+    });
+    const legacy = structuredClone(scan);
+    legacy.schemaVersion = 1;
+    delete legacy.readinessContext.dependencies.sourceRef;
+    const checked = validateParallelScanRecord(legacy, { now: NOW });
+    assert.equal(checked.ok, false);
+    const message = checked.errors.find(error => /superseded/.test(error));
+    assert.ok(message, checked.errors.join('\n'));
+    assert.match(message, /task prepare-decomposition <id> --work-unit <id> --source-ref <path> --source-revision <ref> --base <ref-or-tree> --dependencies <path>/);
+  });
+});

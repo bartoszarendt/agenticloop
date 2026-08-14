@@ -1,5 +1,6 @@
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -71,7 +72,7 @@ import { fileMatchesScopePattern } from './scope-matcher.js';
 import { createValidationResult, validationResultDigest, VALIDATION_RESULT_KIND } from './result-envelope.js';
 import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
 import { evaluateTaskReadiness } from './task-readiness.js';
-import { executeMutationBatch } from './fs-mutation-kernel.js';
+import { executeMutationBatch, resolveTargetPath } from './fs-mutation-kernel.js';
 import { createTaskContractBaselineRecord, createTaskContractCorrectionRecord, taskContractDigest, trustedChainTerminal, validActivationCaptureRef, validateTaskContractBaseline } from './task-contract-baseline.js';
 import { appendFilesTaskContractRecord, loadFilesTaskContractRecords } from './files-task-contract.js';
 import { genericTerminalRefusalMessage, resolveCanonicalTerminalScope } from './terminal-scope.js';
@@ -80,16 +81,20 @@ import { assertLifecycleHandoffResolved } from './lifecycle-plan.js';
 import {
   activationCapabilityInventory,
   activationCaptureDisposition,
+  dispatchPreparationDigest,
   prepareDecompositionSource,
   prepareRoleDispatch,
+  createRoleReturn,
+  authoritativePacketTaskBinding,
   receiveRoleReturn,
   validateActivationCapture,
+  validateDispatchPreparation,
   verifyDispatchBeforeMutation,
 } from './dispatch-envelope.js';
-import { loadHostTrustStore, targetRepositoryIdentity } from './host-trust.js';
+import { createExecutionReceiptReplayAuthority, loadHostTrustStore, targetRepositoryIdentity } from './host-trust.js';
 import { CommitRangeError, deriveCommitRange } from './commit-range.js';
 import { gitTreeObjectId, isGitObjectId } from './git-oid.js';
-import { verifyCommittedAttributedSource } from './committed-source.js';
+import { validateCommittedSourcePath, verifyCommittedAttributedSource } from './committed-source.js';
 import {
   createTaskInventoryEnumeration,
   normalizeFilesTaskInventory,
@@ -107,7 +112,9 @@ import {
 import { buildGitHubTaskIdentityInventory, resolveCoveredGitHubTask } from './github-task-identity.js';
 import { fetchGitHubTaskBody } from './github-task-body.js';
 import {
+  createAuthenticatedReturnVerification,
   createReturnVerification,
+  CURRENT_REQUIRED_CHECK_EVIDENCE_ASSURANCE,
   listReturnVerifications,
   writeReturnVerification,
 } from './return-verification.js';
@@ -125,6 +132,12 @@ import {
   listDispatchConsumptions,
   resolveCarrierLineage,
 } from './handoff-consumption.js';
+import { createDegradedEnforcementReports } from './host-role-capabilities.js';
+import { REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION, validateRequiredCheckEvidence, requiredCheckEvidenceMatchesInventory } from './required-checks.js';
+import { produceExecutionEvidence, parseRequiredCheckCommand, validateExecutionEvidence } from './execution-evidence.js';
+import { CANCELLATION_PROVENANCE_KIND, validateAuthoritativeCancellationProvenance } from './cancellation-provenance.js';
+import { isAbsoluteOrDriveQualifiedPath, isPathWithin, pathIdentity, samePathAuthority } from './path-identity.js';
+import { runRequiredCheckCommand } from './cross-platform-runner.js';
 
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -141,6 +154,13 @@ function implementationArtifactHead(content) {
 
 function taskLintCommandRunner(command, args, options = {}) {
   return spawnSync(command, args, { encoding: 'utf-8', ...options });
+}
+
+const REQUIRED_CHECK_TIMEOUT_MS = 300_000;
+
+/** Execute the task-authorized argv through the cross-platform runner. */
+function requiredCheckCommandRunner({ command, args, cwd }) {
+  return runRequiredCheckCommand({ command, args, cwd });
 }
 
 /**
@@ -247,7 +267,11 @@ const TASK_SUBCOMMAND_BACKENDS = Object.freeze({
   'authorize-correction': Object.freeze(['files']),
   'prepare-decomposition': Object.freeze(['files', 'github']),
   'prepare-dispatch': Object.freeze(['files', 'github']),
+  'prepare-return': Object.freeze(['files']),
   'verify-return': Object.freeze(['files', 'github']),
+  'check-evidence-init': Object.freeze(['files', 'github']),
+  'check-evidence-show': Object.freeze(['files', 'github']),
+  'check-evidence-update': Object.freeze(['files', 'github']),
   evidence: Object.freeze(['files']),
   'review-prepare': Object.freeze(['files']),
   status: Object.freeze(['files']),
@@ -454,6 +478,466 @@ function lintTaskFile(filePath, target, projectConfig, verificationContext) {
 /** Digest of one exact task-record byte sequence. */
 function taskRecordDigest(content) {
   return `sha256:${createHash('sha256').update(String(content ?? ''), 'utf8').digest('hex')}`;
+}
+
+/** Derive execution binding only from the authentic packet and current target facts. */
+function executionEvidenceBinding(target, projectConfig, taskId, packet, current = {}) {
+  const body = current.body ?? readFileSync(taskPathForId(target, projectConfig, taskId), 'utf8');
+  const contractDigest = current.contractDigest ?? taskContractDigest(body).digest;
+  const currentCarrierDigest = current.currentCarrierDigest ?? taskRecordDigest(body);
+  const repositoryHead = String(targetGitRunner(target)(['rev-parse', '--verify', 'HEAD']).stdout ?? '').trim();
+  // GitHub task carriers do not own the files-only implementation_artifact
+  // field. Their public execution route binds the current repository head,
+  // which the authenticated return receipt later rechecks as its product head.
+  const productHead = current.productHead ?? implementationArtifactHead(body) ??
+    (packet?.backend === 'github' ? repositoryHead : null);
+  if (!contractDigest || !currentCarrierDigest || !isGitObjectId(repositoryHead) || !isGitObjectId(productHead)) {
+    throw new VerificationContextMalformedError('execution evidence requires current task contract, carrier, repository, and product Git identities');
+  }
+  return {
+    packetId: packet.packetId,
+    packetDigest: packet.digest,
+    invocationId: packet.assignment.invocationId,
+    taskId,
+    taskContractDigest: contractDigest,
+    currentCarrierDigest,
+    repositoryHead,
+    productHead,
+  };
+}
+
+/**
+ * Revalidate a dispatch packet after role start without replaying the
+ * role-start repository-head check. Check evidence is only legal for the exact
+ * consumed packet generation, current task contract, and continuous carrier
+ * lineage; a self-consistent packet digest is never authority to execute.
+ */
+function validateConsumedCheckEvidencePacket(target, projectConfig, taskId, packet, io, hostTrustStore) {
+  const activationPolicy = resolveEffectiveActivationPolicy(target, io);
+  const hostRoleCapabilities = resolveEffectiveHostRoleCapabilities(target);
+  let consumedLegacyCapture = false;
+  try {
+    const capabilities = resolveActivationCapabilities(target, io, hostTrustStore);
+    const activationVerification = resolveActivationVerification(target, io, {
+      hostTrustStorePath: hostTrustStore,
+    });
+    const dispatch = validateDispatchPreparation(packet, {
+      capabilities,
+      hostRoleCapabilities,
+      assurancePolicy: { mode: activationPolicy.mode, policySource: activationPolicy.source },
+      verifyActivationSignature: activationVerification.verify,
+      resolveActivationBinding: candidate => resolvePacketActivationBinding(target, io, candidate, {
+        hostTrustStorePath: hostTrustStore,
+      }),
+    });
+    if (!dispatch.ok) {
+      throw new VerificationContextMalformedError(
+        `dispatch packet is not authentic for check evidence: ${dispatch.errors.join('; ')}`
+      );
+    }
+  } catch (error) {
+    // A standard-policy legacy capture has already passed canonical packet and
+    // signature validation at role start before its immutable consumption
+    // record was created.  The public check-evidence commands run after that
+    // boundary; they may reuse this exact consumed packet without requiring a
+    // second live host challenge. Hardened packets, grants, and every other
+    // validation error remain fail-closed here.
+    if (!(error instanceof VerificationContextUnsupportedBoundaryError) ||
+        activationPolicy.mode !== 'standard' ||
+        packet?.assurance?.activationSource !== 'legacy_task_capture') {
+      throw error;
+    }
+    consumedLegacyCapture = true;
+  }
+  const backend = resolveTaskBackend(target).backend;
+  if (packet.backend !== backend || packet.task?.id !== taskId ||
+      packet.assignment?.roleId !== 'engineer' ||
+      packet.assurance?.mode !== activationPolicy.mode ||
+      packet.assurance?.minimumActivation !== activationPolicy.minimumActivation ||
+      packet.assurance?.minimumReturn !== activationPolicy.minimumReturn ||
+      !samePathAuthority(packet.repository?.worktree, target) ||
+      !samePathAuthority(packet.assignment?.worktree, target) ||
+      targetRepositoryIdentity(packet.repository?.worktree) !== targetRepositoryIdentity(target)) {
+    throw new VerificationContextMalformedError(
+      'dispatch packet does not bind the selected target, current policy, and Engineer role'
+    );
+  }
+
+  let snapshot;
+  if (backend === 'github') {
+    const inventory = enumerateGitHubTaskInventory(projectConfig, io);
+    const resolvedTask = resolveCoveredGitHubTask(inventory.identityInventory, taskId);
+    if (!resolvedTask.found) throw new VerificationContextMalformedError(resolvedTask.error);
+    const fetched = fetchGitHubTaskBody({
+      issue: resolvedTask.issue.number,
+      repo: inventory.repo,
+      commandRunner: resolveGhRunner(io),
+      projectMapConfig: projectConfig,
+    });
+    snapshot = {
+      backend, taskId, carrier: `issue:${resolvedTask.issue.number}`,
+      body: fetched.body, digest: fetched.digest,
+      trustedRecords: fetched.trustedRecords, trustedRecordErrors: fetched.trustedRecordErrors,
+    };
+  } else {
+    const filePath = taskPathForId(target, projectConfig, taskId);
+    if (!existsSync(filePath)) {
+      throw new VerificationContextMalformedError(`task record not found: ${relative(target, filePath).replace(/\\/g, '/')}`);
+    }
+    const body = readFileSync(filePath, 'utf8');
+    snapshot = {
+      backend, taskId, carrier: relative(target, filePath).replace(/\\/g, '/'), body,
+      digest: taskRecordDigest(body),
+    };
+  }
+  const { body, digest: currentCarrierDigest } = snapshot;
+  const authoritative = authoritativePacketTaskBinding(snapshot);
+  if (!authoritative.ok) {
+    throw new VerificationContextMalformedError(
+      `current task contract cannot authorize check evidence: ${authoritative.error}`
+    );
+  }
+  const { dispatchCarrierDigest: _packetCarrierDigest, ...packetContract } = packet.task;
+  const { dispatchCarrierDigest: _currentCarrierDigest, ...currentContract } = authoritative.binding.task;
+  if (canonicalJson(packetContract) !== canonicalJson(currentContract)) {
+    throw new VerificationContextStaleError(
+      'dispatch packet required-check inventory or task contract does not equal the current authoritative task contract'
+    );
+  }
+  const lineage = resolveCarrierLineage(target, taskId, {
+    backend, taskContractDigest: authoritative.contract.digest, currentCarrierDigest,
+  });
+  const expectedWorkUnitIdentity = packet.decomposition?.workUnitId ??
+    packet.decomposition?.scan?.workUnit?.id ?? packet.decomposition?.workUnit?.id ?? null;
+  if (!lineage.ok ||
+      lineage.dispatchConsumption.packetId !== packet.packetId ||
+      lineage.dispatchConsumption.packetDigest !== packet.digest ||
+      lineage.dispatchConsumption.invocationId !== packet.assignment.invocationId ||
+      lineage.dispatchConsumption.workflowRole !== packet.assignment.roleId ||
+      lineage.dispatchConsumption.taskContractDigest !== authoritative.contract.digest ||
+      lineage.dispatchConsumption.dispatchCarrierDigest !== packet.task.dispatchCarrierDigest ||
+      lineage.dispatchConsumption.repositoryIdentity !== targetRepositoryIdentity(target) ||
+      !samePathAuthority(lineage.dispatchConsumption.worktreeRoot, target) ||
+      lineage.dispatchConsumption.workUnitIdentity !== expectedWorkUnitIdentity ||
+      lineage.dispatchCarrierDigest !== packet.task.dispatchCarrierDigest ||
+      lineage.currentCarrierDigest !== currentCarrierDigest) {
+    throw new VerificationContextStaleError(
+      `current dispatch consumption and carrier lineage do not bind the exact packet invocation: ${lineage.errors?.join('; ') || 'identity mismatch'}`
+    );
+  }
+  if (consumedLegacyCapture &&
+      (packet.digest !== dispatchPreparationDigest(packet) ||
+       packet.assurance?.activation !== 'host_signed' ||
+       lineage.dispatchConsumption.assuranceGrade !== 'host_signed')) {
+    throw new VerificationContextMalformedError(
+      'consumed legacy activation packet is not canonical and host-signed for standard check evidence'
+    );
+  }
+  return {
+    packet,
+    body,
+    contractDigest: authoritative.contract.digest,
+    currentCarrierDigest,
+    lineage,
+  };
+}
+
+function checkEvidencePaths(target, packetPath, inputPath = null, outputPath = null, executionOutputPath = null) {
+  const packet = publicTargetRelativePath(target, packetPath, 'dispatch packet');
+  const input = inputPath === null ? null : publicTargetRelativePath(target, inputPath, 'check evidence input');
+  const output = outputPath === null ? null : validateCheckEvidenceWritePath(
+    target,
+    publicTargetRelativePath(target, outputPath, 'check evidence output'),
+    'check evidence output',
+  );
+  const execution = executionOutputPath === null ? null : validateCheckEvidenceWritePath(
+    target,
+    publicTargetRelativePath(target, executionOutputPath, 'execution output'),
+    'execution output',
+  );
+  if ([input, output, execution].filter(Boolean).some(candidate => samePathAuthority(packet.path, candidate.path))) {
+    throw new VerificationContextMalformedError('dispatch packet path must not alias a check-evidence or execution artifact path');
+  }
+  if (execution !== null && output !== null && samePathAuthority(execution.path, output.path)) {
+    throw new VerificationContextMalformedError('execution output path must not alias the check-evidence output path');
+  }
+  return { packet, input, output, execution };
+}
+
+/**
+ * Validate a future public write through the mutation kernel's path resolver
+ * before a required command may run.  The kernel repeats this validation at
+ * commit time; this early pass makes unsafe destinations fail before command
+ * execution while retaining the batch's atomic write semantics.
+ */
+function validateCheckEvidenceWritePath(target, destination, label) {
+  try {
+    const path = resolveTargetPath(target, destination.relPath);
+    const entry = lstatSync(path, { throwIfNoEntry: false });
+    if (entry && (!entry.isFile() || entry.isSymbolicLink())) {
+      throw new VerificationContextMalformedError(`destination must be absent or an existing regular file: ${destination.relPath}`);
+    }
+    return { ...destination, path };
+  } catch (error) {
+    throw new VerificationContextMalformedError(
+      `${label} is not a safe target-confined write destination: ${error.message}`
+    );
+  }
+}
+
+function writeCheckEvidenceUpdate(target, execution, executionPath, checks, checksPath) {
+  const actions = [];
+  if (execution !== null) {
+    actions.push({ type: 'write', path: executionPath.relPath, content: `${JSON.stringify(execution, null, 2)}\n` });
+  }
+  actions.push({ type: 'write', path: checksPath.relPath, content: `${JSON.stringify(checks, null, 2)}\n` });
+  const applied = executeMutationBatch(target, actions);
+  if (!applied.ok) {
+    throw new VerificationContextMalformedError(
+      `check evidence could not be written atomically: ${[...applied.errors, ...applied.rollbackErrors].join('; ')}`
+    );
+  }
+}
+
+function publicTargetRelativePath(target, value, label) {
+  if (typeof value !== 'string' || !value.trim() || isAbsoluteOrDriveQualifiedPath(value)) {
+    throw new VerificationContextMalformedError(`${label} must be a non-empty target-relative path`);
+  }
+  const path = resolve(target, String(value));
+  const relPath = relative(target, path).replace(/\\/g, '/');
+  if (!relPath || relPath === '..' || relPath.startsWith('../')) {
+    throw new VerificationContextMalformedError(`${label} must resolve inside the selected target`);
+  }
+  return { path, relPath };
+}
+
+/** Read exactly one target-confined regular file without following leaf links. */
+function readTargetText(target, relPath, label) {
+  const { path } = publicTargetRelativePath(target, relPath, label);
+  try {
+    const entry = lstatSync(path);
+    if (!entry.isFile() || entry.isSymbolicLink() || !isPathWithin(path, target)) {
+      throw new VerificationContextMalformedError(`${label} must be a target-confined regular file`);
+    }
+    return readFileSync(path, 'utf8');
+  } catch (error) {
+    if (error instanceof VerificationContextMalformedError) throw error;
+    throw new VerificationContextMalformedError(`${label} is unreadable: ${error.message}`);
+  }
+}
+
+/** Read exactly one JSON value from a target-relative regular file. */
+function readTargetJson(target, relPath, label) {
+  try {
+    return JSON.parse(readTargetText(target, relPath, label));
+  } catch (error) {
+    if (error instanceof VerificationContextMalformedError) throw error;
+    throw new VerificationContextMalformedError(`${label} is unreadable or invalid JSON: ${error.message}`);
+  }
+}
+
+/** Atomically persist a public JSON artifact below the selected target. */
+function writeTargetJson(target, relPath, value) {
+  const destination = publicTargetRelativePath(target, relPath, 'output path');
+  const applied = executeMutationBatch(target, [{
+    type: 'write', path: destination.relPath, content: `${JSON.stringify(value, null, 2)}\n`,
+  }]);
+  if (!applied.ok) {
+    throw new VerificationContextMalformedError(`output could not be written atomically: ${[...applied.errors, ...applied.rollbackErrors].join('; ')}`);
+  }
+  return destination.path;
+}
+
+/**
+ * Classify one cancellation-evidence failure. A structurally broken record is
+ * malformed; a well-formed record that is not a usable Agentic Loop-controlled
+ * observation (absent, ambiguous, or for another request/invocation) leaves
+ * the cancellation outcome unknown and needs context.
+ */
+function cancellationEvidenceError(errors, prefix) {
+  const structural = errors.some(error =>
+    /fields must equal|identity is invalid|digest is invalid/.test(error));
+  const message = `${prefix}: ${errors.join('; ')}`;
+  return structural
+    ? new VerificationContextMalformedError(message)
+    : new VerificationContextError(message, {
+        requiredContext: ['an Agentic Loop-controlled cancellation observation bound to the exact consumed invocation'],
+      });
+}
+
+/**
+ * Receiving-boundary execution-evidence enforcement for files-backend returns.
+ *
+ * The packet's authenticated requiredCheckEvidenceContract selects this grammar.
+ * Field absence is never a compatibility selector.
+ */
+function enforceReturnedCommandCheckEvidence(target, wireReturn, packet, verifiedEvidence, taskId) {
+  const checks = wireReturn?.checks;
+  if (packet?.task?.requiredCheckEvidenceContract !== REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION) {
+    throw new VerificationContextMalformedError('dispatch packet does not select the current required-check evidence contract');
+  }
+  const checked = validateRequiredCheckEvidence(checks, {
+    label: 'role return', contractVersion: REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION,
+  });
+  if (!checked.ok) {
+    throw new VerificationContextMalformedError(`role return does not satisfy the authenticated required-check evidence contract: ${checked.errors.join('; ')}`);
+  }
+  for (const check of checks) {
+    if (check?.kind === 'command' && check.outcome !== 'passed' && check.executionEvidence != null) {
+      throw new VerificationContextMalformedError(
+        `command check '${check.id}' with outcome '${check.outcome}' must not carry an execution artifact reference`
+      );
+    }
+  }
+  validatePreparedCommandCheckExecutions(target, checks, packet.task.requiredChecks, {
+    packetId: packet.packetId,
+    packetDigest: packet.digest,
+    invocationId: packet.assignment.invocationId,
+    taskId,
+    taskContractDigest: wireReturn.task.taskContractDigest,
+    currentCarrierDigest: wireReturn.task.currentCarrierDigest,
+    repositoryHead: verifiedEvidence.workflowHead,
+    productHead: wireReturn.productHead,
+  });
+}
+
+/**
+ * A passed command observation is only usable when it binds the exact
+ * target-confined execution record emitted by check-evidence-update. The
+ * surrounding check JSON is editable, so its exit-code and prose are never
+ * accepted as a substitute for the closed execution record.
+ */
+function validatePreparedCommandCheckExecutions(target, checks, inventory, expectedBinding) {
+  const targetAuthority = pathIdentity(target).authorityPath;
+  const scratchAuthority = pathIdentity(join(target, '.agenticloop', 'tmp')).authorityPath;
+  for (const required of inventory) {
+    if (required.kind !== 'command') continue;
+    const check = checks.find(candidate => candidate?.id === required.id);
+    if (check?.outcome !== 'passed') continue;
+    const reference = check.executionEvidence;
+    if (!reference || typeof reference !== 'object' || Array.isArray(reference) ||
+        Object.keys(reference).length !== 2 || typeof reference.path !== 'string' || !reference.path.trim() ||
+         !/^sha256:agenticloop\.execution-evidence\.v3:[a-f0-9]{64}$/.test(String(reference.digest ?? ''))) {
+      throw new VerificationContextMalformedError(
+        `passed command check '${required.id}' requires a closed CLI execution artifact path and digest (executionEvidence)`
+      );
+    }
+    const artifactPath = publicTargetRelativePath(target, reference?.path, `passed command check '${required.id}' execution artifact`);
+    const execution = readTargetJson(target, artifactPath.relPath, `passed command check '${required.id}' execution artifact`);
+    const checked = validateExecutionEvidence(execution, { expectedBinding });
+    if (!checked.ok) {
+      throw new VerificationContextMalformedError(
+        `passed command check '${required.id}' execution artifact is invalid: ${checked.errors.join('; ')}`
+      );
+    }
+    let parsed;
+    try {
+      parsed = parseRequiredCheckCommand(required.command);
+    } catch (error) {
+      throw new VerificationContextMalformedError(
+        `required command check '${required.id}' is not safe inert argv: ${error.message}`
+      );
+    }
+    if (reference.digest !== execution.digest ||
+        execution.check.id !== required.id ||
+        execution.check.instruction !== required.command ||
+        execution.check.command !== parsed.command ||
+        JSON.stringify(execution.check.args) !== JSON.stringify(parsed.args) ||
+        execution.execution.outcome !== 'passed' || execution.execution.childExitCode !== 0 ||
+        !['carrierRoot', 'artifactWorktreeRoot', 'workingDirectory'].every(field =>
+          samePathAuthority(execution.locations[field].authorityPath, targetAuthority)) ||
+         !samePathAuthority(execution.locations.projectScratchRoot.authorityPath, scratchAuthority)) {
+      throw new VerificationContextMalformedError(
+        `passed command check '${required.id}' does not bind exact target CLI execution evidence`
+      );
+    }
+  }
+}
+
+function artifactSuccess({ taskId, outputPath, artifact, assuranceGrade }) {
+  return {
+    ok: true,
+    task_id: taskId,
+    outputPath,
+    artifactKind: artifact.kind,
+    schemaVersion: artifact.schemaVersion,
+    semanticDigest: artifact.digest,
+    assuranceGrade,
+  };
+}
+
+function checkEvidenceSuccess({ taskId, outputPath, checks, assuranceGrade }) {
+  return {
+    ok: true,
+    task_id: taskId,
+    outputPath,
+    artifactKind: 'agenticloop.required-check-evidence',
+    schemaVersion: 1,
+    semanticDigest: `sha256:agenticloop.required-check-evidence.v1:${canonicalSha256(checks)}`,
+    assuranceGrade,
+  };
+}
+
+function dispatchAssignmentFromCurrentFacts({ taskId, host, repository, backend, hostRoleCapabilities }) {
+  const declaration = hostRoleCapabilities?.[host]?.engineer;
+  if (!declaration) {
+    throw new VerificationContextMalformedError(
+      `no canonical effective host-role capability declaration exists for '${String(host)}/engineer'`
+    );
+  }
+  return {
+    roleId: 'engineer',
+    host,
+    hostRoleCapability: declaration,
+    degradedEnforcementReports: createDegradedEnforcementReports(declaration),
+    worktree: repository.worktree,
+    branch: repository.branch,
+    requiredCapabilities: ['implementation_mutation'],
+    canonicalReferences: ['agents/engineer.md', 'skills/role-delegation/SKILL.md', `backends/${backend}.md`],
+    attribution: { taskTrailer: `Task: ${taskId}`, agentTrailer: 'Agent: engineer' },
+    liveness: {
+      cadence: 'return after each check',
+      expiry: new Date(Date.now() + 3_600_000).toISOString(),
+      stopCondition: 'return on blocker',
+    },
+    cancellationBoundary: 'return_on_cancellation',
+    invocationId: `invocation:${randomUUID()}`,
+  };
+}
+
+function dispatchSourcesFromDurableState(target, taskId) {
+  const sourceRef = `.agenticloop/decompositions/${taskId}.json`;
+  const decomposition = readTargetJson(target, sourceRef, 'derived decomposition source');
+  const base = decomposition?.scan?.readinessContext?.base;
+  const dependency = decomposition?.scan?.readinessContext?.dependencies;
+  const regeneration =
+    `regenerate the decomposition source with 'agenticloop task prepare-decomposition ${taskId} ` +
+    `--work-unit <work-unit-id> --source-ref ${sourceRef} --source-revision <ref> --base <ref-or-tree> ` +
+    `--dependencies <path>' or use the advanced --input compatibility path`;
+  if (base?.kind !== 'git_tree' || typeof base?.identity !== 'string' || !base.identity.startsWith('git-tree:')) {
+    throw new VerificationContextMalformedError(
+      `derived dispatch sources require an exact Git-tree base selector; ${regeneration}`
+    );
+  }
+  // The semantic dependency source identity (for example
+  // `files:.agenticloop/tasks`) is never reinterpreted as a path. The persisted
+  // `sourceRef` is the only artifact selector, and it is validated through the
+  // same canonical target-relative confinement every committed source uses.
+  const dependencyRef = typeof dependency?.sourceRef === 'string' ? dependency.sourceRef : null;
+  if (dependencyRef === null || !validateCommittedSourcePath(dependencyRef).ok) {
+    throw new VerificationContextMalformedError(
+      `derived dispatch sources lack an exact target-relative dependency revalidation selector; ${regeneration}`
+    );
+  }
+  return {
+    decomposition,
+    readiness: {
+      evidence: {
+        base: { revalidationArgs: ['--base', base.identity.slice('git-tree:'.length)] },
+        dependencies: { revalidationArgs: ['--dependencies', dependencyRef] },
+      },
+    },
+  };
 }
 
 /**
@@ -1070,11 +1554,9 @@ export async function cmdTask(args, io = createIo()) {
   const TASK_SUBCOMMANDS = COMMAND_REGISTRY.task.subcommands;
   if (!sub || !TASK_SUBCOMMANDS[sub]) {
     const suggestion = sub ? suggestName(sub, Object.keys(TASK_SUBCOMMANDS)) : null;
-    io.err(suggestion
+    throw new CliUsageError(suggestion
       ? `task: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
-      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, verify-return, evidence, status.');
-    io.err('Run "agenticloop help task" for usage.');
-    return EXIT_USAGE;
+      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, status.');
   }
   const { opts, positional } = parseCommandArgs(`task ${sub}`, TASK_SUBCOMMANDS[sub], args.slice(1));
   const target = resolveCliTarget(io, opts.target);
@@ -1393,16 +1875,13 @@ export async function cmdTask(args, io = createIo()) {
     if (sub === 'prepare-dispatch') {
       const taskId = positional[0];
       const asJson = Boolean(opts.json);
-      if (!taskId || (!opts.input && !opts.packet) || (opts.input && opts.packet)) {
-        io.err('task prepare-dispatch requires <id> and exactly one of --input <dispatch-input.json> or --packet <packet.json>');
-        return EXIT_USAGE;
+      const advancedInput = Boolean(opts.input);
+      if (!taskId || (opts.input && opts.packet) || (!opts.packet && !advancedInput && (!opts.host || opts.role !== 'engineer'))) {
+        const error = new CliUsageError('task prepare-dispatch requires <id>; ordinary packet creation requires --host <host> and --role engineer, while --input remains an advanced compatibility route; --input and --packet are mutually exclusive');
+        return printGateResult('task prepare-dispatch', commandFailure('task prepare-dispatch', error, 'usage', {}, target), asJson, io, EXIT_USAGE);
       }
       const readJson = (relPath, label) => {
-        try {
-          return JSON.parse(readFileSync(resolve(target, String(relPath)), 'utf8'));
-        } catch (error) {
-          throw new VerificationContextMalformedError(`${label} is unreadable or invalid JSON: ${error.message}`);
-        }
+        return readTargetJson(target, relPath, label);
       };
       let input = null;
       let capabilities;
@@ -1459,15 +1938,21 @@ export async function cmdTask(args, io = createIo()) {
           trustedRecordErrors: fetched.trustedRecordErrors,
         };
       };
+      let derivedSources;
+      try {
+        derivedSources = opts.packet || advancedInput ? null : dispatchSourcesFromDurableState(target, taskId);
+      } catch (error) {
+        return printGateResult('task prepare-dispatch', commandFailure('task prepare-dispatch', error, 'operational_error', {}, target), asJson, io);
+      }
       const refetchReadiness = ({ snapshot }) => refetchDispatchReadiness(
         target,
         snapshot,
-        input?.readiness ?? packet?.readiness
+        derivedSources?.readiness ?? input?.readiness ?? packet?.readiness
       );
       const refetchRepository = ({ readiness }) => refetchDispatchRepository(target, readiness);
       const refetchDecomposition = ({ snapshot }) => refetchDispatchDecomposition(
         target,
-        input?.decomposition ?? packet?.decomposition,
+        derivedSources?.decomposition ?? input?.decomposition ?? packet?.decomposition,
         snapshot.taskId
       );
       const refetchParallelScanInventory = ({ decomposition }) => refetchDispatchParallelScanInventory(
@@ -1580,6 +2065,26 @@ export async function cmdTask(args, io = createIo()) {
           roleId: opts.role,
         }, dispatchOptions);
       } else {
+        let assignment;
+        try {
+          const readinessSource = derivedSources?.readiness ?? input?.readiness;
+          const repository = refetchDispatchRepository(target, {
+            evidence: { base: { identity: readinessSource?.evidence?.base?.revalidationArgs?.[1]?.startsWith('git-tree:')
+              ? readinessSource.evidence.base.revalidationArgs[1]
+              : `git-tree:${readinessSource?.evidence?.base?.revalidationArgs?.[1] ?? ''}` } },
+          });
+          assignment = advancedInput && input?.assignment
+            ? input.assignment
+            : dispatchAssignmentFromCurrentFacts({
+                taskId,
+                host: opts.host,
+                repository,
+                backend,
+                hostRoleCapabilities,
+              });
+        } catch (error) {
+          return printGateResult('task prepare-dispatch', commandFailure('task prepare-dispatch', error, 'operational_error', {}, target), asJson, io);
+        }
         prepared = prepareRoleDispatch({
           refetchTask,
           refetchReadiness,
@@ -1587,12 +2092,18 @@ export async function cmdTask(args, io = createIo()) {
           refetchDecomposition,
           ...stateInputs,
           activation: input?.activation,
-          assignment: input?.assignment,
+          assignment,
         }, dispatchOptions);
       }
       const presentedValidation = presentGateResultForTarget(prepared.validation, target);
+      const outputPath = prepared.ok && !opts.packet && opts.output
+        ? writeTargetJson(target, opts.output, prepared.packet)
+        : null;
       if (asJson) {
         if (prepared.ok && opts.packet) printGateResult('task prepare-dispatch', presentedValidation, true, io);
+        else if (prepared.ok && outputPath) io.out(JSON.stringify(artifactSuccess({
+          taskId, outputPath, artifact: prepared.packet, assuranceGrade: prepared.packet.assurance.activation,
+        })));
         else if (prepared.ok) io.out(JSON.stringify(prepared.packet, null, 2));
         else printGateResult('task prepare-dispatch', presentedValidation, true, io);
       }
@@ -1608,24 +2119,342 @@ export async function cmdTask(args, io = createIo()) {
       // stdout stays exactly one packet document so it can be piped. The two
       // assurance grades go to stderr, where a human sees them without a reader
       // having to dig them out of the packet.
-      if (prepared.ok) printDispatchAssurance(prepared.packet?.assurance ?? packet?.assurance, io);
+      if (prepared.ok && !asJson) printDispatchAssurance(prepared.packet?.assurance ?? packet?.assurance, io);
       return prepared.ok ? 0 : 1;
+      }
+
+      if (['check-evidence-init', 'check-evidence-show', 'check-evidence-update'].includes(sub)) {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      if (!taskId || !opts.packet) {
+        const error = new CliUsageError(`task ${sub} requires <id> and --packet <packet.json>`);
+        return printGateResult(`task ${sub}`, commandFailure(`task ${sub}`, error, 'usage', {}, target), asJson, io, EXIT_USAGE);
+        }
+        try {
+          const paths = checkEvidencePaths(
+            target,
+            opts.packet,
+            sub === 'check-evidence-init' ? null : opts.input,
+            opts.output ?? null,
+            sub === 'check-evidence-update' ? opts.executionOutput ?? null : null,
+          );
+          const packet = readTargetJson(target, paths.packet.relPath, 'dispatch packet');
+          const current = validateConsumedCheckEvidencePacket(
+            target, projectConfig, taskId, packet, io, opts.hostTrustStore,
+          );
+          if (sub === 'check-evidence-init') {
+            if (!opts.output) throw new CliUsageError('task check-evidence-init requires --output <path>');
+            const checks = packet.task.requiredChecks.map(required => ({
+            id: required.id,
+            kind: required.kind,
+            ...(required.kind === 'command'
+              ? { command: required.command, exitCode: -1, executionEvidence: null }
+              : { instruction: required.instruction, exitCode: null }),
+              outcome: 'not_run',
+              evidence: 'not yet recorded',
+            }));
+            const outputPath = writeTargetJson(target, paths.output.relPath, checks);
+            io.out(JSON.stringify(checkEvidenceSuccess({
+              taskId, outputPath, checks, assuranceGrade: packet.assurance?.activation ?? 'unknown',
+            })));
+            return 0;
+          }
+          if (sub === 'check-evidence-show') {
+            if (!opts.input) throw new CliUsageError('task check-evidence-show requires --input <path>');
+            const checks = readTargetJson(target, paths.input.relPath, 'check evidence');
+            const checked = validateRequiredCheckEvidence(checks, {
+              contractVersion: packet.task.requiredCheckEvidenceContract,
+            });
+            if (!checked.ok || !requiredCheckEvidenceMatchesInventory(checks, packet.task.requiredChecks, {
+              contractVersion: packet.task.requiredCheckEvidenceContract,
+            })) {
+              throw new VerificationContextMalformedError(`check evidence is invalid for the packet inventory: ${checked.errors.join('; ')}`);
+            }
+            validatePreparedCommandCheckExecutions(
+              target,
+              checked.checks,
+              packet.task.requiredChecks,
+              executionEvidenceBinding(target, projectConfig, taskId, packet, {
+                body: current.body,
+                contractDigest: current.contractDigest,
+                currentCarrierDigest: current.currentCarrierDigest,
+              }),
+            );
+            io.out(JSON.stringify(checked.checks, null, 2));
+            return 0;
+          }
+        if (!opts.input || !opts.output || !opts.check || !opts.outcome || typeof opts.evidence !== 'string') {
+          throw new CliUsageError('task check-evidence-update requires --input, --output, --check, --outcome, and --evidence');
+        }
+          const checks = readTargetJson(target, paths.input.relPath, 'check evidence');
+          const priorChecks = validateRequiredCheckEvidence(checks, {
+            contractVersion: packet.task.requiredCheckEvidenceContract,
+          });
+          if (!priorChecks.ok || !requiredCheckEvidenceMatchesInventory(checks, packet.task.requiredChecks, {
+            contractVersion: packet.task.requiredCheckEvidenceContract,
+          })) {
+            throw new VerificationContextMalformedError(`check evidence is invalid for the packet inventory: ${priorChecks.errors.join('; ')}`);
+          }
+          const required = packet.task.requiredChecks.find(item => item.id === opts.check);
+          if (!required) throw new VerificationContextMalformedError(`required check '${String(opts.check)}' is not in the packet inventory`);
+          const validatePriorExecutions = () => validatePreparedCommandCheckExecutions(
+            target,
+            priorChecks.checks,
+            packet.task.requiredChecks,
+            executionEvidenceBinding(target, projectConfig, taskId, packet, {
+              body: current.body,
+              contractDigest: current.contractDigest,
+              currentCarrierDigest: current.currentCarrierDigest,
+            }),
+          );
+          let evidenceText = opts.evidence;
+          let executionReference = null;
+          let execution = null;
+          if (required.kind === 'command' && opts.outcome === 'passed') {
+          if (!opts.executionOutput) {
+            throw new CliUsageError('a passed command check requires --execution-output <path>');
+          }
+          let parsed;
+          try {
+            parsed = parseRequiredCheckCommand(required.command);
+          } catch (error) {
+            throw new VerificationContextMalformedError(
+              `required command check '${required.id}' is not safe inert argv: ${error.message}`
+            );
+          }
+          // Refuse a missing execution selector or unsafe argv before requiring
+          // unrelated product-artifact state, but still validate every prior
+          // closed execution record before this command can be spawned.
+          validatePriorExecutions();
+          // This is the public trust boundary. The command text came from the
+          // packet's authenticated inventory; the CLI parses and executes that
+          // exact text itself, then persists the actual argv and child result.
+            execution = produceExecutionEvidence({
+            checkId: required.id,
+            instruction: required.command,
+            command: parsed.command,
+            args: parsed.args,
+            carrierRoot: target,
+            artifactWorktreeRoot: target,
+            workingDirectory: target,
+            projectScratchRoot: join(target, '.agenticloop', 'tmp'),
+            binding: executionEvidenceBinding(target, projectConfig, taskId, packet, {
+              body: current.body,
+              contractDigest: current.contractDigest,
+              currentCarrierDigest: current.currentCarrierDigest,
+            }),
+          }, { run: io.requiredCheckCommandRunner ?? requiredCheckCommandRunner });
+          if (execution.execution.outcome !== 'passed' || execution.execution.childExitCode !== 0) {
+            throw new VerificationContextError(
+              `required command check '${required.id}' did not pass (outcome ${execution.execution.outcome}, exit ${String(execution.execution.childExitCode)})`
+            );
+          }
+          evidenceText = `${evidenceText}\nExecution evidence: ${execution.digest}\nExecution artifact: ${paths.execution.relPath}`;
+          executionReference = {
+            path: paths.execution.relPath,
+            digest: execution.digest,
+          };
+        }
+        if (required.kind !== 'command' || opts.outcome !== 'passed') validatePriorExecutions();
+        const updated = checks.map(check => check?.id === required.id ? {
+          id: required.id,
+          kind: required.kind,
+          ...(required.kind === 'command'
+            ? { command: required.command, exitCode: opts.outcome === 'passed' ? 0 : Number(opts.exitCode) }
+            : { instruction: required.instruction, exitCode: null }),
+          outcome: opts.outcome,
+          evidence: evidenceText,
+          ...(required.kind === 'command' ? { executionEvidence: executionReference } : {}),
+        } : check);
+        const checked = validateRequiredCheckEvidence(updated, {
+          contractVersion: packet.task.requiredCheckEvidenceContract,
+        });
+        if (!checked.ok || !requiredCheckEvidenceMatchesInventory(updated, packet.task.requiredChecks, {
+          contractVersion: packet.task.requiredCheckEvidenceContract,
+        })) {
+          throw new VerificationContextMalformedError(`updated check evidence is invalid: ${checked.errors.join('; ')}`);
+        }
+        writeCheckEvidenceUpdate(target, executionReference === null ? null : execution, paths.execution, checked.checks, paths.output);
+        const outputPath = paths.output.path;
+        io.out(JSON.stringify(checkEvidenceSuccess({
+          taskId, outputPath, checks: checked.checks, assuranceGrade: packet.assurance?.activation ?? 'unknown',
+        })));
+        return 0;
+      } catch (error) {
+        return printGateResult(`task ${sub}`, commandFailure(`task ${sub}`, error, error instanceof CliUsageError ? 'usage' : 'operational_error', {}, target), asJson, io, error instanceof CliUsageError ? EXIT_USAGE : 1);
+      }
+    }
+
+    if (sub === 'prepare-return') {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      const cancellationClaim = opts.outcome === 'implementation_blocked';
+      if (!taskId || !opts.packet || !opts.checkEvidence || !opts.output ||
+          !['implementation_ready_for_review', 'implementation_blocked'].includes(opts.outcome) ||
+          (cancellationClaim && (opts.blockerCategory !== 'cancellation_requested' || !opts.cancellationEvidence)) ||
+          (!cancellationClaim && (opts.blockerCategory !== undefined || opts.cancellationEvidence !== undefined))) {
+        const error = new CliUsageError(
+          'task prepare-return requires <id>, --packet <packet.json>, --check-evidence <path>, --output <path>, and either ' +
+          '--outcome implementation_ready_for_review or --outcome implementation_blocked ' +
+          '--blocker-category cancellation_requested --cancellation-evidence <path>'
+        );
+        return printGateResult('task prepare-return', commandFailure('task prepare-return', error, 'usage', {}, target), asJson, io, EXIT_USAGE);
+      }
+      try {
+        const packet = readTargetJson(target, opts.packet, 'dispatch packet');
+        // Full revalidation belongs at role start, where the packet's initial
+        // repository head must still be current. A return necessarily follows
+        // Engineer product commits, so it instead authenticates the packet and
+        // proves its exact already-consumed invocation through carrier lineage.
+        const capabilities = resolveActivationCapabilities(target, io, opts.hostTrustStore);
+        const hostRoleCapabilities = resolveEffectiveHostRoleCapabilities(target);
+        const activationVerification = resolveActivationVerification(target, io, {
+          hostTrustStorePath: opts.hostTrustStore,
+        });
+        const activationPolicy = resolveEffectiveActivationPolicy(target, io);
+        const dispatch = validateDispatchPreparation(packet, {
+          capabilities,
+          hostRoleCapabilities,
+          assurancePolicy: { mode: activationPolicy.mode, policySource: activationPolicy.source },
+          verifyActivationSignature: activationVerification.verify,
+          resolveActivationBinding: candidate => resolvePacketActivationBinding(target, io, candidate, {
+            hostTrustStorePath: opts.hostTrustStore,
+          }),
+        });
+        if (!dispatch.ok) {
+          throw new VerificationContextMalformedError(
+            `dispatch packet is not authentic for return production: ${dispatch.errors.join('; ')}`
+          );
+        }
+        if (packet.backend !== 'files') {
+          throw new VerificationContextMalformedError('prepare-return supports the files backend only');
+        }
+        const checks = readTargetJson(target, opts.checkEvidence, 'check evidence');
+        if (packet?.backend !== 'files' || packet?.task?.id !== taskId || !requiredCheckEvidenceMatchesInventory(
+          checks,
+          packet?.task?.requiredChecks,
+          { contractVersion: packet?.task?.requiredCheckEvidenceContract }
+        )) {
+          const absentArtifact = Array.isArray(checks) && checks.find(check =>
+            check?.kind === 'command' && check?.outcome === 'passed' && !Object.hasOwn(check, 'executionEvidence')
+          );
+          if (absentArtifact) {
+            throw new VerificationContextMalformedError(
+              `passed command check '${absentArtifact.id}' requires a closed CLI execution artifact path and digest (executionEvidence)`
+            );
+          }
+          throw new VerificationContextMalformedError('packet and check evidence do not define one valid files-backed required-check inventory');
+        }
+        const checkedEvidence = validateRequiredCheckEvidence(checks, {
+          label: 'check evidence', contractVersion: packet?.task?.requiredCheckEvidenceContract,
+        });
+        const filePath = taskPathForId(target, projectConfig, taskId);
+        if (!existsSync(filePath)) throw new VerificationContextMalformedError(`task record not found: ${relative(target, filePath).replace(/\\/g, '/')}`);
+        const body = readFileSync(filePath, 'utf8');
+        const contract = taskContractDigest(body);
+        const currentCarrierDigest = taskRecordDigest(body);
+        const lineage = resolveCarrierLineage(target, taskId, {
+          backend: 'files', taskContractDigest: contract.digest, currentCarrierDigest,
+        });
+        if (!lineage.ok ||
+            lineage.dispatchConsumption.packetId !== packet.packetId ||
+            lineage.dispatchConsumption.packetDigest !== packet.digest ||
+            lineage.dispatchConsumption.invocationId !== packet.assignment.invocationId ||
+            lineage.dispatchCarrierDigest !== packet.task.dispatchCarrierDigest) {
+          throw new VerificationContextStaleError(
+            `current dispatch consumption and carrier lineage do not bind the exact packet invocation: ${lineage.errors?.join('; ') || 'identity mismatch'}`
+          );
+        }
+        const productHead = implementationArtifactHead(body);
+        if (!contract.ok || (!cancellationClaim && !isGitObjectId(productHead))) {
+          throw new VerificationContextMalformedError('current task facts lack a valid committed implementation_artifact product head');
+        }
+        // A cancellation claim is only ever an Agentic Loop-controlled
+        // observation bound to the exact consumed invocation. Host idle,
+        // completion, termination, or stop-reason state is never consulted.
+        let cancellation = null;
+        if (cancellationClaim) {
+          const provenance = readTargetJson(target, opts.cancellationEvidence, 'cancellation evidence');
+          const provenanceCheck = validateAuthoritativeCancellationProvenance(provenance);
+          if (!provenanceCheck.ok) {
+            throw cancellationEvidenceError(provenanceCheck.errors, 'cancellation evidence is not a usable Agentic Loop-controlled observation');
+          }
+          if (provenance.invocation.invocationId !== packet.assignment.invocationId) {
+            throw new VerificationContextMalformedError('cancellation evidence does not bind the consumed packet invocation');
+          }
+          cancellation = provenance;
+        }
+        validatePreparedCommandCheckExecutions(target, checks, packet.task.requiredChecks, executionEvidenceBinding(target, projectConfig, taskId, packet, {
+          body, contractDigest: contract.digest, currentCarrierDigest,
+          productHead: isGitObjectId(productHead) ? productHead : packet.repository.head,
+        }));
+        if (!checkedEvidence.ok) {
+          throw new VerificationContextMalformedError(
+            `check evidence does not satisfy the authenticated required-check evidence contract: ${checkedEvidence.errors.join('; ')}`
+          );
+        }
+        const evidence = refetchFilesReturnEvidence(target, packet, {
+          productHead: isGitObjectId(productHead) ? productHead : packet.repository.head,
+          checks,
+          task: { currentCarrierDigest },
+        });
+        const roleReturn = createRoleReturn({
+          producerRole: 'engineer',
+          packet: { packetId: packet.packetId, digest: packet.digest },
+          task: {
+            backend: 'files', id: taskId, taskContractDigest: contract.digest,
+            dispatchCarrierDigest: packet.task.dispatchCarrierDigest,
+            currentCarrierDigest,
+          },
+          worktree: evidence.worktree,
+          branch: evidence.branch,
+          productBaseHead: evidence.productBaseHead,
+          productHead: evidence.productHead,
+          workflowHead: evidence.workflowHead,
+          candidateHead: null,
+          productChangedPaths: evidence.productChangedPaths,
+          workflowChangedPaths: evidence.workflowChangedPaths,
+          checks,
+          productAttribution: evidence.productAttribution,
+          pr: evidence.pr,
+          carrierLineage: evidence.carrierLineage,
+          outcome: cancellationClaim
+            ? { kind: 'implementation_blocked', completion: false, authority: 'non_authoritative_role_outcome' }
+            : { kind: 'implementation_ready_for_review', completion: false, authority: 'non_authoritative_role_outcome' },
+          disposition: cancellationClaim ? 'blocked' : 'proceed',
+          blocker: cancellationClaim
+            ? {
+                category: 'cancellation_requested',
+                evidence: { kind: CANCELLATION_PROVENANCE_KIND, detail: cancellation.digest },
+                resumeOwner: 'engineer',
+                resumeTransition: 'implementation_resume',
+                resumePreconditions: {
+                  items: ['Issue a fresh dispatch packet for the unchanged task contract before resuming.'],
+                  justification: null,
+                },
+              }
+            : null,
+          freshness: { invalidatedBy: packet.freshness.invalidatedBy },
+        });
+        const outputPath = writeTargetJson(target, opts.output, roleReturn);
+        io.out(JSON.stringify(artifactSuccess({
+          taskId, outputPath, artifact: roleReturn,
+          assuranceGrade: lineage.dispatchConsumption.assuranceGrade,
+        })));
+        return 0;
+      } catch (error) {
+        return printGateResult('task prepare-return', commandFailure('task prepare-return', error, 'operational_error', {}, target), asJson, io);
+      }
     }
 
     if (sub === 'verify-return') {
       const taskId = positional[0];
       const asJson = Boolean(opts.json);
       if (!taskId || !opts.packet || !opts.return) {
-        io.err('task verify-return requires <id>, --packet <packet.json>, and --return <role-return.json>');
-        return EXIT_USAGE;
+        const error = new CliUsageError('task verify-return requires <id>, --packet <packet.json>, and --return <role-return.json>');
+        return printGateResult('task verify-return', commandFailure('task verify-return', error, 'usage', {}, target), asJson, io, EXIT_USAGE);
       }
-      const readJsonText = (relPath, label) => {
-        try {
-          return readFileSync(resolve(target, String(relPath)), 'utf8');
-        } catch (error) {
-          throw new VerificationContextMalformedError(`${label} is unreadable: ${error.message}`);
-        }
-      };
+      const readJsonText = (relPath, label) => readTargetText(target, relPath, label);
       let packet;
       let raw;
       let repositoryEvidence = null;
@@ -1635,6 +2464,7 @@ export async function cmdTask(args, io = createIo()) {
       let humanDisposition = null;
       let exceptionalVerification = null;
       let exceptionalReceipt = null;
+      let executionReceipt = null;
       let capabilities;
       let hostRoleCapabilities;
       let workflowRoleRegistry;
@@ -1647,6 +2477,9 @@ export async function cmdTask(args, io = createIo()) {
         hostRoleCapabilities = resolveEffectiveHostRoleCapabilities(target);
         workflowRoleRegistry = resolveEffectiveWorkflowRegistry(target);
         returnPolicy = resolveEffectiveActivationPolicy(target, io);
+        if (opts.repositoryEvidence && opts.fromCurrentRepository) {
+          throw new CliUsageError('task verify-return accepts exactly one of --repository-evidence <path> or --from-current-repository');
+        }
         repositoryEvidence = opts.repositoryEvidence
           ? JSON.parse(readJsonText(opts.repositoryEvidence, 'repository evidence'))
           : null;
@@ -1668,8 +2501,11 @@ export async function cmdTask(args, io = createIo()) {
         exceptionalReceipt = opts.exceptionalReceipt
           ? JSON.parse(readJsonText(opts.exceptionalReceipt, 'exceptional verification receipt'))
           : null;
+        executionReceipt = opts.executionReceipt
+          ? JSON.parse(readJsonText(opts.executionReceipt, 'execution receipt'))
+          : null;
       } catch (error) {
-        return printGateResult('task verify-return', commandFailure('task verify-return', error, 'operational_error', {}, target), asJson, io);
+        return printGateResult('task verify-return', commandFailure('task verify-return', error, error instanceof CliUsageError ? 'usage' : 'operational_error', {}, target), asJson, io, error instanceof CliUsageError ? EXIT_USAGE : 1);
       }
       const hasHumanDispositionSelector =
         opts.humanDispositionAuthority !== undefined ||
@@ -1703,6 +2539,24 @@ export async function cmdTask(args, io = createIo()) {
         return EXIT_USAGE;
       }
       const backend = selectedBackend.backend;
+      if (backend === 'files' && repositoryEvidence) {
+        const repositoryChecks = validateRequiredCheckEvidence(repositoryEvidence.checks, {
+          label: 'repository evidence',
+        });
+        if (!repositoryChecks.ok) {
+          const artifactCheck = Array.isArray(repositoryEvidence.checks) && repositoryEvidence.checks.find(check =>
+            check?.kind === 'command' && Object.hasOwn(check, 'executionEvidence')
+          );
+          if (artifactCheck) {
+            throw new VerificationContextMalformedError(
+              `repository evidence command check '${artifactCheck.id}' must not carry an execution artifact reference (executionEvidence)`
+            );
+          }
+          throw new VerificationContextMalformedError(
+            `repository evidence does not satisfy the baseline required-check observation grammar: ${repositoryChecks.errors.join('; ')}`
+          );
+        }
+      }
       const filePath = backend === 'files' ? taskPathForId(target, projectConfig, taskId) : null;
       const carrier = filePath ? relative(target, filePath).replace(/\\/g, '/') : null;
       let githubSnapshot = null;
@@ -1734,6 +2588,18 @@ export async function cmdTask(args, io = createIo()) {
         };
       };
       let verifiedRepositoryEvidence = null;
+      // `--from-current-repository` is files-only. The verification boundary
+      // rederives Git topology from the live repository, takes the product head
+      // and carrier digest from the exact current task carrier, and takes only
+      // the required-check observations from the producing role's return -
+      // caller-authored repository evidence is never current authority.
+      if (opts.fromCurrentRepository && backend !== 'files') {
+        const error = new CliUsageError(
+          'task verify-return --from-current-repository is supported for the files backend only; ' +
+          'the GitHub backend requires --repository-evidence authenticated at the protected boundary'
+        );
+        return printGateResult('task verify-return', commandFailure('task verify-return', error, 'usage', {}, target), asJson, io, EXIT_USAGE);
+      }
       const refetchRepositoryEvidence = repositoryEvidence
         ? () => {
             verifiedRepositoryEvidence = backend === 'github'
@@ -1744,7 +2610,19 @@ export async function cmdTask(args, io = createIo()) {
               : refetchFilesReturnEvidence(target, packet, repositoryEvidence);
             return verifiedRepositoryEvidence;
           }
-        : null;
+        : opts.fromCurrentRepository
+          ? () => {
+              const body = readFileSync(filePath, 'utf8');
+              let returnChecks;
+              try { returnChecks = JSON.parse(raw)?.checks; } catch { returnChecks = undefined; }
+              verifiedRepositoryEvidence = refetchFilesReturnEvidence(target, packet, {
+                productHead: implementationArtifactHead(body) ?? packet?.repository?.head,
+                checks: returnChecks,
+                task: { currentCarrierDigest: taskRecordDigest(body) },
+              });
+              return verifiedRepositoryEvidence;
+            }
+          : null;
       // Verification consumes only the operator-pinned public key. No signing
       // secret is read from the environment, so an agent invoking this command
       // cannot mint a receipt for itself. The raw receipt travels into the
@@ -1807,21 +2685,86 @@ export async function cmdTask(args, io = createIo()) {
       let returnVerification = null;
       if (received.ok && received.exceptional === undefined) {
         try {
-          returnVerification = createReturnVerification({
-            target,
-            packet,
-            roleReturn: JSON.parse(raw),
+          const wireReturn = JSON.parse(raw);
+          const cancellationClaimed = wireReturn?.disposition === 'blocked' &&
+            wireReturn?.blocker?.category === 'cancellation_requested';
+          if (cancellationClaimed) {
+            // The cancellation outcome stays unknown until an Agentic
+            // Loop-controlled observation bound to this exact consumed
+            // invocation is presented. Host state is never consulted.
+            if (!opts.cancellationEvidence) {
+              throw new VerificationContextError(
+                'a cancellation-blocked role return requires --cancellation-evidence <path> carrying the Agentic Loop-controlled observation; without it the cancellation outcome is unknown',
+                { requiredContext: ['--cancellation-evidence <path>'] }
+              );
+            }
+            const provenance = readTargetJson(target, opts.cancellationEvidence, 'cancellation evidence');
+            const provenanceCheck = validateAuthoritativeCancellationProvenance(provenance);
+            if (!provenanceCheck.ok) {
+              throw cancellationEvidenceError(provenanceCheck.errors, 'cancellation evidence is not a usable Agentic Loop-controlled observation');
+            }
+            if (provenance.invocation.invocationId !== packet.assignment.invocationId ||
+                provenance.digest !== wireReturn.blocker.evidence?.detail) {
+              throw new VerificationContextMalformedError(
+                'cancellation evidence does not bind the consumed packet invocation and the exact blocked-return claim'
+              );
+            }
+          } else if (opts.cancellationEvidence) {
+            throw new CliUsageError('--cancellation-evidence requires a cancellation-blocked role return');
+          }
+          if (backend === 'files' && verifiedRepositoryEvidence) {
+            enforceReturnedCommandCheckEvidence(target, wireReturn, packet, verifiedRepositoryEvidence, taskId);
+          }
+          if (executionReceipt !== null && producerReceipt === null) {
+            throw new CliUsageError('--execution-receipt requires --producer-receipt');
+          }
+          if (executionReceipt !== null) {
+            const trustedAdapter = resolveTrustedHostAdapter(
+              target, io, opts.hostTrustStore, packet.returnAdapter?.adapterId
+            );
+            const executionReceiptReplayAuthority = createExecutionReceiptReplayAuthority({
+              target,
+              trustedAdapter,
+              // This is an adapter-owned protected transport in production. The
+              // CLI intentionally has no fallback replay store; test IO is the
+              // only in-process seam that can emulate that external boundary.
+              protectedBoundary: io.hostAuthority,
+            });
+            returnVerification = createAuthenticatedReturnVerification({
+              target,
+              packet,
+              roleReturn: wireReturn,
+              repositoryEvidence: verifiedRepositoryEvidence,
+              producerReceipt,
+              received,
+              executionReceipt,
+              trustedAdapter,
+            });
+            const stored = writeReturnVerification(target, returnVerification, {
+              trustedAdapter,
+              executionReceiptReplayAuthority,
+            });
+            if (!stored.ok) {
+              throw new VerificationContextError(`authenticated return verification could not be persisted: ${stored.errors.join('; ')}`);
+            }
+            returnVerification = { record: returnVerification, path: stored.path };
+          } else {
+            returnVerification = createReturnVerification({
+              target,
+              packet,
+              roleReturn: wireReturn,
             repositoryEvidence: verifiedRepositoryEvidence,
             producerReceipt,
             received,
           });
-          const stored = writeReturnVerification(target, returnVerification);
-          if (!stored.ok) {
-            throw new VerificationContextError(`successful return verification could not be persisted: ${stored.errors.join('; ')}`);
+            const stored = writeReturnVerification(target, returnVerification);
+            if (!stored.ok) {
+              throw new VerificationContextError(`successful return verification could not be persisted: ${stored.errors.join('; ')}`);
+            }
+            returnVerification = { record: returnVerification, path: stored.path };
           }
-          returnVerification = { record: returnVerification, path: stored.path };
         } catch (error) {
-          return printGateResult('task verify-return', commandFailure('task verify-return', error, 'operational_error', {}, target), asJson, io);
+          return printGateResult('task verify-return', commandFailure('task verify-return', error, error instanceof CliUsageError ? 'usage' : 'operational_error', {}, target), asJson, io, error instanceof CliUsageError ? EXIT_USAGE : 1);
         }
       }
       if (asJson) printGateResult('task verify-return', presentedValidation, true, io);
@@ -2047,6 +2990,13 @@ export async function cmdTask(args, io = createIo()) {
       const returnId = recognition.boundIdentity.returnId;
       const verified = listReturnVerifications(target, taskId, {
         taskContractDigest: contract.digest,
+        resolveTrustedAdapter: adapterId => resolveTrustedHostAdapter(target, io, opts.hostTrustStore, adapterId),
+        resolveExecutionReceiptReplayAuthority: record => {
+          const trustedAdapter = resolveTrustedHostAdapter(
+            target, io, opts.hostTrustStore, record.producerAuthentication?.adapterId
+          );
+          return createExecutionReceiptReplayAuthority({ target, trustedAdapter, protectedBoundary: io.hostAuthority });
+        },
       });
       const matchingReturns = verified.records.filter(record =>
         record.evidence?.roleReturn?.returnId === returnId
@@ -2790,7 +3740,7 @@ export async function cmdTask(args, io = createIo()) {
       }));
     }
 
-    io.err(`Unknown task subcommand '${sub}'. Expected: list, lint, new, establish-baseline, authorize-correction, prepare-dispatch, verify-return, evidence, review-prepare, status.`);
+    io.err(`Unknown task subcommand '${sub}'. Expected: list, lint, new, establish-baseline, authorize-correction, prepare-dispatch, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, review-prepare, status.`);
     return EXIT_USAGE;
   } catch (error) {
     if (error instanceof CliUsageError) throw error;

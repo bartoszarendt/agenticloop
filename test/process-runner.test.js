@@ -122,14 +122,19 @@ describe('process runner', () => {
       'const { writeFileSync } = require("node:fs");',
       'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });',
       'writeFileSync(process.argv[1], String(child.pid));',
+      'process.stdout.write("READY\\n");',
       'setInterval(() => {}, 1000);',
     ].join('\n');
     let descendantPid;
     try {
       const result = await runProcess(process.execPath, ['-e', parent, pidPath], {
-        timeout: 150, terminationGrace: 50, settlementGrace: 100,
+        timeout: 150, timeoutAfterStdout: 'READY\n', startupTimeout: 1000,
+        terminationGrace: 50, settlementGrace: 100,
       });
       assert.equal(result.failure, 'timeout');
+      assert.equal(result.timedOut, true);
+      assert.equal(result.termination.readiness.observed, true);
+      assert.equal(result.termination.timeoutPhase, 'runtime');
       assert.equal(result.termination.scope, process.platform === 'win32' ? 'pid-tree' : 'process-group');
       if (process.platform === 'win32') {
         assert.equal(result.termination.initial.signal, null);

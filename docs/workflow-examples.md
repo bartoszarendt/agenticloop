@@ -133,13 +133,25 @@ claim; hardened mode rejects it.
 
 After approval, the orchestrator delegates to the engineer. The engineer:
 
-1. Confirms scope, out of scope, acceptance criteria, and required checks.
-2. Uses `[[tdd-implementation]]` for behavior changes.
-3. Uses `[[debugging-before-fixes]]` if a check fails.
-4. Runs required checks fresh.
-5. Publishes the implementation artifact required by the task record.
-6. Publishes the implementation summary with evidence in the backend's canonical location.
-7. Emits required gate events when event logging is enabled.
+1. Receives the packet from `npx agenticloop task prepare-dispatch <id> --host
+   <host> --role engineer --output <packet-path> --json` after guarded role start
+   has consumed and revalidated it.
+2. Confirms scope, out of scope, acceptance criteria, and required checks; uses
+   `[[tdd-implementation]]` for behavior changes and
+   `[[debugging-before-fixes]]` if a check fails.
+3. Initializes and updates CLI-authored required-check evidence with
+   `task check-evidence-init` and `task check-evidence-update`, then runs the
+   required checks fresh.
+4. Publishes the implementation artifact and derives the raw return with `task
+   prepare-return`.
+5. Has the receiver run `task verify-return <id> --packet <packet-path> --return
+   <return-path> --from-current-repository`; only then starts review.
+6. Publishes the implementation summary with evidence in the backend's canonical location and emits required gate events when event logging is enabled.
+
+Packet, evidence, and return paths are target-relative. The CLI authors those
+artifacts: do not inspect or hand-author their JSON/digests, and never treat host
+status, messages, opaque handles, or cancellation observations as a return or as
+proof of cancellation.
 
 For files-backed work, the implementation artifact and review outcome stay in the task file. For
 GitHub-backed work, they project to the linked PR and review markers.

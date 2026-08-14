@@ -20,7 +20,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, platform } from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { runCliInProcess, scriptedStdin } from './helpers/run-cli.js';
@@ -218,15 +218,42 @@ describe('zero-mutation safety', () => {
   it('a real process reports SIGINT as exit 130 on POSIX platforms', { skip: platform() === 'win32' }, async () => {
     const target = makeTarget();
     writeDocs(target);
-    const child = spawnSync(process.execPath, [BIN, 'setup', '--target', target], {
-      input: 'yes\n',
-      encoding: 'utf-8',
-      killSignal: 'SIGINT',
-      timeout: 5000,
+    const child = spawn(process.execPath, [BIN, 'setup', '--target', target], {
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
-    // Node child signal delivery is not portable to Windows; POSIX-only check.
-    assert.ok(child.status === 130 || child.signal === 'SIGINT',
-      `expected exit 130 or SIGINT termination, got status=${child.status} signal=${child.signal}`);
+    let output = '';
+    const exited = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', (status, signal) => resolve({ status, signal }));
+    });
+    const ready = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`setup prompt was not reached: ${output}`)), 5000);
+      const onOutput = chunk => {
+        output += chunk;
+        if (output.includes('Confirm project setup?')) {
+          clearTimeout(timeout);
+          child.stdout.off('data', onOutput);
+          child.stderr.off('data', onOutput);
+          resolve();
+        }
+      };
+      child.stdout.on('data', onOutput);
+      child.stderr.on('data', onOutput);
+    });
+    try {
+      await ready;
+      assert.equal(child.kill('SIGINT'), true, 'SIGINT must be delivered to the pending setup process');
+      const result = await Promise.race([
+        exited,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('setup did not exit after SIGINT')), 5000)),
+      ]);
+      // Node child signal delivery is not portable to Windows; POSIX-only check.
+      assert.ok(result.status === 130 || result.signal === 'SIGINT',
+        `expected exit 130 or SIGINT termination, got status=${result.status} signal=${result.signal}`);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await exited.catch(() => {});
+    }
   });
 });
 

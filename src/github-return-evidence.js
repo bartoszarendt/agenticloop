@@ -10,10 +10,14 @@ import {
  * Commit-range and changed-path facts are independently rederived by
  * receiveRoleReturn through its Git reader; this boundary proves that the PR
  * still names the same live head, branch, number, URL, and open state.
+ * Terminal closeout is the sole exception: it proves that this exact formerly
+ * open PR is now merged, while retaining the original evidence projection for
+ * the authenticated return comparison.
  */
 export function refetchGitHubReturnEvidence(suppliedEvidence, {
   commandRunner = defaultGhCommandRunner,
   repo,
+  historicalCloseout = false,
 } = {}) {
   const identities = ['productBaseHead', 'productHead', 'workflowHead']
     .map(field => [field, String(suppliedEvidence?.[field] ?? '').trim()]);
@@ -27,9 +31,12 @@ export function refetchGitHubReturnEvidence(suppliedEvidence, {
   if (!Number.isInteger(number) || number <= 0) {
     throw new VerificationContextMalformedError('GitHub return evidence requires a positive PR number');
   }
+  if (suppliedEvidence?.pr?.state !== 'open') {
+    throw new VerificationContextMalformedError('GitHub return evidence must record the open PR state observed for the role return');
+  }
   const args = [
     'pr', 'view', String(number),
-    '--json', 'number,state,url,headRefOid,headRefName',
+    '--json', 'number,state,url,headRefOid,headRefName,mergedAt,mergeCommit',
   ];
   if (repo) args.push('--repo', repo);
   let live;
@@ -45,7 +52,12 @@ export function refetchGitHubReturnEvidence(suppliedEvidence, {
   if (liveNumber !== number || !isGitObjectId(liveHead)) {
     throw new VerificationContextMalformedError('GitHub returned an invalid PR identity or head');
   }
-  if (String(live?.state ?? '').toUpperCase() !== 'OPEN') {
+  const liveState = String(live?.state ?? '').toUpperCase();
+  if (historicalCloseout) {
+    if (liveState !== 'MERGED' || !String(live?.mergedAt ?? '').trim() || !isGitObjectId(String(live?.mergeCommit?.oid ?? ''))) {
+      throw new VerificationContextStaleError(`GitHub PR #${number} is not a merged terminal PR for historical closeout evidence`);
+    }
+  } else if (liveState !== 'OPEN') {
     throw new VerificationContextStaleError(`GitHub PR #${number} is no longer open`);
   }
   if (liveHead !== suppliedEvidence.workflowHead ||
@@ -60,6 +72,9 @@ export function refetchGitHubReturnEvidence(suppliedEvidence, {
     ...structuredClone(suppliedEvidence),
     branch: liveBranch,
     workflowHead: liveHead,
-    pr: { state: 'open', number: liveNumber, url: liveUrl },
+    // A return is authenticated over its original open-state observation. The
+    // terminal proof above is an additional closeout-only condition, not a
+    // rewrite of that signed observation.
+    pr: structuredClone(suppliedEvidence.pr),
   };
 }

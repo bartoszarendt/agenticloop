@@ -26,10 +26,10 @@
  * signer accepts only the two canonical activation payload kinds.
  */
 
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, readdirSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { createHash, generateKeyPairSync } from 'node:crypto';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, parse, relative, resolve } from 'node:path';
 
 import { atomicCreateFile, atomicWriteFile } from './fs-mutation-kernel.js';
 import { validateActivationRevocation } from './activation-grant.js';
@@ -41,6 +41,7 @@ import {
   targetRepositoryIdentity,
   verifyHostPayload,
 } from './host-trust.js';
+import { displayPath, isPathOutside, pathIdentity } from './path-identity.js';
 
 export const OPERATOR_ACTIVATION_KEY_KIND = 'agenticloop.operator-activation-key';
 export const OPERATOR_ACTIVATION_KEY_SCHEMA_VERSION = 1;
@@ -63,13 +64,6 @@ function isObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function canonicalPath(path) {
-  const resolved = resolve(String(path));
-  if (!existsSync(resolved)) return resolved;
-  const nativeRealpath = realpathSync.native ?? realpathSync;
-  return nativeRealpath(resolved);
-}
-
 /** Fixed per-user operator activation root used by the public CLI. */
 export function defaultOperatorActivationRoot() {
   return join(homedir(), ...OPERATOR_ACTIVATION_DIRECTORY.split('/'));
@@ -84,7 +78,7 @@ export function defaultOperatorActivationRoot() {
 export function operatorActivationKeyPath(target, root = defaultOperatorActivationRoot()) {
   const identity = targetRepositoryIdentity(target);
   const digest = createHash('sha256').update(identity, 'utf8').digest('hex');
-  return join(canonicalPath(root), `${digest}.json`);
+  return join(displayPath(root), `${digest}.json`);
 }
 
 function repositoryActivationDigest(target) {
@@ -94,7 +88,31 @@ function repositoryActivationDigest(target) {
 export function externalActivationRevocationPath(target, revocationId, root = defaultOperatorActivationRoot()) {
   const suffix = String(revocationId ?? '').replace(/^revocation:/, '');
   if (!/^[0-9a-f-]{36}$/.test(suffix)) throw new TypeError('external activation revocation id is invalid');
-  return join(canonicalPath(root), 'revocations', repositoryActivationDigest(target), `${suffix}.json`);
+  return join(displayPath(root), 'revocations', repositoryActivationDigest(target), `${suffix}.json`);
+}
+
+function externalRevocationDirectory(target, root) {
+  return join(displayPath(root), 'revocations', repositoryActivationDigest(target));
+}
+
+/** Apply the operator-storage authority boundary to external revocation tombstones. */
+export function assertSafeExternalActivationRevocationPath(target, root, path) {
+  if (typeof root !== 'string' || !root.trim() || !isAbsolute(root)) {
+    throw new Error('operator activation root must be an absolute path');
+  }
+  const canonicalTarget = pathIdentity(target).authorityPath;
+  const canonicalRoot = pathIdentity(root).authorityPath;
+  const canonicalPath = pathIdentity(path).authorityPath;
+  const rootToDestination = relative(resolve(root), resolve(path));
+  if (!rootToDestination || rootToDestination === '..' ||
+      rootToDestination.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rootToDestination)) {
+    throw new Error('external activation revocation destination must remain below the operator activation root');
+  }
+  if (!isPathOutside(canonicalRoot, canonicalTarget) || !isPathOutside(canonicalPath, canonicalTarget)) {
+    throw new Error('operator activation root and external activation revocation destination must remain outside the target repository');
+  }
+  assertNoLinkComponents(root, 'operator activation root');
+  assertNoLinkComponents(path, 'external activation revocation destination');
 }
 
 /** Create the externally authoritative deny tombstone. Existing tombstones are immutable. */
@@ -104,7 +122,13 @@ export function writeExternalActivationRevocation(target, revocation, options = 
   if (revocation.repositoryIdentity !== targetRepositoryIdentity(target)) {
     return { ok: false, errors: ['external activation revocation targets a different repository'], path: null, created: false };
   }
-  const path = externalActivationRevocationPath(target, revocation.revocationId, options.operatorActivationRoot);
+  const root = options.operatorActivationRoot ?? defaultOperatorActivationRoot();
+  const path = externalActivationRevocationPath(target, revocation.revocationId, root);
+  try {
+    assertSafeExternalActivationRevocationPath(target, root, path);
+  } catch (error) {
+    return { ok: false, errors: [error.message], path, created: false };
+  }
   if (existsSync(path)) {
     try {
       const existing = JSON.parse(readFileSync(path, 'utf8'));
@@ -118,6 +142,8 @@ export function writeExternalActivationRevocation(target, revocation, options = 
     }
   }
   try {
+    mkdirSync(resolve(path, '..'), { recursive: true });
+    assertSafeExternalActivationRevocationPath(target, root, path);
     atomicCreateFile(path, `${JSON.stringify(revocation, null, 2)}\n`);
     return { ok: true, errors: [], path, created: true };
   } catch (error) {
@@ -127,7 +153,13 @@ export function writeExternalActivationRevocation(target, revocation, options = 
 
 /** Read all external deny tombstones. A present malformed registry fails closed. */
 export function readExternalActivationRevocations(target, options = {}) {
-  const directory = join(canonicalPath(options.operatorActivationRoot ?? defaultOperatorActivationRoot()), 'revocations', repositoryActivationDigest(target));
+  const root = options.operatorActivationRoot ?? defaultOperatorActivationRoot();
+  const directory = externalRevocationDirectory(target, root);
+  try {
+    assertSafeExternalActivationRevocationPath(target, root, directory);
+  } catch (error) {
+    return { ok: false, revocations: [], errors: [error.message], path: directory };
+  }
   if (!existsSync(directory)) return { ok: true, revocations: [], errors: [], path: directory };
   if (lstatSync(directory).isSymbolicLink()) return { ok: false, revocations: [], errors: ['external activation revocation registry must not be a symbolic link'], path: directory };
   const revocations = [];
@@ -135,6 +167,10 @@ export function readExternalActivationRevocations(target, options = {}) {
   try {
     for (const name of readdirSync(directory).sort()) {
       const path = join(directory, name);
+      try { assertSafeExternalActivationRevocationPath(target, root, path); } catch (error) {
+        errors.push(error.message);
+        continue;
+      }
       if (!name.endsWith('.json') || !statSync(path).isFile() || lstatSync(path).isSymbolicLink()) {
         errors.push(`external activation revocation registry contains unsupported entry '${name}'`);
         continue;
@@ -174,10 +210,38 @@ function applyOwnerProtection(path, mode) {
 }
 
 function rootOutsideTarget(target, root) {
-  const targetRoot = canonicalPath(target);
-  const operatorRoot = canonicalPath(root);
-  const fromTarget = relative(targetRoot, operatorRoot);
-  return Boolean(fromTarget) && (fromTarget.startsWith('..') || isAbsolute(fromTarget));
+  return isPathOutside(root, target);
+}
+
+function assertNoLinkComponents(path, label) {
+  const absolute = resolve(path);
+  const parsed = parse(absolute);
+  let current = parsed.root;
+  for (const segment of relative(parsed.root, absolute).split(/[\\/]/).filter(Boolean)) {
+    current = resolve(current, segment);
+    const entry = lstatSync(current, { throwIfNoEntry: false });
+    if (!entry) break;
+    if (entry.isSymbolicLink()) {
+      throw new Error(`${label} must not contain a symbolic link or junction component`);
+    }
+  }
+}
+
+/** Revalidate external private-key authority after root materialization and before writing. */
+export function assertSafeOperatorActivationKeyWritePath(target, root, path) {
+  const canonicalTarget = pathIdentity(target).authorityPath;
+  const canonicalRoot = pathIdentity(root).authorityPath;
+  const canonicalPath = pathIdentity(path).authorityPath;
+  const rootToDestination = relative(resolve(root), resolve(path));
+  if (!rootToDestination || rootToDestination === '..' ||
+      rootToDestination.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(rootToDestination)) {
+    throw new Error('operator activation key destination must remain below the operator activation root');
+  }
+  if (!isPathOutside(canonicalRoot, canonicalTarget) || !isPathOutside(canonicalPath, canonicalTarget)) {
+    throw new Error('operator activation key root and destination must remain outside the target repository');
+  }
+  assertNoLinkComponents(root, 'operator activation root');
+  assertNoLinkComponents(path, 'operator activation key destination');
 }
 
 function parseKeyDocument(text, { target, path }) {
@@ -267,7 +331,7 @@ export function loadOperatorActivationKey(target, options = {}) {
   if (lstatSync(path).isSymbolicLink()) {
     return { ok: false, state: 'malformed', key: null, errors: ['operator activation key must not be a symbolic link'], path };
   }
-  const realPath = canonicalPath(path);
+  const realPath = displayPath(path);
   if (!rootOutsideTarget(target, realPath)) {
     return { ok: false, state: 'malformed', key: null, errors: ['operator activation key resolves inside the target repository'], path: realPath };
   }
@@ -311,9 +375,27 @@ export function provisionOperatorActivationKey(target, options = {}) {
     createdAt: new Date(options.now ?? Date.now()).toISOString(),
   };
   const path = existing.path;
+  const root = options.operatorActivationRoot ?? defaultOperatorActivationRoot();
   const directory = resolve(path, '..');
+  // A missing root is only a provisional lexical fact; defend both the
+  // preexisting-link case and replacement while the directory is materialized.
+  try {
+    assertSafeOperatorActivationKeyWritePath(target, root, path);
+  } catch (error) {
+    return { ok: false, created: false, key: null, path, errors: [error.message], ownerProtection: null };
+  }
   mkdirSync(directory, { recursive: true });
+  try {
+    assertSafeOperatorActivationKeyWritePath(target, root, path);
+  } catch (error) {
+    return { ok: false, created: false, key: null, path, errors: [error.message], ownerProtection: null };
+  }
   const directoryProtection = applyOwnerProtection(directory, 0o700);
+  try {
+    assertSafeOperatorActivationKeyWritePath(target, root, path);
+  } catch (error) {
+    return { ok: false, created: false, key: null, path, errors: [error.message], ownerProtection: null };
+  }
   atomicWriteFile(path, `${JSON.stringify(document, null, 2)}\n`);
   const fileProtection = applyOwnerProtection(path, 0o600);
   const reloaded = loadOperatorActivationKey(target, options);

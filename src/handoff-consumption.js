@@ -7,6 +7,7 @@ import { GIT_OBJECT_ID_RE } from './git-oid.js';
 import { validateHandoffRecognition } from './handoff-recognition.js';
 import { executeMutationBatch } from './fs-mutation-kernel.js';
 import { validateCarrierMutationReceipt } from './task-evidence-contract.js';
+import { classifyLifecycleCompatibility, compatibilityMessage } from './lifecycle-compatibility.js';
 
 export const DISPATCH_CONSUMPTION_KIND = 'agenticloop.dispatch-consumption';
 export const DISPATCH_CONSUMPTION_SCHEMA_VERSION = 3;
@@ -147,9 +148,14 @@ export function listDispatchConsumptions(target, taskId, options = {}) {
   for (const name of readdirSync(directory).filter(value => value.endsWith('.json')).sort()) {
     try {
       const record = JSON.parse(readFileSync(join(directory, name), 'utf8'));
-      const checked = validateDispatchConsumption(record, { ...options, taskId, filename: name });
-      if (!checked.ok) errors.push(...checked.errors.map(error => `${name}: ${error}`));
-      else records.push(record);
+      const compatibility = classifyLifecycleCompatibility(record, DISPATCH_CONSUMPTION_KIND);
+      if (compatibility.state !== 'current') {
+        errors.push(`${name}: ${compatibilityMessage(compatibility, 'dispatch consumption')}`);
+      } else {
+        const checked = validateDispatchConsumption(record, { ...options, taskId, filename: name });
+        if (!checked.ok) errors.push(...checked.errors.map(error => `${name}: ${error}`));
+        else records.push(record);
+      }
     } catch (error) {
       errors.push(`${name}: dispatch consumption is unreadable: ${error.message}`);
     }
@@ -192,13 +198,18 @@ export function listCarrierMutationReceipts(target, taskId, { backend = null } =
   for (const name of readdirSync(directory).filter(value => value.endsWith('.json')).sort()) {
     try {
       const record = JSON.parse(readFileSync(join(directory, name), 'utf8'));
-      const checked = validateCarrierMutationReceipt(record);
-      if (!checked.ok) errors.push(`${name}: ${checked.errors.join('; ')}`);
-      else if (record.task.id !== taskId || (backend !== null && record.backend !== backend)) {
-        errors.push(`${name}: carrier mutation receipt identity does not match its storage task/backend`);
-      } else if (name !== `${safeSegment(record.receiptId)}.json`) {
-        errors.push(`${name}: carrier mutation receipt filename does not match its identity`);
-      } else records.push(record);
+      const compatibility = classifyLifecycleCompatibility(record, 'agenticloop.task-mutation-receipt');
+      if (compatibility.state !== 'current') {
+        errors.push(`${name}: ${compatibilityMessage(compatibility, 'carrier mutation receipt')}`);
+      } else {
+        const checked = validateCarrierMutationReceipt(record);
+        if (!checked.ok) errors.push(`${name}: ${checked.errors.join('; ')}`);
+        else if (record.task.id !== taskId || (backend !== null && record.backend !== backend)) {
+          errors.push(`${name}: carrier mutation receipt identity does not match its storage task/backend`);
+        } else if (name !== `${safeSegment(record.receiptId)}.json`) {
+          errors.push(`${name}: carrier mutation receipt filename does not match its identity`);
+        } else records.push(record);
+      }
     } catch (error) {
       errors.push(`${name}: carrier mutation receipt is unreadable: ${error.message}`);
     }
