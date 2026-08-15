@@ -1027,6 +1027,8 @@ describe('packed public handoff lifecycle', () => {
     const persistedReview = JSON.parse(readFileSync(join(fixture.root, reviewEntry.reviewEntryPath), 'utf8'));
     assert.equal(persistedReview.handoffRecognitionDigest, reviewEntry.handoff_recognition.digest);
     assert.equal(persistedReview.dispatchCarrierDigest, packet.task.dispatchCarrierDigest);
+    assert.equal(reviewEntry.findingResolutionMatrix, null, 'no finding-resolution matrix should be created when the task record has no Maintainer Review Fixup');
+    assert.equal(reviewEntry.matrixDecision, null);
   });
 
   it('upgrades a genuine 0.4.0 installation and exercises the public lifecycle', { timeout: 600000 }, async () => {

@@ -70,6 +70,7 @@ import { evaluateCommitAttribution } from './commit-attribution.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
 import { fileMatchesScopePattern } from './scope-matcher.js';
 import { createValidationResult, validationResultDigest, VALIDATION_RESULT_KIND } from './result-envelope.js';
+import { createDiagnostic } from './repair-policy.js';
 import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
 import { evaluateTaskReadiness } from './task-readiness.js';
 import { executeMutationBatch, resolveTargetPath } from './fs-mutation-kernel.js';
@@ -111,6 +112,22 @@ import {
 } from './activation-resolution.js';
 import { buildGitHubTaskIdentityInventory, resolveCoveredGitHubTask } from './github-task-identity.js';
 import { fetchGitHubTaskBody } from './github-task-body.js';
+import {
+  evaluateHandoffPreflight,
+} from './handoff-preflight.js';
+import {
+  applyHandoffEvidenceRefresh,
+  createHandoffEvidenceRefreshPlan,
+  validateHandoffRefreshPlan,
+} from './handoff-evidence-refresh.js';
+import {
+  createFindingResolutionMatrix,
+  detectFixupEpisodes,
+  metadataOnlyReviewDecision,
+  validateFindingResolutionMatrix,
+  validateFixupEpisode,
+} from './maintainer-fixup.js';
+import { parseFilesReviewHistory } from './review-history.js';
 import {
   createAuthenticatedReturnVerification,
   createReturnVerification,
@@ -267,6 +284,8 @@ const TASK_SUBCOMMAND_BACKENDS = Object.freeze({
   'authorize-correction': Object.freeze(['files']),
   'prepare-decomposition': Object.freeze(['files', 'github']),
   'prepare-dispatch': Object.freeze(['files', 'github']),
+  'handoff-preflight': Object.freeze(['files']),
+  'refresh-handoff-evidence': Object.freeze(['files']),
   'prepare-return': Object.freeze(['files']),
   'verify-return': Object.freeze(['files', 'github']),
   'check-evidence-init': Object.freeze(['files', 'github']),
@@ -1556,7 +1575,7 @@ export async function cmdTask(args, io = createIo()) {
     const suggestion = sub ? suggestName(sub, Object.keys(TASK_SUBCOMMANDS)) : null;
     throw new CliUsageError(suggestion
       ? `task: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
-      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, status.');
+      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, handoff-preflight, refresh-handoff-evidence, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, status.');
   }
   const { opts, positional } = parseCommandArgs(`task ${sub}`, TASK_SUBCOMMANDS[sub], args.slice(1));
   const target = resolveCliTarget(io, opts.target);
@@ -2122,6 +2141,174 @@ export async function cmdTask(args, io = createIo()) {
       if (prepared.ok && !asJson) printDispatchAssurance(prepared.packet?.assurance ?? packet?.assurance, io);
       return prepared.ok ? 0 : 1;
       }
+
+    if (sub === 'handoff-preflight') {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      if (!taskId) {
+        const error = new CliUsageError('task handoff-preflight requires <id>');
+        return printGateResult('task handoff-preflight', commandFailure('task handoff-preflight', error, 'usage', {}, target), asJson, io, EXIT_USAGE);
+      }
+      let result;
+      try {
+        result = evaluateHandoffPreflight({
+          target,
+          taskId,
+          backend: selectedBackend.backend,
+          projectConfig,
+          io,
+          hostTrustStore: opts.hostTrustStore,
+        });
+      } catch (error) {
+        return printGateResult('task handoff-preflight',
+          commandFailure('task handoff-preflight', error, 'operational_error', {}, target), asJson, io);
+      }
+      let refreshPlan = null;
+      let refreshPlanPath = null;
+      if (opts.repairPlan) {
+        try {
+          refreshPlan = createHandoffEvidenceRefreshPlan({ target, preflight: result });
+          refreshPlanPath = writeTargetJson(target, opts.repairPlan, refreshPlan);
+        } catch (error) {
+          return printGateResult('task handoff-preflight',
+            commandFailure('task handoff-preflight', error, 'operational_error', {}, target), asJson, io);
+        }
+      }
+      const presented = presentGateResultForTarget(result, target);
+      if (asJson) {
+        // Emit the closed domain schema directly; the verdict matches the
+        // human presentation because both are derived from the same result.
+        io.out(JSON.stringify({
+          ...result,
+          ...(refreshPlan ? {
+            refreshPlan,
+            refreshPlanPath: relative(target, refreshPlanPath).replace(/\\/g, '/'),
+          } : {}),
+        }, null, 2));
+      } else {
+        io.out();
+        io.out(`agenticloop task handoff-preflight ${taskId}`);
+        io.out('='.repeat(50));
+        io.out(`  task: ${presented.taskId}`);
+        io.out(`  backend: ${presented.backend}`);
+        io.out(`  carrier: ${presented.carrier}`);
+        io.out(`  carrier digest: ${presented.carrierDigest ?? '(unavailable)'}`);
+        io.out(`  contract digest: ${presented.contractDigest ?? '(unavailable)'}`);
+        io.out(`  operator authorization: ${presented.operatorAuthorization}`);
+        if (presented.activation) {
+          io.out(`  activation: ${presented.activation.source} (${presented.activation.assurance})`);
+          io.out(`  policy: ${presented.activation.policyMode} (${presented.activation.policySource})`);
+          io.out(`  activation usability: ${presented.activation.usability}`);
+        } else {
+          io.out('  activation: none');
+        }
+        if (presented.readiness) {
+          io.out(`  readiness: ${presented.readiness.ok ? 'pass' : 'FAIL'} (${presented.readiness.evidenceState})`);
+        }
+        if (presented.decomposition) {
+          io.out(`  decomposition: ${presented.decomposition.dispatchCompatible ? 'dispatchable' : 'NOT dispatchable'}`);
+          io.out(`  decomposition source: ${presented.decomposition.sourceRef}`);
+          io.out(`  maintainer attribution: ${presented.decomposition.maintainerAttribution}`);
+          io.out(`  inventory complete: ${presented.decomposition.inventoryComplete}`);
+          io.out(`  base mode: ${presented.decomposition.baseMode}`);
+        } else {
+          io.out('  decomposition: none');
+        }
+        if (presented.repository) {
+          io.out(`  worktree: ${presented.repository.worktree}`);
+          io.out(`  branch: ${presented.repository.branch ?? '(detached)'}`);
+          io.out(`  HEAD: ${presented.repository.head}`);
+          io.out(`  product base: ${presented.repository.productBase ?? '(none)'}`);
+        }
+        io.out(`  clean state: ${presented.cleanState}`);
+        if (presented.hostRoleCapability) {
+          io.out(`  host-role: ${presented.hostRoleCapability.host}/${presented.hostRoleCapability.roleId}`);
+        }
+        if (presented.returnAdapter) {
+          io.out(`  return adapter: ${presented.returnAdapter.state}${presented.returnAdapter.adapter ? ` (${presented.returnAdapter.adapter.adapterId})` : ''}`);
+        }
+        if (presented.siblingCollisions.length > 0) {
+          io.out('  sibling collisions:');
+          for (const collision of presented.siblingCollisions) {
+            io.out(`    ${collision.worktreePath}: ${collision.reason}`);
+          }
+        }
+        io.out(`  status: ${presented.ok ? 'READY' : 'BLOCKED'}`);
+        io.out(`  disposition owner: ${presented.dispositionOwner ?? '(none)'}`);
+        if (refreshPlanPath) io.out(`  refresh plan: ${relative(target, refreshPlanPath).replace(/\\/g, '/')}`);
+        for (const warning of presented.warnings ?? []) io.warn(`  WARN: ${warning}`);
+        for (const error of presented.errors ?? []) io.err(`  ERROR: ${error}`);
+        if (presented.firstSafeRepair) io.out(`  first safe repair: ${presented.firstSafeRepair}`);
+        io.out();
+      }
+      return presented.ok ? 0 : 1;
+    }
+
+    if (sub === 'refresh-handoff-evidence') {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      if (!taskId || !opts.plan || opts.yes !== true) {
+        const error = new CliUsageError(
+          'task refresh-handoff-evidence requires <id>, --plan <path>, and --yes; refresh is never implicit'
+        );
+        return printGateResult(
+          'task refresh-handoff-evidence',
+          commandFailure('task refresh-handoff-evidence', error, 'usage', {}, target),
+          asJson,
+          io,
+          EXIT_USAGE
+        );
+      }
+      try {
+        const plan = readTargetJson(target, opts.plan, 'handoff refresh plan');
+        const checkedPlan = validateHandoffRefreshPlan(plan, { target, taskId });
+        if (!checkedPlan.ok) {
+          const result = createValidationResult({
+            command: 'task refresh-handoff-evidence',
+            ok: false,
+            evidenceState: 'malformed',
+            disposition: 'rejected',
+            diagnostics: checkedPlan.errors.map(message =>
+              createDiagnostic({
+                code: 'handoff.refresh.plan.malformed',
+                message,
+                evidence: { state: 'malformed', supplied: true, rollbackAuthorized: false },
+              })
+            ),
+            firstSafeRepair: null,
+          });
+          return printGateResult('task refresh-handoff-evidence', result, asJson, io);
+        }
+        const current = evaluateHandoffPreflight({
+          target,
+          taskId,
+          backend: selectedBackend.backend,
+          projectConfig,
+          io,
+          hostTrustStore: opts.hostTrustStore,
+        });
+        const applied = applyHandoffEvidenceRefresh({ target, plan, preflight: current });
+        if (asJson) {
+          io.out(JSON.stringify(applied, null, 2));
+        } else {
+          io.out(`agenticloop task refresh-handoff-evidence ${taskId}`);
+          io.out(`  status: ${applied.ok ? 'REFRESHED' : 'BLOCKED'}`);
+          io.out(`  evidence: ${applied.evidenceState}`);
+          io.out(`  disposition: ${applied.disposition}`);
+          io.out(`  changed files: ${(applied.changedFiles ?? []).join(', ') || '(none)'}`);
+          for (const error of applied.errors ?? []) io.err(`  ERROR: ${error}`);
+          if (applied.firstSafeRepair) io.out(`  first safe repair: ${applied.firstSafeRepair}`);
+        }
+        return applied.ok ? 0 : 1;
+      } catch (error) {
+        return printGateResult(
+          'task refresh-handoff-evidence',
+          commandFailure('task refresh-handoff-evidence', error, 'operational_error', {}, target),
+          asJson,
+          io
+        );
+      }
+    }
 
       if (['check-evidence-init', 'check-evidence-show', 'check-evidence-update'].includes(sub)) {
       const taskId = positional[0];
@@ -2987,6 +3174,96 @@ export async function cmdTask(args, io = createIo()) {
           handoff_recognition: recognition,
         }, asJson, io);
       }
+
+      // Maintainer Review Fixup durable-disclosure validation: validate the
+      // shape of any fixup subsection using the shared checker, then build the
+      // finding-resolution matrix from the canonical review record (stable
+      // AGENT_REVIEW_FINDINGS IDs + Revision classification) rather than from
+      // fixup episodes.  The matrix routes record-only corrections without
+      // consuming an Engineer revision round; it does not hard-block review
+      // entry preparation.
+      let findingResolutionMatrix = null;
+      let matrixDecision = null;
+      const fixupEpisodes = detectFixupEpisodes(body);
+      if (fixupEpisodes.length > 0) {
+        const episodeErrors = [];
+        for (const episode of fixupEpisodes) {
+          episodeErrors.push(...validateFixupEpisode(episode, {
+            subject: `Task record '${carrier}'`,
+          }));
+        }
+        if (episodeErrors.length > 0) {
+          return printGateResult('task review-prepare', commandFailure('task review-prepare', new PublicCommandError(
+            `task record contains an invalid Maintainer Review Fixup: ${episodeErrors[0]}`, {
+              code: 'review.entry.fixup_invalid', evidenceState: 'malformed', disposition: 'blocked',
+              safeRepair: 'Repair the ## Maintainer Review Fixup subsection and rerun task review-prepare.',
+            }
+          ), 'operational_error', { task_id: taskId }, target), asJson, io);
+        }
+      }
+      // Scaffold the finding-resolution matrix from the canonical review
+      // record.  A null matrix on first review (no needs_revision outcome yet)
+      // is correct — the matrix populates on revision rounds when
+      // AGENT_REVIEW_FINDINGS exists.
+      const reviewHistory = parseFilesReviewHistory(body);
+      const needsRevisionEvents = reviewHistory.events.filter(
+        event => event.type === 'outcome' && event.status === 'needs_revision'
+      );
+      if (needsRevisionEvents.length > 0) {
+        const latestRevision = needsRevisionEvents.at(-1);
+        const protectedContractUnchanged = contract.ok &&
+          recognition.boundIdentity.taskContractDigest !== null &&
+          contract.digest === recognition.boundIdentity.taskContractDigest;
+        const boundProductArtifact = recognition.boundIdentity.productHead ?? '';
+        const currentProductArtifact = implementationArtifactHead(body) ?? '';
+        const fixupResolved = fixupEpisodes.length > 0 &&
+          fixupEpisodes.some(episode => /passed|resolved/i.test(String(episode.fields.verification_result ?? '')));
+        const classificationMap = {
+          record_only: 'record-only',
+          implementation_changing: 'implementation-changing',
+        };
+        const findings = latestRevision.findingIds.map(findingId => ({
+          findingId,
+          classification: classificationMap[latestRevision.classification] ?? 'implementation-changing',
+          disposition: fixupResolved ? 'resolved' : 'disputed',
+          evidence: fixupEpisodes.length > 0
+            ? [
+                fixupEpisodes[0].fields.finding,
+                fixupEpisodes[0].fields.correction,
+                fixupEpisodes[0].fields.verification_result,
+              ].filter(Boolean).join('; ')
+            : `review finding ${findingId} pending resolution`,
+        }));
+        findingResolutionMatrix = createFindingResolutionMatrix({
+          taskId,
+          productArtifact: boundProductArtifact,
+          workflowHead: recognition.boundIdentity.workflowHead,
+          carrierHead: currentCarrierDigest,
+          findings,
+        });
+        const matrixValidation = validateFindingResolutionMatrix(findingResolutionMatrix, {
+          taskId,
+          currentProductArtifact,
+          protectedContractUnchanged,
+        });
+        if (!matrixValidation.ok) {
+          return printGateResult('task review-prepare', commandFailure('task review-prepare', new PublicCommandError(
+            `finding-resolution matrix is stale or invalid: ${matrixValidation.errors[0]}`, {
+              code: 'review.entry.matrix_stale', evidenceState: 'changed', disposition: 'superseded',
+              safeRepair: `Refresh the finding-resolution matrix against the current product artifact ${currentProductArtifact} and rerun task review-prepare.`,
+            }
+          ), 'operational_error', { task_id: taskId }, target), asJson, io);
+        }
+        // Route and record the decision; do not hard-block review entry
+        // preparation.  Implementation-changing findings are routed to the
+        // Engineer for revision, but the review entry itself is still prepared.
+        matrixDecision = metadataOnlyReviewDecision(findingResolutionMatrix, {
+          taskId,
+          currentProductArtifact,
+          protectedContractUnchanged,
+        });
+      }
+
       const returnId = recognition.boundIdentity.returnId;
       const verified = listReturnVerifications(target, taskId, {
         taskContractDigest: contract.digest,
@@ -3093,6 +3370,8 @@ export async function cmdTask(args, io = createIo()) {
         verifiedReturn: receipt.verifiedReturn,
         carrierLineageTerminalDigest: receipt.carrierLineageTerminalDigest,
         handoff_recognition: recognition,
+        findingResolutionMatrix,
+        matrixDecision,
       };
       if (asJson) io.out(JSON.stringify(result, null, 2));
       else io.out(`Prepared files review entry for ${taskId}: ${reviewPath}`);
@@ -3740,7 +4019,7 @@ export async function cmdTask(args, io = createIo()) {
       }));
     }
 
-    io.err(`Unknown task subcommand '${sub}'. Expected: list, lint, new, establish-baseline, authorize-correction, prepare-dispatch, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, review-prepare, status.`);
+    io.err(`Unknown task subcommand '${sub}'. Expected: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, handoff-preflight, refresh-handoff-evidence, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, review-prepare, status.`);
     return EXIT_USAGE;
   } catch (error) {
     if (error instanceof CliUsageError) throw error;

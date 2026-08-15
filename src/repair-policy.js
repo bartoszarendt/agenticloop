@@ -134,6 +134,7 @@ export const REPAIR_POLICY = Object.freeze({
   'review_prepare.stale_head': policy('stale_head', 'refresh_review_preparation', 'none', 'Review preparation is stale relative to the current PR head.'),
   'review_prepare.packet': policy('review_packet', 'regenerate_review_packet', 'none', 'The review preparation packet is invalid.'),
   'attribution.trailer': policy('attribution', 'repair_attribution_trailer', 'none', 'Commit attribution trailer block is invalid.'),
+  'attribution.role': policy('attribution', 'repair_attribution_trailer', 'none', 'The expected commit-attribution role is not a canonical lowercase workflow role.'),
   'ready.preflight': policy('preflight', 'repair_preflight_gate', 'none', 'A preflight component gate failed.'),
   'ready.review_audit': policy('review_audit', 'repair_review_audit', 'none', 'The review-audit component gate failed.'),
   'ready.task_identity': policy('task_identity', 'repair_task_identity', 'none', 'Cross-carrier task identity is invalid.'),
@@ -166,6 +167,7 @@ export const REPAIR_POLICY = Object.freeze({
   'handoff.evidence.mismatched': policy('handoff', 'repair_evidence', 'none', 'Supplied handoff evidence binds a different task, role, packet, artifact, or worktree.'),
   'handoff.evidence.unsupported': policy('handoff', 'repair_evidence', 'none', 'Supplied handoff evidence declares a schema or assurance grade this boundary cannot evaluate.'),
   'handoff.evidence.unauthenticated': policy('handoff', 'repair_evidence', 'human_authority_review', 'Handoff evidence is session-reported or below the required assurance minimum and cannot authorize a protected transition.'),
+  'handoff.refresh.plan.malformed': policy('handoff', 'repair_evidence', 'none', 'Handoff evidence refresh plan is malformed or does not match the expected task binding.'),
 });
 
 function policy(category, repairKind, escalationKind, description) {

@@ -37,6 +37,13 @@ conventions.
 - **Durable**: credentials missing, task contradiction, merge conflict, review deadlock, missing human decision, or unavailable external dependency. Record a block immediately.
 - **Ambiguity**: if the task record is incomplete but the maintainer can fix it, use `needs_context` instead of blocked.
 
+Before routing a blocked handoff, use the read-only
+`npx agenticloop task handoff-preflight <id> --json` result. It reports the
+disposition owner and one safe repair without treating activation as operator
+authorization. A stale derived observation may use the explicit
+`task refresh-handoff-evidence <id> --plan <path> --yes` path; it cannot repair a
+protected task contract, human decision, review disposition, or product file.
+
 ## needs_context
 
 Use `needs_context` when the engineer cannot proceed because the task record is

@@ -16,6 +16,7 @@
  */
 
 import { markdownLines, parseAtxHeading } from './markdown.js';
+import { canonicalSha256 } from './canonical-json.js';
 
 /** The canonical durable disclosure heading. */
 export const MAINTAINER_FIXUP_HEADING = '## Maintainer Review Fixup';
@@ -38,6 +39,109 @@ export const FIXUP_FIELDS = Object.freeze([
   { key: 'verification_result', label: 'Verification result' },
   { key: 'resulting_artifact', label: 'Resulting artifact' },
 ]);
+
+export const FINDING_RESOLUTION_KIND = 'agenticloop.finding-resolution-matrix';
+export const FINDING_RESOLUTION_SCHEMA_VERSION = 1;
+export const FINDING_RESOLUTION_CLASSES = Object.freeze([
+  'implementation-changing', 'contract-changing', 'record-only',
+]);
+
+const FINDING_RESOLUTION_FIELDS = Object.freeze([
+  'kind', 'schemaVersion', 'taskId', 'artifact', 'entries',
+  'engineerRevisionConsumed', 'maintainerFixupEligible', 'digest',
+]);
+
+/** @param {any} value @param {readonly string[]} fields */
+function exactObject(value, fields) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).length === fields.length && Object.keys(value).every(key => fields.includes(key));
+}
+
+/** @param {any} value */
+function findingResolutionDigest(value) {
+  const { digest: _digest, ...projection } = value;
+  return `sha256:${FINDING_RESOLUTION_KIND}.v${FINDING_RESOLUTION_SCHEMA_VERSION}:${canonicalSha256(projection)}`;
+}
+
+/**
+ * Build the closed finding matrix used by review preparation and Maintainer
+ * fixup routing.
+ * @param {{ taskId?: string, productArtifact?: string, workflowHead?: string, carrierHead?: string, findings?: Array<{ findingId?: string, classification?: string, disposition?: string, evidence?: string }> }} [input]
+ */
+export function createFindingResolutionMatrix({
+  taskId, productArtifact, workflowHead, carrierHead, findings = [],
+} = {}) {
+  const entries = findings.map(item => ({
+    findingId: String(item?.findingId ?? '').trim(),
+    classification: String(item?.classification ?? '').trim(),
+    disposition: String(item?.disposition ?? '').trim(),
+    evidence: String(item?.evidence ?? '').trim(),
+  })).sort((left, right) => left.findingId.localeCompare(right.findingId));
+  const allRecordOnly = entries.length > 0 && entries.every(item => item.classification === 'record-only');
+  /** @type {any} */
+  const value = {
+    kind: FINDING_RESOLUTION_KIND,
+    schemaVersion: FINDING_RESOLUTION_SCHEMA_VERSION,
+    taskId: String(taskId ?? '').trim(),
+    artifact: {
+      product: String(productArtifact ?? '').trim(),
+      workflow: String(workflowHead ?? '').trim(),
+      carrier: String(carrierHead ?? '').trim(),
+    },
+    entries,
+    engineerRevisionConsumed: !allRecordOnly,
+    maintainerFixupEligible: allRecordOnly,
+    digest: null,
+  };
+  value.digest = findingResolutionDigest(value);
+  return Object.freeze(value);
+}
+
+/** @param {any} value @param {any} [options] */
+export function validateFindingResolutionMatrix(value, {
+  taskId = null, currentProductArtifact = null, protectedContractUnchanged = true,
+} = {}) {
+  const errors = [];
+  if (!exactObject(value, FINDING_RESOLUTION_FIELDS)) return { ok: false, errors: ['finding-resolution matrix fields must equal the closed schema'] };
+  if (value.kind !== FINDING_RESOLUTION_KIND || value.schemaVersion !== FINDING_RESOLUTION_SCHEMA_VERSION) errors.push('finding-resolution matrix identity is invalid');
+  if (!String(value.taskId ?? '').trim() || (taskId !== null && value.taskId !== taskId)) errors.push('finding-resolution matrix taskId is invalid or mismatched');
+  if (!exactObject(value.artifact, ['product', 'workflow', 'carrier']) || !value.artifact.product || !value.artifact.workflow || !value.artifact.carrier) errors.push('finding-resolution matrix must bind product, workflow, and carrier heads separately');
+  if (currentProductArtifact !== null && value.artifact.product !== currentProductArtifact) errors.push('finding-resolution matrix is stale for the current product artifact');
+  if (!Array.isArray(value.entries) || value.entries.length === 0) errors.push('finding-resolution matrix requires at least one finding');
+  const ids = new Set();
+  /** @type {any[]} */
+  const entries = Array.isArray(value.entries) ? value.entries : [];
+  for (const entry of entries) {
+    if (!exactObject(entry, ['findingId', 'classification', 'disposition', 'evidence'])) {
+      errors.push('finding-resolution matrix entries must use the closed finding shape');
+      continue;
+    }
+    if (!/^F-[1-9]\d*$/.test(entry.findingId) || ids.has(entry.findingId)) errors.push(`finding-resolution matrix finding id '${entry.findingId}' is invalid or duplicated`);
+    ids.add(entry.findingId);
+    if (!FINDING_RESOLUTION_CLASSES.includes(entry.classification)) errors.push(`finding '${entry.findingId}' has an invalid classification`);
+    if (!['resolved', 'disputed', 'blocked'].includes(entry.disposition)) errors.push(`finding '${entry.findingId}' has an invalid disposition`);
+    if (!entry.evidence) errors.push(`finding '${entry.findingId}' requires evidence`);
+  }
+  const recordOnly = entries.length > 0 && entries.every(entry => entry.classification === 'record-only');
+  if (value.maintainerFixupEligible !== recordOnly || value.engineerRevisionConsumed !== !recordOnly) errors.push('finding-resolution matrix routing flags do not match finding classifications');
+  if (!protectedContractUnchanged && value.maintainerFixupEligible) errors.push('protected contract changes cannot use metadata-only Maintainer fixup');
+  if (value.digest !== findingResolutionDigest(value)) errors.push('finding-resolution matrix digest is invalid');
+  return { ok: errors.length === 0, errors };
+}
+
+/** @param {any} value @param {any} [options] */
+export function metadataOnlyReviewDecision(value, options = {}) {
+  const checked = validateFindingResolutionMatrix(value, options);
+  if (!checked.ok) return { eligible: false, ownerRole: 'maintainer', engineerRevisionConsumed: true, reason: checked.errors[0] };
+  return {
+    eligible: value.maintainerFixupEligible,
+    ownerRole: value.maintainerFixupEligible ? 'maintainer' : 'engineer',
+    engineerRevisionConsumed: value.engineerRevisionConsumed,
+    reason: value.maintainerFixupEligible
+      ? 'all findings are record-only and the exact product artifact and protected contract remain unchanged'
+      : 'at least one finding changes implementation or protected contract and requires Engineer re-review',
+  };
+}
 
 const FIELD_LABEL_TO_KEY = new Map(
   FIXUP_FIELDS.map(field => [field.label.toLowerCase(), field.key])

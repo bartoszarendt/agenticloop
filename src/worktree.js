@@ -356,8 +356,8 @@ export function listAgenticLoopWorktrees(contextOrTarget) {
   }
 
   const records = parseWorktreeList(result.stdout).map(record => {
-    const path = resolve(record.path);
-    const location = classifyWorktreeLocation(record, standardParent, context.repoRoot);
+    const path = resolve(context.gitCwd, record.path);
+    const location = classifyWorktreeLocation({ ...record, path }, standardParent, context.repoRoot);
     return {
       path,
       head: record.head ?? null,
@@ -386,8 +386,10 @@ export function listAgenticLoopWorktrees(contextOrTarget) {
     const guard = record.location === 'standard' ? configGuardStatus(record.path) : null;
     return {
       ...record,
+      taskId,
       dirtyCount: dirtyFiles.length,
       blockingDirtyCount: blockingDirtyFiles.length,
+      blockingDirtyFiles: blockingDirtyFiles.map(entry => entry.path),
       laneLocalDirtyFiles: laneLocalDirtyFiles.map(entry => entry.path),
       sharedStateDirtyFiles: sharedStateDirtyFiles.map(entry => entry.path),
       guard,

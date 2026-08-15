@@ -790,6 +790,13 @@ that means frontmatter such as `status`, `implementation_artifact`,
 GitHub issues and pull requests are an optional projection for projects that
 explicitly choose `task_backend: github`. See `agenticloop/backends/github.md`.
 
+Before delegating an implementation, run the read-only handoff preflight:
+`npx agenticloop task handoff-preflight <task-id> --json`. If only derived
+evidence is stale, request a plan with `--repair-plan <path>` and apply it later
+with `npx agenticloop task refresh-handoff-evidence <task-id> --plan <path>
+--yes --json`. The refresh cannot alter task contracts, activation, review
+decisions, or product files.
+
 ### Event logging
 
 Event logging is disabled by default. Enable it in `.agenticloop/project.md`

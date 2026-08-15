@@ -28,6 +28,8 @@ import {
   verifyDispatchBeforeMutation,
 } from '../src/dispatch-envelope.js';
 import { evaluateParallelScan, normalizeFilesTaskInventory } from '../src/parallel-scan.js';
+import { validateExecutionReuseDecision } from '../src/execution-reuse.js';
+import { validateOperationalMeasurement } from '../src/operational-measurements.js';
 import {
   blockedAuthoritySignaturePayload,
   blockedResultRedelegationDigest,
@@ -1864,5 +1866,63 @@ describe('role-return core boundary authenticates evidence itself', () => {
       JSON.parse(rejected.stdout).diagnostics[0].message,
       /Available role IDs: .*security-observer/
     );
+  });
+});
+
+describe('execution reuse and operational measurement recording on verified returns', () => {
+  it('records a validated execution-reuse decision and operational measurement in the gate result', async () => {
+    const fixture = await createDispatchFixture(temp, 'reuse-measurement');
+    const prepared = prepare(fixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    writeFileSync(join(fixture.root, 'src', 'existing.js'), 'export const current = "returned";\n', 'utf8');
+    git(fixture.root, ['add', 'src/existing.js']);
+    git(fixture.root, ['commit', '-m', 'implement\n\nTask: T-001\nAgent: engineer']);
+    const returnHead = git(fixture.root, ['rev-parse', 'HEAD']);
+    const evidence = repositoryEvidence(prepared.packet, { head: returnHead, changedPaths: ['src/existing.js'] });
+    evidence.productAttribution = { range: { base: prepared.packet.repository.head, head: returnHead }, commits: [returnHead] };
+    const roleReturn = readyReturn(prepared.packet, evidence);
+    const received = receiveRoleReturn({
+      raw: JSON.stringify(roleReturn),
+      packet: prepared.packet,
+      refetchTask: fixture.refetchTask,
+      refetchRepositoryEvidence: () => evidence,
+      ...producerBinding(fixture.trust, prepared.packet, roleReturn, evidence),
+      runGit: fixture.runGit,
+    }, fixture.options);
+    assert.equal(received.ok, true, received.validation.errors?.join('\n'));
+    assert.ok(received.validation.executionReuse, 'execution reuse decision is missing');
+    assert.equal(received.validation.executionReuse.taskId, prepared.packet.task.id);
+    assert.equal(received.validation.executionReuse.backend, prepared.packet.backend);
+    assert.equal(received.validation.executionReuse.roleId, prepared.packet.assignment.roleId);
+    assert.equal(validateExecutionReuseDecision(received.validation.executionReuse, { taskId: prepared.packet.task.id }).ok, true);
+    assert.ok(received.validation.operationalMeasurement, 'operational measurement is missing');
+    assert.equal(received.validation.operationalMeasurement.run.hostIdentity, prepared.packet.assignment.hostRoleCapability.host);
+    assert.equal(validateOperationalMeasurement(received.validation.operationalMeasurement).ok, true);
+    assert.equal(received.validation.operationalMeasurement.run.executionState, received.validation.executionReuse.execution.state);
+  });
+
+  it('records a session-reported return as new execution with missing host admission', async () => {
+    const fixture = await createDispatchFixture(temp, 'reuse-measurement-session');
+    const prepared = prepare(fixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+    writeFileSync(join(fixture.root, 'src', 'existing.js'), 'export const current = "returned";\n', 'utf8');
+    git(fixture.root, ['add', 'src/existing.js']);
+    git(fixture.root, ['commit', '-m', 'implement\n\nTask: T-001\nAgent: engineer']);
+    const returnHead = git(fixture.root, ['rev-parse', 'HEAD']);
+    const evidence = repositoryEvidence(prepared.packet, { head: returnHead, changedPaths: ['src/existing.js'] });
+    evidence.productAttribution = { range: { base: prepared.packet.repository.head, head: returnHead }, commits: [returnHead] };
+    const roleReturn = readyReturn(prepared.packet, evidence);
+    const received = receiveRoleReturn({
+      raw: JSON.stringify(roleReturn),
+      packet: prepared.packet,
+      refetchTask: fixture.refetchTask,
+      refetchRepositoryEvidence: () => evidence,
+      runGit: fixture.runGit,
+    }, fixture.options);
+    assert.equal(received.ok, true, received.validation.errors?.join('\n'));
+    assert.equal(received.validation.executionReuse.execution.state, 'new');
+    assert.match(received.validation.executionReuse.execution.reason, /dispatchUnconsumed/);
+    assert.equal(received.validation.operationalMeasurement.run.hostAdmissionEvidenceGrade, 'missing');
+    assert.equal(received.validation.operationalMeasurement.run.executionState, 'new');
   });
 });

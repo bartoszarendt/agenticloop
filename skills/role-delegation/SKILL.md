@@ -82,6 +82,19 @@ Copilot's `execute`, and Codex instructions are advisory. Bind one version 3
 report per degraded action, emit `capability.enforcement.degraded`, and check it
 against authenticated actor/evidence on return import.
 
+### Handoff preflight and bounded continuation
+
+Run `npx agenticloop task handoff-preflight <id> --json` before packet assembly.
+It is read-only and reports activation usability, exact authorization, readiness,
+decomposition, capability, worktree, and relevant sibling-collision evidence in
+one result. A derived-only repair may be planned and explicitly applied with
+`task refresh-handoff-evidence`; it never changes the protected task contract or
+product files. Same-task Maintainer or Engineer continuation is permitted only
+when the dispatch, cancellation boundary, carrier lineage, role identity, host
+reference, protected contract, and durable refetch all remain current. A resumed
+execution has no authority, and Auditor or explicitly independent review work is
+always a fresh invocation.
+
 ### Implementation dispatch
 
 Before Engineer delegation, the orchestrator runs `npx agenticloop task

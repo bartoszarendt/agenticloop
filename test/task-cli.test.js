@@ -1,7 +1,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { platform, tmpdir } from 'node:os';
@@ -17,6 +17,8 @@ import { createExecutionReceiptReplayAuthority } from '../src/host-trust.js';
 import { listReturnVerifications, revalidateReturnVerification, writeReturnVerification } from '../src/return-verification.js';
 import { recognizeHandoff } from '../src/handoff-recognition.js';
 import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
+import { createCarrierMutationReceipt } from '../src/task-evidence-contract.js';
+import { carrierMutationRelativePath } from '../src/handoff-consumption.js';
 
 let tmpDir;
 const IS_WINDOWS = platform() === 'win32';
@@ -1086,6 +1088,150 @@ describe('task CLI', () => {
     const persisted = JSON.parse(readFileSync(join(fixture.root, '.agenticloop', 'returns', 'verifications', records[0]), 'utf8'));
     assert.equal(persisted.requiredCheckEvidenceAssurance, 'unverified');
     assert.equal(persisted.evidence.producerIdentityAuthenticated, false);
+  });
+
+  it('prepares a files review entry with a finding-resolution matrix from a valid fixup episode', async () => {
+    const fixture = await createDispatchFixture(tmpDir, 'review-prepare-fixup', {
+      requiredChecksText: '- [RC-1] command: `node --version`\n- [RC-2] command: `node --version`',
+    });
+    const packetPath = '.agenticloop/tmp/dispatch.json';
+    const checksPath = '.agenticloop/tmp/checks.json';
+    const returnPath = '.agenticloop/tmp/return.json';
+    const options = {
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      hostAuthority: protectedHostBoundary(fixture.trust),
+    };
+    mkdirSync(join(fixture.root, '.agenticloop', 'tmp'), { recursive: true });
+    writeFileSync(join(fixture.root, packetPath), JSON.stringify(prepareDispatch(fixture).packet), 'utf8');
+
+    assertOk(await runCliInProcess([
+      'task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(fixture.root, 'T-001'),
+      '--dispatch-packet', packetPath, '--json', '--target', fixture.root,
+    ], options));
+
+    writeFileSync(join(fixture.root, 'src', 'existing.js'), 'export const current = "returned";\n', 'utf8');
+    fixtureGit(fixture.root, ['add', 'src/existing.js']);
+    fixtureGit(fixture.root, ['commit', '-m', 'implement return\n\nTask: T-001\nAgent: engineer']);
+    const productHead = fixtureGit(fixture.root, ['rev-parse', 'HEAD']);
+
+    assertOk(await runCliInProcess([
+      'task', 'evidence', 'T-001', '--class', 'implementation_artifact_evidence',
+      '--expect-digest', currentDigest(fixture.root, 'T-001'), '--product-head', productHead,
+      '--json', '--target', fixture.root,
+    ], options));
+    fixtureGit(fixture.root, ['add', '.agenticloop/tasks/T-001.md', '.agenticloop/handoffs/task-mutations']);
+    fixtureGit(fixture.root, ['commit', '-m', 'record implementation artifact\n\nTask: T-001\nAgent: engineer']);
+
+    // Simulate a Maintainer review round: add a ## Review History entry with
+    // a needs_revision outcome and a ## Maintainer Review Fixup subsection to
+    // the carrier.  The carrier mutation is recorded so the carrier lineage
+    // stays consistent — this is the exact shape that was never exercised by
+    // any files-backend review-prepare test before.  The coverage hole that
+    // let a guaranteed crash ship behind 3827 green tests.
+    const taskFile = join(fixture.root, '.agenticloop', 'tasks', 'T-001.md');
+    const priorDigest = currentDigest(fixture.root, 'T-001');
+    const evidenceCommit = fixtureGit(fixture.root, ['rev-parse', 'HEAD']);
+
+    // Add review history + fixup to the carrier.  The fixup's base_artifact is
+    // the productHead and resulting_artifact is the evidence commit (a real
+    // different commit — validateFixupEpisode only checks they differ).
+    let body = readFileSync(taskFile, 'utf8');
+    const reviewHistory = [
+      '## Review History', '',
+      '### Review 1', '',
+      '- Status: needs_revision', '- Mode: host_subagent',
+      `- Artifact: commit:${productHead}`,
+      '- Maintainer: maintainer', '- Findings: F-1',
+      '- Classification: record_only', '',
+    ].join('\n');
+    const fixupSection = [
+      '## Maintainer Review Fixup', '',
+      '- Finding: typo in acceptance criteria',
+      '- Eligibility decision: applied -- typo',
+      `- Base artifact: commit:${productHead}`,
+      '- Correction: fixed the typo',
+      '- Affected files: .agenticloop/tasks/T-001.md',
+      '- Planned verification: npx agenticloop task lint T-001',
+      '- Verification result: passed',
+      `- Resulting artifact: commit:${evidenceCommit}`,
+      '',
+    ].join('\n');
+    body = body + '\n' + reviewHistory + '\n' + fixupSection;
+    writeFileSync(taskFile, body, 'utf8');
+    const newDigest = currentDigest(fixture.root, 'T-001');
+
+    // Read the last carrier mutation receipt to link the new one.
+    const mutationDir = join(fixture.root, '.agenticloop', 'handoffs', 'task-mutations', 'T-001');
+    const mutationFiles = readdirSync(mutationDir).filter(f => f.endsWith('.json'));
+    const lastReceipt = JSON.parse(readFileSync(join(mutationDir, mutationFiles[0]), 'utf8'));
+
+    // Create a carrier mutation receipt for the review history + fixup addition.
+    const receipt = createCarrierMutationReceipt({
+      receiptId: `task-mutation:${randomUUID()}`,
+      backend: 'files', task: { id: 'T-001', carrier: '.agenticloop/tasks/T-001.md' },
+      taskContractDigest: lastReceipt.taskContractDigest,
+      dispatchCarrierDigest: lastReceipt.dispatchCarrierDigest,
+      priorCarrierDigest: priorDigest,
+      currentCarrierDigest: newDigest,
+      mutationClass: 'implementation_summary_evidence',
+      ownedFields: ['comments'],
+      changedFields: ['comments'],
+      producer: {
+        workflowRole: 'engineer', assuranceGrade: 'session_reported',
+        invocationId: lastReceipt.producer.invocationId,
+        workUnitIdentity: lastReceipt.producer.workUnitIdentity,
+        repositoryIdentity: lastReceipt.producer.repositoryIdentity,
+      },
+      predecessor: {
+        kind: 'task_mutation_receipt',
+        digest: lastReceipt.digest,
+      },
+    });
+    const receiptPath = carrierMutationRelativePath(receipt);
+    writeFileSync(join(fixture.root, receiptPath), `${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
+    fixtureGit(fixture.root, ['add', '.agenticloop/tasks/T-001.md', receiptPath]);
+    fixtureGit(fixture.root, ['commit', '-m', 'record review history and fixup\n\nTask: T-001\nAgent: engineer']);
+
+    assertOk(await runCliInProcess([
+      'task', 'check-evidence-init', 'T-001', '--packet', packetPath, '--output', checksPath, '--json', '--target', fixture.root,
+    ], options));
+
+    for (const check of ['RC-1', 'RC-2']) {
+      assertOk(await runCliInProcess([
+        'task', 'check-evidence-update', 'T-001', '--packet', packetPath,
+        '--input', checksPath, '--output', checksPath, '--check', check,
+        '--outcome', 'passed', '--evidence', `${check} passed`,
+        '--execution-output', `.agenticloop/tmp/${check}.execution.json`, '--json', '--target', fixture.root,
+      ], options));
+    }
+
+    assertOk(await runCliInProcess([
+      'task', 'prepare-return', 'T-001', '--packet', packetPath, '--check-evidence', checksPath,
+      '--outcome', 'implementation_ready_for_review', '--output', returnPath,
+      '--json', '--target', fixture.root,
+    ], options));
+
+    assertOk(await runCliInProcess([
+      'task', 'verify-return', 'T-001', '--packet', packetPath, '--return', returnPath,
+      '--from-current-repository', '--json', '--target', fixture.root,
+    ], options));
+
+    const review = await runCliInProcess([
+      'task', 'review-prepare', 'T-001', '--json', '--target', fixture.root,
+    ], options);
+    assert.equal(review.status, 0, `${review.stdout}\n${review.stderr}`);
+    const reviewEntry = JSON.parse(review.stdout);
+    assert.equal(reviewEntry.ok, true);
+    assert.ok(reviewEntry.reviewEntryPath, 'review entry path must be populated');
+    assert.ok(reviewEntry.findingResolutionMatrix, 'finding-resolution matrix must be populated for a needs_revision outcome');
+    assert.equal(reviewEntry.findingResolutionMatrix.entries.length, 1);
+    assert.equal(reviewEntry.findingResolutionMatrix.entries[0].findingId, 'F-1');
+    assert.equal(reviewEntry.findingResolutionMatrix.entries[0].classification, 'record-only');
+    assert.equal(reviewEntry.findingResolutionMatrix.maintainerFixupEligible, true);
+    assert.equal(reviewEntry.findingResolutionMatrix.engineerRevisionConsumed, false);
+    assert.ok(reviewEntry.matrixDecision, 'matrix decision must be recorded');
+    assert.equal(reviewEntry.matrixDecision.eligible, true, 'eligible record-only corrections do not consume an Engineer revision round');
+    assert.equal(reviewEntry.matrixDecision.ownerRole, 'maintainer');
   });
 
   it('prepares an ordinary derived dispatch from durable selectors without --input', async () => {

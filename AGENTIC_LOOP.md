@@ -392,14 +392,24 @@ handoff artifact, not a controller, lane-result store, task mutation, or shared
 durable-state import. Its canonical digest is
 `sha256:agenticloop.role-preparation.v8:<64-lowercase-hex>` and it binds the
 current task/contract/activation identities, both assurance dimensions, freshly
-reevaluated P35-03
-readiness and base/dependency sources, committed Maintainer-attributed
+evaluated readiness and base/dependency sources, committed Maintainer-attributed
 decomposition evidence, scoped checks, immutable role and invocation IDs, canonical
 references, the selected host, exact closed host-role capability declaration,
 and canonical degraded-enforcement report inventory, branch/worktree,
 attribution, liveness, and
 cancellation. Any bound input changing stales the packet. The receiver verifies
 its ID, digest, role, and current bindings before its first mutation.
+
+Before assembling that packet, `task handoff-preflight <task-id> --json` is the
+single read-only prerequisite report. It keeps carrier and protected-contract
+digests distinct, resolves current activation authorization without prompting,
+reports dispatch-bound decomposition and active/sibling worktree evidence, and
+names one safe repair owner and command. A derived-only refresh plan may be
+applied explicitly through `task refresh-handoff-evidence`; it cannot alter
+protected task fields, human decisions, review dispositions, acceptance,
+closeout, or product files. Same-task Maintainer/Engineer continuation is
+recorded as `new` or `resumed` evidence and never becomes authority; Auditor and
+independent review executions remain fresh.
 Schema versions 2, 3, 4, and 5 are recognized as authentic prior evidence and
 rejected as `dispatch.packet.stale`; regenerate the packet as version 7 rather
 than reinterpreting or repairing an earlier version in place. Version 4 is not

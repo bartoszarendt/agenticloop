@@ -378,4 +378,19 @@ describe('generated adapter payload-size budgets', () => {
       }
     }
   });
+
+  it('does not project the retired generated-guidance literal into any adapter target', () => {
+    for (const adapter of ADAPTERS) {
+      const fx = mkdtempSync(join(tmpDir, `${adapter.name}-literal-fx-`));
+      seedTargetLayout(REPO_ROOT, fx, { includeDocs: false, includeScratch: false });
+      const out = mkdtempSync(join(tmpDir, `${adapter.name}-literal-out-`));
+      adapter.generate(loadAgenticLoopConfig(join(fx, 'agenticloop.json')), fx, out);
+      const projected = readFileSync(join(fx, 'agenticloop', 'AGENTIC_LOOP.md'), 'utf8');
+      assert.doesNotMatch(projected, /reevaluated P35-03/);
+      for (const file of walk(out)) {
+        if (!/\.(md|toml|ya?ml)$/.test(file)) continue;
+        assert.doesNotMatch(readFileSync(file, 'utf8'), /reevaluated P35-03/, `${adapter.name}: ${file}`);
+      }
+    }
+  });
 });

@@ -328,11 +328,11 @@ export const COMMAND_REGISTRY = {
   },
   'commit-attribution': {
     summary: 'Read-only Engineer commit-trailer validation and canonical repair guidance.',
-    usage: 'agenticloop commit-attribution check --task <id> [--commit <ref>] [--message-file <path>] [--json]',
+    usage: 'agenticloop commit-attribution check --task <id> [--role <orchestrator|maintainer|engineer|auditor>] [--commit <ref>] [--message-file <path>] [--json]',
     subcommands: {
       check: {
         summary: 'Check Task/Agent trailers without amending, committing, pushing, or force-pushing.',
-        options: [targetOption(), opt('task', 'string', 'Expected task id. Required.'), opt('commit', 'string', 'Commit ref (default: HEAD).'), opt('message-file', 'string', 'Read a commit message from a local file.'), jsonOption],
+        options: [targetOption(), opt('task', 'string', 'Expected task id. Required.'), opt('role', 'string', 'Expected canonical workflow role.', { enum: ['orchestrator', 'maintainer', 'engineer', 'auditor'] }), opt('commit', 'string', 'Commit ref (default: HEAD).'), opt('message-file', 'string', 'Read a commit message from a local file.'), jsonOption],
       },
       'repair-record-render': {
         summary: 'Validate and render a durable attribution-repair record without mutating Git.',
@@ -493,7 +493,7 @@ export const COMMAND_REGISTRY = {
   },
   task: {
     summary: 'Manage files-backed task records and canonical handoff preparation.',
-    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|status> [options]',
+    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|handoff-preflight|refresh-handoff-evidence|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|status> [options]',
     subcommands: {
       list: {
         summary: 'List task records.',
@@ -574,6 +574,20 @@ export const COMMAND_REGISTRY = {
         receiptRevalidation: 'read-only',
         positionals: [{ name: 'id', required: true }],
         options: [targetOption(), opt('host', 'string', 'Canonical generated host identity used to derive the Engineer assignment from current durable facts. Required for the ordinary no-input producer.'), opt('output', 'string', 'Optional packet output path. With --json, stdout is a closed success result and this path holds the exact packet artifact. Input/output paths are target-relative and must remain inside the selected target.'), opt('input', 'string', 'Advanced compatibility input for projects where durable source selectors are unavailable. Its route is validated normally; it may not override refetched durable authority. Path is target-relative and must remain inside the selected target.'), opt('packet', 'string', 'Existing dispatch packet to revalidate read-only before receiver mutation. Path is target-relative and must remain inside the selected target.'), opt('role', 'string', 'Immutable receiving role required for ordinary and --packet routes. The advanced --input compatibility route preserves its existing no-host invocation.', { enum: ['engineer'] }), opt('return-adapter', 'string', 'Exact authenticated protected-boundary adapter to bind for host role-return receipts. Required when several eligible adapters exist; hardened mode requires one.'), opt('prior-receipts', 'string', 'JSON array of prior-gate or setup task-mutation receipts that must be resolved and undrifted before dispatch. Path is target-relative and must remain inside the selected target.'), opt('repo', 'string', 'GitHub repository in owner/name form. Defaults to the authenticated current repository for the GitHub backend.'), hostTrustStoreOption, jsonOption],
+      },
+      'handoff-preflight': {
+        summary: 'Read-only pre-delegation prerequisite check: report every ordinary prerequisite and one safe repair before dispatch packet assembly.',
+        usage: 'agenticloop task handoff-preflight <id> [--host-trust-store <expected-path>] [--repair-plan <path>] [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only',
+        positionals: [{ name: 'id', required: true }],
+        options: [targetOption(), hostTrustStoreOption, opt('repair-plan', 'string', 'Write a bounded derived-evidence refresh plan to this target-relative path.'), jsonOption],
+      },
+      'refresh-handoff-evidence': {
+        summary: 'Apply one current, digest-bound refresh plan for derived handoff evidence only.',
+        usage: 'agenticloop task refresh-handoff-evidence <id> --plan <path> --yes [--host-trust-store <expected-path>] [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only-before-explicit-apply',
+        positionals: [{ name: 'id', required: true }],
+        options: [targetOption(), hostTrustStoreOption, opt('plan', 'string', 'Target-relative handoff refresh plan JSON. Required.'), yesOption, jsonOption],
       },
       'prepare-return': {
         summary: 'Engineer-only producer: derive a raw implementation-ready or cancellation-blocked role return from current files/Git facts.',

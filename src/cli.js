@@ -2587,7 +2587,11 @@ async function cmdCommitAttribution(args, io) {
         }
         return result.stdout;
       })();
-    return printGateResult('commit-attribution check', presentGateResultForTarget(evaluateCommitAttribution({ message, taskId: opts.task }), target), asJson, io);
+    return printGateResult('commit-attribution check', presentGateResultForTarget(evaluateCommitAttribution({
+      message,
+      taskId: opts.task,
+      role: opts.role ?? 'engineer',
+    }), target), asJson, io);
   } catch (error) {
     if (error instanceof CliUsageError) return asJson ? printGateResult('commit-attribution check', commandFailure('commit-attribution check', error, 'usage', {}, target), true, io) : Promise.reject(error);
     return printGateResult('commit-attribution check', commandFailure('commit-attribution check', error, 'operational_error', {}, target), asJson, io);

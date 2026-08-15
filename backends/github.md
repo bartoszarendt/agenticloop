@@ -98,6 +98,13 @@ receipt chain proves it. `productBaseHead`, `productHead`, `workflowHead`, and
 transport writes, but it must not claim an authoritative final lifecycle result
 without refetching and validating the same normalized carrier lineage.
 
+The shared read-only `task handoff-preflight` command is the pre-delegation
+check for files and GitHub semantics. A GitHub projection may report transport-
+specific evidence, but a bounded refresh plan still writes only the local
+derived-evidence path and cannot mutate an issue, protected contract, review
+decision, or product artifact. Apply requires explicit `--yes` and refetch
+validation; carrier and protected-contract digests remain separate.
+
 After a recognized GitHub role start, `task-body evidence` is the only bounded
 Engineer path that may evolve that lineage. It refetches the exact issue digest,
 requires the local dispatch-consumption record for the active generation, writes

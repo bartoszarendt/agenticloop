@@ -3,6 +3,7 @@
 import { markdownLines } from './markdown.js';
 import { createDiagnostic } from './repair-policy.js';
 import { WORKFLOW_ROLE_SET } from './workflow-vocabulary.js';
+import { getWorkflowRole } from './workflow-roles.js';
 import { isGitObjectId } from './git-oid.js';
 
 const TRAILER_LINE_RE = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\s*:\s*(.+?)\s*$/;
@@ -113,12 +114,21 @@ function namedTrailersIn(lines) {
 export function evaluateCommitAttribution({ message, taskId, role = 'engineer' } = {}) {
   const errors = [];
   const task = String(taskId ?? '').trim();
-  const expectedRole = String(role ?? '').trim().toLowerCase();
+  const suppliedRole = String(role ?? '').trim();
+  const expectedRole = suppliedRole.toLowerCase();
   if (!task) errors.push('task id is required for commit attribution');
+  if (suppliedRole !== expectedRole) {
+    errors.push(`workflow role identity must be lowercase; received '${suppliedRole}'`);
+  }
+  try {
+    getWorkflowRole(expectedRole);
+  } catch {
+    errors.push(`unknown workflow role '${expectedRole}'; expected a role from the canonical workflow-role registry`);
+  }
 
   const { block, named, misplaced } = parseFinalTrailerBlock(message);
   const tasks = named.filter(entry => entry.name === 'task').map(entry => entry.value);
-  const agents = named.filter(entry => entry.name === 'agent').map(entry => entry.value.toLowerCase());
+  const agents = named.filter(entry => entry.name === 'agent').map(entry => entry.value);
 
   // Task/Agent tokens that appear outside the final trailer block (in prose or
   // an earlier paragraph) are not authoritative trailers and must not be
@@ -144,7 +154,12 @@ export function evaluateCommitAttribution({ message, taskId, role = 'engineer' }
     ok: errors.length === 0,
     errors,
     warnings: [],
-    diagnostics: errors.map(message => createDiagnostic({ code: 'attribution.trailer', message })),
-    repairPlan: errors.length ? `Replace the final contiguous trailer block with one final pair:\n${repair}\nThen create or amend the commit explicitly as Engineer. This command never amends or publishes.` : null,
+    diagnostics: errors.map(message => createDiagnostic({
+      code: message.startsWith('unknown workflow role') || message.startsWith('workflow role identity')
+        ? 'attribution.role'
+        : 'attribution.trailer',
+      message,
+    })),
+    repairPlan: errors.length ? `Replace the final contiguous trailer block with one final pair:\n${repair}\nThen create or amend the commit explicitly as ${expectedRole}. This command never amends or publishes.` : null,
   };
 }

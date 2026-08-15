@@ -31,7 +31,7 @@ All commands:
 | `guidance` | Manage the activation-guidance block (`apply`, `check`, `remove`) |
 | `generate` | Generate adapter artifacts (`opencode`, `codex`, `claude-code`, `copilot`, `cursor`, `all`) |
 | `configure models` | Set per-host role model settings in `agenticloop.json` |
-| `task` | Task records and lifecycle preparation (`list`, `lint`, `new`, `establish-baseline`, `authorize-correction`, `prepare-decomposition`, `prepare-dispatch`, `prepare-return`, `verify-return`, `check-evidence-init`, `check-evidence-show`, `check-evidence-update`, `evidence`, `review-prepare`, `status`) |
+| `task` | Task records and lifecycle preparation (`list`, `lint`, `new`, `establish-baseline`, `authorize-correction`, `prepare-decomposition`, `prepare-dispatch`, `handoff-preflight`, `refresh-handoff-evidence`, `prepare-return`, `verify-return`, `check-evidence-init`, `check-evidence-show`, `check-evidence-update`, `evidence`, `review-prepare`, `status`) |
 | `audit` | Work-unit audit certificates (`new`, `baseline`, `report`, `status`, `gate`, `lint`, `repair-structure`, `disposition`, `override`, `resolve`) |
 | `closeout` | Composite closeout packets (`prepare`, `status`, `record`) |
 | `improvement` | Bounded improvement proposals (`new`, `lint`, `status`) |
@@ -43,7 +43,7 @@ All commands:
 | `pr-body scaffold` / `pr-body lint` | Scaffold a canonical body (plus optional offline context snapshot) and lint a local candidate body against live or snapshotted context |
 | `task-readiness` | Read-only explicit base-tree, path-intent, and dependency readiness check |
 | `task-body fetch` / `lint` / `apply` | Guarded GitHub task-record body fetch, validation, dry-run diff, and transactional publication |
-| `commit-attribution check` | Read-only Engineer trailer check with repair guidance only |
+| `commit-attribution check` | Read-only role-aware trailer check with repair guidance only |
 | `github-checkpoint render` / `repair-plan` | Render a checkpoint or one bounded append-only repair carrier without posting |
 | `github-review-prepare` | Fail-closed exact-head Maintainer delegation packet |
 | `bootstrap-labels` | Create required GitHub labels |
@@ -253,6 +253,32 @@ authenticated binding for the exact repository, backend, task, carrier, and
 contract digest under effective policy. The snapshot exposes provenance and
 diagnostics so callers can repair context, but it does not promote raw store
 records, adapter capability, a digest, or a status message into authority.
+
+## Handoff preflight and derived refresh
+
+Use `npx agenticloop task handoff-preflight <task-id> --json` for one read-only
+pre-delegation verdict. It reports the task carrier and protected contract as
+separate identities, current activation authorization, readiness and
+decomposition evidence, host capability, return-adapter resolution, active
+worktree state, relevant sibling collisions, the disposition owner, and one
+safe repair command. Add `--repair-plan <target-relative-path>` to write a
+bounded plan for derived evidence only.
+
+Apply a plan explicitly with:
+
+```text
+npx agenticloop task refresh-handoff-evidence <task-id> --plan <path> --yes --json
+```
+
+The apply path is compare-before-write, atomic, refetch-validated, and confined
+to `.agenticloop/handoffs/derived-evidence/`. It cannot change task contracts,
+activation, review decisions, acceptance, closeout, or product files. A durable
+Maintainer update is cooperative and must use the emitted final trailer block;
+it does not authenticate the producer.
+
+`commit-attribution check` accepts `--role orchestrator|maintainer|engineer|auditor`.
+The role is validated against the canonical registry and the final contiguous
+`Task:`/`Agent:` trailer parser is shared with decomposition verification.
 
 ## GitHub review audit
 
@@ -1192,10 +1218,14 @@ final trailer block:
 npx agenticloop commit-attribution check --task T-001 --message-file .agenticloop/tmp/T-001-commit-message.txt
 git commit -F .agenticloop/tmp/T-001-commit-message.txt
 npx agenticloop commit-attribution check --task T-001
+npx agenticloop commit-attribution check --task T-001 --role maintainer --commit HEAD
 ```
 
 Push only after both checks pass. Separate `git commit -m` paragraphs for
 `Task:` and `Agent:` fail prospective validation.
+Role-aware attribution is cooperative evidence, not producer authentication;
+Git author identity, workflow role, operator authority, and verifier identity
+remain separate.
 
 ## Workflow budgets
 

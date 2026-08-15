@@ -14,6 +14,9 @@ import {
   commitHasMaintainerFixupTrailers,
   commitTaskTrailerValues,
   crossCheckMaintainerFixup,
+  createFindingResolutionMatrix,
+  validateFindingResolutionMatrix,
+  metadataOnlyReviewDecision,
   MAINTAINER_FIXUP_HEADING,
 } from '../src/maintainer-fixup.js';
 import { validateConfig, validateFilesTaskRecord } from '../src/validate-config.js';
@@ -30,7 +33,69 @@ const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
 let tmpDir;
 before(() => { tmpDir = mkdtempSync(join(tmpdir(), 'al-maintainer-fixup-')); });
-after(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+after(() => { rmSync(tmpDir, { recursive: true, force: true   });
+});
+
+describe('finding-resolution matrix', () => {
+  it('scaffolds stable IDs and routes record-only findings to the maintainer', () => {
+    const matrix = createFindingResolutionMatrix({
+      taskId: 'T-001',
+      productArtifact: 'aaa111bbb222',
+      workflowHead: 'ccc333ddd444',
+      carrierHead: 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      findings: [
+        { findingId: 'F-1', classification: 'record-only', disposition: 'resolved', evidence: 'doc typo' },
+      ],
+    });
+    assert.equal(matrix.maintainerFixupEligible, true);
+    assert.equal(matrix.engineerRevisionConsumed, false);
+    const checked = validateFindingResolutionMatrix(matrix, {
+      taskId: 'T-001', currentProductArtifact: 'aaa111bbb222', protectedContractUnchanged: true,
+    });
+    assert.equal(checked.ok, true, checked.errors.join('; '));
+    const decision = metadataOnlyReviewDecision(matrix, {
+      taskId: 'T-001', currentProductArtifact: 'aaa111bbb222', protectedContractUnchanged: true,
+    });
+    assert.equal(decision.eligible, true);
+    assert.equal(decision.ownerRole, 'maintainer');
+    assert.equal(decision.engineerRevisionConsumed, false);
+  });
+
+  it('routes implementation-changing findings to the Engineer and consumes revision', () => {
+    const matrix = createFindingResolutionMatrix({
+      taskId: 'T-001',
+      productArtifact: 'aaa111bbb222',
+      workflowHead: 'ccc333ddd444',
+      carrierHead: 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      findings: [
+        { findingId: 'F-1', classification: 'implementation-changing', disposition: 'disputed', evidence: 'rename variable' },
+      ],
+    });
+    assert.equal(matrix.maintainerFixupEligible, false);
+    assert.equal(matrix.engineerRevisionConsumed, true);
+    const decision = metadataOnlyReviewDecision(matrix, {
+      taskId: 'T-001', currentProductArtifact: 'aaa111bbb222', protectedContractUnchanged: true,
+    });
+    assert.equal(decision.eligible, false);
+    assert.equal(decision.ownerRole, 'engineer');
+    assert.equal(decision.engineerRevisionConsumed, true);
+  });
+
+  it('rejects a stale product artifact with one exact repair reason', () => {
+    const matrix = createFindingResolutionMatrix({
+      taskId: 'T-001',
+      productArtifact: 'stalestalestale',
+      workflowHead: 'ccc333ddd444',
+      carrierHead: 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      findings: [{ findingId: 'F-1', classification: 'record-only', disposition: 'resolved', evidence: 'doc typo' }],
+    });
+    const checked = validateFindingResolutionMatrix(matrix, {
+      taskId: 'T-001', currentProductArtifact: 'aaa111bbb222', protectedContractUnchanged: true,
+    });
+    assert.equal(checked.ok, false);
+    assert.ok(checked.errors.some(e => e.includes('stale')), checked.errors.join('; '));
+  });
+});
 
 function fixupSubsection({
   finding = 'Duplicated guard clause in the parser',

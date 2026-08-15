@@ -25,6 +25,19 @@ dot). These two directories differ only by the dot – do not assume the process
 doc or agents are siblings of `.agenticloop/project.md`. The process doc is
 `agenticloop/AGENTIC_LOOP.md`.
 
+## Handoff preflight
+
+Before packet assembly, run the shared read-only
+`npx agenticloop task handoff-preflight <id> --json` command. It reports the
+current task and protected-contract identities separately, exact authorization,
+readiness, decomposition eligibility, host capability, active worktree state,
+and relevant sibling collisions. If it produces a bounded derived-evidence
+repair plan, apply that plan only through `task refresh-handoff-evidence <id>
+--plan <path> --yes`; never edit a protected task contract or product file as a
+refresh. Same-task continuation is a mechanical `new`/`resumed` observation,
+not authority, and Auditor or explicitly independent review executions are
+always fresh.
+
 ## Responsibilities
 
 - Check `.agenticloop/project.md` `setup_status` and human-confirmed `development_stage` before the first task is selected or created.

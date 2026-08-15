@@ -60,6 +60,16 @@ Select the mode before reading any task-record instructions.
   unsafe, or materially underspecified – not merely because Agentic Loop
   bookkeeping fields are absent.
 
+## Handoff and return evidence
+
+The orchestrator must provide a current prepared dispatch packet before
+implementation mutation. If a same-task continuation is offered, treat its
+`executionReuse` decision as descriptive only: verify the durable packet,
+carrier lineage, cancellation boundary, contract, and repository evidence again.
+Never resume Auditor or explicitly independent review work. Return the canonical
+role result; host idle state, model satisfaction, or a resumed context cannot
+replace it.
+
 ## Common Responsibilities
 
 These apply in both modes.
