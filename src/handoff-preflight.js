@@ -716,6 +716,7 @@ export function evaluateHandoffPreflight(input) {
 
   // ── 8. Sibling-worktree collisions ──────────────────────────────────────
   let siblingCollisions = [];
+  let siblingWorktrees = [];
 
   if (repositoryState) {
     try {
@@ -727,26 +728,48 @@ export function evaluateHandoffPreflight(input) {
       const scopeContract = snapshot ? (taskContract ?? taskContractDigest(snapshot.body)) : null;
       const scopePatterns = scopeContract?.ok ? scopeContract.projection.allowed_paths ?? [] : [];
 
+      const hasScope = scopePatterns.length > 0;
+
       for (const wt of allWorktrees) {
         if (resolve(wt.path) === currentPath) continue;
-        if (wt.location !== 'standard') continue;
+
+        // Non-standard siblings: advisory only, not collisions
+        if (wt.location !== 'standard') {
+          siblingWorktrees.push({
+            worktreePath: relative(context.repoRoot, wt.path).replace(/\\/g, '/'),
+            location: wt.location,
+            reason: `non-standard sibling worktree (${wt.location})`,
+          });
+          continue;
+        }
+
+        // No scope declared: advisory that overlap cannot be evaluated
+        if (!hasScope) {
+          siblingWorktrees.push({
+            worktreePath: relative(context.repoRoot, wt.path).replace(/\\/g, '/'),
+            taskId: wt.taskId ?? null,
+            location: wt.location,
+            reason: 'task declares no allowed_paths; sibling overlap cannot be evaluated',
+          });
+          continue;
+        }
 
         // Only report dirty siblings that overlap with our scope
-        if (scopePatterns.length === 0 || wt.blockingDirtyCount === 0) continue;
+        if (wt.blockingDirtyCount === 0) continue;
 
         const dirtyPaths = (wt.blockingDirtyFiles ?? []);
         const overlapping = dirtyPaths.filter(path =>
           scopePatterns.some(pattern => fileMatchesScopePattern(path, pattern))
         );
-          if (overlapping.length > 0) {
+        if (overlapping.length > 0) {
           siblingCollisions.push({
             worktreePath: relative(context.repoRoot, wt.path).replace(/\\/g, '/'),
             taskId: wt.taskId ?? null,
             dirtyCount: wt.blockingDirtyCount,
             overlappingPaths: overlapping.slice(0, 5),
-              reason: 'dirty sibling worktree has files overlapping with task scope',
-            });
-          }
+            reason: 'dirty sibling worktree has files overlapping with task scope',
+          });
+        }
       }
     } catch {
       // Sibling detection is advisory; failures don't block the preflight.
@@ -795,6 +818,7 @@ export function evaluateHandoffPreflight(input) {
     } : null,
     returnAdapter: returnAdapterResolution,
     siblingCollisions,
+    siblingWorktrees,
     degradedEnforcementReports: degradedEnforcementReports.map(r => ({
       host: r.host, roleId: r.roleId, action: r.action, enforcement: r.enforcement,
     })),

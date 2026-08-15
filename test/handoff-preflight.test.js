@@ -57,7 +57,7 @@ function taskPath(target, taskId) {
   return join(target, '.agenticloop', 'tasks', `${taskId}.md`);
 }
 
-function writeTask(target, taskId, { status = 'agent-ready', withActivation = false, malformed = false, depends_on = null } = {}) {
+function writeTask(target, taskId, { status = 'agent-ready', withActivation = false, malformed = false, depends_on = null, emptyScope = false } = {}) {
   mkdirSync(join(target, '.agenticloop', 'tasks'), { recursive: true });
   if (malformed) {
     writeFileSync(taskPath(target, taskId), 'completely invalid content without frontmatter\n', 'utf8');
@@ -66,14 +66,14 @@ function writeTask(target, taskId, { status = 'agent-ready', withActivation = fa
   const activationLines = withActivation
     ? `activation_input_digest: ${activationDigest(taskId)}\nactivation_capture_ref: activation-grants/${taskId}.md\n`
     : '';
+  const scopeLines = emptyScope
+    ? 'allowed_paths: []\n'
+    : 'allowed_paths:\n  - "src/**"\n  - "docs/**"\n';
   writeFileSync(taskPath(target, taskId), `---
 task_id: ${taskId}
 status: ${status}
 backend: files
-allowed_paths:
-  - "src/**"
-  - "docs/**"
-intended_creations:
+${scopeLines}intended_creations:
   - "src/output.txt"
 ${activationLines}${depends_on ? `depends_on:\n${depends_on.map(d => `  - "${d}"`).join('\n')}\n` : ''}task_contract_schema: 2
 ---
@@ -242,6 +242,7 @@ const EXPECTED_DOMAIN_KEYS = [
   'rollbackAuthorized',
   'schemaVersion',
   'siblingCollisions',
+  'siblingWorktrees',
   'taskId',
   'warnings',
   'warningDiagnostics',
@@ -689,6 +690,48 @@ describe('handoff-preflight', () => {
 
     git(target, ['worktree', 'remove', '-f', '.agenticloop/worktrees/OTHER']);
     git(target, ['branch', '-D', 'other-task']);
+  });
+
+  it('reports siblingWorktrees for no-scope tasks and non-standard siblings', () => {
+    const target = makeTarget('sibling-worktrees');
+    writeTask(target, 'T-060', { emptyScope: true });
+    git(target, ['add', '.']);
+    git(target, ['commit', '-m', 'task T-060\n\nTask: T-060\nAgent: maintainer']);
+
+    const now = new Date().toISOString();
+    const result = evaluateHandoffPreflight({
+      target, taskId: 'T-060', backend: 'files',
+      projectConfig: { task_file_template: '.agenticloop/tasks/{taskId}.md' },
+      io: {},
+      now,
+    });
+
+    assert.ok(Array.isArray(result.siblingWorktrees), 'siblingWorktrees should be an array');
+    assert.equal(result.siblingCollisions.length, 0, 'no-scope task should have no collisions');
+    // The main worktree is the current one and is skipped, so with no other
+    // worktrees there should be no entries. Create an external one next.
+
+    const externalBranch = 'external-branch-T060';
+    const externalPath = join(tmpDir, 'external-wt-T060');
+    git(target, ['worktree', 'add', '-b', externalBranch, externalPath]);
+
+    const resultWithExternal = evaluateHandoffPreflight({
+      target, taskId: 'T-060', backend: 'files',
+      projectConfig: { task_file_template: '.agenticloop/tasks/{taskId}.md' },
+      io: {},
+      now,
+    });
+
+    assert.ok(Array.isArray(resultWithExternal.siblingWorktrees), 'siblingWorktrees should be an array');
+    const externalEntry = resultWithExternal.siblingWorktrees.find(
+      e => e.reason && e.reason.includes('non-standard sibling worktree')
+    );
+    assert.ok(externalEntry, 'should have a non-standard sibling worktree entry');
+    assert.ok(externalEntry.reason.includes('external'), `reason should mention external location, got: ${externalEntry.reason}`);
+
+    // Clean up external worktree
+    git(target, ['worktree', 'remove', '--force', externalPath]);
+    git(target, ['branch', '-D', externalBranch]);
   });
 
   it('does not mutate the target', () => {

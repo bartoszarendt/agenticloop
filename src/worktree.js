@@ -344,11 +344,12 @@ function classifyWorktreeLocation(record, standardParent, repoRoot) {
   return 'external';
 }
 
-export function listAgenticLoopWorktrees(contextOrTarget) {
+export function listAgenticLoopWorktrees(contextOrTarget, options = {}) {
   const context = typeof contextOrTarget === 'string' || !contextOrTarget?.repoRoot
     ? resolveGitRepositoryContext(contextOrTarget)
     : contextOrTarget;
   const standardParent = join(context.repoRoot, WORKTREE_PARENT);
+  const skipDirtyEnumeration = options.skipDirtyEnumeration === true;
 
   const result = runGit(context.gitCwd, ['worktree', 'list', '--porcelain']);
   if (result.status !== 0) {
@@ -373,6 +374,19 @@ export function listAgenticLoopWorktrees(contextOrTarget) {
 
   return records.map(record => {
     const taskId = record.location === 'standard' ? taskIdFromWorktreePath(record.path) : null;
+    if (skipDirtyEnumeration) {
+      const guard = record.location === 'standard' ? configGuardStatus(record.path) : null;
+      return {
+        ...record,
+        taskId,
+        dirtyCount: 0,
+        blockingDirtyCount: 0,
+        blockingDirtyFiles: [],
+        laneLocalDirtyFiles: [],
+        sharedStateDirtyFiles: [],
+        guard,
+      };
+    }
     const dirtyFiles = record.bare ? [] : listDirtyFiles(record.path);
     const laneLocalDirtyFiles = taskId
       ? dirtyFiles.filter(entry => isLaneLocalStatePath(entry.path, taskId))

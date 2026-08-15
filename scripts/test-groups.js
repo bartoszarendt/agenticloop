@@ -145,6 +145,7 @@ const MANIFEST = {
     'test/role-key-validation.test.js',
     'test/setup-state.test.js',
     'test/setup-states.test.js',
+    'test/sibling-worktree-isolation.test.js',
     'test/task-backend.test.js',
     'test/task-body-publication.test.js',
     'test/task-cli.test.js',

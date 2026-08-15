@@ -12,9 +12,11 @@
  * setup mutations rather than defining a second receipt system.
  */
 
+import { relative, resolve } from 'node:path';
 import { canonicalSha256 } from './canonical-json.js';
 import { fileMatchesScopePattern } from './scope-matcher.js';
 import { validateTaskMutationReceipt } from './task-evidence-contract.js';
+import { listAgenticLoopWorktrees } from './worktree.js';
 
 export const CLEAN_STATE_KIND = 'agenticloop.dispatch-clean-state';
 /** v2 adds the operator-owned activation state class. */
@@ -101,6 +103,41 @@ function shared(path) {
   return SHARED_STATE_PREFIXES.some(prefix => path.startsWith(prefix));
 }
 
+/**
+ * Derive repo-relative forward-slash prefixes for sibling worktree roots.
+ * Returns an array of prefixes like `.agenticloop/worktrees/T-002` (no trailing slash).
+ * Siblings whose resolved path equals the active checkout root are excluded.
+ * Siblings whose relative prefix starts with `..` are skipped (registered elsewhere).
+ */
+function deriveSiblingExclusionPrefixes(runGit) {
+  const toplevelResult = runGit(['rev-parse', '--show-toplevel']);
+  if (!toplevelResult || toplevelResult.status !== 0) return [];
+  const toplevel = toplevelResult.stdout.trim();
+  if (!toplevel) return [];
+
+  let siblings;
+  try {
+    siblings = listAgenticLoopWorktrees(toplevel, { skipDirtyEnumeration: true });
+  } catch {
+    return [];
+  }
+
+  const prefixes = [];
+  for (const wt of siblings) {
+    try {
+      const siblingResolved = resolve(wt.path);
+      const activeResolved = resolve(toplevel);
+      if (siblingResolved === activeResolved) continue;
+      const rel = relative(activeResolved, siblingResolved).replace(/\\/g, '/');
+      if (rel.startsWith('..')) continue;
+      prefixes.push(rel);
+    } catch {
+      // fail open: skip this sibling
+    }
+  }
+  return prefixes;
+}
+
 function lines(result) {
   return String(result?.stdout ?? '').trim().split(/\r?\n/).filter(Boolean).map(path => path.replace(/\\/g, '/'));
 }
@@ -122,11 +159,12 @@ function finding(evidenceState, disposition, code, message) {
  *   runGit: (args: string[]) => { status: number, stdout?: string, stderr?: string },
  *   scopePatterns?: string[],
  *   intendedCreations?: string[],
+ *   excludedSiblingRoots?: string[],
  * }} input
  * @returns {{ ok: boolean, state: object|null, identity: string|null, findings: object[] }}
  */
 export function evaluateDispatchCleanState(input = {}) {
-  const { runGit, scopePatterns = [], intendedCreations = [] } = input;
+  const { runGit, scopePatterns = [], intendedCreations = [], excludedSiblingRoots } = input;
   if (typeof runGit !== 'function') throw new TypeError('evaluateDispatchCleanState requires a runGit function');
   const patterns = Array.isArray(scopePatterns) ? scopePatterns.filter(pattern => typeof pattern === 'string' && pattern) : [];
   const creations = Array.isArray(intendedCreations) ? intendedCreations.filter(path => typeof path === 'string' && path) : [];
@@ -144,7 +182,7 @@ export function evaluateDispatchCleanState(input = {}) {
 
   const staged = (read(['diff', '--cached', '--name-only'], 'staged tracked changes') ?? []).filter(path => !permitted(path));
   const unstaged = (read(['diff', '--name-only'], 'unstaged tracked changes') ?? []).filter(path => !permitted(path));
-  const untracked = read(['ls-files', '--others', '--exclude-standard'], 'untracked paths') ?? [];
+  let untracked = read(['ls-files', '--others', '--exclude-standard'], 'untracked paths') ?? [];
 
   // Ignored files are invisible to the untracked query above. Query them only
   // inside the bounded path classes a valid role return could later claim;
@@ -155,10 +193,36 @@ export function evaluateDispatchCleanState(input = {}) {
     ...patterns.map(pattern => `:(glob)${pattern}`),
     ...creations,
   ];
-  const ignoredCandidates = ignoredPathspecs.length
+  let ignoredCandidates = ignoredPathspecs.length
     ? read(['ls-files', '--others', '--ignored', '--exclude-standard', '--', ...ignoredPathspecs], 'ignored in-scope paths') ?? []
     : [];
   if (findings.length) return { ok: false, state: null, identity: null, findings };
+
+  // Exclude registered Agentic Loop sibling worktree roots from the untracked
+  // and ignored scans of the active checkout.  Self-derive lazily only when
+  // there are candidate paths to filter (so clean repos and mock-runGit tests
+  // pay nothing).
+  let siblingPrefixes = null;
+  if (excludedSiblingRoots !== undefined) {
+    siblingPrefixes = excludedSiblingRoots;
+  }
+
+  function isExcludedBySibling(path) {
+    if (!siblingPrefixes) {
+      if (untracked.length === 0 && ignoredCandidates.length === 0) return false;
+      siblingPrefixes = Array.isArray(excludedSiblingRoots)
+        ? excludedSiblingRoots
+        : deriveSiblingExclusionPrefixes(runGit);
+    }
+    return siblingPrefixes.some(prefix => path === prefix || path === `${prefix}/` || path.startsWith(`${prefix}/`));
+  }
+
+  if (untracked.length > 0) {
+    untracked = untracked.filter(path => !isExcludedBySibling(path));
+  }
+  if (ignoredCandidates.length > 0) {
+    ignoredCandidates = ignoredCandidates.filter(path => !isExcludedBySibling(path));
+  }
 
   const relevantUntracked = untracked.filter(path => {
     if (permitted(path)) return false;
