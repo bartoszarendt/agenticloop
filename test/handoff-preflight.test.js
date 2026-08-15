@@ -13,7 +13,7 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -21,7 +21,13 @@ import { createTaskProjectFixture } from './helpers/task-fixture.js';
 import { git } from './helpers/git-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 import { evaluateHandoffPreflight } from '../src/handoff-preflight.js';
-import { canonicalJson, canonicalSha256 } from '../src/canonical-json.js';
+import { canonicalJson } from '../src/canonical-json.js';
+import { createDispatchFixture } from './helpers/dispatch-fixture.js';
+import { createTestHostTrust, protectedHostBoundary, writeHostTrustStore } from './helpers/host-trust-fixture.js';
+import { signHostPayload, hostTrustBoundarySignaturePayload, HOST_TRUST_BOUNDARY_RESPONSE_KIND, HOST_TRUST_BOUNDARY_SCHEMA_VERSION } from '../src/host-trust.js';
+import { createDecompositionProvenance } from '../src/dispatch-envelope.js';
+import { createTaskInventoryEnumeration, evaluateParallelScan, normalizeFilesTaskInventory } from '../src/parallel-scan.js';
+import { parseDependencySnapshot, dependencyStatusMap } from '../src/task-evidence-contract.js';
 
 let tmpDir;
 
@@ -110,69 +116,81 @@ Proceed incrementally.
 
 }
 
-function makeDecompositionSource(target, taskId) {
+function makeDecompositionSource(target, taskId, { depSnapshot: depSnapshotOverride, depSourceRef: depSourceRefOverride } = {}) {
   const dir = join(target, '.agenticloop', 'decompositions');
   mkdirSync(dir, { recursive: true });
   const sourceRef = `.agenticloop/decompositions/${taskId}.json`;
+  const depSourceRef = depSourceRefOverride ?? `.agenticloop/decompositions/${taskId}.dependencies.json`;
   const baseTree = spawnSyncOutput(target, ['rev-parse', 'HEAD^{tree}']);
+  const observedAt = new Date().toISOString();
 
-  const decomposition = {
-    kind: 'agenticloop.decomposition-provenance',
-    schemaVersion: 2,
-    taskId,
-    authority: 'maintainer',
-    source: 'task-decomposition',
-    route: 'serial',
-    scan: {
-      kind: 'agenticloop.parallel-scan',
-      schemaVersion: 2,
-      workUnit: { id: `work-unit:${taskId}`, backend: 'files' },
-      inventory: {
-        source: 'files:.agenticloop/tasks',
-        enumeration: {
-          inventoryId: 'files:.agenticloop/tasks',
-          observedAt: new Date().toISOString(),
-          discovered: 1,
-          returned: 1,
-          pageCount: 1,
-          truncated: false,
-          cursor: null,
-        },
-        members: [{
-          carrier: `.agenticloop/tasks/${taskId}.md`,
-          taskId,
-          status: 'agent-ready',
-          backend: 'files',
-          digest: sha256(readFileSync(taskPath(target, taskId), 'utf8')),
-          eligibility: 'eligible',
-        }],
-        complete: true,
-      },
-      excluded: [],
-      readyTaskIds: [taskId],
-      candidatePairs: [],
-      conclusion: 'serial_only',
-      decomposition: {
-        state: 'complete',
-        readySetDigest: sha256(canonicalJson({ readyTaskIds: [taskId] })),
-      },
-      readinessContext: {
-        base: { kind: 'git_tree', identity: `git-tree:${baseTree}` },
-        dependencies: null,
-      },
-      observedAt: new Date().toISOString(),
-      freshnessPolicy: { maxAgeSeconds: 3600 },
-      rescanTrigger: 'test-rescan',
-      joinPlans: {},
-      laneArtifacts: {},
-    },
-    observedAt: new Date().toISOString(),
+  const depSnapshot = depSnapshotOverride ?? {
+    kind: 'agenticloop.dependency-snapshot',
+    schemaVersion: 1,
+    source: 'files:.agenticloop/tasks',
+    observedAt,
     freshnessPolicy: { maxAgeSeconds: 3600 },
-    sourceRef,
-    sourceDigest: null,
+    statuses: {},
   };
-  const { sourceDigest: _ignored, ...rest } = decomposition;
-  decomposition.sourceDigest = `sha256:${canonicalSha256(rest)}`;
+  const depSnapshotJson = canonicalJson(depSnapshot);
+  writeFileSync(join(target, depSourceRef), `${depSnapshotJson}\n`, 'utf8');
+  const parsedDep = parseDependencySnapshot(depSnapshotJson, { sourceRef: depSourceRef, now: Date.parse(observedAt) });
+  if (!parsedDep.ok) throw new Error(`dep snapshot failed: ${parsedDep.errors.join('; ')}`);
+
+  const taskBody = readFileSync(taskPath(target, taskId), 'utf8');
+  const basePaths = spawnSyncOutput(target, ['ls-tree', '-r', '--name-only', baseTree])
+    .split(/\r?\n/).filter(Boolean);
+  const inventoryEntries = [{
+    carrier: `.agenticloop/tasks/${taskId}.md`,
+    content: taskBody,
+    readError: null,
+  }];
+  const scanned = evaluateParallelScan({
+    workUnit: { id: `work-unit:${taskId}`, backend: 'files' },
+    inventory: normalizeFilesTaskInventory({
+      inventoryId: 'files:.agenticloop/tasks',
+      entries: inventoryEntries,
+      complete: true,
+      enumeration: createTaskInventoryEnumeration({
+        backend: 'files',
+        inventoryId: 'files:.agenticloop/tasks',
+        observedAt,
+        discovered: 1,
+        returned: 1,
+      }),
+    }),
+    decomposition: {
+      source: 'task-decomposition',
+      sourceRef,
+      revision: `git-commit:test`,
+      declaredCompleteness: 'complete',
+      attribution: 'maintainer',
+      state: 'complete',
+    },
+    observedAt,
+    freshnessPolicy: { maxAgeSeconds: 3600 },
+    basePaths,
+    dependencies: dependencyStatusMap(parsedDep.evidence),
+    readinessContext: {
+      base: {
+        kind: 'git_tree',
+        identity: `git-tree:${baseTree}`,
+        inventoryDigest: sha256(canonicalJson([...basePaths].sort())),
+        pathCount: basePaths.length,
+        revalidationArgs: ['--base', baseTree],
+      },
+      dependencies: parsedDep.evidence,
+    },
+    rescanTrigger: 'test-rescan',
+  });
+  if (!scanned.ok) throw new Error(`scan failed: ${scanned.result.errors.join('; ')}`);
+
+  const decomposition = createDecompositionProvenance({
+    taskId,
+    scan: scanned.scan,
+    route: 'serial',
+    sourceRef,
+  });
 
   writeFileSync(join(target, sourceRef), `${canonicalJson(decomposition)}\n`, 'utf8');
   return sourceRef;
@@ -200,6 +218,7 @@ const EXPECTED_DOMAIN_KEYS = [
   'carrier',
   'carrierDigest',
   'cleanState',
+  'cleanStateAdvisory',
   'command',
   'contractDigest',
   'debugReference',
@@ -440,12 +459,14 @@ describe('handoff-preflight', () => {
       io: {},
     });
 
-    assertPreflight(result, { expectOk: false, expectErrors: 1 });
-    assert.equal(result.evidenceState, 'negative');
+    assertPreflight(result, { expectOk: false });
+    assert.ok(result.errors.length >= 1, `expected at least 1 error, got ${result.errors.length}`);
+    assert.ok(['negative', 'malformed'].includes(result.evidenceState),
+      `expected negative or malformed evidenceState, got ${result.evidenceState}`);
     assert.equal(result.dispositionOwner, 'engineer');
     assert.ok(result.decomposition, 'decomposition should be reported');
     assert.equal(result.decomposition.dispatchCompatible, false);
-    assert.ok(result.diagnostics[0].code.includes('decomposition'), `expected decomposition code, got ${result.diagnostics[0].code}`);
+    assert.ok(result.diagnostics.some(d => d.code.includes('decomposition')), `expected decomposition code, got ${result.diagnostics.map(d => d.code).join(', ')}`);
   });
 
   it('fails closed for unknown backend', () => {
@@ -556,6 +577,59 @@ describe('handoff-preflight', () => {
     assert.ok(result.returnAdapter, 'returnAdapter should be present');
     assert.equal(result.returnAdapter.state, 'none_required');
     assert.ok(Array.isArray(result.returnAdapter.adapters));
+  });
+
+  it('warns on ambiguous return-adapter in standard mode', () => {
+    const target = makeTarget('return-ambiguous');
+    writeTask(target, 'T-050');
+    git(target, ['add', '.']);
+    git(target, ['commit', '-m', 'task T-050\n\nTask: T-050\nAgent: maintainer']);
+
+    const trustA = createTestHostTrust({ target, adapterId: 'test.adapter.alpha.v1', keyId: 'alpha-key' });
+    const trustB = createTestHostTrust({ target, adapterId: 'test.adapter.beta.v1', keyId: 'beta-key' });
+    const operatorRoot = join(tmpDir, 'return-ambiguous-operator-trust');
+    const document = {
+      kind: 'agenticloop.host-trust',
+      schemaVersion: 1,
+      target: { repositoryIdentity: trustA.repositoryIdentity },
+      adapters: [...trustA.document.adapters, ...trustB.document.adapters],
+    };
+    writeHostTrustStore(operatorRoot, { target, document });
+
+    const trustByAdapterId = { 'test.adapter.alpha.v1': trustA, 'test.adapter.beta.v1': trustB };
+    const hostAuthority = challenge => {
+      const responses = [];
+      for (const adapterId of challenge.supportedAdapterIds ?? []) {
+        const trust = trustByAdapterId[adapterId];
+        if (!trust) continue;
+        const response = {
+          kind: HOST_TRUST_BOUNDARY_RESPONSE_KIND,
+          schemaVersion: HOST_TRUST_BOUNDARY_SCHEMA_VERSION,
+          adapterId: trust.adapterId,
+          keyId: trust.keyId,
+          challengeNonce: challenge.nonce,
+          signature: null,
+        };
+        response.signature = signHostPayload(hostTrustBoundarySignaturePayload(challenge, response), trust.privateKey);
+        responses.push(response);
+      }
+      return responses;
+    };
+
+    const result = evaluateHandoffPreflight({
+      target, taskId: 'T-050', backend: 'files',
+      projectConfig: { task_file_template: '.agenticloop/tasks/{taskId}.md' },
+      io: { operatorTrustRoot: operatorRoot, hostAuthority },
+    });
+
+    const warning = result.warningDiagnostics.find(d => d.code === 'return.assurance.ambiguous');
+    assert.ok(warning, 'should have a return.assurance.ambiguous warning');
+    assert.match(warning.message, /test\.adapter\.alpha\.v1/);
+    assert.match(warning.message, /test\.adapter\.beta\.v1/);
+    assert.equal(result.returnAdapter.state, 'resolved');
+    assert.ok(result.returnAdapter.adapter, 'resolved adapter should be listed');
+    assert.equal(typeof result.returnAdapter.adapter.adapterId, 'string');
+    assert.deepEqual(result.returnAdapter.adapters.sort(), ['test.adapter.alpha.v1', 'test.adapter.beta.v1']);
   });
 
   it('reports host-role capability without throwing', () => {
@@ -759,77 +833,12 @@ describe('handoff-preflight', () => {
     const depSnapshot = {
       kind: 'agenticloop.dependency-snapshot',
       schemaVersion: 1,
-      source: 'test-scan',
+      source: 'files:.agenticloop/tasks',
       observedAt,
       freshnessPolicy: { maxAgeSeconds: 3600 },
       statuses: { 'T-029': 'accepted' },
     };
-    const depRef = `.agenticloop/decompositions/T-030.dependencies.json`;
-    mkdirSync(join(target, '.agenticloop', 'decompositions'), { recursive: true });
-    writeFileSync(join(target, depRef), `${canonicalJson(depSnapshot)}\n`, 'utf8');
-
-    const decomDir = join(target, '.agenticloop', 'decompositions');
-    mkdirSync(decomDir, { recursive: true });
-    const baseTree = spawnSyncOutput(target, ['rev-parse', 'HEAD^{tree}']);
-    const decomposition = {
-      kind: 'agenticloop.decomposition-provenance',
-      schemaVersion: 2,
-      taskId: 'T-030',
-      authority: 'maintainer',
-      source: 'task-decomposition',
-      route: 'serial',
-      scan: {
-        kind: 'agenticloop.parallel-scan',
-        schemaVersion: 2,
-        workUnit: { id: 'work-unit:T-030', backend: 'files' },
-        inventory: {
-          source: 'files:.agenticloop/tasks',
-          enumeration: {
-            inventoryId: 'files:.agenticloop/tasks',
-            observedAt: new Date().toISOString(),
-            discovered: 1,
-            returned: 1,
-            pageCount: 1,
-            truncated: false,
-            cursor: null,
-          },
-          members: [{
-            carrier: '.agenticloop/tasks/T-030.md',
-            taskId: 'T-030',
-            status: 'agent-ready',
-            backend: 'files',
-            digest: sha256(readFileSync(taskPath(target, 'T-030'), 'utf8')),
-            eligibility: 'eligible',
-          }],
-          complete: true,
-        },
-        excluded: [],
-        readyTaskIds: ['T-030'],
-        candidatePairs: [],
-        conclusion: 'serial_only',
-        decomposition: {
-          state: 'complete',
-          readySetDigest: sha256(canonicalJson({ readyTaskIds: ['T-030'] })),
-        },
-        readinessContext: {
-          base: { kind: 'git_tree', identity: `git-tree:${baseTree}` },
-          dependencies: { sourceRef: depRef },
-        },
-        observedAt: new Date().toISOString(),
-        freshnessPolicy: { maxAgeSeconds: 3600 },
-        rescanTrigger: 'test-rescan',
-        joinPlans: {},
-        laneArtifacts: {},
-      },
-      observedAt: new Date().toISOString(),
-      freshnessPolicy: { maxAgeSeconds: 3600 },
-      sourceRef: `.agenticloop/decompositions/T-030.json`,
-      sourceDigest: null,
-    };
-    const { sourceDigest: _ignored, ...rest } = decomposition;
-    decomposition.sourceDigest = `sha256:${canonicalSha256(rest)}`;
-    writeFileSync(join(target, decomposition.sourceRef), `${canonicalJson(decomposition)}\n`, 'utf8');
-
+    makeDecompositionSource(target, 'T-030', { depSnapshot });
     git(target, ['add', '.agenticloop/decompositions']);
     git(target, ['commit', '-m', 'decomposition T-030\n\nTask: T-030\nAgent: maintainer']);
     const now = new Date().toISOString();
@@ -853,80 +862,26 @@ describe('handoff-preflight', () => {
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-032\n\nTask: T-032\nAgent: maintainer']);
 
-    const depSnapshot = {
+    const validObservedAt = new Date().toISOString();
+    const validSnapshot = {
       kind: 'agenticloop.dependency-snapshot',
       schemaVersion: 1,
-      source: 'test-scan',
+      source: 'files:.agenticloop/tasks',
+      observedAt: validObservedAt,
+      freshnessPolicy: { maxAgeSeconds: 3600 },
+      statuses: { 'T-031': 'accepted' },
+    };
+    makeDecompositionSource(target, 'T-032', { depSnapshot: validSnapshot });
+    const depPath = join(target, '.agenticloop', 'decompositions', 'T-032.dependencies.json');
+    const staleDep = {
+      kind: 'agenticloop.dependency-snapshot',
+      schemaVersion: 1,
+      source: 'files:.agenticloop/tasks',
       observedAt: '2020-01-01T00:00:00.000Z',
       freshnessPolicy: { maxAgeSeconds: 60 },
       statuses: { 'T-031': 'accepted' },
     };
-    const depRef = `.agenticloop/decompositions/T-032.dependencies.json`;
-    mkdirSync(join(target, '.agenticloop', 'decompositions'), { recursive: true });
-    writeFileSync(join(target, depRef), `${canonicalJson(depSnapshot)}\n`, 'utf8');
-
-    const decomDir = join(target, '.agenticloop', 'decompositions');
-    mkdirSync(decomDir, { recursive: true });
-    const baseTree = spawnSyncOutput(target, ['rev-parse', 'HEAD^{tree}']);
-    const decomposition = {
-      kind: 'agenticloop.decomposition-provenance',
-      schemaVersion: 2,
-      taskId: 'T-032',
-      authority: 'maintainer',
-      source: 'task-decomposition',
-      route: 'serial',
-      scan: {
-        kind: 'agenticloop.parallel-scan',
-        schemaVersion: 2,
-        workUnit: { id: 'work-unit:T-032', backend: 'files' },
-        inventory: {
-          source: 'files:.agenticloop/tasks',
-          enumeration: {
-            inventoryId: 'files:.agenticloop/tasks',
-            observedAt: new Date().toISOString(),
-            discovered: 1,
-            returned: 1,
-            pageCount: 1,
-            truncated: false,
-            cursor: null,
-          },
-          members: [{
-            carrier: '.agenticloop/tasks/T-032.md',
-            taskId: 'T-032',
-            status: 'agent-ready',
-            backend: 'files',
-            digest: sha256(readFileSync(taskPath(target, 'T-032'), 'utf8')),
-            eligibility: 'eligible',
-          }],
-          complete: true,
-        },
-        excluded: [],
-        readyTaskIds: ['T-032'],
-        candidatePairs: [],
-        conclusion: 'serial_only',
-        decomposition: {
-          state: 'complete',
-          readySetDigest: sha256(canonicalJson({ readyTaskIds: ['T-032'] })),
-        },
-        readinessContext: {
-          base: { kind: 'git_tree', identity: `git-tree:${baseTree}` },
-          dependencies: { sourceRef: depRef },
-        },
-        observedAt: new Date().toISOString(),
-        freshnessPolicy: { maxAgeSeconds: 3600 },
-        rescanTrigger: 'test-rescan',
-        joinPlans: {},
-        laneArtifacts: {},
-      },
-      observedAt: new Date().toISOString(),
-      freshnessPolicy: { maxAgeSeconds: 3600 },
-      sourceRef: `.agenticloop/decompositions/T-032.json`,
-      sourceDigest: null,
-    };
-    const { sourceDigest: _ignored, ...rest } = decomposition;
-    decomposition.sourceDigest = `sha256:${canonicalSha256(rest)}`;
-    writeFileSync(join(target, decomposition.sourceRef), `${canonicalJson(decomposition)}\n`, 'utf8');
-
+    writeFileSync(depPath, `${canonicalJson(staleDep)}\n`, 'utf8');
     git(target, ['add', '.agenticloop/decompositions']);
     git(target, ['commit', '-m', 'decomposition T-032\n\nTask: T-032\nAgent: maintainer']);
 
@@ -945,69 +900,18 @@ describe('handoff-preflight', () => {
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-034\n\nTask: T-034\nAgent: maintainer']);
 
-    const depRef = `.agenticloop/decompositions/T-034.dependencies.json`;
-    const decomDir = join(target, '.agenticloop', 'decompositions');
-    mkdirSync(decomDir, { recursive: true });
-    const baseTree = spawnSyncOutput(target, ['rev-parse', 'HEAD^{tree}']);
-    const decomposition = {
-      kind: 'agenticloop.decomposition-provenance',
-      schemaVersion: 2,
-      taskId: 'T-034',
-      authority: 'maintainer',
-      source: 'task-decomposition',
-      route: 'serial',
-      scan: {
-        kind: 'agenticloop.parallel-scan',
-        schemaVersion: 2,
-        workUnit: { id: 'work-unit:T-034', backend: 'files' },
-        inventory: {
-          source: 'files:.agenticloop/tasks',
-          enumeration: {
-            inventoryId: 'files:.agenticloop/tasks',
-            observedAt: new Date().toISOString(),
-            discovered: 1,
-            returned: 1,
-            pageCount: 1,
-            truncated: false,
-            cursor: null,
-          },
-          members: [{
-            carrier: '.agenticloop/tasks/T-034.md',
-            taskId: 'T-034',
-            status: 'agent-ready',
-            backend: 'files',
-            digest: sha256(readFileSync(taskPath(target, 'T-034'), 'utf8')),
-            eligibility: 'eligible',
-          }],
-          complete: true,
-        },
-        excluded: [],
-        readyTaskIds: ['T-034'],
-        candidatePairs: [],
-        conclusion: 'serial_only',
-        decomposition: {
-          state: 'complete',
-          readySetDigest: sha256(canonicalJson({ readyTaskIds: ['T-034'] })),
-        },
-        readinessContext: {
-          base: { kind: 'git_tree', identity: `git-tree:${baseTree}` },
-          dependencies: { sourceRef: depRef },
-        },
-        observedAt: new Date().toISOString(),
-        freshnessPolicy: { maxAgeSeconds: 3600 },
-        rescanTrigger: 'test-rescan',
-        joinPlans: {},
-        laneArtifacts: {},
-      },
-      observedAt: new Date().toISOString(),
+    const validObservedAt = new Date().toISOString();
+    const validSnapshot = {
+      kind: 'agenticloop.dependency-snapshot',
+      schemaVersion: 1,
+      source: 'files:.agenticloop/tasks',
+      observedAt: validObservedAt,
       freshnessPolicy: { maxAgeSeconds: 3600 },
-      sourceRef: `.agenticloop/decompositions/T-034.json`,
-      sourceDigest: null,
+      statuses: { 'T-033': 'accepted' },
     };
-    const { sourceDigest: _ignored, ...rest } = decomposition;
-    decomposition.sourceDigest = `sha256:${canonicalSha256(rest)}`;
-    writeFileSync(join(target, decomposition.sourceRef), `${canonicalJson(decomposition)}\n`, 'utf8');
-
+    makeDecompositionSource(target, 'T-034', { depSnapshot: validSnapshot });
+    const depPath = join(target, '.agenticloop', 'decompositions', 'T-034.dependencies.json');
+    rmSync(depPath, { force: true });
     git(target, ['add', '.agenticloop/decompositions']);
     git(target, ['commit', '-m', 'decomposition T-034\n\nTask: T-034\nAgent: maintainer']);
 
@@ -1018,5 +922,67 @@ describe('handoff-preflight', () => {
     });
 
     assert.equal(result.dependencyAge.state, 'missing');
+  });
+
+  it('preflight and dispatch agree on readiness for a real fixture', async () => {
+    const fixture = await createDispatchFixture(tmpDir, 'preflight-dispatch-agreement');
+    const hostBoundary = protectedHostBoundary(fixture.trust);
+    const commonOptions = {
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      hostAuthority: hostBoundary,
+    };
+
+    const preflightResult = await runCliInProcess([
+      'task', 'handoff-preflight', 'T-001', '--host', 'opencode', '--json', '--target', fixture.root,
+    ], commonOptions);
+    const preflight = JSON.parse(preflightResult.stdout);
+
+    const dispatchResult = await runCliInProcess([
+      'task', 'prepare-dispatch', 'T-001', '--host', 'opencode', '--role', 'engineer', '--json', '--target', fixture.root,
+    ], commonOptions);
+    const dispatch = JSON.parse(dispatchResult.stdout);
+
+    const preflightOk = preflight.ok === true;
+    const dispatchOk = dispatchResult.status === 0;
+    assert.equal(preflightOk, dispatchOk,
+      `preflight ok=${preflightOk} must agree with dispatch ok=${dispatchOk}`);
+    if (!preflightOk && !dispatchOk) {
+      const preflightCode = preflight.diagnostics?.[0]?.code ?? '';
+      const dispatchCode = dispatch.diagnostics?.[0]?.code ?? '';
+      const preflightMsg = preflight.diagnostics?.[0]?.message ?? '';
+      const dispatchMsg = dispatch.diagnostics?.[0]?.message ?? '';
+      const shareRootCause = preflightCode === dispatchCode ||
+        preflightMsg.split(';')[0] === dispatchMsg.split(';')[0] ||
+        (preflightCode.includes('activation') && dispatchCode.includes('activation')) ||
+        (preflightCode.includes('decomposition') && dispatchCode.includes('decomposition'));
+      assert.ok(shareRootCause,
+        `both blocked but root causes differ: preflight=${preflightCode} dispatch=${dispatchCode}`);
+    }
+  });
+
+  it('emits capability.resolution.failed warning when host-role capability resolution throws', () => {
+    const target = makeTarget('cap-resolution-failed');
+    writeTask(target, 'T-040');
+    writeFileSync(join(target, 'agenticloop.json'), JSON.stringify({
+      adapters: {
+        'claude-code': {
+          roleSettings: {
+            engineer: { permissionMode: 'totally-invalid-mode' },
+          },
+        },
+      },
+    }), 'utf8');
+    git(target, ['add', '.']);
+    git(target, ['commit', '-m', 'task T-040\n\nTask: T-040\nAgent: maintainer']);
+
+    const result = evaluateHandoffPreflight({
+      target, taskId: 'T-040', backend: 'files',
+      projectConfig: { task_file_template: '.agenticloop/tasks/{taskId}.md' },
+      io: {},
+    });
+
+    const warning = result.warningDiagnostics.find(d => d.code === 'capability.resolution.failed');
+    assert.ok(warning, 'expected capability.resolution.failed warning diagnostic');
+    assert.equal(warning.level, 'warning');
   });
 });

@@ -23,6 +23,7 @@ primary_repair_capabilities:
   - repair_task_attribution
   - supply_base_inventory
   - select_readiness_mode
+  - select_return_adapter
   - repair_required_checks
   - repair_task_policy
   - repair_review_checkpoint

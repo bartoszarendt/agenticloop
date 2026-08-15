@@ -141,6 +141,7 @@ export const POLICY_SOURCES = Object.freeze([
 /** Decomposition provenance: v1 asserted completeness, v2 derives it from a scan. */
 export const LEGACY_DECOMPOSITION_SCHEMA_VERSION = 1;
 export const DECOMPOSITION_SCHEMA_VERSION = 2;
+export { FindingSet, findingSet, validateDecomposition, validateDecompositionFreshness };
 /**
  * The committed decomposition source carries the whole scan record, because
  * that record is the proof. The packet carries only a constant-size binding to
@@ -1139,6 +1140,12 @@ function validateDecomposition(value, taskId, findings, options = {}) {
     }
     if (scan.freshnessPolicy?.maxAgeSeconds !== value?.freshnessPolicy?.maxAgeSeconds) {
       findings.malformed('decomposition freshnessPolicy must equal its bound parallel-scan freshness policy');
+    }
+    const depSourceRef = scan.readinessContext?.dependencies?.sourceRef;
+    if (depSourceRef === null || depSourceRef === undefined) {
+      findings.malformed('decomposition scan readinessContext must carry a dependency revalidation selector');
+    } else if (!safeRepositoryPath(depSourceRef)) {
+      findings.malformed('decomposition scan readinessContext dependency sourceRef must be a safe repository-relative path');
     }
   }
 

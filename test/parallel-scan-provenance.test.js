@@ -231,7 +231,7 @@ function scanInput({
     dependencies,
     readinessContext: readinessContext ?? {
       base: BASE_EVIDENCE,
-      dependencies: Object.keys(dependencies).length > 0 ? dependencyEvidence(dependencies) : null,
+      dependencies: dependencyEvidence(dependencies),
     },
     joinPlans,
     laneArtifacts,
@@ -1727,7 +1727,7 @@ describe('production decomposition producer', () => {
       observedAt: OBSERVED_AT,
       freshnessPolicy: { maxAgeSeconds: 3600 },
       basePaths: BASE_PATHS,
-      readinessContext: { base: BASE_EVIDENCE, dependencies: null },
+      readinessContext: { base: BASE_EVIDENCE, dependencies: dependencyEvidence() },
       rescanTrigger: 'inventory membership changes',
     }, { now: NOW });
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));

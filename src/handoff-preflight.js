@@ -38,6 +38,10 @@ import { listAgenticLoopWorktrees, resolveGitRepositoryContext } from './worktre
 import { loadAgenticLoopConfig } from './json.js';
 import { createDecompositionEligibilityProjection } from './decomposition-eligibility.js';
 import { fileMatchesScopePattern } from './scope-matcher.js';
+import {
+  FindingSet,
+  validateDecomposition,
+} from './dispatch-envelope.js';
 
 export const HANDOFF_PREFLIGHT_KIND = 'agenticloop.handoff-preflight';
 export const HANDOFF_PREFLIGHT_SCHEMA_VERSION = 1;
@@ -135,6 +139,7 @@ class PreflightFindings {
  *   backend: string,
  *   projectConfig: object,
  *   io: object,
+ *   host?: string,
  *   hostTrustStore?: string,
  *   now?: string,
  * }} input
@@ -146,6 +151,7 @@ export function evaluateHandoffPreflight(input) {
     backend,
     projectConfig,
     io,
+    host: requestedHost,
     hostTrustStore,
     now = new Date().toISOString(),
   } = input;
@@ -473,12 +479,6 @@ export function evaluateHandoffPreflight(input) {
         const schemaVersion = decompositionSource?.schemaVersion;
         const sourceRefPath = decompositionSource?.sourceRef;
         const sourceRevision = decompositionSource?.scan?.decomposition?.revision ?? null;
-        const maintainerAttribution = decompositionSource?.authority === 'maintainer';
-        const inventoryComplete = decompositionSource?.scan?.inventory?.complete === true &&
-          decompositionSource?.scan?.decomposition?.state === 'complete';
-        const baseMode = decompositionSource?.scan?.readinessContext?.base?.kind ?? 'unknown';
-        const baseIdentity = decompositionSource?.scan?.readinessContext?.base?.identity ?? null;
-        const baseValid = baseMode === 'git_tree' && typeof baseIdentity === 'string' && baseIdentity.startsWith('git-tree:');
         const members = decompositionSource?.scan?.inventory?.members ?? [];
         const member = members.find(candidate => candidate?.taskId === taskId);
         const eligibility = member?.eligibility ?? null;
@@ -493,34 +493,37 @@ export function evaluateHandoffPreflight(input) {
           },
         });
 
+        const dispatchFindings = new FindingSet('parallel_scan.decomposition.invalid');
+        validateDecomposition(decompositionSource, taskId, dispatchFindings, {
+          now: Date.parse(now) || undefined,
+        });
+
+        for (const item of dispatchFindings.items) {
+          findings.error(
+            item.code ?? 'parallel_scan.decomposition.invalid',
+            item.message,
+            repairCommand(),
+            item.evidenceState ?? 'negative'
+          );
+        }
+
         decompositionDispatchable = {
           schemaVersion,
           sourceRef: sourceRefPath ?? sourceRef,
           sourceRevision: sourceRevision ?? null,
           sourceCommit: sourceRevision ?? null,
-          maintainerAttribution,
-          inventoryComplete,
-          baseMode,
-          baseValid,
+          maintainerAttribution: decompositionSource?.authority === 'maintainer',
+          inventoryComplete: decompositionSource?.scan?.inventory?.complete === true &&
+            decompositionSource?.scan?.decomposition?.state === 'complete',
+          baseMode: decompositionSource?.scan?.readinessContext?.base?.kind ?? 'unknown',
+          baseValid: decompositionSource?.scan?.readinessContext?.base?.kind === 'git_tree' &&
+            typeof decompositionSource?.scan?.readinessContext?.base?.identity === 'string' &&
+            decompositionSource.scan.readinessContext.base.identity.startsWith('git-tree:'),
           eligibility,
           eligibilityDigest: eligibilityProjection.digest,
           eligibilityProjection,
-          dispatchCompatible: maintainerAttribution && inventoryComplete && baseValid && schemaVersion === 2,
+          dispatchCompatible: dispatchFindings.length === 0,
         };
-
-        if (!decompositionDispatchable.dispatchCompatible) {
-          const reasons = [];
-          if (!maintainerAttribution) reasons.push('missing maintainer attribution');
-          if (!inventoryComplete) reasons.push('inventory is incomplete');
-          if (!baseValid) reasons.push('base mode is not a valid git-tree');
-          if (schemaVersion !== 2) reasons.push(`schema version ${schemaVersion} is stale; regenerate as v2`);
-          findings.error(
-            'parallel_scan.decomposition.invalid',
-            `decomposition source is not dispatchable: ${reasons.join('; ')}`,
-            repairCommand(),
-            'negative'
-          );
-        }
       } catch (error) {
         findings.error(
           'parallel_scan.decomposition.invalid',
@@ -571,7 +574,11 @@ export function evaluateHandoffPreflight(input) {
         cleanStateClassification = cleanState.ok ? 'clean' : 'dirty';
         if (!cleanState.ok) {
           for (const finding of cleanState.findings) {
-            findings.warning('worktree.clean_gate.failed', finding.message, 'negative');
+            findings.warning(
+              'worktree.clean_gate.failed',
+              `${finding.message}; clean state is evaluated at dispatch time; a dirty checkout may be refused by prepare-dispatch`,
+              'negative'
+            );
           }
         }
       } catch (error) {
@@ -592,26 +599,57 @@ export function evaluateHandoffPreflight(input) {
       if (existsSync(configPath)) {
         Object.assign(config, loadAgenticLoopConfig(configPath));
       }
-    } catch {
-      // Optional config
+    } catch (error) {
+      findings.error(
+        'cli.operational',
+        `agenticloop.json is present but unreadable: ${error.message}`,
+        'Repair agenticloop.json, then rerun.',
+        'malformed'
+      );
     }
     const hostRoleCapabilities = buildHostRoleCapabilityInventory({
       adapterConfigs: config.adapters ?? {},
     });
-    // Resolve default host
-    const host = Object.keys(hostRoleCapabilities)[0] ?? 'opencode';
-    const declaration = hostRoleCapabilities[host]?.engineer;
-    if (declaration) {
-      const checked = validateHostRoleCapabilityDeclaration(declaration);
-      if (checked.ok) {
-        hostRoleCapability = { host, roleId: 'engineer', declaration };
-        degradedEnforcementReports = createDegradedEnforcementReports(declaration);
-      } else {
-        findings.warning(
-          'capability.declaration.invalid',
-          `host-role capability declaration is invalid: ${checked.errors.join('; ')}`,
-          'malformed'
+    const availableHosts = Object.keys(hostRoleCapabilities);
+    const configuredHosts = Object.keys(config.adapters ?? {});
+    let host;
+    if (requestedHost) {
+      if (!hostRoleCapabilities[requestedHost]) {
+        findings.error(
+          'cli.operational',
+          `requested host '${requestedHost}' is not a recognized adapter host; available: ${availableHosts.join(', ') || '(none)'}`,
+          `Specify --host with one of: ${availableHosts.join(', ') || 'opencode'}.`,
+          'negative'
         );
+        host = null;
+      } else {
+        host = requestedHost;
+      }
+    } else if (configuredHosts.length > 1) {
+      findings.error(
+        'cli.operational',
+        `host is ambiguous; ${configuredHosts.length} adapter hosts are configured (${configuredHosts.join(', ')}); specify --host <id>`,
+        `Specify --host with one of: ${configuredHosts.join(', ')}.`,
+        'negative'
+      );
+      host = null;
+    } else {
+      host = configuredHosts[0] ?? availableHosts[0] ?? 'opencode';
+    }
+    if (host) {
+      const declaration = hostRoleCapabilities[host]?.engineer;
+      if (declaration) {
+        const checked = validateHostRoleCapabilityDeclaration(declaration);
+        if (checked.ok) {
+          hostRoleCapability = { host, roleId: 'engineer', declaration };
+          degradedEnforcementReports = createDegradedEnforcementReports(declaration);
+        } else {
+          findings.warning(
+            'capability.declaration.invalid',
+            `host-role capability declaration is invalid: ${checked.errors.join('; ')}`,
+            'malformed'
+          );
+        }
       }
     }
   } catch (error) {
@@ -648,6 +686,13 @@ export function evaluateHandoffPreflight(input) {
         returnAdapterResolution = { state: 'ambiguous', adapters: eligibleAdapters.map(a => a.adapterId) };
       } else {
         const selected = eligibleAdapters[0] ?? null;
+        if (eligibleAdapters.length > 1 && effectivePolicy?.mode !== 'hardened') {
+          findings.warning(
+            'return.assurance.ambiguous',
+            `multiple return adapters are available (${eligibleAdapters.map(a => a.adapterId).join(', ')}); selected '${selected?.adapterId}'; use --return-adapter to select a specific adapter`,
+            'current'
+          );
+        }
         returnAdapterResolution = {
           state: selected ? 'resolved' : 'none_required',
           adapter: selected ? { adapterId: selected.adapterId, keyId: selected.keyId } : null,
@@ -742,6 +787,7 @@ export function evaluateHandoffPreflight(input) {
     decomposition: decompositionDispatchable,
     repository: repositoryState,
     cleanState: cleanStateClassification,
+    cleanStateAdvisory: cleanStateClassification === 'dirty',
     hostRoleCapability: hostRoleCapability ? {
       host: hostRoleCapability.host,
       roleId: hostRoleCapability.roleId,

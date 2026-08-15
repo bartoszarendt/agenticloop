@@ -2157,6 +2157,7 @@ export async function cmdTask(args, io = createIo()) {
           backend: selectedBackend.backend,
           projectConfig,
           io,
+          host: opts.host,
           hostTrustStore: opts.hostTrustStore,
         });
       } catch (error) {
