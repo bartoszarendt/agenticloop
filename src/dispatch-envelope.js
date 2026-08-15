@@ -96,8 +96,7 @@ import {
   validateTaskActivationBindingShape,
 } from './activation-grant.js';
 import { ACTIVATION_MODES, MODE_MINIMUMS } from './activation-policy.js';
-import { createExecutionReuseDecision } from './execution-reuse.js';
-import { createOperationalMeasurement } from './operational-measurements.js';
+
 
 export const ACTIVATION_CAPTURE_KIND = 'agenticloop.activation-capture';
 export const ACTIVATION_CAPTURE_SCHEMA_VERSION = 2;
@@ -3317,43 +3316,6 @@ export function receiveRoleReturn(input = {}, options = {}) {
       ...sessionReportedWarningDiagnostics(returnAssurance, wire.producerRole),
     ];
     const assurance = returnAssuranceStatement(packet, returnAssurance, minimumReturn);
-    const executionReuse = createExecutionReuseDecision({
-      taskId: packet.task.id,
-      backend: packet.backend,
-      roleId: packet.assignment.roleId,
-      host: packet.assignment.hostRoleCapability.host,
-      hostCapability: true,
-      dispatchLive: true,
-      dispatchUnconsumed: false,
-      cancellationBoundary: packet.assignment.cancellationBoundary,
-      protectedContractUnchanged: true,
-      carrierLineageValid: carrierLineage !== null && carrierLineage.ok,
-      roleIdentityMatches: wire.producerRole === packet.assignment.roleId,
-      hostExecutionReferenceCurrent: returnAssurance === 'host_receipt',
-      durableRefetchSucceeded: true,
-    });
-    const operationalMeasurement = createOperationalMeasurement({
-      hostIdentity: packet.assignment.hostRoleCapability.host,
-      hostRoleCapabilityDigest: packet.assignment.hostRoleCapability.digest,
-      activationAssurance: assurance?.activation ?? 'unknown',
-      returnAssurance,
-      hostAdmissionEvidenceGrade: returnAssurance === 'host_receipt' ? 'host_signed' : 'missing',
-      executionState: executionReuse.execution.state,
-      counters: {},
-      milestones: {},
-      sizes: {
-        actingContextBytes: (raw?.length ?? 0) + JSON.stringify(packet).length,
-        dispatchPacketBytes: JSON.stringify(packet).length,
-        returnPacketBytes: raw?.length ?? 0,
-        orientationBytes: 0,
-        repeatedOrientationCount: 0,
-      },
-      disposition: {
-        state: 'bounded',
-        result: 'not_compared',
-        rationale: 'measurement is descriptive and does not confer workflow authority',
-      },
-    });
     return {
       ok: true,
       roleReturn: deepFreeze(wire),
@@ -3367,8 +3329,6 @@ export function receiveRoleReturn(input = {}, options = {}) {
         degradedEnforcementReports: degradedReports,
         warningDiagnostics,
         assurance,
-        executionReuse,
-        operationalMeasurement,
       }),
     };
   } catch (error) {
