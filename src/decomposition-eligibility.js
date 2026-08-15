@@ -71,6 +71,8 @@ export function createDecompositionEligibilityProjection({
     lifecycleEligibility: {
       state: member?.state ?? null,
       eligibility: eligibility?.eligibility ?? null,
+      status: eligibility?.status ?? null,
+      declaredDependencies: Array.isArray(eligibility?.declaredDependencies) ? eligibility.declaredDependencies : null,
       ready: Array.isArray(scan?.readyTaskIds) ? scan.readyTaskIds.includes(taskId) : null,
       conclusion: scan?.conclusion ?? null,
     },

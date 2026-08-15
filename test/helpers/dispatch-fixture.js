@@ -27,7 +27,7 @@ import { createHostHandoffReceipt } from '../../src/host-handoff.js';
 import { getHostRoleCapability } from '../../src/host-role-capabilities.js';
 import { canonicalJson } from '../../src/canonical-json.js';
 import { createValidationResult, validationResultDigest } from '../../src/result-envelope.js';
-import { createTaskReadinessEvidence, parseDependencySnapshot } from '../../src/task-evidence-contract.js';
+import { createTaskReadinessEvidence, dependencyStatusMap, parseDependencySnapshot } from '../../src/task-evidence-contract.js';
 import { evaluateTaskReadiness } from '../../src/task-readiness.js';
 import { loadFilesTaskContractRecords } from '../../src/files-task-contract.js';
 import { createTaskProjectFixture } from './task-fixture.js';
@@ -322,7 +322,7 @@ async function buildDispatchFixture(temp, name, options = {}) {
       observedAt,
       freshnessPolicy: { maxAgeSeconds: 3600 },
       basePaths,
-      dependencies: {},
+      dependencies: dependencyStatusMap(dependency.evidence),
       readinessContext: { base: readiness.evidence.base, dependencies: readiness.evidence.dependencies },
       rescanTrigger: 'ready membership, dependencies, ownership, coupling, or source revision changes',
     });

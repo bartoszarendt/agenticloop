@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 
+import { createDecompositionEligibilityProjection } from '../src/decomposition-eligibility.js';
 import { createTaskProjectFixture } from './helpers/task-fixture.js';
 import { git } from './helpers/git-fixture.js';
 import {
@@ -27,9 +28,32 @@ function target() {
   return value;
 }
 
+const ELIGIBILITY_DIGEST_RE = /^sha256:agenticloop\.decomposition-eligibility\.v1:[a-f0-9]{64}$/;
+
+function buildEligibilityDigest(taskId, contractDigest) {
+  const minimalScan = {
+    workUnit: { id: 'test-work-unit', backend: 'files' },
+    inventory: { complete: true, members: [{ taskId, state: 'readable', carrier: `.agenticloop/tasks/${taskId}.md`, digest: `sha256:${'b'.repeat(64)}` }] },
+    readyTaskIds: [taskId],
+    excluded: [],
+    eligibility: [{ taskId, eligibility: 'eligible', status: 'agent-ready', protectedContractDigest: contractDigest }],
+    knowledgeCoupling: [{ taskId, classification: 'independent' }],
+    couplingBlockers: [],
+    candidatePairs: [],
+    conclusion: 'not_currently_eligible',
+    decomposition: { state: 'complete' },
+    readinessContext: { digest: `sha256:readiness:${'c'.repeat(64)}`, dependencies: {} },
+  };
+  return createDecompositionEligibilityProjection({
+    taskId, backend: 'files', contractDigest, scan: minimalScan,
+    taskFacts: { requiredChecks: null, scope: null },
+  }).digest;
+}
+
 function preflight(value, taskId = 'T-001') {
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: value, encoding: 'utf8' }).stdout.trim();
   const tree = spawnSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: value, encoding: 'utf8' }).stdout.trim();
+  const contractDigest = `sha256:v1:${'2'.repeat(64)}`;
   return {
     kind: 'agenticloop.handoff-preflight',
     schemaVersion: 1,
@@ -37,7 +61,7 @@ function preflight(value, taskId = 'T-001') {
     backend: 'files',
     carrier: `.agenticloop/tasks/${taskId}.md`,
     carrierDigest: `sha256:${'1'.repeat(64)}`,
-    contractDigest: `sha256:v1:${'2'.repeat(64)}`,
+    contractDigest,
     repository: { head, baseTree: tree, productBase: null },
     readiness: {
       ok: true,
@@ -55,6 +79,7 @@ function preflight(value, taskId = 'T-001') {
       baseMode: 'git_tree',
       eligibility: 'eligible',
       dispatchCompatible: true,
+      eligibilityDigest: buildEligibilityDigest(taskId, contractDigest),
     },
   };
 }
@@ -78,6 +103,7 @@ describe('handoff derived-evidence refresh', () => {
     assert.equal(existsSync(join(value, HANDOFF_REFRESH_ROOT, 'T-001.json')), true);
     assert.equal(readFileSync(join(value, '.agenticloop', 'tasks', 'T-001.md'), 'utf8'), taskBefore);
     assert.equal(validateHandoffRefreshReceipt(applied.receipt, { target: value, taskId: 'T-001' }).ok, true);
+    assert.match(applied.receipt.decomposition.eligibilityDigest, ELIGIBILITY_DIGEST_RE);
     assert.equal(applied.attributionValidation.ok, true);
     assert.equal(applied.maintainerTrailerBlock, 'Task: T-001\nAgent: maintainer');
   });

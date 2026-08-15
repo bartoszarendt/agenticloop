@@ -29,6 +29,7 @@
 import { canonicalJson, canonicalSha256 } from './canonical-json.js';
 import { createHash } from 'node:crypto';
 import { validateCommittedSourcePath } from './committed-source.js';
+import { createDecompositionEligibilityProjection } from './decomposition-eligibility.js';
 import { parseFrontmatterStrict } from './frontmatter.js';
 import {
   classifyParallelPair,
@@ -41,6 +42,7 @@ import {
   deriveEvidenceState,
   dispositionForEvidenceState,
 } from './result-envelope.js';
+import { taskContractDigest } from './task-contract-baseline.js';
 import {
   dependencyStatusMap,
   normalizeReadinessBaseEvidence,
@@ -187,6 +189,7 @@ const ENUMERATION_COVERAGE_FIELDS = Object.freeze([
 const MEMBER_STATES = Object.freeze(['readable', 'malformed', 'unreadable']);
 const TERMINAL_STATUSES = Object.freeze(['done', 'closed', 'cancelled', 'accepted']);
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
+const CONTRACT_SHA256 = /^sha256:v1:[a-f0-9]{64}$/;
 const PARALLEL_SCAN_FIELDS = Object.freeze([
   'kind', 'schemaVersion', 'workUnit', 'inventory', 'decomposition', 'readinessContext',
   'observedAt', 'freshnessPolicy', 'invalidatedBy', 'readyTaskIds', 'readyCount', 'excluded',
@@ -917,12 +920,21 @@ export function evaluateParallelScan(input = {}, options = {}) {
     }
     const declaration = parseOwnershipDeclaration(member.body);
     const dependsOn = parseTaskReadinessDeclaration(member.body).declaration?.dependsOn ?? [];
-    readyTasks.push({ member, declaration, dependsOn });
+    readyTasks.push({ member, declaration, dependsOn, taskStatus: status });
   }
 
   const readyTaskIds = readyTasks.map(item => item.member.taskId).sort();
   const eligibility = readyTasks
-    .map(item => ({ taskId: item.member.taskId, eligibility: evaluateTaskEligibility(item.declaration) }))
+    .map(item => {
+      const contractResult = taskContractDigest(item.member.body);
+      return {
+        taskId: item.member.taskId,
+        eligibility: evaluateTaskEligibility(item.declaration),
+        status: item.taskStatus || null,
+        protectedContractDigest: contractResult?.ok ? contractResult.digest : null,
+        declaredDependencies: [...item.dependsOn].sort(),
+      };
+    })
     .sort((left, right) => (left.taskId < right.taskId ? -1 : 1));
   const knowledgeCoupling = readyTasks
     .map(item => ({ taskId: item.member.taskId, classification: item.declaration?.knowledgeCoupling ?? 'unknown' }))
@@ -1125,14 +1137,24 @@ function inventorySnapshot(inventory) {
  * inventory. The current inventory is never taken from the authored
  * decomposition source, so omitted/new carriers and changed task bodies make
  * the scan stale before dispatch.
+ *
+ * When `options.eligibilityRecheck` is supplied, carrier-byte drift with
+ * identical membership is resolved by comparing the decomposition-eligibility
+ * projections rather than failing unconditionally: prose-only carrier edits
+ * (review comments, appended notes) are accepted, while material changes
+ * (scope, status, required checks) still fail closed.
+ *
+ * @param {any} record
+ * @param {any} currentInventory
+ * @param {{ eligibilityRecheck?: { taskId: string, backend: string, currentContractDigest: string|null, runGit?: Function } }} [options]
  */
-export function validateParallelScanInventoryBinding(record, currentInventory) {
+export function validateParallelScanInventoryBinding(record, currentInventory, options = {}) {
   const errors = [];
   if (!isPlainObject(record?.inventory) || !isPlainObject(record?.workUnit)) {
-    return { ok: false, errors: ['parallel scan has no valid inventory binding'] };
+    return { ok: false, errors: ['parallel scan has no valid inventory binding'], proseDriftAccepted: false };
   }
   if (!isPlainObject(currentInventory)) {
-    return { ok: false, errors: ['authoritative parallel-scan inventory refetch did not return an object'] };
+    return { ok: false, errors: ['authoritative parallel-scan inventory refetch did not return an object'], proseDriftAccepted: false };
   }
   const current = inventorySnapshot(currentInventory);
   if (current.backend !== record.workUnit.backend) {
@@ -1144,9 +1166,40 @@ export function validateParallelScanInventoryBinding(record, currentInventory) {
   if (!current.complete) {
     errors.push('authoritative parallel-scan inventory refetch is incomplete');
   }
-  if (current.memberCount !== record.inventory.memberCount || current.digest !== record.inventory.digest) {
+
+  // Membership drift fails closed always: member count, identity pairs,
+  // completeness, or any unreadable member.
+  const boundPairs = (record.inventory.members ?? [])
+    .map(m => `${m.taskId}\u0000${m.carrier}`)
+    .sort();
+  const currentPairs = current.members
+    .map(m => `${m.taskId}\u0000${m.carrier}`)
+    .sort();
+  const membershipDrift = current.memberCount !== record.inventory.memberCount ||
+    !current.complete ||
+    boundPairs.length !== currentPairs.length ||
+    boundPairs.some((pair, i) => pair !== currentPairs[i]);
+
+  let proseDriftAccepted = false;
+  if (membershipDrift) {
     errors.push('authoritative parallel-scan inventory membership or task carrier digest changed after the scan');
+  } else if (current.digest !== record.inventory.digest) {
+    // Carrier-byte drift with identical membership. Without a recheck option,
+    // the existing fail-closed behavior is preserved.
+    if (!options?.eligibilityRecheck) {
+      errors.push('authoritative parallel-scan inventory membership or task carrier digest changed after the scan');
+    } else {
+      const recheck = compareEligibilityAfterCarrierDrift(
+        record, currentInventory, current, options.eligibilityRecheck,
+      );
+      if (!recheck.ok) {
+        errors.push(recheck.error);
+      } else {
+        proseDriftAccepted = true;
+      }
+    }
   }
+
   // The refetch must itself be an exhaustive observation by the authoritative
   // enumerator for this exact surface; a truncated or untyped refetch proves
   // nothing about what is on the backend now.
@@ -1163,7 +1216,138 @@ export function validateParallelScanInventoryBinding(record, currentInventory) {
       enumeration.receipt.enumerator !== record.inventory.enumeration.enumerator) {
     errors.push('authoritative parallel-scan inventory refetch used a different enumerator than the bound scan');
   }
-  return { ok: errors.length === 0, errors, inventory: current };
+  return { ok: errors.length === 0, errors, inventory: current, proseDriftAccepted };
+}
+
+/**
+ * When carrier bytes changed but membership is identical, compare the
+ * decomposition-eligibility projections to decide whether the drift is
+ * prose-only (accepted) or material (rejected).
+ *
+ * Uses a genuine re-derivation via `evaluateParallelScan` over the current
+ * inventory instead of a surgically-edited clone, so sibling status changes,
+ * knowledge coupling flips, and dependency drift are all detected.
+ *
+ * @param {any} record  The bound scan record.
+ * @param {any} rawCurrentInventory  The raw refetched inventory (carries member body content).
+ * @param {any} currentSnapshot  The inventory snapshot (digest-computed).
+ * @param {{ taskId: string, backend: string, currentContractDigest: string|null, runGit?: Function, baseEvidence?: any, dependencyEvidence?: any }} recheck
+ * @returns {{ ok: boolean, error?: string }}
+ */
+function compareEligibilityAfterCarrierDrift(record, rawCurrentInventory, currentSnapshot, recheck) {
+  const { taskId, backend, currentContractDigest, runGit, baseEvidence, dependencyEvidence } = recheck;
+
+  const boundEntry = (record.eligibility ?? []).find(e => e.taskId === taskId);
+  if (!boundEntry?.protectedContractDigest || boundEntry.declaredDependencies === undefined) {
+    return { ok: false, error: 'authoritative parallel-scan inventory membership or task carrier digest changed after the scan' };
+  }
+  if (typeof runGit !== 'function') {
+    return { ok: false, error: 'authoritative parallel-scan inventory membership or task carrier digest changed after the scan' };
+  }
+
+  const rawMembers = Array.isArray(rawCurrentInventory?.members) ? rawCurrentInventory.members : [];
+  const currentMember = rawMembers.find(m => m.taskId === taskId);
+  if (!currentMember?.body) {
+    return { ok: false, error: 'authoritative parallel-scan inventory membership or task carrier digest changed after the scan' };
+  }
+
+  const currentContract = taskContractDigest(currentMember.body);
+  const memberContractDigest = currentContract?.ok ? currentContract.digest : null;
+  if (currentContractDigest !== null && currentContractDigest !== undefined && memberContractDigest !== currentContractDigest) {
+    return { ok: false, error: `task '${taskId}' carrier drift changed decomposition eligibility; regenerate the decomposition` };
+  }
+
+  const currentTaskFacts = {
+    requiredChecks: currentContract?.ok ? currentContract.projection?.required_checks ?? null : null,
+    scope: currentContract?.ok ? currentContract.projection?.allowed_paths ?? null : null,
+  };
+
+  const baseIdentity = record.readinessContext?.base?.identity;
+  if (typeof baseIdentity !== 'string' || !baseIdentity.startsWith('git-tree:')) {
+    return { ok: false, error: 'authoritative parallel-scan inventory membership or task carrier digest changed after the scan' };
+  }
+  const tree = baseIdentity.slice('git-tree:'.length);
+  let basePaths;
+  try {
+    const treeResult = runGit(['ls-tree', '-r', '--name-only', tree]);
+    if (treeResult.status !== 0 || typeof treeResult.stdout !== 'string') {
+      return { ok: false, error: 'authoritative parallel-scan inventory membership or task carrier digest changed after the scan' };
+    }
+    basePaths = treeResult.stdout.split(/\r?\n/).filter(Boolean);
+  } catch {
+    return { ok: false, error: 'authoritative parallel-scan inventory membership or task carrier digest changed after the scan' };
+  }
+
+  const boundDependencies = record.readinessContext?.dependencies;
+  const depStatuses = dependencyEvidence
+    ? dependencyStatusMap(dependencyEvidence)
+    : boundDependencies ? dependencyStatusMap(boundDependencies) : {};
+
+  const decomposition = record.decomposition;
+
+  const recheckInventory = { ...rawCurrentInventory };
+  if (recheckInventory.enumeration && record.observedAt) {
+    recheckInventory.enumeration = { ...recheckInventory.enumeration, observedAt: record.observedAt };
+  }
+
+  const reRunReadinessContext = {
+    base: baseEvidence ?? record.readinessContext?.base ?? null,
+    dependencies: dependencyEvidence ?? record.readinessContext?.dependencies ?? null,
+  };
+
+  const reRun = evaluateParallelScan({
+    workUnit: record.workUnit,
+    inventory: recheckInventory,
+    decomposition: {
+      source: decomposition.source,
+      sourceRef: decomposition.sourceRef,
+      revision: decomposition.revision,
+      declaredCompleteness: decomposition.declaredCompleteness,
+      attribution: decomposition.attribution,
+    },
+    observedAt: record.observedAt,
+    freshnessPolicy: record.freshnessPolicy,
+    basePaths,
+    dependencies: depStatuses,
+    readinessContext: reRunReadinessContext,
+    rescanTrigger: record.rescanTrigger,
+  }, { now: Date.parse(record.observedAt) || Date.now() });
+
+  if (!reRun.ok || !reRun.scan) {
+    return { ok: false, error: 'authoritative parallel-scan inventory membership or task carrier digest changed after the scan' };
+  }
+
+  const reRunEntry = (reRun.scan.eligibility ?? []).find(e => e.taskId === taskId);
+  if (!reRunEntry?.protectedContractDigest || reRunEntry.declaredDependencies === undefined) {
+    return { ok: false, error: 'authoritative parallel-scan inventory membership or task carrier digest changed after the scan' };
+  }
+
+  if (memberContractDigest !== reRunEntry.protectedContractDigest) {
+    return { ok: false, error: `task '${taskId}' carrier drift changed decomposition eligibility; regenerate the decomposition` };
+  }
+
+  const boundProjection = createDecompositionEligibilityProjection({
+    taskId,
+    backend,
+    contractDigest: boundEntry.protectedContractDigest,
+    scan: record,
+    taskFacts: currentTaskFacts,
+  });
+  const currentProjection = createDecompositionEligibilityProjection({
+    taskId,
+    backend,
+    contractDigest: reRunEntry.protectedContractDigest,
+    scan: reRun.scan,
+    taskFacts: currentTaskFacts,
+  });
+
+  if (boundProjection.digest !== currentProjection.digest) {
+    return {
+      ok: false,
+      error: `task '${taskId}' carrier drift changed decomposition eligibility; regenerate the decomposition`,
+    };
+  }
+  return { ok: true };
 }
 
 /**
@@ -1456,10 +1640,36 @@ function validateParallelScanRecordInner(record, options) {
 
   const eligibilityIds = [];
   for (const item of eligibility) {
-    exactKeys(item, ['taskId', 'eligibility'], `parallel scan eligibility '${item?.taskId}'`, errors);
+    if (!isPlainObject(item)) {
+      errors.push('parallel scan eligibility entry must be an object');
+      continue;
+    }
+    const allowed = new Set(['taskId', 'eligibility', 'status', 'protectedContractDigest', 'declaredDependencies']);
+    const unknown = Object.keys(item).filter(key => !allowed.has(key));
+    if (unknown.length > 0) {
+      errors.push(`parallel scan eligibility '${item?.taskId}' contains unknown fields: ${unknown.sort().join(', ')}`);
+    }
     eligibilityIds.push(item?.taskId);
     if (!['eligible', 'blocked', 'unknown'].includes(item?.eligibility)) {
       errors.push(`parallel scan eligibility for '${item?.taskId}' is invalid`);
+    }
+    if (item.status !== null && item.status !== undefined && typeof item.status !== 'string') {
+      errors.push(`parallel scan eligibility '${item?.taskId}' status must be a string or null`);
+    }
+    if (item.protectedContractDigest !== null && item.protectedContractDigest !== undefined) {
+      if (typeof item.protectedContractDigest !== 'string' || !CONTRACT_SHA256.test(item.protectedContractDigest)) {
+        errors.push(`parallel scan eligibility '${item?.taskId}' protectedContractDigest must be null or sha256:v1:<64 lowercase hex>`);
+      }
+    }
+    if (item.declaredDependencies !== null && item.declaredDependencies !== undefined) {
+      if (!Array.isArray(item.declaredDependencies) || item.declaredDependencies.some(dep => typeof dep !== 'string' || !dep)) {
+        errors.push(`parallel scan eligibility '${item?.taskId}' declaredDependencies must be null or an array of non-empty strings`);
+      } else {
+        const sorted = [...item.declaredDependencies].sort();
+        if (item.declaredDependencies.some((dep, i) => dep !== sorted[i])) {
+          errors.push(`parallel scan eligibility '${item?.taskId}' declaredDependencies must be in canonical sorted order`);
+        }
+      }
     }
   }
   const knowledgeByTask = new Map();

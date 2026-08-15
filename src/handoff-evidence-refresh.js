@@ -113,33 +113,7 @@ function projectionFromPreflight(preflight) {
   };
 }
 
-function eligibilityDigest(preflight) {
-  const decomposition = preflight?.decomposition ?? null;
-  return `sha256:agenticloop.handoff-eligibility.v1:${canonicalSha256({
-    taskId: preflight?.taskId ?? null,
-    backend: preflight?.backend ?? null,
-    carrier: preflight?.carrier ?? null,
-    contractDigest: preflight?.contractDigest ?? null,
-    readiness: preflight?.readiness
-      ? {
-          ok: preflight.readiness.ok,
-          evidenceState: preflight.readiness.evidenceState ?? null,
-          disposition: preflight.readiness.disposition ?? null,
-          dependencies: preflight.readiness.dependencies ?? null,
-        }
-      : null,
-    decomposition: decomposition
-      ? {
-          sourceRef: decomposition.sourceRef ?? null,
-          sourceCommit: decomposition.sourceCommit ?? null,
-          inventoryComplete: decomposition.inventoryComplete ?? false,
-          baseMode: decomposition.baseMode ?? null,
-          eligibility: decomposition.eligibility ?? null,
-          dispatchCompatible: decomposition.dispatchCompatible ?? false,
-        }
-      : null,
-  })}`;
-}
+const ELIGIBILITY_DIGEST_RE = /^sha256:agenticloop\.decomposition-eligibility\.v1:[a-f0-9]{64}$/;
 
 function createReceipt({ target, preflight }) {
   const projection = projectionFromPreflight(preflight);
@@ -159,7 +133,7 @@ function createReceipt({ target, preflight }) {
     },
     decomposition: {
       ...projection.decomposition,
-      eligibilityDigest: preflight?.decomposition?.eligibilityDigest ?? eligibilityDigest(preflight),
+      eligibilityDigest: preflight?.decomposition?.eligibilityDigest ?? null,
     },
     dispatch: projection.dispatch,
     authority: {
@@ -191,6 +165,14 @@ export function validateHandoffRefreshReceipt(value, { target = null, taskId = n
   if (!CONTRACT_DIGEST_RE.test(String(value.contractDigest ?? ''))) errors.push('handoff derived-evidence receipt contractDigest is invalid');
   if (!isObject(value.repository) || !isObject(value.readiness) || !isObject(value.decomposition) || !isObject(value.dispatch)) {
     errors.push('handoff derived-evidence receipt derived projections must be objects');
+  }
+  if (isObject(value.decomposition)) {
+    const eligDigest = value.decomposition.eligibilityDigest;
+    if (eligDigest !== null && eligDigest !== undefined) {
+      if (!ELIGIBILITY_DIGEST_RE.test(String(eligDigest))) {
+        errors.push('handoff derived-evidence receipt decomposition eligibilityDigest must use the decomposition-eligibility domain');
+      }
+    }
   }
   if (!exactKeys(value.authority, ['state', 'durableCommitRequired', 'durableCommit']) ||
       value.authority.state !== 'derived_only' || value.authority.durableCommitRequired !== true ||

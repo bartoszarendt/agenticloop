@@ -2042,12 +2042,28 @@ export function prepareRoleDispatch(input = {}, options = {}) {
       );
       return failure(command, findings);
     }
+    let proseDriftAccepted = false;
     if (decomposition?.schemaVersion === DECOMPOSITION_SCHEMA_VERSION &&
         decomposition?.scan?.inventory?.complete === true &&
         decomposition?.scan?.decomposition?.state === 'complete') {
-      const inventoryBinding = validateParallelScanInventoryBinding(decomposition.scan, parallelScanInventory);
+      const eligibilityRecheck = scopeContract.ok
+        ? {
+            taskId: snapshot.taskId,
+            backend: decomposition.scan.workUnit.backend,
+            currentContractDigest: scopeContract.digest,
+            runGit,
+            baseEvidence: readiness?.evidence?.base ?? null,
+            dependencyEvidence: readiness?.evidence?.dependencies ?? null,
+          }
+        : undefined;
+      const inventoryBinding = validateParallelScanInventoryBinding(
+        decomposition.scan, parallelScanInventory, { eligibilityRecheck },
+      );
       for (const error of inventoryBinding.errors) {
         findings.stale(error, { code: 'dispatch.packet.stale', disposition: 'superseded' });
+      }
+      if (inventoryBinding.proseDriftAccepted) {
+        proseDriftAccepted = true;
       }
       // The base inventory and dependency snapshot decide readiness for the
       // whole ready set without changing any task carrier digest, so the
@@ -2103,6 +2119,7 @@ export function prepareRoleDispatch(input = {}, options = {}) {
           boundAssignment.hostRoleCapability
         ),
         degradedEnforcementReports: boundAssignment.degradedEnforcementReports,
+        ...(proseDriftAccepted ? { proseDriftAccepted: true } : {}),
       }),
     };
   } catch (error) {

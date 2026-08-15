@@ -110,6 +110,7 @@ const MANIFEST = {
     'test/decomposition-eligibility.test.js',
     'test/dispatch-context-measurement.test.js',
     'test/dispatch-hardening.test.js',
+    'test/eligibility-staleness.test.js',
     'test/event-cli.test.js',
     'test/event-logging-skill.test.js',
     'test/event-logging.test.js',
