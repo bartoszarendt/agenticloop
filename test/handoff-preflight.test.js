@@ -504,9 +504,12 @@ describe('handoff-preflight', () => {
     });
 
     assertPreflight(result, { expectOk: false, expectErrors: 1 });
-    assert.equal(result.evidenceState, 'negative');
-    assert.equal(result.dispositionOwner, 'engineer');
-    assert.ok(result.errors.some(e => e.includes('GitHub') || e.includes('not yet supported')), `expected GitHub error, got: ${JSON.stringify(result.errors)}`);
+    // GitHub backend now attempts real resolution; without a ghCommandRunner,
+    // it falls back to defaultGhCommandRunner which fails (gh not available),
+    // producing a 'missing' evidence state.
+    assert.equal(result.evidenceState, 'missing');
+    assert.ok(result.errors.some(e => e.includes('GitHub') || e.includes('gh') || e.includes('issue number') || e.includes('could not be resolved')),
+      `expected GitHub resolution error, got: ${JSON.stringify(result.errors)}`);
   });
 
   it('reports distinct carrier and contract digests', () => {

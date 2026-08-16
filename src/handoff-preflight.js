@@ -36,6 +36,8 @@ import { parseDependencySnapshot, dependencyStatusMap } from './task-evidence-co
 import { isGitObjectId } from './git-oid.js';
 import { listAgenticLoopWorktrees, resolveGitRepositoryContext } from './worktree.js';
 import { loadAgenticLoopConfig } from './json.js';
+import { resolveGitHubTaskIdentityStrict } from './github-task-identity.js';
+import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
 import { createDecompositionEligibilityProjection } from './decomposition-eligibility.js';
 import { fileMatchesScopePattern } from './scope-matcher.js';
 import {
@@ -226,12 +228,107 @@ export function evaluateHandoffPreflight(input) {
       }
     }
   } else if (backend === 'github') {
-    findings.error(
-      'cli.operational',
-      'handoff-preflight for the GitHub backend is not yet supported',
-      'Use the files backend for handoff-preflight.',
-      'negative'
-    );
+    // ── GitHub backend: fetch task record from a GitHub issue ──
+    // Resolve the issue number from the taskId. Two formats are accepted:
+    //   #NUMBER  — direct issue number
+    //   T-NNN    — resolved via the task label (task:T-NNN)
+    let ghIssueNumber = null;
+    const issueNumberMatch = String(taskId).match(/^#(\d+)$/);
+    if (issueNumberMatch) {
+      ghIssueNumber = Number(issueNumberMatch[1]);
+    } else {
+      // Try to resolve by task label (default template: task:{taskId})
+      try {
+        const ghRunner = io?.ghCommandRunner ?? defaultGhCommandRunner;
+        const labelResult = runGhJson(ghRunner, [
+          'issue', 'list', '--label', `task:${taskId}`, '--json', 'number', '--limit', '1',
+        ]);
+        if (Array.isArray(labelResult) && labelResult.length === 1 && Number.isInteger(Number(labelResult[0]?.number))) {
+          ghIssueNumber = Number(labelResult[0].number);
+        }
+      } catch {
+        // Label resolution failed; fall through to error diagnostic.
+      }
+    }
+
+    if (!ghIssueNumber) {
+      findings.error(
+        'task.contract.absent',
+        `GitHub backend requires a valid issue number; taskId '${taskId}' could not be resolved to an issue`,
+        'Provide a taskId in #NUMBER format or ensure the task label (task:<id>) exists, then rerun.',
+        'missing'
+      );
+    } else {
+      try {
+        const ghRunner = io?.ghCommandRunner ?? defaultGhCommandRunner;
+        const data = runGhJson(ghRunner, ['issue', 'view', String(ghIssueNumber), '--json', 'body,number']);
+        if (!data || typeof data.body !== 'string') {
+          findings.error(
+            'task.contract.absent',
+            `GitHub issue #${ghIssueNumber} has no readable body`,
+            'Ensure the issue has a task-record body, then rerun.',
+            'missing'
+          );
+        } else {
+          const body = data.body;
+          taskCarrierDigest = digestBytes(body);
+          taskContract = taskContractDigest(body);
+          if (!taskContract.ok) {
+            findings.error(
+              'task.contract.malformed',
+              `task contract is invalid: ${taskContract.error}`,
+              'Repair the issue task-record frontmatter, then rerun.',
+              'malformed'
+            );
+          } else {
+            taskContractDigestValue = taskContract.digest;
+            // Resolve GitHub task identity (frontmatter task_id or issue-number fallback)
+            const identity = resolveGitHubTaskIdentityStrict({ number: ghIssueNumber, body });
+            if (!identity.ok) {
+              findings.error(
+                'task.contract.malformed',
+                identity.diagnostic?.message ?? 'GitHub task identity is malformed',
+                'Repair the issue task-record frontmatter, then rerun.',
+                'malformed'
+              );
+            } else {
+              const resolvedTaskId = identity.identity?.taskId ?? `#${ghIssueNumber}`;
+              if (resolvedTaskId !== taskId) {
+                findings.error(
+                  'task.record.identity_mismatch',
+                  `task contract task_id '${resolvedTaskId}' does not match requested '${taskId}'`,
+                  'Correct the task_id frontmatter field or use the correct taskId, then rerun.',
+                  'malformed'
+                );
+              } else {
+                taskCarrierPath = `issue:${ghIssueNumber}`;
+                snapshot = {
+                  backend: 'github',
+                  taskId,
+                  carrier: taskCarrierPath,
+                  body,
+                  digest: taskCarrierDigest,
+                  trustedRecords: [],
+                  trustedRecordErrors: [],
+                };
+              }
+            }
+          }
+        }
+      } catch (error) {
+        const detail = String(error?.message ?? error);
+        let hint = '';
+        if (/not logged|authentication|gh auth/i.test(detail)) {
+          hint = " Run 'gh auth login' first.";
+        }
+        findings.error(
+          'cli.operational',
+          `GitHub task fetch failed: ${detail}${hint}`,
+          'Ensure the gh CLI is installed and authenticated, then rerun.',
+          'missing'
+        );
+      }
+    }
   } else {
     findings.error(
       'cli.operational',

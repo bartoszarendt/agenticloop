@@ -284,7 +284,7 @@ const TASK_SUBCOMMAND_BACKENDS = Object.freeze({
   'authorize-correction': Object.freeze(['files']),
   'prepare-decomposition': Object.freeze(['files', 'github']),
   'prepare-dispatch': Object.freeze(['files', 'github']),
-  'handoff-preflight': Object.freeze(['files']),
+  'handoff-preflight': Object.freeze(['files', 'github']),
   'refresh-handoff-evidence': Object.freeze(['files']),
   'prepare-return': Object.freeze(['files']),
   'verify-return': Object.freeze(['files', 'github']),

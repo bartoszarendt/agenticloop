@@ -121,6 +121,7 @@ const MANIFEST = {
     'test/handoff-integration-routes.test.js',
     'test/handoff-evidence-refresh.test.js',
     'test/handoff-preflight.test.js',
+    'test/handoff-preflight-github.test.js',
     'test/handoff-recognition.test.js',
     'test/host-skill-surface.test.js',
     'test/host-trust.test.js',
