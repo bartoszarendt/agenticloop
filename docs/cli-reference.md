@@ -828,6 +828,22 @@ resulting `currentCarrierDigest`. Raw returns and repository evidence name
 product/workflow paths, and exact chain references. `task review-prepare` uses
 one command-local carrier snapshot and writes no review receipt when it changes.
 
+`task review-prepare --json` also emits two revision-routing fields,
+`findingResolutionMatrix` and `matrixDecision`. Both are `null` on a first
+review: the matrix is scaffolded only on a revision round, once the review record
+carries a `needs_revision` outcome (an `AGENT_REVIEW_FINDINGS` result). When
+populated, `matrixDecision.maintainerFixupEligible` is `true` only when every
+finding in the round is `record-only`; that routes a record-only correction to
+the Maintainer without consuming an Engineer revision round, while any
+implementation-changing finding routes to the Engineer. Classification is
+currently derived per revision round, not per finding: the round's single
+classification is mapped onto every finding id and the disposition is uniform
+across the round. The `contract-changing` class exists in the schema but is
+currently unreachable — the review record permits only `implementation_changing`
+and `record_only`, and a protected-contract change is blocked separately by the
+`protectedContractUnchanged` check, never routed through the matrix. Per-finding
+classification is a known limitation, not yet implemented.
+
 The CLI never receives signing material. The operator registry contains only
 Ed25519 public keys and scopes them to one canonical target checkout. A host or
 OS policy must keep that fixed registry non-writable by agents; the CLI rejects

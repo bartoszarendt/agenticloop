@@ -99,6 +99,23 @@ instructions require the line. A record-only review that completed Lens 2/Lens 3
 does not authorize a fixup or acceptance while Lens 1 remains unclean. Structural
 Risk Sweep findings are likewise fixup-ineligible while Lens 1 is unclean.
 
+### Finding-resolution matrix (`task review-prepare --json`)
+
+`task review-prepare --json` emits `findingResolutionMatrix` and `matrixDecision`
+to route a revision round. Both are `null` on a first review and populate only on
+a revision round, once the record carries a `needs_revision`
+(`AGENT_REVIEW_FINDINGS`) outcome; `null` on first review is correct.
+`matrixDecision.maintainerFixupEligible` is `true` only when every finding in the
+round is `record-only`, routing a record-only correction to the Maintainer
+without consuming an Engineer revision round (it does not loosen the fixup gate
+above); any implementation-changing finding routes to the Engineer. Granularity
+is per revision round, not per finding: the round's one classification and
+disposition apply to every finding id. The schema's `contract-changing` class is
+currently unreachable — the record permits only `implementation_changing` and
+`record_only`, and protected-contract changes are blocked separately by the
+`protectedContractUnchanged` check. Per-finding classification is a known,
+unimplemented limitation.
+
 ### Independent-review enforcement
 
 When the task record sets `independent_review_required: true`, final acceptance
