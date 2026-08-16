@@ -2,6 +2,77 @@
 
 ## Unreleased
 
+## 0.4.2 - 2026-08-16
+
+### Highlights
+- **Pre-delegation preflight.** `task handoff-preflight` is a new read-only gate
+  that reports every ordinary prerequisite and one safe repair before dispatch
+  packet assembly, on both the files and GitHub backends. It derives
+  dispatchability from the same canonical validator `task prepare-dispatch`
+  uses, so preflight and dispatch return the same verdict on the same fixture.
+- **Bounded derived-evidence refresh.** `task refresh-handoff-evidence` applies
+  one digest-bound plan that renews dependency snapshots, regenerates the
+  decomposition, and refreshes dispatch liveness. Snapshot renewal and
+  decomposition regeneration apply as one atomic pair, the write surface is
+  confined, and a stale or forged plan is refused with zero writes.
+- **Dispatch stops refusing healthy repositories.** Registered sibling worktrees
+  no longer dirty the active checkout's clean-state scan, a large ignored tree
+  no longer overflows Git's output buffer into a false Git failure, and
+  prose-only carrier edits no longer stale an otherwise ready set.
+
+### Added
+- Added `task handoff-preflight <id>`, a read-only pre-delegation prerequisite
+  check. It evaluates activation, readiness against the real dependency snapshot
+  recorded in the decomposition, decomposition dispatchability through the
+  canonical dispatch validator, repository and sibling-worktree state, host-role
+  capability, and return-adapter resolution, then reports the disposition owner
+  and one first safe repair. Clean state is explicitly advisory and flagged as
+  evaluated at dispatch time. Options: `--host` (required when several adapter
+  hosts are configured), `--return-adapter` (required when several eligible
+  protected-boundary adapters exist), `--host-trust-store`, `--repair-plan` to
+  write a bounded refresh plan, `--output` for an atomic target-relative JSON
+  write, and `--json`. Ambiguous or unknown `--host` and `--return-adapter`
+  values fail closed with typed errors, and a present-but-malformed
+  `agenticloop.json` is an error while a missing config remains acceptable.
+- Added GitHub-backend parity for preflight. The evaluator resolves `#NUMBER`
+  (direct) and `T-NNN` (label lookup) issue references through the `gh` CLI with
+  the strict identity resolver, shares the task-contract and carrier digests
+  with the files backend, and stays read-only. Downstream activation, readiness,
+  decomposition, repository, host-role, return-adapter, and sibling logic is
+  backend-agnostic. `--repair-plan` applies only to the files backend and
+  returns a typed refusal elsewhere without discarding the preflight verdict.
+- Added `task refresh-handoff-evidence <id> --plan <path> --yes`. The snapshot
+  path is re-derived from the on-disk decomposition rather than from the plan,
+  guarded by a protected-prefix denylist, and verified with a canonical digest.
+  Apply is atomic with a compare-before-write against expected digests and
+  inputs, followed by refetch and validation. The write surface is derived
+  evidence, decomposition provenance, and at most one bound dependency snapshot;
+  never task contracts, activation, human decisions, review dispositions,
+  acceptance, closeout, or product files. Dependency refresh renews the
+  observation window: it writes a fresh `observedAt`, carries Maintainer-recorded
+  statuses forward unchanged, verifies every declared dependency has a recorded
+  status, and does not re-observe dependency state.
+- Added `--role <orchestrator|maintainer|engineer|auditor>` to
+  `commit-attribution check`, so the expected role is selectable rather than
+  fixed. A non-canonical or non-lowercase role is rejected through the new
+  `attribution.role` diagnostic, and the emitted repair plan names the expected
+  role instead of always naming Engineer.
+- Added a finding-resolution matrix and decision to `task review-prepare
+  --json`, built from the canonical review record's stable finding IDs and
+  revision classification. Both are null on a first review and populate on a
+  revision round once the review record carries a `needs_revision` outcome.
+  `matrixDecision.maintainerFixupEligible` is true only when every finding in the
+  round is record-only, routing that correction to the Maintainer without
+  consuming an Engineer revision round; any implementation-changing finding
+  routes to the Engineer without hard-blocking review entry. Classification is
+  derived per revision round, not per finding, and the `contract-changing` class
+  is currently unreachable because the review record permits only
+  `implementation_changing` and `record_only`. Per-finding classification is a
+  known limitation, not yet implemented.
+- Registered the `return.assurance.ambiguous`, `capability.resolution.failed`,
+  `attribution.role`, `handoff.refresh.plan.malformed`, and
+  `handoff.refresh.plan.unsupported` repair-policy result codes.
+
 ### Changed
 - The `Agent:` commit trailer is now matched case-sensitively against the exact
   lowercase canonical `roleId`. A capitalized spelling such as `Agent: Engineer`
@@ -9,6 +80,43 @@
   as a wrong trailer across `commit-attribution check` and the Engineer-return,
   Maintainer-decomposition, review-entry, and derived-evidence verification
   gates. Author the trailer as the lowercase `roleId` (`Agent: engineer`).
+- Refetched inventory digests that differ while membership is identical are now
+  re-evaluated through the shared parallel-scan projection and compared by
+  decomposition-eligibility digest. Equal projections accept the drift as
+  observation-only, so a prose-only carrier edit no longer stales the ready set.
+  Material drift still fails closed, including status changes on any member,
+  scope or required-check contract changes, `depends_on` add/remove/swap,
+  knowledge-coupling flips affecting candidature, membership or readability
+  changes, and old-shape scans lacking the new eligibility fields. Callers that
+  do not opt into the recheck keep the previous fail-closed behavior. The
+  handoff-evidence receipt now uses the canonical decomposition-eligibility
+  digest and rejects any other domain.
+- Every Git `spawnSync` now shares a 64 MiB `maxBuffer` bound, and a
+  post-ceiling overflow is reported distinctly as an overflow rather than as an
+  unreadable Git query.
+- Dirty registered worktrees are kept with a stated reason. Removal still
+  requires an explicit `--force`, and no repair output prescribes force-removal
+  to satisfy dispatch cleanliness.
+
+### Fixed
+- Fixed registered sibling worktrees blocking dispatch on a clean root. Sibling
+  roots are excluded from untracked and ignored scans of the active checkout by
+  resolved registered path, never by pattern-matching the worktree directory,
+  and a per-sibling `git status` spawn can be skipped. Enumeration fails open,
+  so an ignored non-worktree directory still fails the gate, and uncommitted
+  sibling content is byte-identical after every run.
+- Fixed the dispatch clean gate refusing a pristine checkout when a large
+  ignored tree under `.agenticloop/` exceeded Node's 1 MB default `spawnSync`
+  `maxBuffer` and the resulting `ENOBUFS` was misread as a Git failure.
+
+### Migration and compatibility
+- Author the commit trailer as the lowercase `roleId` (`Agent: engineer`).
+  Capitalized spellings that 0.4.1 accepted are rejected by every gate that
+  parses the trailer.
+- Run `npx agenticloop update` after upgrading so generated role, backend, and
+  skill guidance includes the new handoff-preflight and refresh-handoff-evidence
+  steps. User-modified managed blocks remain preserved and are reported rather
+  than overwritten.
 
 ## 0.4.1 - 2026-08-14
 
