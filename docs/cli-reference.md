@@ -258,13 +258,24 @@ records, adapter capability, a digest, or a status message into authority.
 
 Use `npx agenticloop task handoff-preflight <task-id> --json` for one read-only
 pre-delegation verdict. It reports the task carrier and protected contract as
-separate identities, current activation authorization, readiness and
-decomposition evidence, host capability, return-adapter resolution, active
-worktree state, relevant sibling collisions, the disposition owner, and one
-safe repair command. Add `--repair-plan <target-relative-path>` to write a
+separate identities, lifecycle dispatchability, current activation
+authorization, readiness and decomposition evidence, host capability,
+return-adapter resolution, active worktree state, relevant sibling collisions,
+the disposition owner, and one safe repair command. Add
+`--repair-plan <target-relative-path>` to write a
 bounded plan for derived evidence only. Add `--host <host>` to evaluate a
 specific host adapter, `--return-adapter <id>` to select a return adapter, and
 `--output <path>` to write the result to a file.
+
+The `lifecycle` field answers one question preflight, packet preparation, and
+role start all have to agree on: may this task begin an execution attempt right
+now? The rule is derived from the single legal-transition authority rather than
+restated, so a task is dispatchable exactly when its status can legally reach
+`in-progress` — `agent-ready`, `in-progress`, `needs_revision`, `blocked`, or
+`needs_context`. A `draft` task is refused here, with the Maintainer-owned
+`task set-status ... --status agent-ready` repair, instead of reaching a role
+start and failing there as an illegal transition. An absent or unrecognized
+status is reported as missing or malformed evidence, never as a negative answer.
 
 Apply a plan explicitly with:
 
@@ -505,6 +516,8 @@ authority.
 npx agenticloop activation status [<task-id>] [--json]
 npx agenticloop activation revoke <grant-id> [--reason <text>] [--json]
 npx agenticloop activation provision-key [--json]
+npx agenticloop activation identity-status [--json]
+npx agenticloop activation migrate-identity [--json]
 ```
 
 `status` reports every stored binding, whether it is still usable against
@@ -513,6 +526,53 @@ an externally authoritative repository-specific create-only tombstone; every bin
 by dispatch. `provision-key` creates the external operator confirmation key
 explicitly; `activate` provisions it lazily, so running it separately is
 optional.
+
+#### Repository authority identity and migration
+
+Operator activation keys and external revocation tombstones live outside the
+target repository, addressed by a digest of the target's **repository authority
+identity**. That derivation is versioned, because changing it relocates every
+existing record:
+
+| Version | Derivation |
+| --- | --- |
+| v1 | `file:` plus the host's resolved path, separators normalized, host letter case preserved |
+| v2 (current) | v1 plus Windows case folding, so `C:\Apps\Repo` and `c:\apps\repo` are one identity |
+
+On POSIX the two versions agree and nothing below applies.
+
+`identity-status` is read-only. It reports the current identity and digest, the
+state of the current operator key, and every superseded spelling that still
+holds operator state:
+
+```text
+npx agenticloop activation identity-status
+Repository authority identity v2: file:c:/apps/example
+  operator key:      missing
+  disposition:       migration_available
+  superseded:        file:C:/apps/example [key present, 2 revocation(s)]
+```
+
+`migrate-identity` copies exactly one superseded operator key forward, verifies
+that the copy loads as this repository's key, and writes a receipt under
+`~/.agenticloop/operator-activation/migrations/`. Superseded key files and
+revocation tombstones are **preserved, never deleted**, and rerunning the
+command is a no-op.
+
+Revocation tombstones need no migration at all: external deny evidence is always
+read as the fail-closed union of the current and superseded registries, so a
+revoked grant stays revoked whether or not a migration was ever run. Any
+unreadable record in any of those registries fails the whole read closed.
+
+When more than one superseded key claims the same repository, both commands
+report `conflict` and refuse. Choosing which operator identity survives is an
+operator decision, so nothing is written; remove or rename the keys you do not
+want to keep and rerun.
+
+`activate` and `provision-key` refuse to mint a fresh identity while superseded
+operator material exists, and name `migrate-identity` as the repair. Silently
+provisioning there would look like ordinary first-time setup while orphaning the
+operator's real key and every deny tombstone bound to it.
 
 ### Assurance grades
 

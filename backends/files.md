@@ -79,8 +79,12 @@ advanced compatibility route, while `task prepare-dispatch <id> --packet
 optional `--host-trust-store` can assert, but cannot select, the target's
 pre-registered path under the fixed operator registry. They
 refetch task/Git facts, rerun readiness from its exact base/dependency sources,
-and reread decomposition from a byte-current committed source whose last change
-has canonical Maintainer attribution. The committed decomposition persists its
+and reread decomposition from an unmodified committed source whose last change
+has canonical Maintainer attribution. "Unmodified" is Git's verdict, so the
+path's own `.gitattributes` eol rules and any clean filter apply, and the
+content the verifier consumes is the committed blob rather than the host's
+checked-out spelling: an ordinary Windows CRLF checkout is not drift, while a
+genuine content change - staged or not - still is. The committed decomposition persists its
 own revalidation selectors: the base as an exact `git-tree:<oid>` identity and
 each dependency snapshot as the semantic `source` identity plus a confined
 target-relative `sourceRef` artifact path. Inline readiness results or decomposition
@@ -89,7 +93,10 @@ or contradictory evidence blocks before a digest-bound packet is emitted or
 accepted. The packet is transient handoff data, not task state.
 
 Run `task handoff-preflight <id> --json` before packet assembly to see one
-combined prerequisite result. If its derived observations are stale, write a
+combined prerequisite result, including the lifecycle gate role start will
+apply: a task is dispatchable only from a status that legally reaches
+`in-progress`, so a `draft` task is refused here with its Maintainer-owned
+`task set-status` repair rather than at delegation. If its derived observations are stale, write a
 plan with `--repair-plan <path>` and apply it explicitly with
 `task refresh-handoff-evidence <id> --plan <path> --yes`. The refresh writes only
 derived evidence under `.agenticloop/handoffs/derived-evidence/`, the
