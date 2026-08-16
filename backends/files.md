@@ -99,6 +99,12 @@ bound dependency snapshot (the path named by the decomposition's
 activation, human decisions, review dispositions, acceptance, closeout, or
 product files. It refetches after the atomic write and emits the cooperative
 Maintainer `Task:`/`Agent:` trailer block when a durable update is required.
+Refreshing the dependency snapshot renews the observation *window*, not the
+observation: the Maintainer-recorded statuses are carried forward unchanged and
+only `observedAt` is re-stamped (resetting the `maxAgeSeconds` window). The
+refresh checks that every declared dependency has a recorded status; it does not
+re-observe dependency state, so the Maintainer stays responsible for those
+statuses being currently true.
 
 The Engineer creates required-check evidence with `task check-evidence-init`,
 updates it with `task check-evidence-update`, and derives the raw return with

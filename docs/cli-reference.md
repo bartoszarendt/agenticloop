@@ -281,6 +281,13 @@ activation, human decisions, review dispositions, acceptance, closeout, or
 product files. A durable Maintainer update is cooperative and must use the
 emitted final trailer block; it does not authenticate the producer.
 
+The dependency-observation category renews the observation *window*, not the
+observation: it carries the Maintainer-recorded statuses forward unchanged and
+re-stamps `observedAt`, resetting the `maxAgeSeconds` freshness window. It
+verifies only that every declared dependency has a recorded status; it does not
+re-observe dependency state, so the Maintainer remains responsible for those
+statuses still being currently true.
+
 `commit-attribution check` accepts `--role orchestrator|maintainer|engineer|auditor`.
 The role is validated against the canonical registry and the final contiguous
 `Task:`/`Agent:` trailer parser is shared with decomposition verification. The

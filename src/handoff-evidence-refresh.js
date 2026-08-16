@@ -440,6 +440,13 @@ function attemptDependencySnapshotRefresh({ target, preflight }) {
       missingDependencies: missing,
     };
   }
+  // This renews the observation *window* on Maintainer-recorded statuses; it does
+  // not re-observe dependency state. The existing statuses are carried forward
+  // verbatim and only `observedAt` is re-stamped, so a status that was `satisfied`
+  // stays `satisfied` with its maxAgeSeconds window reset. The refresh verifies
+  // only that every declared dependency has a recorded status (missing ones fail
+  // above); the Maintainer remains responsible for those statuses still being
+  // currently true. Re-observing dependency status is recorded follow-up work.
   const freshObservedAt = new Date().toISOString();
   const freshSnapshot = {
     kind: 'agenticloop.dependency-snapshot',
