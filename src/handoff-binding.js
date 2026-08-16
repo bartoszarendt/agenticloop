@@ -19,6 +19,7 @@ import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
+import { GIT_MAX_BUFFER } from './git-runner.js';
 import { activationCapabilityInventory, validateDispatchPreparation } from './dispatch-envelope.js';
 import { createExecutionReceiptReplayAuthority, loadHostTrustStore, targetRepositoryIdentity } from './host-trust.js';
 import { resolveEffectiveActivationPolicy, resolvePacketActivationBinding } from './activation-resolution.js';
@@ -246,7 +247,7 @@ export function recognizeLifecycleReturn({
       expectedWorkUnitIdentity: dispatch.workUnitIdentity ?? workUnitIdentity,
       refetchTask,
       refetchRepositoryEvidence: () => refetchRepositoryEvidence(record),
-      runGit: args => spawnSync('git', args, { cwd: target, encoding: 'utf8' }),
+      runGit: args => spawnSync('git', args, { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }),
       minimumReturnAssurance: policy?.minimumReturn ?? null,
       // Standard evidence is usable only when the independently resolved
       // current policy explicitly selects standard mode.  Backend is transport,

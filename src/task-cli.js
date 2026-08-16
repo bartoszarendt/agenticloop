@@ -95,6 +95,7 @@ import {
 import { createExecutionReceiptReplayAuthority, loadHostTrustStore, targetRepositoryIdentity } from './host-trust.js';
 import { CommitRangeError, deriveCommitRange } from './commit-range.js';
 import { gitTreeObjectId, isGitObjectId } from './git-oid.js';
+import { GIT_MAX_BUFFER } from './git-runner.js';
 import { validateCommittedSourcePath, verifyCommittedAttributedSource } from './committed-source.js';
 import {
   createTaskInventoryEnumeration,
@@ -1099,18 +1100,18 @@ function readActivationCaptureInput(target, relPath, capabilities, intendedTaskI
 
 /** Run one Git command inside the target and return a plain spawn result. */
 function targetGitRunner(target) {
-  return args => spawnSync('git', args, { cwd: target, encoding: 'utf8' });
+  return args => spawnSync('git', args, { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
 }
 
 function refetchDispatchRepository(target, readiness) {
   const baseTree = gitTreeObjectId(readiness?.evidence?.base?.identity);
   if (!baseTree) throw new VerificationContextMalformedError('dispatch readiness must bind a full git-tree base identity');
-  const verifiedTree = spawnSync('git', ['rev-parse', '--verify', `${baseTree}^{tree}`], { cwd: target, encoding: 'utf8' });
+  const verifiedTree = spawnSync('git', ['rev-parse', '--verify', `${baseTree}^{tree}`], { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   if (verifiedTree.status !== 0 || String(verifiedTree.stdout ?? '').trim() !== baseTree) {
     throw new VerificationContextStaleError(`dispatch base tree '${baseTree}' is unavailable or changed`);
   }
-  const branch = spawnSync('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: target, encoding: 'utf8' });
-  const head = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: target, encoding: 'utf8' });
+  const branch = spawnSync('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
+  const head = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   const branchName = String(branch.stdout ?? '').trim();
   const headId = String(head.stdout ?? '').trim();
   if (branch.status !== 0 || !branchName || head.status !== 0 || !isGitObjectId(headId)) {
@@ -1361,12 +1362,12 @@ function readExplicitBaseEvidence(target, options = {}) {
     };
   }
   const ref = String(options.base);
-  const tree = spawnSync('git', ['rev-parse', '--verify', `${ref}^{tree}`], { cwd: target, encoding: 'utf8' });
+  const tree = spawnSync('git', ['rev-parse', '--verify', `${ref}^{tree}`], { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   const treeOid = String(tree.stdout ?? '').trim();
   if (tree.status !== 0 || !isGitObjectId(treeOid)) {
     throw new VerificationContextMalformedError(`Base ref '${ref}' cannot be resolved to an exact Git tree object id.`);
   }
-  const listed = spawnSync('git', ['ls-tree', '-r', '--name-only', treeOid], { cwd: target, encoding: 'utf8' });
+  const listed = spawnSync('git', ['ls-tree', '-r', '--name-only', treeOid], { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   if (listed.status !== 0) {
     throw new VerificationContextMalformedError(`Base tree '${treeOid}' cannot be listed.`);
   }

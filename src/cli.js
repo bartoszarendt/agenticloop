@@ -46,6 +46,7 @@ import { recognizeLifecycleReturn, recognizeRoleStart } from './handoff-binding.
 import { resolveGitHubTaskIdentityStrict } from './github-task-identity.js';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { GIT_MAX_BUFFER } from './git-runner.js';
 import { join, resolve, isAbsolute } from 'node:path';
 import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.js';
 import { createValidationResult, emitValidationResult } from './result-envelope.js';
@@ -1548,7 +1549,7 @@ function readBasePaths(base, basePaths, target) {
       requiredContext: ['--base <ref-or-tree> or --base-paths <path>'],
     });
   }
-  const result = spawnSync('git', ['ls-tree', '-r', '--name-only', base], { cwd: target, encoding: 'utf8' });
+  const result = spawnSync('git', ['ls-tree', '-r', '--name-only', base], { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   if (result.status !== 0) {
     throw new VerificationContextMalformedError(`Base tree '${base}' cannot be resolved.`, {
       requiredContext: [`a resolvable Git tree or commit for --base '${base}'`],
@@ -1612,14 +1613,14 @@ function readBaseEvidence(opts, target) {
     };
   }
   const ref = String(opts.base);
-  const tree = spawnSync('git', ['rev-parse', '--verify', `${ref}^{tree}`], { cwd: target, encoding: 'utf8' });
+  const tree = spawnSync('git', ['rev-parse', '--verify', `${ref}^{tree}`], { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   const treeOid = String(tree.stdout ?? '').trim();
   if (tree.status !== 0 || !isGitObjectId(treeOid)) {
     throw new VerificationContextMalformedError(`Base tree '${ref}' cannot be resolved.`, {
       requiredContext: [`a resolvable Git tree or commit for --base '${ref}'`],
     });
   }
-  const listed = spawnSync('git', ['ls-tree', '-r', '--name-only', treeOid], { cwd: target, encoding: 'utf8' });
+  const listed = spawnSync('git', ['ls-tree', '-r', '--name-only', treeOid], { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   if (listed.status !== 0) {
     throw new VerificationContextMalformedError(`Base tree '${ref}' cannot be listed.`, {
       requiredContext: [`a listable Git tree for --base '${ref}'`],
@@ -2036,7 +2037,7 @@ async function cmdTaskBody(args, io) {
         let ownedFields;
         if (mutationClass === 'implementation_artifact_evidence') {
           const productHead = String(opts.productHead ?? '');
-          const observedHead = String(spawnSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: target, encoding: 'utf8' }).stdout ?? '').trim();
+          const observedHead = String(spawnSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }).stdout ?? '').trim();
           if (!isGitObjectId(productHead) || productHead !== observedHead) {
             throw new GitHubTaskBodyError(
               'implementation artifact evidence requires --product-head equal to the exact current repository HEAD before workflow evidence is committed',
@@ -2579,7 +2580,7 @@ async function cmdCommitAttribution(args, io) {
     const message = opts.messageFile
       ? readFileSync(resolveCliTarget(io, opts.messageFile), 'utf8')
       : (() => {
-        const result = spawnSync('git', ['log', '-1', '--format=%B', opts.commit ?? 'HEAD'], { cwd: target, encoding: 'utf8' });
+        const result = spawnSync('git', ['log', '-1', '--format=%B', opts.commit ?? 'HEAD'], { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
         if (result.status !== 0) {
           throw new VerificationContextError(`Cannot read commit message: ${(result.stderr || result.error?.message || '').trim()}`, {
             requiredContext: [`a readable commit '${opts.commit ?? 'HEAD'}' in the target repository`],

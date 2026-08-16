@@ -8,6 +8,7 @@ import { parseFrontmatterStrict } from './frontmatter.js';
 import { githubAttributionShape, resolveGitHubTaskIdentity } from './github-task-identity.js';
 import { filterLiveLines } from './markdown.js';
 import { isGitObjectId, sameGitObjectFormat } from './git-oid.js';
+import { GIT_MAX_BUFFER } from './git-runner.js';
 import {
   extractReviewAuthor,
   isLegacyMissingFindingsMarker,
@@ -116,7 +117,7 @@ export function normalizeGitHubFixupArtifact(value) {
 
 /** @param {string} workspace */
 function defaultWorkspaceHeadRunner(workspace) {
-  return spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf-8' });
+  return spawnSync('git', ['-C', workspace, 'rev-parse', 'HEAD'], { encoding: 'utf-8', maxBuffer: GIT_MAX_BUFFER });
 }
 
 /**

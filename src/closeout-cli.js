@@ -17,6 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.js';
 import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
+import { GIT_MAX_BUFFER } from './git-runner.js';
 import { defaultGhCommandRunner } from './gh-helpers.js';
 import { evaluateCloseout,
   filesTaskInfo,
@@ -265,7 +266,7 @@ export function resolveCloseoutAssuranceContext(target, io, backend, params) {
           : refetchFilesReturnEvidence(target, record.evidence.packet, record.evidence.repositoryEvidence, {
               historicalCloseout: true,
             }),
-        runGit: args => spawnSync('git', args, { cwd: target, encoding: 'utf8' }),
+        runGit: args => spawnSync('git', args, { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER }),
         minimumReturnAssurance: policy.minimumReturn,
         // GitHub is not a substitute for an assurance policy.  The resolved
         // external policy must explicitly be standard before its unverified

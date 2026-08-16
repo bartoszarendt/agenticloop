@@ -6,10 +6,11 @@ import { spawnSync } from 'node:child_process';
 
 import { evaluateCommitAttribution } from './commit-attribution.js';
 import { GIT_OBJECT_ID_RE } from './git-oid.js';
+import { GIT_MAX_BUFFER } from './git-runner.js';
 import { isAbsoluteOrDriveQualifiedPath } from './path-identity.js';
 
 function git(target, args, encoding = 'utf8') {
-  return spawnSync('git', args, { cwd: target, encoding });
+  return spawnSync('git', args, { cwd: target, encoding, maxBuffer: GIT_MAX_BUFFER });
 }
 
 /** Require the canonical forward-slash repository-relative wire form. */

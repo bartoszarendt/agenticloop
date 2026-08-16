@@ -14,6 +14,7 @@ import { evaluateParallelScan, normalizeFilesTaskInventory, createTaskInventoryE
 import { createDecompositionProvenance, DECOMPOSITION_SCHEMA_VERSION } from './dispatch-envelope.js';
 import { parseTaskReadinessDeclaration } from './task-readiness.js';
 import { parseDependencySnapshot, dependencyStatusMap } from './task-evidence-contract.js';
+import { GIT_MAX_BUFFER } from './git-runner.js';
 
 export const HANDOFF_REFRESH_PLAN_KIND = 'agenticloop.handoff-evidence-refresh-plan';
 export const HANDOFF_REFRESH_PLAN_SCHEMA_VERSION = 1;
@@ -551,12 +552,12 @@ function attemptDecompositionRegeneration({ target, preflight, taskId, refreshed
       return { ok: false, skipped: false, reason: `task carrier unreadable: ${carrier}`, expectedDigest: null, content: null, path: null };
     }
   }
-  const treeResult = spawnSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: target, encoding: 'utf8' });
+  const treeResult = spawnSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   if (treeResult.status !== 0) {
     return { ok: false, skipped: false, reason: 'could not resolve HEAD^{tree}', expectedDigest: null, content: null, path: null };
   }
   const treeOid = treeResult.stdout.trim();
-  const lsResult = spawnSync('git', ['ls-tree', '-r', '--name-only', treeOid], { cwd: target, encoding: 'utf8' });
+  const lsResult = spawnSync('git', ['ls-tree', '-r', '--name-only', treeOid], { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   if (lsResult.status !== 0) {
     return { ok: false, skipped: false, reason: 'could not list tree paths', expectedDigest: null, content: null, path: null };
   }

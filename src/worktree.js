@@ -23,6 +23,7 @@ import {
   resolve,
 } from 'node:path';
 import { resolveTaskBackend } from './task-backend.js';
+import { GIT_MAX_BUFFER } from './git-runner.js';
 import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
 import { loadProjectMap } from './project-map.js';
 import { parseFrontmatter } from './frontmatter.js';
@@ -56,6 +57,7 @@ export const NON_INTERACTIVE_ENV = [
 function runGit(cwd, args, options = {}) {
   return spawnSync('git', ['-C', cwd, ...args], {
     encoding: 'utf-8',
+    maxBuffer: GIT_MAX_BUFFER,
     ...options,
   });
 }

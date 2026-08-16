@@ -174,7 +174,14 @@ export function evaluateDispatchCleanState(input = {}) {
   const read = (args, label) => {
     const result = runGit(args);
     if (!result || result.status !== 0) {
-      findings.push(finding('missing', 'blocked', 'worktree.clean_gate.failed', `${label} could not be read from Git`));
+      // An ENOBUFS after callers raise the buffer (see git-runner.js) is a real
+      // operational fault - output larger than the ceiling - not a Git failure,
+      // and it must still fail closed but say what actually happened rather than
+      // claiming the query could not be read.
+      const detail = result?.error?.code === 'ENOBUFS'
+        ? `${label} exceeded the Git output buffer`
+        : `${label} could not be read from Git`;
+      findings.push(finding('missing', 'blocked', 'worktree.clean_gate.failed', detail));
       return null;
     }
     return lines(result);

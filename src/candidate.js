@@ -21,12 +21,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { classifyCloseoutPath, validateWorkflowDeltaContent } from './closeout-contract.js';
 import { validateImprovementProposal } from './improvement.js';
+import { GIT_MAX_BUFFER } from './git-runner.js';
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const SHORTISH_SHA_PATTERN = /^[0-9a-f]{4,40}$/i;
 
 function defaultGitRunner(args, options = {}) {
-  return spawnSync('git', args, { encoding: 'utf-8', ...options });
+  return spawnSync('git', args, { encoding: 'utf-8', maxBuffer: GIT_MAX_BUFFER, ...options });
 }
 
 function runGit(gitRunner, cwd, args) {

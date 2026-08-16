@@ -3,6 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import { deriveCommitRange } from './commit-range.js';
 import { isGitObjectId, sameGitObjectFormat } from './git-oid.js';
+import { GIT_MAX_BUFFER } from './git-runner.js';
 import {
   carrierMutationRelativePath,
   dispatchConsumptionRelativePath,
@@ -123,7 +124,7 @@ export function deriveReturnTopology(target, packet, signedEvidence, {
   historicalCloseout = false,
   backend = 'files',
 } = {}) {
-  const runGit = args => spawnSync('git', args, { cwd: target, encoding: 'utf8' });
+  const runGit = args => spawnSync('git', args, { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   const branch = readGit(runGit, ['symbolic-ref', '--quiet', '--short', 'HEAD'], 'current return branch');
   const currentHead = readGit(runGit, ['rev-parse', '--verify', 'HEAD'], 'current return workflow head');
   const productBaseHead = String(packet?.repository?.head ?? '').trim();

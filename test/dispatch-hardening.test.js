@@ -77,7 +77,8 @@ import {
   repositoryEvidence,
 } from './helpers/dispatch-fixture.js';
 import { createTestHostTrust, protectedHostBoundary as signedHostBoundary, writeHostTrustStore } from './helpers/host-trust-fixture.js';
-import { initTestGitRepository } from './helpers/git-fixture.js';
+import { initTestGitRepository, spawnGit } from './helpers/git-fixture.js';
+import { GIT_MAX_BUFFER } from '../src/git-runner.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
 
@@ -548,6 +549,62 @@ describe('initial repository state binds the dispatch', () => {
     assert.equal(envelope.evidenceState, 'negative');
     assert.equal(envelope.disposition, 'blocked');
     assert.match(envelope.errors.join('\n'), /authenticated host-controlled IPC|unsupported.*in-process/i);
+  });
+});
+
+describe('clean gate reads large ignored trees without a false Git failure', () => {
+  it('distinguishes an ENOBUFS operational fault from an unreadable Git query', () => {
+    // A mocked runGit that fails the ignored-paths query the way an over-buffer
+    // spawnSync does: status null, error.code ENOBUFS. The gate must still fail
+    // closed, but name the buffer overflow rather than claim Git was unreadable.
+    const runGit = args => {
+      const isIgnoredQuery = args.includes('--ignored');
+      if (isIgnoredQuery) return { status: null, error: { code: 'ENOBUFS' }, stdout: '' };
+      return { status: 0, stdout: '' };
+    };
+    const evaluated = evaluateDispatchCleanState({ runGit, scopePatterns: ['src/**'] });
+    assert.equal(evaluated.ok, false);
+    assert.equal(evaluated.identity, null);
+    assert.equal(evaluated.findings[0].code, 'worktree.clean_gate.failed');
+    assert.match(evaluated.findings[0].message, /exceeded the Git output buffer/);
+    assert.doesNotMatch(evaluated.findings[0].message, /could not be read from Git/);
+  });
+
+  it('passes a clean checkout carrying >1 MB of ignored scratch under .agenticloop/tmp/', () => {
+    const root = mkdtempSync(join(temp, 'lg-'));
+    initTestGitRepository(root, { initialBranch: 'main' });
+    writeFileSync(join(root, '.gitignore'), '.agenticloop/\n', 'utf8');
+    writeFileSync(join(root, 'keep.txt'), 'tracked\n', 'utf8');
+    git(root, ['add', '.gitignore', 'keep.txt']);
+    git(root, ['commit', '-m', 'seed\n\nTask: T-001\nAgent: maintainer']);
+
+    // Emit well over Node's 1 MB spawnSync default as ignored-path output. The
+    // ignored query lists every path, so long file names inflate the byte count
+    // with fewer inodes; the name is sized so the absolute path stays inside the
+    // Windows MAX_PATH ceiling regardless of the temp root length.
+    const relativePrefix = ['.agenticloop', 'tmp'].join('/') + '/';
+    mkdirSync(join(root, '.agenticloop', 'tmp'), { recursive: true });
+    const nameBudget = Math.max(24, Math.min(200, 245 - root.length - relativePrefix.length - 20));
+    let emittedBytes = 0;
+    for (let index = 0; emittedBytes < 1_200_000; index += 1) {
+      const suffix = String(index).padStart(8, '0');
+      const name = `s${'x'.repeat(nameBudget - suffix.length - 6)}-${suffix}.dat`;
+      writeFileSync(join(root, '.agenticloop', 'tmp', name), '1', 'utf8');
+      emittedBytes += relativePrefix.length + name.length + 1;
+    }
+
+    // The default 1 MB buffer overflows and the gate reports the overflow.
+    const defaultRunner = args => spawnGit(root, args);
+    const overflowed = evaluateDispatchCleanState({ runGit: defaultRunner, scopePatterns: ['src/**'] });
+    assert.equal(overflowed.ok, false, 'default buffer should overflow on this tree');
+    assert.match(overflowed.findings[0].message, /exceeded the Git output buffer/);
+
+    // The production buffer reads the full listing; the scratch is permitted, so
+    // the checkout is clean and binds the canonical identity.
+    const largeRunner = args => spawnGit(root, args, { maxBuffer: GIT_MAX_BUFFER });
+    const evaluated = evaluateDispatchCleanState({ runGit: largeRunner, scopePatterns: ['src/**'] });
+    assert.equal(evaluated.ok, true, JSON.stringify(evaluated.findings));
+    assert.equal(evaluated.identity, CLEAN_DISPATCH_STATE_IDENTITY);
   });
 });
 

@@ -31,6 +31,7 @@ import {
   fingerprintTargetPath,
 } from './fs-mutation-kernel.js';
 import { executeGenerationPlan } from './generation-transaction.js';
+import { GIT_MAX_BUFFER } from './git-runner.js';
 import {
   PublicCommandError,
   VerificationContextMalformedError,
@@ -266,7 +267,7 @@ export const LIFECYCLE_COMMIT_DISPOSITIONS = Object.freeze(['committed', 'uncomm
 
 /** @type {GitRunner} */
 function defaultGitRunner(target, args) {
-  return spawnSync('git', args, { cwd: target, encoding: 'utf8' });
+  return spawnSync('git', args, { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
 }
 
 /**

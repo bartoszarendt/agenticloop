@@ -35,6 +35,7 @@ import { loadFilesTaskContractRecords } from './files-task-contract.js';
 import { evaluateTaskReadiness } from './task-readiness.js';
 import { parseDependencySnapshot, dependencyStatusMap } from './task-evidence-contract.js';
 import { isGitObjectId } from './git-oid.js';
+import { GIT_MAX_BUFFER } from './git-runner.js';
 import { listAgenticLoopWorktrees, resolveGitRepositoryContext } from './worktree.js';
 import { loadAgenticLoopConfig } from './json.js';
 import { resolveGitHubTaskIdentityStrict } from './github-task-identity.js';
@@ -55,7 +56,7 @@ function digestBytes(value) {
 
 /** Run one Git command inside the target. */
 function runGit(target, args) {
-  return spawnSync('git', args, { cwd: target, encoding: 'utf8' });
+  return spawnSync('git', args, { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
 }
 
 function gitText(target, args) {

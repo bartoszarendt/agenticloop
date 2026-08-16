@@ -18,6 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { FILES_TASK_CONTRACT_HISTORY_DIRECTORY } from './layout.js';
 import { parseTaskContractRecords, validateTrustedTaskContractRecords } from './task-contract-baseline.js';
+import { GIT_MAX_BUFFER } from './git-runner.js';
 
 export function filesTaskContractHistoryPath(target, taskId) {
   return join(target, FILES_TASK_CONTRACT_HISTORY_DIRECTORY, `${taskId}.jsonl`);
@@ -32,7 +33,7 @@ export function appendFilesTaskContractRecord(target, record) {
 
 function git(target, args) {
   // Ignore replace refs so provenance reads the repository's stored objects.
-  return spawnSync('git', args, { cwd: target, encoding: 'utf8', env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } });
+  return spawnSync('git', args, { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' } });
 }
 
 const recordCache = new Map();
