@@ -2175,10 +2175,24 @@ export async function cmdTask(args, io = createIo()) {
             commandFailure('task handoff-preflight', error, 'operational_error', {}, target), asJson, io);
         }
       }
-      const presented = presentGateResultForTarget(result, target);
+      // --output: atomically write the result JSON to a target-relative path.
+      if (opts.output) {
+        try {
+          writeTargetJson(target, opts.output, {
+            ...result,
+            ...(refreshPlan ? {
+              refreshPlan,
+              refreshPlanPath: relative(target, refreshPlanPath).replace(/\\/g, '/'),
+            } : {}),
+          });
+        } catch (error) {
+          return printGateResult('task handoff-preflight',
+            commandFailure('task handoff-preflight', error, 'operational_error', {}, target), asJson, io);
+        }
+      }
       if (asJson) {
-        // Emit the closed domain schema directly; the verdict matches the
-        // human presentation because both are derived from the same result.
+        // Emit the closed domain schema directly; the evaluator result already
+        // carries the one canonical presentation applied at evaluation time.
         io.out(JSON.stringify({
           ...result,
           ...(refreshPlan ? {
@@ -2190,59 +2204,60 @@ export async function cmdTask(args, io = createIo()) {
         io.out();
         io.out(`agenticloop task handoff-preflight ${taskId}`);
         io.out('='.repeat(50));
-        io.out(`  task: ${presented.taskId}`);
-        io.out(`  backend: ${presented.backend}`);
-        io.out(`  carrier: ${presented.carrier}`);
-        io.out(`  carrier digest: ${presented.carrierDigest ?? '(unavailable)'}`);
-        io.out(`  contract digest: ${presented.contractDigest ?? '(unavailable)'}`);
-        io.out(`  operator authorization: ${presented.operatorAuthorization}`);
-        if (presented.activation) {
-          io.out(`  activation: ${presented.activation.source} (${presented.activation.assurance})`);
-          io.out(`  policy: ${presented.activation.policyMode} (${presented.activation.policySource})`);
-          io.out(`  activation usability: ${presented.activation.usability}`);
+        io.out(`  task: ${result.taskId}`);
+        io.out(`  backend: ${result.backend}`);
+        io.out(`  carrier: ${result.carrier}`);
+        io.out(`  carrier digest: ${result.carrierDigest ?? '(unavailable)'}`);
+        io.out(`  contract digest: ${result.contractDigest ?? '(unavailable)'}`);
+        io.out(`  operator authorization: ${result.operatorAuthorization}`);
+        if (result.activation) {
+          io.out(`  activation: ${result.activation.source} (${result.activation.assurance})`);
+          io.out(`  policy: ${result.activation.policyMode} (${result.activation.policySource})`);
+          io.out(`  activation usability: ${result.activation.usability}`);
         } else {
           io.out('  activation: none');
         }
-        if (presented.readiness) {
-          io.out(`  readiness: ${presented.readiness.ok ? 'pass' : 'FAIL'} (${presented.readiness.evidenceState})`);
+        if (result.readiness) {
+          io.out(`  readiness: ${result.readiness.ok ? 'pass' : 'FAIL'} (${result.readiness.evidenceState})`);
         }
-        if (presented.decomposition) {
-          io.out(`  decomposition: ${presented.decomposition.dispatchCompatible ? 'dispatchable' : 'NOT dispatchable'}`);
-          io.out(`  decomposition source: ${presented.decomposition.sourceRef}`);
-          io.out(`  maintainer attribution: ${presented.decomposition.maintainerAttribution}`);
-          io.out(`  inventory complete: ${presented.decomposition.inventoryComplete}`);
-          io.out(`  base mode: ${presented.decomposition.baseMode}`);
+        if (result.decomposition) {
+          io.out(`  decomposition: ${result.decomposition.dispatchCompatible ? 'dispatchable' : 'NOT dispatchable'}`);
+          io.out(`  decomposition source: ${result.decomposition.sourceRef}`);
+          io.out(`  maintainer attribution: ${result.decomposition.maintainerAttribution}`);
+          io.out(`  inventory complete: ${result.decomposition.inventoryComplete}`);
+          io.out(`  base mode: ${result.decomposition.baseMode}`);
         } else {
           io.out('  decomposition: none');
         }
-        if (presented.repository) {
-          io.out(`  worktree: ${presented.repository.worktree}`);
-          io.out(`  branch: ${presented.repository.branch ?? '(detached)'}`);
-          io.out(`  HEAD: ${presented.repository.head}`);
-          io.out(`  product base: ${presented.repository.productBase ?? '(none)'}`);
+        if (result.repository) {
+          io.out(`  worktree: ${result.repository.worktree}`);
+          io.out(`  branch: ${result.repository.branch ?? '(detached)'}`);
+          io.out(`  HEAD: ${result.repository.head}`);
+          io.out(`  product base: ${result.repository.productBase ?? '(none)'}`);
         }
-        io.out(`  clean state: ${presented.cleanState}`);
-        if (presented.hostRoleCapability) {
-          io.out(`  host-role: ${presented.hostRoleCapability.host}/${presented.hostRoleCapability.roleId}`);
+        io.out(`  clean state: ${result.cleanState}`);
+        if (result.hostRoleCapability) {
+          io.out(`  host-role: ${result.hostRoleCapability.host}/${result.hostRoleCapability.roleId}`);
         }
-        if (presented.returnAdapter) {
-          io.out(`  return adapter: ${presented.returnAdapter.state}${presented.returnAdapter.adapter ? ` (${presented.returnAdapter.adapter.adapterId})` : ''}`);
+        if (result.returnAdapter) {
+          io.out(`  return adapter: ${result.returnAdapter.state}${result.returnAdapter.adapter ? ` (${result.returnAdapter.adapter.adapterId})` : ''}`);
         }
-        if (presented.siblingCollisions.length > 0) {
+        if (result.siblingCollisions.length > 0) {
           io.out('  sibling collisions:');
-          for (const collision of presented.siblingCollisions) {
+          for (const collision of result.siblingCollisions) {
             io.out(`    ${collision.worktreePath}: ${collision.reason}`);
           }
         }
-        io.out(`  status: ${presented.ok ? 'READY' : 'BLOCKED'}`);
-        io.out(`  disposition owner: ${presented.dispositionOwner ?? '(none)'}`);
+        io.out(`  status: ${result.ok ? 'READY' : 'BLOCKED'}`);
+        io.out(`  disposition owner: ${result.dispositionOwner ?? '(none)'}`);
+        if (opts.output) io.out(`  output: ${relative(target, resolve(target, opts.output)).replace(/\\/g, '/')}`);
         if (refreshPlanPath) io.out(`  refresh plan: ${relative(target, refreshPlanPath).replace(/\\/g, '/')}`);
-        for (const warning of presented.warnings ?? []) io.warn(`  WARN: ${warning}`);
-        for (const error of presented.errors ?? []) io.err(`  ERROR: ${error}`);
-        if (presented.firstSafeRepair) io.out(`  first safe repair: ${presented.firstSafeRepair}`);
+        for (const warning of result.warnings ?? []) io.warn(`  WARN: ${warning}`);
+        for (const error of result.errors ?? []) io.err(`  ERROR: ${error}`);
+        if (result.firstSafeRepair) io.out(`  first safe repair: ${result.firstSafeRepair}`);
         io.out();
       }
-      return presented.ok ? 0 : 1;
+      return result.ok ? 0 : 1;
     }
 
     if (sub === 'refresh-handoff-evidence') {

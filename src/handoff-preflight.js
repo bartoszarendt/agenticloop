@@ -18,6 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { createValidationResult } from './result-envelope.js';
 import { createDiagnostic } from './repair-policy.js';
 import { presentGateResultForTarget } from './diagnostic-presentation.js';
+
 import {
   buildHostRoleCapabilityInventory,
   createDegradedEnforcementReports,
@@ -48,16 +49,8 @@ import {
 export const HANDOFF_PREFLIGHT_KIND = 'agenticloop.handoff-preflight';
 export const HANDOFF_PREFLIGHT_SCHEMA_VERSION = 1;
 
-function isObject(value) {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
 function digestBytes(value) {
   return `sha256:${createHash('sha256').update(Buffer.from(String(value ?? ''), 'utf8')).digest('hex')}`;
-}
-
-function frontmatterString(value) {
-  return typeof value === 'string' ? value.trim() : '';
 }
 
 /** Run one Git command inside the target. */
@@ -895,6 +888,8 @@ export function evaluateHandoffPreflight(input) {
   } : null;
 
   const domain = {
+    kind: HANDOFF_PREFLIGHT_KIND,
+    schemaVersion: HANDOFF_PREFLIGHT_SCHEMA_VERSION,
     taskId,
     backend,
     carrier: taskCarrierPath ?? `issue:${taskId}`,
@@ -940,7 +935,5 @@ export function evaluateHandoffPreflight(input) {
     ...domain,
     firstSafeRepair,
     dispositionOwner,
-    schemaVersion: HANDOFF_PREFLIGHT_SCHEMA_VERSION,
-    kind: HANDOFF_PREFLIGHT_KIND,
   };
 }

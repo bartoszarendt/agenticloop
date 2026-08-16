@@ -577,10 +577,10 @@ export const COMMAND_REGISTRY = {
       },
       'handoff-preflight': {
         summary: 'Read-only pre-delegation prerequisite check: report every ordinary prerequisite and one safe repair before dispatch packet assembly.',
-        usage: 'agenticloop task handoff-preflight <id> [--host <host>] [--host-trust-store <expected-path>] [--repair-plan <path>] [--json] [--target <dir>]',
+        usage: 'agenticloop task handoff-preflight <id> [--host <host>] [--host-trust-store <expected-path>] [--repair-plan <path>] [--output <path>] [--json] [--target <dir>]',
         receiptRevalidation: 'read-only',
         positionals: [{ name: 'id', required: true }],
-        options: [targetOption(), opt('host', 'string', 'Canonical generated host identity for host-role capability resolution. Required when multiple adapter hosts are configured.'), hostTrustStoreOption, opt('repair-plan', 'string', 'Write a bounded derived-evidence refresh plan to this target-relative path.'), jsonOption],
+        options: [targetOption(), opt('host', 'string', 'Canonical generated host identity for host-role capability resolution. Required when multiple adapter hosts are configured.'), hostTrustStoreOption, opt('repair-plan', 'string', 'Write a bounded derived-evidence refresh plan to this target-relative path.'), opt('output', 'string', 'Write the preflight result JSON to this target-relative path. Atomic write; directory is created if needed.'), jsonOption],
       },
       'refresh-handoff-evidence': {
         summary: 'Apply one current, digest-bound refresh plan for derived handoff evidence only.',

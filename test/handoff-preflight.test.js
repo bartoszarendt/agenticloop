@@ -13,7 +13,7 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -1030,5 +1030,61 @@ describe('handoff-preflight', () => {
     const warning = result.warningDiagnostics.find(d => d.code === 'capability.resolution.failed');
     assert.ok(warning, 'expected capability.resolution.failed warning diagnostic');
     assert.equal(warning.level, 'warning');
+  });
+
+  it('writes result to --output path atomically', async () => {
+    const target = makeTarget('output-json');
+    writeTask(target, 'T-050', { withActivation: true });
+    git(target, ['add', '.']);
+    git(target, ['commit', '-m', 'task T-050\n\nTask: T-050\nAgent: maintainer']);
+    makeDecompositionSource(target, 'T-050');
+    git(target, ['add', '.agenticloop/decompositions']);
+    git(target, ['commit', '-m', 'decomposition T-050\n\nTask: T-050\nAgent: maintainer']);
+
+    const run = await runCliInProcess(['task', 'handoff-preflight', 'T-050', '--output', 'preflight.json'], { cwd: target });
+    assert.equal(run.status, 0, `--output run should succeed\nstderr:\n${run.stderr}`);
+
+    const outputPath = join(target, 'preflight.json');
+    assert.ok(existsSync(outputPath), 'output file should exist');
+    const written = JSON.parse(readFileSync(outputPath, 'utf8'));
+    assert.equal(written.kind, 'agenticloop.handoff-preflight');
+    assert.equal(written.ok, true);
+    assert.equal(written.taskId, 'T-050');
+  });
+
+  it('writes result to --output with --json without double-printing', async () => {
+    const target = makeTarget('output-json-flag');
+    writeTask(target, 'T-051', { withActivation: true });
+    git(target, ['add', '.']);
+    git(target, ['commit', '-m', 'task T-051\n\nTask: T-051\nAgent: maintainer']);
+    makeDecompositionSource(target, 'T-051');
+    git(target, ['add', '.agenticloop/decompositions']);
+    git(target, ['commit', '-m', 'decomposition T-051\n\nTask: T-051\nAgent: maintainer']);
+
+    const run = await runCliInProcess(['task', 'handoff-preflight', 'T-051', '--output', 'out/preflight.json', '--json'], { cwd: target });
+    assert.equal(run.status, 0, `--output --json run should succeed\nstderr:\n${run.stderr}`);
+
+    // File should exist (nested directory created)
+    const outputPath = join(target, 'out', 'preflight.json');
+    assert.ok(existsSync(outputPath), 'output file should exist in nested directory');
+    const written = JSON.parse(readFileSync(outputPath, 'utf8'));
+    assert.equal(written.kind, 'agenticloop.handoff-preflight');
+    assert.equal(written.taskId, 'T-051');
+
+    // Stdout should also have JSON
+    let stdoutJson;
+    assert.doesNotThrow(() => { stdoutJson = JSON.parse(run.stdout); }, 'stdout should be valid JSON');
+    assert.equal(stdoutJson.taskId, 'T-051');
+  });
+
+  it('rejects --output with an escaping path', async () => {
+    const target = makeTarget('output-escape');
+    writeTask(target, 'T-052', { withActivation: true });
+    git(target, ['add', '.']);
+    git(target, ['commit', '-m', 'task T-052\n\nTask: T-052\nAgent: maintainer']);
+
+    const run = await runCliInProcess(['task', 'handoff-preflight', 'T-052', '--output', '../escape.json'], { cwd: target });
+    assert.equal(run.status, 1, 'escaping --output path should fail');
+    assert.match(run.stderr, /output|target/i);
   });
 });
