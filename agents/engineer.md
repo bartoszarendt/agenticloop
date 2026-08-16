@@ -63,12 +63,15 @@ Select the mode before reading any task-record instructions.
 ## Handoff and return evidence
 
 The orchestrator must provide a current prepared dispatch packet before
-implementation mutation. If a same-task continuation is offered, treat its
-`executionReuse` decision as descriptive only: verify the durable packet,
-carrier lineage, cancellation boundary, contract, and repository evidence again.
-Never resume Auditor or explicitly independent review work. Return the canonical
-role result; host idle state, model satisfaction, or a resumed context cannot
-replace it.
+implementation mutation. Never resume Auditor or explicitly independent review
+work. Return the canonical role result; host idle state, model satisfaction, or
+a resumed context cannot replace it.
+
+Before delegation, the orchestrator may run `task handoff-preflight <task-id>`
+for a read-only prerequisites check. If only derived evidence is stale, a
+bounded refresh plan can be applied with `task refresh-handoff-evidence
+<task-id> --plan <path> --yes`. These commands cannot change task contracts,
+activation, review decisions, or product files.
 
 ## Common Responsibilities
 

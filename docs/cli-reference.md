@@ -262,7 +262,9 @@ separate identities, current activation authorization, readiness and
 decomposition evidence, host capability, return-adapter resolution, active
 worktree state, relevant sibling collisions, the disposition owner, and one
 safe repair command. Add `--repair-plan <target-relative-path>` to write a
-bounded plan for derived evidence only.
+bounded plan for derived evidence only. Add `--host <host>` to evaluate a
+specific host adapter, `--return-adapter <id>` to select a return adapter, and
+`--output <path>` to write the result to a file.
 
 Apply a plan explicitly with:
 
