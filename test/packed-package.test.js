@@ -828,6 +828,75 @@ describe('packed public handoff lifecycle', () => {
     assert.equal(scan.validateParallelScanRecord(committed.scan).ok, true);
   });
 
+  it('runs installed handoff-preflight with --repair-plan and produces a valid refresh plan', async () => {
+    const fixture = await createDispatchFixture(tmpBase, 'packed-preflight-repair-plan');
+    const preflight = await runPacked([
+      'task', 'handoff-preflight', 'T-001',
+      '--repair-plan', '.agenticloop/tmp/refresh-plan.json',
+      '--json', '--target', fixture.root,
+    ]);
+    // Preflight may succeed or block; either way it should produce valid JSON
+    const result = JSON.parse(preflight.stdout);
+    assert.equal(result.kind, 'agenticloop.handoff-preflight');
+    assert.equal(result.taskId, 'T-001');
+    assert.ok(result.refreshPlan, 'installed preflight with --repair-plan should include refreshPlan');
+    assert.equal(result.refreshPlan.kind, 'agenticloop.handoff-evidence-refresh-plan');
+    assert.ok(result.refreshPlanPath, 'installed preflight should include refreshPlanPath');
+    // The plan file should be written to the target
+    const planPath = join(fixture.root, '.agenticloop', 'tmp', 'refresh-plan.json');
+    assert.ok(existsSync(planPath), 'plan file should exist in target');
+    const planContent = JSON.parse(readFileSync(planPath, 'utf8'));
+    assert.equal(planContent.kind, 'agenticloop.handoff-evidence-refresh-plan');
+    assert.ok(Array.isArray(planContent.categories));
+  });
+
+  it('runs installed refresh-handoff-evidence with a valid plan and applies it', async () => {
+    const fixture = await createDispatchFixture(tmpBase, 'packed-refresh-evidence');
+    // Step 1: Generate a plan via handoff-preflight
+    const preflight = await runPacked([
+      'task', 'handoff-preflight', 'T-001',
+      '--repair-plan', '.agenticloop/tmp/refresh-plan.json',
+      '--json', '--target', fixture.root,
+    ]);
+    const preflightResult = JSON.parse(preflight.stdout);
+    assert.ok(preflightResult.refreshPlan, 'preflight should produce a plan');
+
+    // Step 2: Apply the plan via refresh-handoff-evidence
+    const refresh = await runPacked([
+      'task', 'refresh-handoff-evidence', 'T-001',
+      '--plan', '.agenticloop/tmp/refresh-plan.json',
+      '--yes', '--json', '--target', fixture.root,
+    ]);
+    assert.equal(refresh.status, 0, `refresh should succeed\nstderr:\n${refresh.stderr}`);
+    const refreshResult = JSON.parse(refresh.stdout);
+    assert.ok(refreshResult.receipt, 'refresh result should have a receipt');
+    assert.ok(Array.isArray(refreshResult.changedFiles), 'result should have changedFiles array');
+    // At least the receipt file should be changed
+    assert.ok(refreshResult.changedFiles.length > 0, 'should have at least one changed file');
+    assert.ok(refreshResult.changedFiles.some(f => f.includes('T-001')), 'changed files should reference the task');
+  });
+
+  it('installed refresh-handoff-evidence rejects invocation without --yes', async () => {
+    const fixture = await createDispatchFixture(tmpBase, 'packed-refresh-no-yes');
+    // Generate a plan first
+    await runPacked([
+      'task', 'handoff-preflight', 'T-001',
+      '--repair-plan', '.agenticloop/tmp/refresh-plan.json',
+      '--json', '--target', fixture.root,
+    ]);
+
+    // Try to refresh without --yes
+    const refresh = await runPacked([
+      'task', 'refresh-handoff-evidence', 'T-001',
+      '--plan', '.agenticloop/tmp/refresh-plan.json',
+      '--json', '--target', fixture.root,
+    ]);
+    assert.equal(refresh.status, 2, 'missing --yes should exit with usage error');
+    const result = JSON.parse(refresh.stdout);
+    assert.ok(result.evidenceState, 'result should have evidenceState');
+    assert.match(result.diagnostics[0].message, /--yes/);
+  });
+
   it('returns one installed authoritative handoff verdict for all five adapters', { timeout: 300000 }, async () => {
     const verdicts = {};
     const successfulVerdicts = {};

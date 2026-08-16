@@ -1087,4 +1087,99 @@ describe('handoff-preflight', () => {
     assert.equal(run.status, 1, 'escaping --output path should fail');
     assert.match(run.stderr, /output|target/i);
   });
+
+  it('generates a valid repair plan for a blocked preflight via --repair-plan', async () => {
+    const target = makeTarget('repair-plan-blocked');
+    // T-003 is blocked (no activation)
+    writeTask(target, 'T-003');
+    git(target, ['add', '.']);
+    git(target, ['commit', '-m', 'task T-003\n\nTask: T-003\nAgent: maintainer']);
+
+    const run = await runCliInProcess(['task', 'handoff-preflight', 'T-003', '--repair-plan', 'repair.json', '--json'], { cwd: target });
+    assert.equal(run.status, 1, 'blocked preflight should exit non-zero');
+    const result = JSON.parse(run.stdout);
+    assert.equal(result.ok, false);
+    assert.equal(result.taskId, 'T-003');
+    // The repair plan should be attached to the JSON output
+    assert.ok(result.refreshPlan, 'refreshPlan should be present in JSON output');
+    assert.ok(result.refreshPlanPath, 'refreshPlanPath should be present in JSON output');
+    assert.equal(result.refreshPlan.kind, 'agenticloop.handoff-evidence-refresh-plan');
+    assert.equal(result.refreshPlan.taskId, 'T-003');
+    // The plan file should be written
+    const planPath = join(target, 'repair.json');
+    assert.ok(existsSync(planPath), 'repair plan file should exist');
+    const planContent = JSON.parse(readFileSync(planPath, 'utf8'));
+    assert.equal(planContent.kind, 'agenticloop.handoff-evidence-refresh-plan');
+    assert.ok(Array.isArray(planContent.categories), 'plan should have categories');
+  });
+
+  it('generates a repair plan for a ready preflight via --repair-plan', async () => {
+    const target = makeTarget('repair-plan-ready');
+    writeTask(target, 'T-060', { withActivation: true });
+    git(target, ['add', '.']);
+    git(target, ['commit', '-m', 'task T-060\n\nTask: T-060\nAgent: maintainer']);
+    makeDecompositionSource(target, 'T-060');
+    git(target, ['add', '.agenticloop/decompositions']);
+    git(target, ['commit', '-m', 'decomposition T-060\n\nTask: T-060\nAgent: maintainer']);
+
+    const run = await runCliInProcess(['task', 'handoff-preflight', 'T-060', '--repair-plan', 'plan/refresh.json', '--json'], { cwd: target });
+    assert.equal(run.status, 0, `ready preflight should succeed\nstderr:\n${run.stderr}`);
+    const result = JSON.parse(run.stdout);
+    assert.equal(result.ok, true);
+    assert.ok(result.refreshPlan, 'refreshPlan should be present even for ready preflight');
+    assert.equal(result.refreshPlan.kind, 'agenticloop.handoff-evidence-refresh-plan');
+    assert.ok(result.refreshPlanPath, 'refreshPlanPath should be present');
+    // Nested directory should be created
+    const planPath = join(target, 'plan', 'refresh.json');
+    assert.ok(existsSync(planPath), 'plan file should exist in nested directory');
+    const planContent = JSON.parse(readFileSync(planPath, 'utf8'));
+    assert.equal(planContent.kind, 'agenticloop.handoff-evidence-refresh-plan');
+    assert.equal(planContent.taskId, 'T-060');
+    assert.ok(Array.isArray(planContent.categories), 'plan should have categories array');
+    assert.equal(planContent.categories.length, 4, 'plan should have 4 categories');
+  });
+
+  it('writes repair plan to --output path when both --repair-plan and --output are set', async () => {
+    const target = makeTarget('repair-plan-output');
+    writeTask(target, 'T-061', { withActivation: true });
+    git(target, ['add', '.']);
+    git(target, ['commit', '-m', 'task T-061\n\nTask: T-061\nAgent: maintainer']);
+    makeDecompositionSource(target, 'T-061');
+    git(target, ['add', '.agenticloop/decompositions']);
+    git(target, ['commit', '-m', 'decomposition T-061\n\nTask: T-061\nAgent: maintainer']);
+
+    const run = await runCliInProcess([
+      'task', 'handoff-preflight', 'T-061',
+      '--repair-plan', 'repair.json',
+      '--output', 'preflight-result.json',
+      '--json',
+    ], { cwd: target });
+    assert.equal(run.status, 0, `combined run should succeed\nstderr:\n${run.stderr}`);
+    const result = JSON.parse(run.stdout);
+    assert.equal(result.ok, true);
+    assert.ok(result.refreshPlan, 'refreshPlan should be in stdout JSON');
+    // Both files should exist
+    assert.ok(existsSync(join(target, 'repair.json')), 'repair plan file should exist');
+    assert.ok(existsSync(join(target, 'preflight-result.json')), 'output file should exist');
+    const outputContent = JSON.parse(readFileSync(join(target, 'preflight-result.json'), 'utf8'));
+    assert.ok(outputContent.refreshPlan, 'output file should include refreshPlan');
+    assert.ok(outputContent.refreshPlanPath, 'output file should include refreshPlanPath');
+  });
+
+  it('generates a repair plan with --repair-plan without --json', async () => {
+    const target = makeTarget('repair-plan-human');
+    writeTask(target, 'T-062');
+    git(target, ['add', '.']);
+    git(target, ['commit', '-m', 'task T-062\n\nTask: T-062\nAgent: maintainer']);
+
+    const run = await runCliInProcess(['task', 'handoff-preflight', 'T-062', '--repair-plan', 'repair.json'], { cwd: target });
+    assert.equal(run.status, 1, 'blocked task should exit non-zero');
+    // Human output should mention the refresh plan path
+    assert.match(run.stdout, /refresh plan/);
+    // Plan file should still be written
+    const planPath = join(target, 'repair.json');
+    assert.ok(existsSync(planPath), 'repair plan file should exist even without --json');
+    const planContent = JSON.parse(readFileSync(planPath, 'utf8'));
+    assert.equal(planContent.kind, 'agenticloop.handoff-evidence-refresh-plan');
+  });
 });

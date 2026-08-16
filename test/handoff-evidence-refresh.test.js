@@ -1017,6 +1017,129 @@ describe('handoff derived-evidence refresh', () => {
     assert.equal(applied2.ok, true, `cycle 2 apply failed: ${applied2.errors?.join('; ')}`);
   });
 
+  it('CLI e2e: preflight --repair-plan then refresh-handoff-evidence via public CLI', async () => {
+    const { runCliInProcess } = await import('./helpers/run-cli.js');
+    const value = target();
+    const templateCarrier = readFileSync(join(value, 'agenticloop', 'memory', 'task-record.md'), 'utf8');
+    writeFileSync(join(value, '.agenticloop', 'tasks', 'T-001.md'), templateCarrier, 'utf8');
+    git(value, ['add', '.agenticloop/tasks/T-001.md']);
+    git(value, ['commit', '-m', 'write carrier with template']);
+
+    // Step 1: Run handoff-preflight with --repair-plan to generate a plan
+    const preflightRun = await runCliInProcess([
+      'task', 'handoff-preflight', 'T-001',
+      '--repair-plan', '.agenticloop/tmp/refresh-plan.json',
+      '--json',
+    ], { cwd: value });
+    // Preflight may succeed or fail depending on fixture state; either way the plan should be generated
+    const preflight = JSON.parse(preflightRun.stdout);
+    assert.ok(preflight.refreshPlan, 'preflight JSON should include refreshPlan');
+    assert.ok(preflight.refreshPlanPath, 'preflight JSON should include refreshPlanPath');
+    const planPath = join(value, '.agenticloop', 'tmp', 'refresh-plan.json');
+    assert.ok(existsSync(planPath), 'plan file should be written');
+
+    // Step 2: Run refresh-handoff-evidence with the plan
+    const refreshRun = await runCliInProcess([
+      'task', 'refresh-handoff-evidence', 'T-001',
+      '--plan', '.agenticloop/tmp/refresh-plan.json',
+      '--yes', '--json',
+    ], { cwd: value });
+    assert.equal(refreshRun.status, 0, `refresh should succeed\nstderr:\n${refreshRun.stderr}`);
+    const refreshResult = JSON.parse(refreshRun.stdout);
+    assert.ok(refreshResult.receipt, 'refresh result should have a receipt');
+    assert.ok(refreshResult.changedFiles, 'refresh result should have changedFiles');
+    assert.ok(refreshResult.changedFiles.length > 0, 'should have at least one changed file');
+    assert.ok(refreshResult.changedFiles.some(f => f.includes('T-001')), 'changed files should reference the task');
+  });
+
+  it('CLI e2e: refresh-handoff-evidence rejects missing --yes', async () => {
+    const { runCliInProcess } = await import('./helpers/run-cli.js');
+    const value = target();
+    writeFileSync(join(value, '.agenticloop', 'tasks', 'T-001.md'), 'fixture\n', 'utf8');
+    git(value, ['add', '.agenticloop/tasks/T-001.md']);
+    git(value, ['commit', '-m', 'write carrier']);
+
+    // Write a minimal plan
+    const planPath = join(value, '.agenticloop', 'tmp', 'plan.json');
+    mkdirSync(join(value, '.agenticloop', 'tmp'), { recursive: true });
+    writeFileSync(planPath, '{}\n', 'utf8');
+
+    const run = await runCliInProcess([
+      'task', 'refresh-handoff-evidence', 'T-001',
+      '--plan', '.agenticloop/tmp/plan.json',
+      // No --yes
+      '--json',
+    ], { cwd: value });
+    assert.equal(run.status, 2, 'missing --yes should exit with usage error');
+    const result = JSON.parse(run.stdout);
+    assert.ok(result.evidenceState, 'result should have evidenceState');
+    assert.match(result.diagnostics[0].message, /--yes/);
+  });
+
+  it('CLI e2e: refresh-handoff-evidence rejects missing --plan', async () => {
+    const { runCliInProcess } = await import('./helpers/run-cli.js');
+    const value = target();
+    writeFileSync(join(value, '.agenticloop', 'tasks', 'T-001.md'), 'fixture\n', 'utf8');
+    git(value, ['add', '.agenticloop/tasks/T-001.md']);
+    git(value, ['commit', '-m', 'write carrier']);
+
+    const run = await runCliInProcess([
+      'task', 'refresh-handoff-evidence', 'T-001',
+      '--yes', '--json',
+    ], { cwd: value });
+    assert.equal(run.status, 2, 'missing --plan should exit with usage error');
+    const result = JSON.parse(run.stdout);
+    assert.ok(result.evidenceState, 'result should have evidenceState');
+  });
+
+  it('CLI e2e: refresh-handoff-evidence rejects malformed plan file', async () => {
+    const { runCliInProcess } = await import('./helpers/run-cli.js');
+    const value = target();
+    writeFileSync(join(value, '.agenticloop', 'tasks', 'T-001.md'), 'fixture\n', 'utf8');
+    git(value, ['add', '.agenticloop/tasks/T-001.md']);
+    git(value, ['commit', '-m', 'write carrier']);
+
+    const planPath = join(value, '.agenticloop', 'tmp', 'bad-plan.json');
+    mkdirSync(join(value, '.agenticloop', 'tmp'), { recursive: true });
+    writeFileSync(planPath, '{"kind":"wrong.kind"}\n', 'utf8');
+
+    const run = await runCliInProcess([
+      'task', 'refresh-handoff-evidence', 'T-001',
+      '--plan', '.agenticloop/tmp/bad-plan.json',
+      '--yes', '--json',
+    ], { cwd: value });
+    assert.notEqual(run.status, 0, 'malformed plan should fail');
+    const result = JSON.parse(run.stdout);
+    assert.ok(result.evidenceState, 'result should have evidenceState');
+    assert.ok(result.diagnostics[0].message.includes('malformed') || result.diagnostics[0].code.includes('malformed'));
+  });
+
+  it('CLI e2e: refresh-handoff-evidence human output shape', async () => {
+    const { runCliInProcess } = await import('./helpers/run-cli.js');
+    const value = target();
+    const templateCarrier = readFileSync(join(value, 'agenticloop', 'memory', 'task-record.md'), 'utf8');
+    writeFileSync(join(value, '.agenticloop', 'tasks', 'T-001.md'), templateCarrier, 'utf8');
+    git(value, ['add', '.agenticloop/tasks/T-001.md']);
+    git(value, ['commit', '-m', 'write carrier with template']);
+
+    // Generate a plan first
+    await runCliInProcess([
+      'task', 'handoff-preflight', 'T-001',
+      '--repair-plan', '.agenticloop/tmp/plan.json',
+      '--json',
+    ], { cwd: value });
+
+    // Run refresh in human mode
+    const run = await runCliInProcess([
+      'task', 'refresh-handoff-evidence', 'T-001',
+      '--plan', '.agenticloop/tmp/plan.json',
+      '--yes',
+    ], { cwd: value });
+    assert.equal(run.status, 0, `refresh should succeed\nstderr:\n${run.stderr}`);
+    assert.match(run.stdout, /REFRESHED/);
+    assert.match(run.stdout, /T-001/);
+  });
+
   it('pairing: fresh decomposition + stale snapshot produces both refreshed, readiness binding passes', () => {
     const value = target();
     const templateCarrier = readFileSync(join(value, 'agenticloop', 'memory', 'task-record.md'), 'utf8');
