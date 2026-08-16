@@ -636,6 +636,101 @@ describe('handoff-preflight', () => {
     assert.deepEqual(result.returnAdapter.adapters.sort(), ['test.adapter.alpha.v1', 'test.adapter.beta.v1']);
   });
 
+  // Two eligible return adapters pinned in an operator trust store, so
+  // selection is exercised against a real ambiguous set.
+  function twoAdapterEnv(name, taskId, { hardened = false } = {}) {
+    const target = makeTarget(name);
+    if (hardened) {
+      writeFileSync(join(target, 'agenticloop.json'), `${JSON.stringify({ activation: { mode: 'hardened' } })}\n`, 'utf8');
+    }
+    writeTask(target, taskId);
+    git(target, ['add', '.']);
+    git(target, ['commit', '-m', `task ${taskId}\n\nTask: ${taskId}\nAgent: maintainer`]);
+
+    const trustA = createTestHostTrust({ target, adapterId: 'test.adapter.alpha.v1', keyId: 'alpha-key' });
+    const trustB = createTestHostTrust({ target, adapterId: 'test.adapter.beta.v1', keyId: 'beta-key' });
+    const operatorRoot = join(tmpDir, `${name}-operator-trust`);
+    const document = {
+      kind: 'agenticloop.host-trust',
+      schemaVersion: 1,
+      target: { repositoryIdentity: trustA.repositoryIdentity },
+      adapters: [...trustA.document.adapters, ...trustB.document.adapters],
+    };
+    writeHostTrustStore(operatorRoot, { target, document });
+
+    const trustByAdapterId = { 'test.adapter.alpha.v1': trustA, 'test.adapter.beta.v1': trustB };
+    const hostAuthority = challenge => {
+      const responses = [];
+      for (const adapterId of challenge.supportedAdapterIds ?? []) {
+        const trust = trustByAdapterId[adapterId];
+        if (!trust) continue;
+        const response = {
+          kind: HOST_TRUST_BOUNDARY_RESPONSE_KIND,
+          schemaVersion: HOST_TRUST_BOUNDARY_SCHEMA_VERSION,
+          adapterId: trust.adapterId,
+          keyId: trust.keyId,
+          challengeNonce: challenge.nonce,
+          signature: null,
+        };
+        response.signature = signHostPayload(hostTrustBoundarySignaturePayload(challenge, response), trust.privateKey);
+        responses.push(response);
+      }
+      return responses;
+    };
+    return { target, taskId, io: { operatorTrustRoot: operatorRoot, hostAuthority } };
+  }
+
+  it('honors an explicit --return-adapter selection and suppresses the standard ambiguity warning', () => {
+    const env = twoAdapterEnv('return-select', 'T-051');
+    const result = evaluateHandoffPreflight({
+      target: env.target, taskId: env.taskId, backend: 'files',
+      projectConfig: { task_file_template: '.agenticloop/tasks/{taskId}.md' },
+      io: env.io,
+      returnAdapter: 'test.adapter.beta.v1',
+    });
+    assert.equal(result.returnAdapter.state, 'resolved');
+    assert.equal(result.returnAdapter.adapter.adapterId, 'test.adapter.beta.v1');
+    assert.deepEqual(result.returnAdapter.adapters.sort(), ['test.adapter.alpha.v1', 'test.adapter.beta.v1']);
+    assert.equal(
+      result.warningDiagnostics.find(d => d.code === 'return.assurance.ambiguous'),
+      undefined,
+      'an explicit selection must suppress the standard ambiguity warning'
+    );
+  });
+
+  it('rejects an unknown --return-adapter with a typed insufficient error listing eligible ids', () => {
+    const env = twoAdapterEnv('return-unknown', 'T-052');
+    const result = evaluateHandoffPreflight({
+      target: env.target, taskId: env.taskId, backend: 'files',
+      projectConfig: { task_file_template: '.agenticloop/tasks/{taskId}.md' },
+      io: env.io,
+      returnAdapter: 'test.adapter.gamma.v1',
+    });
+    assert.equal(result.returnAdapter.state, 'unmatched');
+    const error = result.diagnostics.find(d => d.code === 'return.assurance.insufficient');
+    assert.ok(error, 'unknown selection must produce a typed return.assurance.insufficient error');
+    assert.match(error.message, /test\.adapter\.alpha\.v1/);
+    assert.match(error.message, /test\.adapter\.beta\.v1/);
+    assert.equal(error.evidence.state, 'negative');
+  });
+
+  it('lets an explicit --return-adapter satisfy hardened mode without the ambiguity error', () => {
+    const env = twoAdapterEnv('return-hardened', 'T-053', { hardened: true });
+    const result = evaluateHandoffPreflight({
+      target: env.target, taskId: env.taskId, backend: 'files',
+      projectConfig: { task_file_template: '.agenticloop/tasks/{taskId}.md' },
+      io: env.io,
+      returnAdapter: 'test.adapter.alpha.v1',
+    });
+    assert.equal(result.returnAdapter.state, 'resolved');
+    assert.equal(result.returnAdapter.adapter.adapterId, 'test.adapter.alpha.v1');
+    assert.equal(
+      result.diagnostics.find(d => d.code === 'return.assurance.insufficient'),
+      undefined,
+      'a valid explicit selection must suppress the hardened ambiguity error'
+    );
+  });
+
   it('reports host-role capability without throwing', () => {
     const target = makeTarget('capability');
     writeTask(target, 'T-014');

@@ -2160,6 +2160,7 @@ export async function cmdTask(args, io = createIo()) {
           io,
           host: opts.host,
           hostTrustStore: opts.hostTrustStore,
+          returnAdapter: opts.returnAdapter,
         });
       } catch (error) {
         return printGateResult('task handoff-preflight',

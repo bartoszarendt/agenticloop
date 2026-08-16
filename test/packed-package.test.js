@@ -850,6 +850,21 @@ describe('packed public handoff lifecycle', () => {
     assert.ok(Array.isArray(planContent.categories));
   });
 
+  it('accepts the installed handoff-preflight --return-adapter flag', async () => {
+    const fixture = await createDispatchFixture(tmpBase, 'packed-preflight-return-adapter');
+    const preflight = await runPacked([
+      'task', 'handoff-preflight', 'T-001',
+      '--return-adapter', 'test.adapter.example.v1',
+      '--json', '--target', fixture.root,
+    ]);
+    // The flag must be a recognized option, not an unknown-option usage error.
+    assert.doesNotMatch(preflight.stderr ?? '', /unknown option '--return-adapter'/);
+    const result = JSON.parse(preflight.stdout);
+    assert.equal(result.kind, 'agenticloop.handoff-preflight');
+    assert.equal(result.taskId, 'T-001');
+    assert.ok(result.returnAdapter, 'preflight output should carry a returnAdapter resolution');
+  });
+
   it('runs installed refresh-handoff-evidence with a valid plan and applies it', async () => {
     const fixture = await createDispatchFixture(tmpBase, 'packed-refresh-evidence');
     // Step 1: Generate a plan via handoff-preflight

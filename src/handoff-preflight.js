@@ -137,6 +137,7 @@ class PreflightFindings {
  *   io: object,
  *   host?: string,
  *   hostTrustStore?: string,
+ *   returnAdapter?: string,
  *   now?: string,
  * }} input
  */
@@ -149,6 +150,7 @@ export function evaluateHandoffPreflight(input) {
     io,
     host: requestedHost,
     hostTrustStore,
+    returnAdapter = null,
     now = new Date().toISOString(),
   } = input;
 
@@ -756,14 +758,40 @@ export function evaluateHandoffPreflight(input) {
       assertedPath: hostTrustStore,
       protectedBoundary: io?.hostAuthority ?? undefined,
     });
+    const registerHint =
+      'Register a host adapter with returnReceipt capability: npx agenticloop host-trust register <adapter-id> --key-id <id> --public-key <base64-or-path> --return-receipt supported';
     if (store.ok) {
       const eligibleAdapters = Object.values(store.adapters ?? {})
         .filter(adapter => adapter?.capabilities?.returnReceipt === 'supported');
-      if (effectivePolicy?.mode === 'hardened' && eligibleAdapters.length === 0) {
+      const eligibleIds = eligibleAdapters.map(a => a.adapterId);
+      if (returnAdapter) {
+        // An explicit operator selection is authoritative: honor it when it
+        // names an eligible adapter and reject it otherwise. A valid selection
+        // resolves the boundary, so the ambiguity error and warning below are
+        // never reached.
+        const chosen = eligibleAdapters.find(a => a.adapterId === returnAdapter) ?? null;
+        if (!chosen) {
+          findings.error(
+            'return.assurance.insufficient',
+            `requested return adapter '${returnAdapter}' is not an eligible protected-boundary adapter with returnReceipt support; eligible: ${eligibleIds.join(', ') || '(none)'}`,
+            eligibleIds.length
+              ? `Use --return-adapter with one of: ${eligibleIds.join(', ')}.`
+              : registerHint,
+            'negative'
+          );
+          returnAdapterResolution = { state: 'unmatched', requested: returnAdapter, adapters: eligibleIds };
+        } else {
+          returnAdapterResolution = {
+            state: 'resolved',
+            adapter: { adapterId: chosen.adapterId, keyId: chosen.keyId },
+            adapters: eligibleIds,
+          };
+        }
+      } else if (effectivePolicy?.mode === 'hardened' && eligibleAdapters.length === 0) {
         findings.error(
           'return.assurance.insufficient',
           'hardened mode requires a protected-boundary return adapter with returnReceipt support',
-          'Register a host adapter with returnReceipt capability: npx agenticloop host-trust register <adapter-id> --return-receipt supported',
+          registerHint,
           'negative'
         );
         returnAdapterResolution = { state: 'missing', adapters: [] };
@@ -771,23 +799,23 @@ export function evaluateHandoffPreflight(input) {
         findings.error(
           'return.assurance.insufficient',
           'multiple return adapters are available; select one with --return-adapter',
-          'Use --return-adapter <adapter-id> to select a specific adapter.',
+          `Use --return-adapter with one of: ${eligibleIds.join(', ')}.`,
           'negative'
         );
-        returnAdapterResolution = { state: 'ambiguous', adapters: eligibleAdapters.map(a => a.adapterId) };
+        returnAdapterResolution = { state: 'ambiguous', adapters: eligibleIds };
       } else {
         const selected = eligibleAdapters[0] ?? null;
         if (eligibleAdapters.length > 1 && effectivePolicy?.mode !== 'hardened') {
           findings.warning(
             'return.assurance.ambiguous',
-            `multiple return adapters are available (${eligibleAdapters.map(a => a.adapterId).join(', ')}); selected '${selected?.adapterId}'; use --return-adapter to select a specific adapter`,
+            `multiple return adapters are available (${eligibleIds.join(', ')}); selected '${selected?.adapterId}'; use --return-adapter to select a specific adapter`,
             'current'
           );
         }
         returnAdapterResolution = {
           state: selected ? 'resolved' : 'none_required',
           adapter: selected ? { adapterId: selected.adapterId, keyId: selected.keyId } : null,
-          adapters: eligibleAdapters.map(a => a.adapterId),
+          adapters: eligibleIds,
         };
       }
     } else {
@@ -796,7 +824,7 @@ export function evaluateHandoffPreflight(input) {
         findings.error(
           'cli.operational',
           'hardened mode requires an operator-pinned host trust store',
-          'Register a host adapter: npx agenticloop host-trust register <adapter-id> ...',
+          registerHint,
           'negative'
         );
       }
