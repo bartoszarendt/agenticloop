@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+- The `Agent:` commit trailer is now matched case-sensitively against the exact
+  lowercase canonical `roleId`. A capitalized spelling such as `Agent: Engineer`
+  that 0.4.1 accepted (it lowercased the value before comparing) is now rejected
+  as a wrong trailer across `commit-attribution check` and the Engineer-return,
+  Maintainer-decomposition, review-entry, and derived-evidence verification
+  gates. Author the trailer as the lowercase `roleId` (`Agent: engineer`).
+
 ## 0.4.1 - 2026-08-14
 
 ### Highlights

@@ -283,7 +283,11 @@ emitted final trailer block; it does not authenticate the producer.
 
 `commit-attribution check` accepts `--role orchestrator|maintainer|engineer|auditor`.
 The role is validated against the canonical registry and the final contiguous
-`Task:`/`Agent:` trailer parser is shared with decomposition verification.
+`Task:`/`Agent:` trailer parser is shared with decomposition verification. The
+`Agent:` trailer value must be the exact lowercase canonical `roleId` (the
+immutable lowercase machine identity); capitalized spellings such as
+`Agent: Engineer` are rejected as a wrong trailer. This is a deliberate
+tightening over 0.4.1, which lowercased the trailer before comparing.
 
 ## GitHub review audit
 

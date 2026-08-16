@@ -30,6 +30,27 @@ describe('role-aware commit attribution', () => {
     assert.ok(uppercase.errors.some(error => error.includes("wrong Agent trailer 'Maintainer'")));
   });
 
+  it('rejects a capitalized Agent trailer as a deliberate tightening over 0.4.1', () => {
+    // 0.4.1 lowercased the Agent trailer value before comparing, so
+    // `Agent: Engineer` passed. That normalization was removed: the trailer must
+    // now be the exact lowercase canonical roleId. This is intentional and must
+    // stay stable - roleId is defined as an immutable lowercase machine identity
+    // (AGENTIC_LOOP.md), so a capitalized spelling is a wrong trailer, not a
+    // cosmetic variant. Restoring case-insensitive acceptance would break this.
+    const capitalized = evaluateCommitAttribution({
+      taskId: 'T-001', role: 'engineer',
+      message: 'implement\n\nTask: T-001\nAgent: Engineer',
+    });
+    assert.equal(capitalized.ok, false);
+    assert.ok(capitalized.errors.some(error => error.includes("wrong Agent trailer 'Engineer'")));
+
+    const lowercase = evaluateCommitAttribution({
+      taskId: 'T-001', role: 'engineer',
+      message: 'implement\n\nTask: T-001\nAgent: engineer',
+    });
+    assert.equal(lowercase.ok, true);
+  });
+
   it('rejects invalid roles and non-contiguous trailer blocks', () => {
     const invalidRole = evaluateCommitAttribution({
       taskId: 'T-001', role: 'reviewer',

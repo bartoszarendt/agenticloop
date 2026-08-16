@@ -49,8 +49,10 @@ Task: #42
 Agent: engineer
 ```
 
-The body role and `Agent:` value must agree exactly. The repair shape is always
-one final body trailer `[[agent: <role>]]` and one final commit trailer pair
+The body role and `Agent:` value must agree exactly. The `Agent:` value must be
+the exact lowercase canonical `roleId`; a capitalized spelling such as
+`Agent: Engineer` is rejected. The repair shape is always one final body trailer
+`[[agent: <role>]]` and one final commit trailer pair
 `Task: <resolved task id>` / `Agent: <role>`.
 
 ## Prospective commit flow
