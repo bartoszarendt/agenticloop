@@ -41,8 +41,27 @@ function assertNoSymlinkSubstitution(target, sourceRef) {
 }
 
 /**
- * Bind working-tree bytes to HEAD, the exact blob, and the last source commit.
- * The source commit must carry canonical Task:/Agent: Maintainer attribution.
+ * Ask Git whether the worktree path differs from HEAD.
+ *
+ * Git applies the path's `.gitattributes` eol rules and any clean filter before
+ * comparing, so an ordinary Windows CRLF checkout and a smudged working copy
+ * both report "unmodified" while a genuine content change - staged or not -
+ * reports the path. An unusable `git diff` is treated as a difference so the
+ * caller fails closed rather than inheriting an unproven worktree.
+ */
+function worktreeMatchesHead(target, path) {
+  const diff = git(target, ['diff', '--name-only', 'HEAD', '--', path]);
+  if (diff.status !== 0) return { ok: false, reason: 'could not be compared with HEAD' };
+  if (String(diff.stdout ?? '').trim() !== '') return { ok: false, reason: 'differs from HEAD' };
+  return { ok: true, reason: null };
+}
+
+/**
+ * Bind the committed blob to HEAD and the last source commit after Git proves
+ * the worktree path is unmodified. The returned `source` is the committed
+ * content, never the host's checked-out spelling, so line-ending conversion and
+ * clean/smudge filters cannot change what a verifier consumes. The source
+ * commit must carry canonical Task:/Agent: Maintainer attribution.
  */
 export function verifyCommittedAttributedSource(target, sourceRef, { taskId } = {}) {
   const checkedPath = validateCommittedSourcePath(sourceRef);
@@ -60,9 +79,10 @@ export function verifyCommittedAttributedSource(target, sourceRef, { taskId } = 
     return { ok: false, evidenceState: 'malformed', error: error.message };
   }
 
-  let bytes;
+  // The worktree copy must exist: a path deleted after commit is missing
+  // evidence even though HEAD still carries the blob.
   try {
-    bytes = readFileSync(resolve(target, ...checkedPath.path.split('/')));
+    readFileSync(resolve(target, ...checkedPath.path.split('/')));
   } catch (error) {
     return { ok: false, evidenceState: 'missing', error: `committed source '${checkedPath.path}' is unavailable: ${error.message}` };
   }
@@ -71,9 +91,11 @@ export function verifyCommittedAttributedSource(target, sourceRef, { taskId } = 
   if (headBytes.status !== 0) {
     return { ok: false, evidenceState: 'missing', error: `committed source '${checkedPath.path}' is absent from HEAD` };
   }
-  if (!Buffer.from(headBytes.stdout ?? []).equals(bytes)) {
-    return { ok: false, evidenceState: 'changed', error: `committed source '${checkedPath.path}' is not byte-identical to HEAD` };
+  const unmodified = worktreeMatchesHead(target, checkedPath.path);
+  if (!unmodified.ok) {
+    return { ok: false, evidenceState: 'changed', error: `committed source '${checkedPath.path}' ${unmodified.reason}` };
   }
+  const bytes = Buffer.from(headBytes.stdout ?? []);
 
   const blobResult = git(target, ['rev-parse', `HEAD:${checkedPath.path}`]);
   const blob = String(blobResult.stdout ?? '').trim();

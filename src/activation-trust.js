@@ -33,6 +33,7 @@ import { isAbsolute, join, parse, relative, resolve } from 'node:path';
 
 import { atomicCreateFile, atomicWriteFile } from './fs-mutation-kernel.js';
 import { validateActivationRevocation } from './activation-grant.js';
+import { createDiagnostic } from './repair-policy.js';
 import {
   HOST_SIGNATURE_ALGORITHM,
   exportPublicKey,
@@ -42,6 +43,7 @@ import {
   verifyHostPayload,
 } from './host-trust.js';
 import { displayPath, isPathOutside, pathIdentity } from './path-identity.js';
+import { legacyRepositoryAuthorityIdentities, repositoryAuthorityDigest } from './repository-identity.js';
 
 export const OPERATOR_ACTIVATION_KEY_KIND = 'agenticloop.operator-activation-key';
 export const OPERATOR_ACTIVATION_KEY_SCHEMA_VERSION = 1;
@@ -76,23 +78,27 @@ export function defaultOperatorActivationRoot() {
  * can be reused for another.
  */
 export function operatorActivationKeyPath(target, root = defaultOperatorActivationRoot()) {
-  const identity = targetRepositoryIdentity(target);
-  const digest = createHash('sha256').update(identity, 'utf8').digest('hex');
-  return join(displayPath(root), `${digest}.json`);
+  return operatorActivationKeyPathForIdentity(targetRepositoryIdentity(target), root);
 }
 
-function repositoryActivationDigest(target) {
-  return createHash('sha256').update(targetRepositoryIdentity(target), 'utf8').digest('hex');
+/** Address operator key storage by an explicit identity, including a legacy one. */
+export function operatorActivationKeyPathForIdentity(identity, root = defaultOperatorActivationRoot()) {
+  return join(displayPath(root), `${repositoryAuthorityDigest(identity)}.json`);
 }
 
 export function externalActivationRevocationPath(target, revocationId, root = defaultOperatorActivationRoot()) {
   const suffix = String(revocationId ?? '').replace(/^revocation:/, '');
   if (!/^[0-9a-f-]{36}$/.test(suffix)) throw new TypeError('external activation revocation id is invalid');
-  return join(displayPath(root), 'revocations', repositoryActivationDigest(target), `${suffix}.json`);
+  return join(externalRevocationDirectoryForIdentity(targetRepositoryIdentity(target), root), `${suffix}.json`);
+}
+
+/** Address the external deny registry by an explicit identity, including a legacy one. */
+export function externalRevocationDirectoryForIdentity(identity, root = defaultOperatorActivationRoot()) {
+  return join(displayPath(root), 'revocations', repositoryAuthorityDigest(identity));
 }
 
 function externalRevocationDirectory(target, root) {
-  return join(displayPath(root), 'revocations', repositoryActivationDigest(target));
+  return externalRevocationDirectoryForIdentity(targetRepositoryIdentity(target), root);
 }
 
 /** Apply the operator-storage authority boundary to external revocation tombstones. */
@@ -151,44 +157,67 @@ export function writeExternalActivationRevocation(target, revocation, options = 
   }
 }
 
-/** Read all external deny tombstones. A present malformed registry fails closed. */
+/**
+ * Read all external deny tombstones for one target.
+ *
+ * Deny evidence is read as the union of the current identity's registry and
+ * every superseded identity spelling this host could have written under. A
+ * revocation that became unreachable because the identity derivation changed
+ * would otherwise silently re-enable a grant the operator explicitly killed, so
+ * the legacy registries are consulted, their tombstones accepted only when they
+ * name one of this target's own identities, and any unreadable entry in any of
+ * them still fails the whole read closed.
+ */
 export function readExternalActivationRevocations(target, options = {}) {
   const root = options.operatorActivationRoot ?? defaultOperatorActivationRoot();
+  const currentIdentity = targetRepositoryIdentity(target);
+  const legacyIdentities = options.legacyIdentities ?? legacyRepositoryAuthorityIdentities(target);
+  const accepted = new Set([currentIdentity, ...legacyIdentities]);
   const directory = externalRevocationDirectory(target, root);
-  try {
-    assertSafeExternalActivationRevocationPath(target, root, directory);
-  } catch (error) {
-    return { ok: false, revocations: [], errors: [error.message], path: directory };
-  }
-  if (!existsSync(directory)) return { ok: true, revocations: [], errors: [], path: directory };
-  if (lstatSync(directory).isSymbolicLink()) return { ok: false, revocations: [], errors: ['external activation revocation registry must not be a symbolic link'], path: directory };
   const revocations = [];
   const errors = [];
-  try {
-    for (const name of readdirSync(directory).sort()) {
-      const path = join(directory, name);
-      try { assertSafeExternalActivationRevocationPath(target, root, path); } catch (error) {
-        errors.push(error.message);
-        continue;
-      }
-      if (!name.endsWith('.json') || !statSync(path).isFile() || lstatSync(path).isSymbolicLink()) {
-        errors.push(`external activation revocation registry contains unsupported entry '${name}'`);
-        continue;
-      }
-      try {
-        const record = JSON.parse(readFileSync(path, 'utf8'));
-        const checked = validateActivationRevocation(record);
-        if (!checked.ok || record.repositoryIdentity !== targetRepositoryIdentity(target)) {
-          errors.push(`${name} is not a valid revocation for this repository`);
-        } else revocations.push(record);
-      } catch (error) {
-        errors.push(`${name} is unreadable or invalid JSON: ${error.message}`);
-      }
+  const legacyPaths = [];
+
+  for (const identity of [currentIdentity, ...legacyIdentities]) {
+    const registry = externalRevocationDirectoryForIdentity(identity, root);
+    if (identity !== currentIdentity) legacyPaths.push(registry);
+    try {
+      assertSafeExternalActivationRevocationPath(target, root, registry);
+    } catch (error) {
+      errors.push(error.message);
+      continue;
     }
-  } catch (error) {
-    errors.push(`external activation revocation registry is unreadable: ${error.message}`);
+    if (!existsSync(registry)) continue;
+    if (lstatSync(registry).isSymbolicLink()) {
+      errors.push('external activation revocation registry must not be a symbolic link');
+      continue;
+    }
+    try {
+      for (const name of readdirSync(registry).sort()) {
+        const path = join(registry, name);
+        try { assertSafeExternalActivationRevocationPath(target, root, path); } catch (error) {
+          errors.push(error.message);
+          continue;
+        }
+        if (!name.endsWith('.json') || !statSync(path).isFile() || lstatSync(path).isSymbolicLink()) {
+          errors.push(`external activation revocation registry contains unsupported entry '${name}'`);
+          continue;
+        }
+        try {
+          const record = JSON.parse(readFileSync(path, 'utf8'));
+          const checked = validateActivationRevocation(record);
+          if (!checked.ok || !accepted.has(record.repositoryIdentity)) {
+            errors.push(`${name} is not a valid revocation for this repository`);
+          } else revocations.push(record);
+        } catch (error) {
+          errors.push(`${name} is unreadable or invalid JSON: ${error.message}`);
+        }
+      }
+    } catch (error) {
+      errors.push(`external activation revocation registry is unreadable: ${error.message}`);
+    }
   }
-  return { ok: errors.length === 0, revocations, errors, path: directory };
+  return { ok: errors.length === 0, revocations, errors, path: directory, legacyPaths };
 }
 
 /**
@@ -244,7 +273,7 @@ export function assertSafeOperatorActivationKeyWritePath(target, root, path) {
   assertNoLinkComponents(path, 'operator activation key destination');
 }
 
-function parseKeyDocument(text, { target, path }) {
+function parseKeyDocument(text, { expectedIdentity, path }) {
   /** @type {string[]} */
   const errors = [];
   let parsed;
@@ -262,7 +291,6 @@ function parseKeyDocument(text, { target, path }) {
   if (parsed.schemaVersion !== OPERATOR_ACTIVATION_KEY_SCHEMA_VERSION) {
     errors.push(`operator activation key schemaVersion must be ${OPERATOR_ACTIVATION_KEY_SCHEMA_VERSION}`);
   }
-  const expectedIdentity = targetRepositoryIdentity(target);
   if (!isObject(parsed.target) || Object.keys(parsed.target).length !== 1 ||
       typeof parsed.target.repositoryIdentity !== 'string') {
     errors.push('operator activation key target must contain exactly repositoryIdentity');
@@ -341,9 +369,74 @@ export function loadOperatorActivationKey(target, options = {}) {
   } catch (error) {
     return { ok: false, state: 'malformed', key: null, errors: [`operator activation key is unreadable: ${error.message}`], path: realPath };
   }
-  const parsed = parseKeyDocument(text, { target, path: realPath });
+  const parsed = parseKeyDocument(text, { expectedIdentity: targetRepositoryIdentity(target), path: realPath });
   if (!parsed.ok) return { ok: false, state: 'malformed', key: null, errors: parsed.errors, path: realPath };
   return { ok: true, state: 'present', key: parsed.key, errors: [], path: realPath };
+}
+
+/**
+ * Read one operator activation key document from an exact path, checked against
+ * an explicitly supplied repository identity.
+ *
+ * Identity migration needs this: a key provisioned under a superseded identity
+ * spelling is a valid document that simply names an older identity, and calling
+ * it malformed would hide exactly the state the migration must find.
+ */
+export function readOperatorActivationKeyDocument(path, expectedIdentity) {
+  if (!existsSync(path)) return { ok: true, state: 'missing', key: null, errors: [], path };
+  if (lstatSync(path).isSymbolicLink()) {
+    return { ok: false, state: 'malformed', key: null, errors: ['operator activation key must not be a symbolic link'], path };
+  }
+  let text;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    return { ok: false, state: 'malformed', key: null, errors: [`operator activation key is unreadable: ${error.message}`], path };
+  }
+  const parsed = parseKeyDocument(text, { expectedIdentity, path });
+  if (!parsed.ok) return { ok: false, state: 'malformed', key: null, errors: parsed.errors, path };
+  return { ok: true, state: 'present', key: parsed.key, errors: [], path };
+}
+
+/** Build the exact key document bytes for one identity and key material. */
+export function renderOperatorActivationKeyDocument({ repositoryIdentity, keyId, algorithm, publicKey, privateKey, createdAt }) {
+  return `${JSON.stringify({
+    kind: OPERATOR_ACTIVATION_KEY_KIND,
+    schemaVersion: OPERATOR_ACTIVATION_KEY_SCHEMA_VERSION,
+    target: { repositoryIdentity },
+    keyId,
+    algorithm,
+    publicKey,
+    privateKey,
+    createdAt,
+  }, null, 2)}\n`;
+}
+
+/**
+ * Discover operator activation keys stored under superseded identity spellings.
+ *
+ * Only keys that actually exist are returned. A document that is present but
+ * unreadable is reported as `malformed` rather than skipped, because "there is
+ * something here I cannot read" must never be treated as "there is nothing
+ * here" by a caller that is about to mint replacement authority.
+ */
+export function discoverLegacyOperatorActivationKeys(target, options = {}) {
+  const root = options.operatorActivationRoot ?? defaultOperatorActivationRoot();
+  const legacyIdentities = options.legacyIdentities ?? legacyRepositoryAuthorityIdentities(target);
+  const found = [];
+  for (const identity of legacyIdentities) {
+    let path;
+    try {
+      path = operatorActivationKeyPathForIdentity(identity, root);
+    } catch (error) {
+      found.push({ identity, path: null, state: 'malformed', key: null, errors: [error.message] });
+      continue;
+    }
+    const read = readOperatorActivationKeyDocument(path, identity);
+    if (read.state === 'missing') continue;
+    found.push({ identity, path, state: read.state, key: read.key, errors: read.errors });
+  }
+  return found;
 }
 
 /**
@@ -352,8 +445,13 @@ export function loadOperatorActivationKey(target, options = {}) {
  * This is the single setup operation. It is idempotent, never overwrites an
  * existing valid key, and never writes anything into the target repository.
  *
+ * It also refuses to mint a fresh identity while operator material for this
+ * same checkout still exists under a superseded identity spelling. Quietly
+ * provisioning there would look like a successful first-time setup while
+ * orphaning the operator's real key and every deny tombstone bound to it.
+ *
  * @param {string} target
- * @param {{ operatorActivationRoot?: string|null, now?: number }} [options]
+ * @param {{ operatorActivationRoot?: string|null, now?: number, legacyIdentities?: string[] }} [options]
  */
 export function provisionOperatorActivationKey(target, options = {}) {
   const existing = loadOperatorActivationKey(target, options);
@@ -361,6 +459,30 @@ export function provisionOperatorActivationKey(target, options = {}) {
     return { ok: true, created: false, key: existing.key, path: existing.path, errors: [], ownerProtection: describeProtection() };
   }
   if (!existing.ok) return { ok: false, created: false, key: null, path: existing.path, errors: existing.errors, ownerProtection: null };
+  const legacyKeys = discoverLegacyOperatorActivationKeys(target, options);
+  if (legacyKeys.length > 0) {
+    return {
+      ok: false,
+      created: false,
+      key: null,
+      path: existing.path,
+      errors: [
+        `operator activation material already exists under ${legacyKeys.length} superseded repository ` +
+        `identity spelling(s): ${legacyKeys.map(item => item.identity).join(', ')}`,
+      ],
+      diagnostic: createDiagnostic({
+        code: 'activation.identity.migration_required',
+        evidence: {
+          state: 'stale',
+          supplied: true,
+          rollbackAuthorized: false,
+          identities: legacyKeys.map(item => item.identity),
+        },
+      }),
+      legacyKeys,
+      ownerProtection: null,
+    };
+  }
   const { publicKey, privateKey } = generateKeyPairSync(HOST_SIGNATURE_ALGORITHM);
   const publicKeyBase64 = exportPublicKey(publicKey);
   const keyId = `operator-${createHash('sha256').update(publicKeyBase64, 'utf8').digest('hex').slice(0, 16)}`;

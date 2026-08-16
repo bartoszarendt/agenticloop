@@ -59,6 +59,10 @@ import {
   writeExternalActivationRevocation,
 } from './activation-trust.js';
 import {
+  inspectOperatorActivationIdentity,
+  migrateOperatorActivationIdentity,
+} from './activation-identity-migration.js';
+import {
   activationGrantSignaturePayload,
   taskActivationBindingSignaturePayload,
 } from './activation-grant.js';
@@ -83,7 +87,7 @@ import { buildGitHubTaskIdentityInventory, resolveCoveredGitHubTask } from './gi
 import { resolveGitHubRepository, runGhJson } from './gh-helpers.js';
 import { createHash } from 'node:crypto';
 
-const ACTIVATION_SUBCOMMANDS = ['status', 'revoke', 'provision-key'];
+const ACTIVATION_SUBCOMMANDS = ['status', 'revoke', 'provision-key', 'identity-status', 'migrate-identity'];
 
 function sha256(text) {
   return `sha256:${createHash('sha256').update(String(text ?? ''), 'utf8').digest('hex')}`;
@@ -593,7 +597,60 @@ export async function cmdActivate(args, io = createIo()) {
   }
 }
 
-/** The `activation` command family: status, revoke, and provision-key. */
+/**
+ * Report or apply the repository authority-identity migration.
+ *
+ * Both subcommands share one projection so the read-only report and the applied
+ * result can never disagree about what state exists.
+ */
+function runIdentityMigrationSubcommand(sub, { target, io, asJson, command }) {
+  const operatorActivationRoot = io.operatorActivationRoot ?? undefined;
+  const applied = sub === 'migrate-identity'
+    ? migrateOperatorActivationIdentity(target, { operatorActivationRoot })
+    : null;
+  const inspection = applied?.inspection ?? inspectOperatorActivationIdentity(target, { operatorActivationRoot });
+  const report = {
+    command,
+    disposition: applied?.disposition ?? inspection.disposition,
+    identityVersion: inspection.identityVersion,
+    currentIdentity: inspection.currentIdentity,
+    currentDigest: inspection.currentDigest,
+    currentKeyState: inspection.currentKeyState,
+    currentKeyId: inspection.currentKeyId,
+    supersededIdentities: inspection.legacy.map(item => ({
+      identity: item.identity,
+      keyState: item.keyState,
+      keyId: item.keyId,
+      revocationCount: item.revocationCount,
+    })),
+    receiptPath: inspection.receiptPath,
+    ...(applied ? { migrated: applied.migrated, errors: applied.errors } : {}),
+  };
+  if (asJson) io.out(JSON.stringify(report, null, 2));
+  else {
+    io.out(`Repository authority identity v${inspection.identityVersion}: ${inspection.currentIdentity}`);
+    io.out(`  operator key:      ${inspection.currentKeyState}${inspection.currentKeyId ? ` (${inspection.currentKeyId})` : ''}`);
+    io.out(`  disposition:       ${report.disposition}`);
+    for (const item of report.supersededIdentities) {
+      io.out(`  superseded:        ${item.identity} [key ${item.keyState}, ${item.revocationCount} revocation(s)]`);
+    }
+    if (report.supersededIdentities.length === 0) io.out('  superseded:        (none)');
+    if (applied?.migrated) io.out(`  receipt:           ${applied.receiptPath}`);
+    for (const message of applied?.errors ?? []) io.err(message);
+  }
+  if (applied && !applied.ok) {
+    io.err(applied.diagnostic?.code === 'activation.identity.conflict'
+      ? 'Several operator activation keys claim this repository. Remove or rename every superseded key you do not want to keep, then rerun.'
+      : 'The operator activation identity could not be migrated.');
+    return 1;
+  }
+  return 0;
+}
+
+/**
+ * The `activation` command family: status, revoke, provision-key,
+ * identity-status, and migrate-identity.
+ */
 export async function cmdActivation(args, io = createIo()) {
   const sub = args[0];
   const spec = COMMAND_REGISTRY.activation.subcommands;
@@ -611,13 +668,20 @@ export async function cmdActivation(args, io = createIo()) {
   const command = `activation ${sub}`;
 
   try {
+    if (sub === 'identity-status' || sub === 'migrate-identity') {
+      return runIdentityMigrationSubcommand(sub, { target, io, asJson, command });
+    }
+
     if (sub === 'provision-key') {
       const provisioned = provisionOperatorActivationKey(target, {
         operatorActivationRoot: io.operatorActivationRoot ?? undefined,
       });
       if (!provisioned.ok) {
         throw new VerificationContextMalformedError(
-          `Operator activation key could not be provisioned: ${provisioned.errors.join('; ')}`
+          `Operator activation key could not be provisioned: ${provisioned.errors.join('; ')}` +
+          (provisioned.diagnostic?.code === 'activation.identity.migration_required'
+            ? ". Run 'npx agenticloop activation migrate-identity' to carry the existing operator identity forward."
+            : '')
         );
       }
       const report = {

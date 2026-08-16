@@ -83,6 +83,12 @@ export const REPAIR_POLICY = Object.freeze({
   'activation.binding.decomposition_invalid': policy('activation', 'repair_evidence', 'contract_reconciliation', 'The committed decomposition evidence cannot derive this task activation binding.'),
   'activation.binding.decomposition_changed': policy('activation', 'repair_evidence', 'none', 'The committed decomposition changed after activation; derived bindings are superseded.'),
   'activation.assurance.insufficient': policy('activation', 'repair_evidence', 'human_authority_review', 'Activation assurance is below the effective minimum required by the current mode.'),
+  // Operator activation material is addressed by a digest of the target's
+  // canonical repository identity. When that derivation is versioned forward,
+  // existing keys and deny tombstones must be migrated explicitly instead of
+  // being replaced by a silently provisioned new identity.
+  'activation.identity.migration_required': policy('activation', 'repair_evidence', 'human_authority_review', 'Operator activation material exists under a superseded repository identity and must be migrated before new activation authority is created.'),
+  'activation.identity.conflict': policy('activation', 'repair_evidence', 'human_authority_review', 'Several operator activation keys claim this repository; the operator must choose which identity survives.'),
   'return.assurance.insufficient': policy('role_return', 'repair_evidence', 'human_authority_review', 'Return assurance is below the effective minimum required by the current mode.'),
   'return.assurance.ambiguous': policy('role_return', 'select_return_adapter', 'none', 'Multiple return adapters are available; select one with --return-adapter.'),
   'return.assurance.session_reported': policy('role_return', 'repair_evidence', 'none', 'The role return is session-reported: its producing role identity is not host-authenticated.'),

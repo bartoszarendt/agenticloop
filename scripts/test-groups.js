@@ -61,6 +61,8 @@ const MANIFEST = {
     'test/cli-safety.test.js',
     'test/cli-target-resolution.test.js',
     'test/closeout-waiver.test.js',
+    'test/c12r-committed-evidence.test.js',
+    'test/c12r-identity-migration.test.js',
     'test/committed-source.test.js',
     'test/dispatch-envelope-activation.test.js',
     'test/dispatch-envelope-blocked.test.js',
