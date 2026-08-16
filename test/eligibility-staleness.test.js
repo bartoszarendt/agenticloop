@@ -53,6 +53,7 @@ describe('eligibility-aware inventory staleness', () => {
 
     const prepared = prepare(fixture, { refetchParallelScanInventory: () => currentInventory });
     assert.equal(prepared.ok, true, `dispatch must succeed for prose-only drift: ${prepared.validation?.errors?.join('; ')}`);
+    assert.equal(prepared.validation.proseDriftAccepted, true);
 
     // The packet's task carrier digest comes from the refetched snapshot (original
     // file on disk), not from the inventory override. The dispatch succeeds
