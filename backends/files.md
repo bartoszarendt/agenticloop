@@ -91,10 +91,14 @@ accepted. The packet is transient handoff data, not task state.
 Run `task handoff-preflight <id> --json` before packet assembly to see one
 combined prerequisite result. If its derived observations are stale, write a
 plan with `--repair-plan <path>` and apply it explicitly with
-`task refresh-handoff-evidence <id> --plan <path> --yes`. The refresh writes
-only the canonical derived-evidence path, refetches it after the atomic write,
-and emits the cooperative Maintainer `Task:`/`Agent:` trailer block when a
-durable update is required.
+`task refresh-handoff-evidence <id> --plan <path> --yes`. The refresh writes only
+derived evidence under `.agenticloop/handoffs/derived-evidence/`, the
+decomposition provenance under `.agenticloop/decompositions/`, and at most one
+bound dependency snapshot (the path named by the decomposition's
+`scan.readinessContext.dependencies.sourceRef`); it never touches task contracts,
+activation, human decisions, review dispositions, acceptance, closeout, or
+product files. It refetches after the atomic write and emits the cooperative
+Maintainer `Task:`/`Agent:` trailer block when a durable update is required.
 
 The Engineer creates required-check evidence with `task check-evidence-init`,
 updates it with `task check-evidence-update`, and derives the raw return with

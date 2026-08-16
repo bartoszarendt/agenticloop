@@ -272,11 +272,14 @@ Apply a plan explicitly with:
 npx agenticloop task refresh-handoff-evidence <task-id> --plan <path> --yes --json
 ```
 
-The apply path is compare-before-write, atomic, refetch-validated, and confined
-to `.agenticloop/handoffs/derived-evidence/`. It cannot change task contracts,
-activation, review decisions, acceptance, closeout, or product files. A durable
-Maintainer update is cooperative and must use the emitted final trailer block;
-it does not authenticate the producer.
+The apply path is compare-before-write, atomic, and refetch-validated. Its write
+surface is bounded to derived evidence under `.agenticloop/handoffs/derived-evidence/`,
+the decomposition provenance under `.agenticloop/decompositions/`, and at most
+one bound dependency snapshot — the exact path named by the decomposition's
+`scan.readinessContext.dependencies.sourceRef`. It cannot change task contracts,
+activation, human decisions, review dispositions, acceptance, closeout, or
+product files. A durable Maintainer update is cooperative and must use the
+emitted final trailer block; it does not authenticate the producer.
 
 `commit-attribution check` accepts `--role orchestrator|maintainer|engineer|auditor`.
 The role is validated against the canonical registry and the final contiguous
