@@ -2168,25 +2168,43 @@ export async function cmdTask(args, io = createIo()) {
       }
       let refreshPlan = null;
       let refreshPlanPath = null;
+      let refreshPlanRefusal = null;
       if (opts.repairPlan) {
-        try {
-          refreshPlan = createHandoffEvidenceRefreshPlan({ target, preflight: result });
-          refreshPlanPath = writeTargetJson(target, opts.repairPlan, refreshPlan);
-        } catch (error) {
-          return printGateResult('task handoff-preflight',
-            commandFailure('task handoff-preflight', error, 'operational_error', {}, target), asJson, io);
+        if (result.backend !== 'files') {
+          // Derived-evidence refresh is files-only. A GitHub (or other non-files)
+          // preflight is still a valid, useful verdict, so do not discard it:
+          // emit the preflight normally and attach a typed refusal explaining the
+          // plan was not produced. The exit code reflects the preflight verdict.
+          refreshPlanRefusal = {
+            ...createDiagnostic({
+              code: 'handoff.refresh.plan.unsupported',
+              message: `derived-evidence refresh plans apply only to the files backend; the '${result.backend}' backend has no local derived-evidence surface to refresh`,
+              evidence: { state: 'unsupported', backend: result.backend, supplied: false },
+              repairHint: 'Rerun task handoff-preflight without --repair-plan; derived-evidence refresh applies only to the files backend.',
+            }),
+            owner: 'maintainer',
+          };
+        } else {
+          try {
+            refreshPlan = createHandoffEvidenceRefreshPlan({ target, preflight: result });
+            refreshPlanPath = writeTargetJson(target, opts.repairPlan, refreshPlan);
+          } catch (error) {
+            return printGateResult('task handoff-preflight',
+              commandFailure('task handoff-preflight', error, 'operational_error', {}, target), asJson, io);
+          }
         }
       }
       // --output: atomically write the result JSON to a target-relative path.
+      const refreshPlanFields = {
+        ...(refreshPlan ? {
+          refreshPlan,
+          refreshPlanPath: relative(target, refreshPlanPath).replace(/\\/g, '/'),
+        } : {}),
+        ...(refreshPlanRefusal ? { refreshPlanRefusal } : {}),
+      };
       if (opts.output) {
         try {
-          writeTargetJson(target, opts.output, {
-            ...result,
-            ...(refreshPlan ? {
-              refreshPlan,
-              refreshPlanPath: relative(target, refreshPlanPath).replace(/\\/g, '/'),
-            } : {}),
-          });
+          writeTargetJson(target, opts.output, { ...result, ...refreshPlanFields });
         } catch (error) {
           return printGateResult('task handoff-preflight',
             commandFailure('task handoff-preflight', error, 'operational_error', {}, target), asJson, io);
@@ -2195,13 +2213,7 @@ export async function cmdTask(args, io = createIo()) {
       if (asJson) {
         // Emit the closed domain schema directly; the evaluator result already
         // carries the one canonical presentation applied at evaluation time.
-        io.out(JSON.stringify({
-          ...result,
-          ...(refreshPlan ? {
-            refreshPlan,
-            refreshPlanPath: relative(target, refreshPlanPath).replace(/\\/g, '/'),
-          } : {}),
-        }, null, 2));
+        io.out(JSON.stringify({ ...result, ...refreshPlanFields }, null, 2));
       } else {
         io.out();
         io.out(`agenticloop task handoff-preflight ${taskId}`);
@@ -2254,6 +2266,10 @@ export async function cmdTask(args, io = createIo()) {
         io.out(`  disposition owner: ${result.dispositionOwner ?? '(none)'}`);
         if (opts.output) io.out(`  output: ${relative(target, resolve(target, opts.output)).replace(/\\/g, '/')}`);
         if (refreshPlanPath) io.out(`  refresh plan: ${relative(target, refreshPlanPath).replace(/\\/g, '/')}`);
+        if (refreshPlanRefusal) {
+          io.warn(`  WARN: ${refreshPlanRefusal.message}`);
+          io.out(`  refresh plan: unsupported (${refreshPlanRefusal.owner}; ${refreshPlanRefusal.repairHint})`);
+        }
         for (const warning of result.warnings ?? []) io.warn(`  WARN: ${warning}`);
         for (const error of result.errors ?? []) io.err(`  ERROR: ${error}`);
         if (result.firstSafeRepair) io.out(`  first safe repair: ${result.firstSafeRepair}`);

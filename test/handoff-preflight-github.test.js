@@ -12,13 +12,15 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { createTaskProjectFixture } from './helpers/task-fixture.js';
 import { git } from './helpers/git-fixture.js';
 import { evaluateHandoffPreflight } from '../src/handoff-preflight.js';
+import { createHandoffEvidenceRefreshPlan } from '../src/handoff-evidence-refresh.js';
+import { runCliInProcess } from './helpers/run-cli.js';
 
 let tmpDir;
 
@@ -445,5 +447,52 @@ describe('handoff-preflight-github', () => {
     // dependencyAge.evaluatedAt is only set when a dependency snapshot exists;
     // here it is 'missing' because no decomposition source was created.
     assert.equal(result.dependencyAge.state, 'missing');
+  });
+
+  it('createHandoffEvidenceRefreshPlan rejects a non-files preflight as files-only', () => {
+    const target = makeTarget('gh-plan-throws');
+    const body = makeGitHubBody({ taskId: 'T-060' });
+    const ghRunner = makeGhRunner({ 60: body });
+    mkdirSync(join(target, '.agenticloop', 'tasks'), { recursive: true });
+    writeFileSync(join(target, '.agenticloop', 'tasks', 'T-060.md'), body, 'utf8');
+    // Resolve by label so the preflight carries a valid canonical task id and the
+    // builder's backend guard (not its task-id guard) is the reason it refuses.
+    const result = evaluateHandoffPreflight({
+      target, taskId: 'T-060', backend: 'github', projectConfig: {},
+      io: { ghCommandRunner: ghRunner },
+    });
+    assert.equal(result.backend, 'github');
+    assert.equal(result.taskId, 'T-060');
+    assert.throws(
+      () => createHandoffEvidenceRefreshPlan({ target, preflight: result }),
+      /only the files backend/,
+      'a github-backend preflight must be refused by the files-only plan builder'
+    );
+  });
+
+  it('emits a typed files-only refusal for --repair-plan on the GitHub backend instead of discarding the result', async () => {
+    const target = makeTarget('gh-repair-refusal');
+    // Flip the scaffold project map to the GitHub backend so the CLI resolves it.
+    const mapPath = join(target, '.agenticloop', 'project.md');
+    writeFileSync(mapPath, readFileSync(mapPath, 'utf8').replace('task_backend: files', 'task_backend: github'), 'utf8');
+    git(target, ['add', '.agenticloop/project.md']);
+    git(target, ['commit', '-m', 'use github backend']);
+
+    const ghRunner = makeGhRunner({ 70: makeGitHubBody({ taskId: 'T-070' }) });
+    const run = await runCliInProcess(
+      ['task', 'handoff-preflight', '#70', '--repair-plan', 'repair.json', '--json'],
+      { cwd: target, ghCommandRunner: ghRunner }
+    );
+
+    // The preflight verdict must be emitted, not swallowed into an operational error.
+    const result = JSON.parse(run.stdout);
+    assert.equal(result.kind, 'agenticloop.handoff-preflight');
+    assert.equal(result.backend, 'github');
+    assert.ok(result.refreshPlanRefusal, 'a typed refusal must be attached to the emitted result');
+    assert.equal(result.refreshPlanRefusal.code, 'handoff.refresh.plan.unsupported');
+    assert.equal(result.refreshPlanRefusal.owner, 'maintainer');
+    assert.match(result.refreshPlanRefusal.message, /files backend/);
+    // No plan file is produced for a non-files backend.
+    assert.equal(existsSync(join(target, 'repair.json')), false, 'no plan file should be written for the github backend');
   });
 });

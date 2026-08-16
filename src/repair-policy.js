@@ -170,6 +170,7 @@ export const REPAIR_POLICY = Object.freeze({
   'handoff.evidence.unsupported': policy('handoff', 'repair_evidence', 'none', 'Supplied handoff evidence declares a schema or assurance grade this boundary cannot evaluate.'),
   'handoff.evidence.unauthenticated': policy('handoff', 'repair_evidence', 'human_authority_review', 'Handoff evidence is session-reported or below the required assurance minimum and cannot authorize a protected transition.'),
   'handoff.refresh.plan.malformed': policy('handoff', 'repair_evidence', 'none', 'Handoff evidence refresh plan is malformed or does not match the expected task binding.'),
+  'handoff.refresh.plan.unsupported': policy('handoff', 'repair_evidence', 'none', 'Derived-evidence refresh plans apply only to the files backend; the selected backend has no local derived-evidence surface to refresh.'),
 });
 
 function policy(category, repairKind, escalationKind, description) {

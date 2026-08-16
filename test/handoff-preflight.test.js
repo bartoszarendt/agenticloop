@@ -750,6 +750,53 @@ describe('handoff-preflight', () => {
     assert.equal(result.hostRoleCapability.declaration.roleId, 'engineer');
   });
 
+  it('reports host ambiguity when multiple adapter hosts are configured', () => {
+    const target = makeTarget('host-ambiguous');
+    writeFileSync(
+      join(target, 'agenticloop.json'),
+      `${JSON.stringify({ adapters: { opencode: {}, 'claude-code': {} } })}\n`,
+      'utf8'
+    );
+    writeTask(target, 'T-014b');
+    git(target, ['add', '.']);
+    git(target, ['commit', '-m', 'task T-014b\n\nTask: T-014b\nAgent: maintainer']);
+
+    const result = evaluateHandoffPreflight({
+      target, taskId: 'T-014b', backend: 'files',
+      projectConfig: { task_file_template: '.agenticloop/tasks/{taskId}.md' },
+      io: {},
+    });
+
+    const ambiguous = result.diagnostics.find(d => /host is ambiguous/.test(d.message));
+    assert.ok(ambiguous, 'two configured adapter hosts must be reported as ambiguous');
+    assert.match(ambiguous.message, /opencode/);
+    assert.match(ambiguous.message, /claude-code/);
+    assert.equal(result.hostRoleCapability, null, 'no host is selected while the choice is ambiguous');
+  });
+
+  it('resolves the canonical default host and never reports ambiguity with zero configured adapters', () => {
+    // The shippable inventory is always every supported host; that universe must
+    // not be treated as an ambiguous operator selection. Zero configured adapters
+    // resolves deterministically to the canonical default without a host error.
+    const target = makeTarget('host-default');
+    writeTask(target, 'T-014c');
+    git(target, ['add', '.']);
+    git(target, ['commit', '-m', 'task T-014c\n\nTask: T-014c\nAgent: maintainer']);
+
+    const result = evaluateHandoffPreflight({
+      target, taskId: 'T-014c', backend: 'files',
+      projectConfig: { task_file_template: '.agenticloop/tasks/{taskId}.md' },
+      io: {},
+    });
+
+    assert.equal(result.hostRoleCapability?.host, 'opencode');
+    assert.equal(
+      result.diagnostics.find(d => /host is ambiguous/.test(d.message)),
+      undefined,
+      'the shippable host universe must not trigger a false ambiguity error'
+    );
+  });
+
   it('reports relevant sibling collisions only', () => {
     const target = makeTarget('sibling-relevant');
     writeTask(target, 'T-015');

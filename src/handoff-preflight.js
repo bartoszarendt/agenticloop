@@ -705,6 +705,14 @@ export function evaluateHandoffPreflight(input) {
     });
     const availableHosts = Object.keys(hostRoleCapabilities);
     const configuredHosts = Object.keys(config.adapters ?? {});
+    // The shippable inventory (availableHosts) is always every supported host,
+    // so it is never the operator's selection. The set that actually drives the
+    // pick is the operator's configured adapters; when none are configured there
+    // is no operator choice to disambiguate and a single canonical default host
+    // applies. The ambiguity check runs against that selection set rather than
+    // one-sidedly on `configured` while silently taking the first shippable host.
+    const defaultHost = availableHosts.includes('opencode') ? 'opencode' : (availableHosts[0] ?? 'opencode');
+    const selectionHosts = configuredHosts.length > 0 ? configuredHosts : [defaultHost];
     let host;
     if (requestedHost) {
       if (!hostRoleCapabilities[requestedHost]) {
@@ -718,16 +726,16 @@ export function evaluateHandoffPreflight(input) {
       } else {
         host = requestedHost;
       }
-    } else if (configuredHosts.length > 1) {
+    } else if (selectionHosts.length > 1) {
       findings.error(
         'cli.operational',
-        `host is ambiguous; ${configuredHosts.length} adapter hosts are configured (${configuredHosts.join(', ')}); specify --host <id>`,
-        `Specify --host with one of: ${configuredHosts.join(', ')}.`,
+        `host is ambiguous; ${selectionHosts.length} adapter hosts are configured (${selectionHosts.join(', ')}); specify --host <id>`,
+        `Specify --host with one of: ${selectionHosts.join(', ')}.`,
         'negative'
       );
       host = null;
     } else {
-      host = configuredHosts[0] ?? availableHosts[0] ?? 'opencode';
+      host = selectionHosts[0];
     }
     if (host) {
       const declaration = hostRoleCapabilities[host]?.engineer;
@@ -749,7 +757,7 @@ export function evaluateHandoffPreflight(input) {
     findings.warning('capability.resolution.failed', `host-role capability resolution failed: ${error.message}`, 'malformed');
   }
 
-  // ── 7. Return-adapter resolution ──────────────────────────────────────
+  // ── 8. Return-adapter resolution ──────────────────────────────────────
   let returnAdapterResolution = null;
 
   try {
@@ -833,7 +841,7 @@ export function evaluateHandoffPreflight(input) {
     returnAdapterResolution = { state: 'error', error: error.message, adapters: [] };
   }
 
-  // ── 8. Sibling-worktree collisions ──────────────────────────────────────
+  // ── 9. Sibling-worktree collisions ──────────────────────────────────────
   let siblingCollisions = [];
   let siblingWorktrees = [];
 
@@ -895,7 +903,7 @@ export function evaluateHandoffPreflight(input) {
     }
   }
 
-  // ── 9. Build result ───────────────────────────────────────────────────
+  // ── 10. Build result ──────────────────────────────────────────────────
   const hasErrors = findings.hasErrors;
   const primaryError = findings.errorItems[0] ?? null;
 
