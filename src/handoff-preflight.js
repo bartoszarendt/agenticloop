@@ -33,6 +33,11 @@ import { loadHostTrustStore } from './host-trust.js';
 import { taskContractDigest } from './task-contract-baseline.js';
 import { loadFilesTaskContractRecords } from './files-task-contract.js';
 import { evaluateTaskReadiness } from './task-readiness.js';
+import {
+  dispatchableLifecycleRepair,
+  evaluateDispatchableLifecycle,
+  taskStatusFromBody,
+} from './dispatchability.js';
 import { parseDependencySnapshot, dependencyStatusMap } from './task-evidence-contract.js';
 import { isGitObjectId } from './git-oid.js';
 import { GIT_MAX_BUFFER } from './git-runner.js';
@@ -332,6 +337,24 @@ export function evaluateHandoffPreflight(input) {
       "Set task_backend to 'files' in .agenticloop/project.md, then rerun.",
       'negative'
     );
+  }
+
+  // ── 1b. Lifecycle dispatchability ─────────────────────────────────────
+  // The same gate role start applies, asked here so a green preflight cannot be
+  // refused later over unchanged facts (C12-F1).
+  let lifecycle = null;
+
+  if (snapshot) {
+    const evaluated = evaluateDispatchableLifecycle(taskStatusFromBody(snapshot.body));
+    lifecycle = { status: evaluated.status, dispatchable: evaluated.ok };
+    if (!evaluated.ok) {
+      findings.error(
+        'task.lifecycle.not_dispatchable',
+        evaluated.reason,
+        dispatchableLifecycleRepair(taskId, evaluated.status),
+        evaluated.evidenceState
+      );
+    }
   }
 
   // ── 2. Activation ─────────────────────────────────────────────────────
@@ -932,6 +955,7 @@ export function evaluateHandoffPreflight(input) {
     carrier: taskCarrierPath ?? `issue:${taskId}`,
     carrierDigest: taskCarrierDigest ?? null,
     contractDigest: taskContractDigestValue ?? null,
+    lifecycle,
     activation,
     operatorAuthorization,
     readiness: readinessResult,

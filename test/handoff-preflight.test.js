@@ -234,6 +234,7 @@ const EXPECTED_DOMAIN_KEYS = [
   'firstSafeRepair',
   'hostRoleCapability',
   'kind',
+  'lifecycle',
   'ok',
   'operatorAuthorization',
   'readiness',

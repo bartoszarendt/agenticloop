@@ -157,10 +157,15 @@ describe('canonical handoff GitHub integration public routes', () => {
     // Integration follows a separately guarded acceptance. The accepted carrier
     // is the current generation observed by the integration boundary.
     state.body = acceptedBody(original);
+    // The packet is prepared from the dispatchable carrier this task actually
+    // had when its execution attempt started; `state.body` stays the accepted
+    // carrier the later integration boundary observes. A packet can never be
+    // minted from a terminal status, so the two must not be the same document.
+    const dispatchBody = acceptedBody(original).replace('status: accepted', 'status: agent-ready');
     const initial = {
       ...fixture.snapshot(),
-      body: state.body,
-      digest: taskBodyDigest(state.body),
+      body: dispatchBody,
+      digest: taskBodyDigest(dispatchBody),
     };
     const githubFixture = {
       ...fixture,

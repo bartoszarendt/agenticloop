@@ -63,6 +63,11 @@ import {
 } from './repository-state.js';
 import { PublicCommandError } from './public-error.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
+import {
+  dispatchableLifecycleRepair,
+  evaluatePacketDispatchableLifecycle,
+  taskStatusFromBody,
+} from './dispatchability.js';
 import { validateTaskReadinessEvidence } from './task-evidence-contract.js';
 import { taskContractDigest, validateTaskContractBaseline } from './task-contract-baseline.js';
 import {
@@ -1987,6 +1992,17 @@ export function prepareRoleDispatch(input = {}, options = {}) {
       );
     }
     const findings = findingSet(command);
+    // The one shared lifecycle gate, asked before any other packet fact. A task
+    // that cannot legally reach a role start must never receive a packet, or
+    // the refusal surfaces inside the Engineer session instead (C12-F1).
+    const lifecycle = evaluatePacketDispatchableLifecycle(taskStatusFromBody(snapshot?.body));
+    if (!lifecycle.ok) {
+      findings.add(lifecycle.evidenceState, lifecycle.reason, {
+        code: 'task.lifecycle.not_dispatchable',
+        repairHint: dispatchableLifecycleRepair(snapshot?.taskId ?? '<task-id>', lifecycle.status),
+      });
+      return failure(command, findings);
+    }
     let boundAssignment = assignment;
     try {
       boundAssignment = {

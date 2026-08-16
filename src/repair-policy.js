@@ -53,6 +53,10 @@ export const REPAIR_POLICY = Object.freeze({
   // authentication: nothing is forged, the boundary simply cannot prove it.
   'host.boundary.unsupported': policy('evidence', 'repair_evidence', 'none', 'The host boundary cannot support the declared capability; committed state was not evaluated.'),
   'task.record.identity_mismatch': policy('task_contract', 'repair_task_identity', 'contract_reconciliation', 'The requested task identity differs from the materialized record identity.'),
+  // One shared answer to "may this task begin an execution attempt?", asked by
+  // preflight, packet preparation, prepared-packet validation, and role start
+  // so a green preflight cannot be refused later over the same unchanged facts.
+  'task.lifecycle.not_dispatchable': policy('task_contract', 'repair_task_record', 'contract_reconciliation', 'The task lifecycle status cannot begin an execution attempt.'),
   'task.mutation.unresolved': policy('task_contract', 'repair_task_record', 'record_recovery', 'A task mutation may have committed and its exact final state could not be proven.'),
   'worktree.clean_gate.failed': policy('workspace', 'repair_review_workspace', 'none', 'The clean-worktree gate failed.'),
   'state.host_local': policy('workspace', 'repair_review_workspace', 'none', 'Host-local or preexisting state requires classification.'),
