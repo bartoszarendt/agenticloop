@@ -34,9 +34,7 @@ readiness, decomposition eligibility, host capability, active worktree state,
 and relevant sibling collisions. If it produces a bounded derived-evidence
 repair plan, apply that plan only through `task refresh-handoff-evidence <id>
 --plan <path> --yes`; never edit a protected task contract or product file as a
-refresh. Same-task continuation is a mechanical `new`/`resumed` observation,
-not authority, and Auditor or explicitly independent review executions are
-always fresh.
+refresh.
 
 ## Responsibilities
 

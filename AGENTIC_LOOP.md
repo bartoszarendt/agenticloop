@@ -407,9 +407,7 @@ reports dispatch-bound decomposition and active/sibling worktree evidence, and
 names one safe repair owner and command. A derived-only refresh plan may be
 applied explicitly through `task refresh-handoff-evidence`; it cannot alter
 protected task fields, human decisions, review dispositions, acceptance,
-closeout, or product files. Same-task Maintainer/Engineer continuation is
-recorded as `new` or `resumed` evidence and never becomes authority; Auditor and
-independent review executions remain fresh.
+closeout, or product files.
 Schema versions 2, 3, 4, and 5 are recognized as authentic prior evidence and
 rejected as `dispatch.packet.stale`; regenerate the packet as version 7 rather
 than reinterpreting or repairing an earlier version in place. Version 4 is not
