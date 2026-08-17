@@ -63,6 +63,7 @@ const MANIFEST = {
     'test/closeout-waiver.test.js',
     'test/c12r-committed-evidence.test.js',
     'test/c12r-dependency-freshness.test.js',
+    'test/c12r-evidence-inventory.test.js',
     'test/c12r-dispatchability.test.js',
     'test/c12r-historical-adoption.test.js',
     'test/c12r-activation-scope.test.js',

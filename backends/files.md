@@ -210,6 +210,38 @@ assurance `historical_reduced`, never a canonical status, and projects
 consumption, return, host receipt, or activation evidence, and refuses a task
 that already carries dispatch consumption.
 
+## Storage classes and evidence accounting
+
+Every path Agentic Loop writes belongs to exactly one of four storage classes,
+and the clean gate implements the taxonomy rather than restating it:
+
+| Class | Location | Committed | Clean gate | Retention |
+| --- | --- | --- | --- | --- |
+| transient scratch | `.agenticloop/tmp/` | no | excluded | until the writing operation ends; safe to delete |
+| operator-owned authenticated state | `~/.agenticloop/operator-activation/` | no | not applicable | life of the key; superseded material preserved |
+| durable project evidence | `.agenticloop/**` | yes | fails closed until committed | project history |
+| product/task carrier state | `.agenticloop/tasks/` and the product tree | yes | scope-relevant | project history |
+
+The rule that follows: a command may not write ordinary output into a class its
+next required gate rejects. Scratch is excluded at every boundary so transient
+output can never self-block the next step; durable evidence fails closed until
+its owning role commits it, and is never auto-staged.
+
+Each persisted class is accounted for individually — producer, consumer, the
+decision it changes, whether it could be derived instead, retention, storage
+class, and the bounded projection each role receives. A class that is derivable
+must justify being persisted anyway, and one entry
+(`.agenticloop/handoffs/derived-evidence/`) is recorded as a reclassification
+candidate because it is a cache that changes no gate outcome.
+
+Projections are bounded on purpose. An Engineer receives the task record,
+dispatch consumption, its own carrier mutation receipts, and scratch — not
+activation grants, contract history, return verifications, closeout waivers, or
+adoption records. Implementing a bounded change does not need the authority
+machinery around it, and withholding it shrinks both what the role must reason
+about and what it could act on. No workflow role ever receives operator key
+material.
+
 ## Parallel Write Lanes
 
 Concurrency safety is governed by mutation, not by role. Files-backed task
