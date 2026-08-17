@@ -222,6 +222,15 @@ export const TERMINAL_TASK_STATUSES = Object.freeze(
  * express dispatch, consumption, carrier mutation receipts, and return in real
  * order, this narrowing is deleted and `evaluateDispatchableLifecycle` is
  * applied here unchanged.
+ *
+ * P35-C12R.5 measured what that gate actually costs. Deleting the narrowing and
+ * running the full suite fails roughly twenty closeout suites, because the
+ * closeout fixtures still build their lineage *retroactively*: they set a task
+ * terminal and then mint the packet that is supposed to have preceded it. The
+ * narrowing is therefore load-bearing for the fixtures, not for the product
+ * rule - `evaluateDispatchableLifecycle` already refuses terminal statuses
+ * everywhere else, and preflight refuses them at the boundary an operator
+ * actually runs. Closing it is fixture work, not evaluator work.
  */
 export function evaluatePacketDispatchableLifecycle(status) {
   const evaluated = evaluateDispatchableLifecycle(status);
