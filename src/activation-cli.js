@@ -611,7 +611,16 @@ function runIdentityMigrationSubcommand(sub, { target, io, asJson, command }) {
   const applied = sub === 'migrate-identity'
     ? migrateOperatorActivationIdentity(target, { operatorActivationRoot })
     : null;
-  const inspection = applied?.inspection ?? inspectOperatorActivationIdentity(target, { operatorActivationRoot });
+  // `applied.inspection` is the state the migration *read*, before it wrote
+  // anything. Projecting that as `current` reported `currentKeyState: missing`
+  // alongside `migrated: true` for a migration that had just succeeded
+  // (C12R-R2-F2). A mutation is reported from the state it produced, so the
+  // filesystem is re-read after a successful apply and the pre-migration view is
+  // kept only under its own name.
+  const priorInspection = applied?.inspection ?? null;
+  const inspection = applied?.migrated
+    ? inspectOperatorActivationIdentity(target, { operatorActivationRoot })
+    : priorInspection ?? inspectOperatorActivationIdentity(target, { operatorActivationRoot });
   const report = {
     command,
     disposition: applied?.disposition ?? inspection.disposition,
@@ -620,25 +629,48 @@ function runIdentityMigrationSubcommand(sub, { target, io, asJson, command }) {
     currentDigest: inspection.currentDigest,
     currentKeyState: inspection.currentKeyState,
     currentKeyId: inspection.currentKeyId,
+    // The digest is the directory name under `<root>/revocations/`, so the
+    // documented manual repair can only name a locatable path when the digest
+    // is reported (C12R-R2-F3).
     supersededIdentities: inspection.legacy.map(item => ({
       identity: item.identity,
+      digest: item.digest,
       keyState: item.keyState,
       keyId: item.keyId,
       revocationCount: item.revocationCount,
+      revocationDirectory: item.revocationDirectory,
     })),
     receiptPath: inspection.receiptPath,
-    ...(applied ? { migrated: applied.migrated, errors: applied.errors } : {}),
+    ...(applied
+      ? {
+        migrated: applied.migrated,
+        errors: applied.errors,
+        ...(applied.migrated
+          ? {
+            priorKeyState: priorInspection.currentKeyState,
+            priorKeyId: priorInspection.currentKeyId,
+            migratedFrom: applied.receipt?.migratedFrom ?? null,
+          }
+          : {}),
+      }
+      : {}),
   };
   if (asJson) io.out(JSON.stringify(report, null, 2));
   else {
     io.out(`Repository authority identity v${inspection.identityVersion}: ${inspection.currentIdentity}`);
-    io.out(`  operator key:      ${inspection.currentKeyState}${inspection.currentKeyId ? ` (${inspection.currentKeyId})` : ''}`);
+    io.out(`  digest:            ${inspection.currentDigest}`);
+    io.out(`  operator key:      ${report.currentKeyState}${report.currentKeyId ? ` (${report.currentKeyId})` : ''}`);
     io.out(`  disposition:       ${report.disposition}`);
     for (const item of report.supersededIdentities) {
       io.out(`  superseded:        ${item.identity} [key ${item.keyState}, ${item.revocationCount} revocation(s)]`);
+      io.out(`    digest:          ${item.digest}`);
+      io.out(`    revocations:     ${item.revocationDirectory}`);
     }
     if (report.supersededIdentities.length === 0) io.out('  superseded:        (none)');
-    if (applied?.migrated) io.out(`  receipt:           ${applied.receiptPath}`);
+    if (applied?.migrated) {
+      io.out(`  migrated from:     ${report.migratedFrom?.identity ?? '(unknown)'}`);
+      io.out(`  receipt:           ${applied.receiptPath}`);
+    }
     for (const message of applied?.errors ?? []) io.err(message);
   }
   if (applied && !applied.ok) {

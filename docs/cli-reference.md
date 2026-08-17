@@ -273,9 +273,20 @@ now? The rule is derived from the single legal-transition authority rather than
 restated, so a task is dispatchable exactly when its status can legally reach
 `in-progress` — `agent-ready`, `in-progress`, `needs_revision`, `blocked`, or
 `needs_context`. A `draft` task is refused here, with the Maintainer-owned
-`task set-status ... --status agent-ready` repair, instead of reaching a role
-start and failing there as an illegal transition. An absent or unrecognized
-status is reported as missing or malformed evidence, never as a negative answer.
+`task status <id> agent-ready` repair, instead of reaching a role start and
+failing there as an illegal transition. An absent or unrecognized status is
+reported as missing or malformed evidence, never as a negative answer.
+
+Every lifecycle repair is rendered from one structured plan rather than
+assembled as a string at each refusal site, so preflight, packet preparation,
+prepared-packet validation, and role start cannot print different advice for the
+same fact. The plan names the read-only command that supplies the current digest
+(`task lint <id> --json`), one primary command whose declared placeholders are
+the only tokens to replace, and — where the choice is genuinely the operator's —
+one identified alternative with the condition that selects it. `--base` and
+`--base-paths` are mutually exclusive, so they are never offered inside a single
+command. Statuses with no safe forward move receive a statement of what is true
+and no command at all.
 
 One asymmetry is deliberate and temporary: `task prepare-dispatch` currently
 refuses only the statuses that have **not yet** reached an execution attempt.
@@ -554,16 +565,30 @@ holds operator state:
 ```text
 npx agenticloop activation identity-status
 Repository authority identity v2: file:c:/apps/example
+  digest:            2f1c...e90a
   operator key:      missing
   disposition:       migration_available
   superseded:        file:C:/apps/example [key present, 2 revocation(s)]
+    digest:          9b74...31cd
+    revocations:     C:\Users\you\.agenticloop\operator-activation\revocations\9b74...31cd
 ```
+
+Both output modes report the digest of every identity, current and superseded,
+because that digest is the directory name the manual revocation repair below
+needs. `--json` adds `digest` and `revocationDirectory` to each entry of
+`supersededIdentities`.
 
 `migrate-identity` copies exactly one superseded operator key forward, verifies
 that the copy loads as this repository's key, and writes a receipt under
 `~/.agenticloop/operator-activation/migrations/`. Superseded key files and
 revocation tombstones are **preserved, never deleted**, and rerunning the
 command is a no-op.
+
+A successful migration reports the state it **produced**, not the state it read:
+`currentKeyState` becomes `present` and `currentKeyId` names the migrated key.
+The replaced state is still reported, under `priorKeyState` and `priorKeyId`,
+alongside `migratedFrom`. A rerun reports `already_migrated` with the same
+current key.
 
 Revocation tombstones need no migration at all: external deny evidence is always
 read as the fail-closed union of the current and superseded registries, so a

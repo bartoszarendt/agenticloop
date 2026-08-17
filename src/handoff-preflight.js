@@ -34,6 +34,7 @@ import { taskContractDigest } from './task-contract-baseline.js';
 import { loadFilesTaskContractRecords } from './files-task-contract.js';
 import { evaluateTaskReadiness } from './task-readiness.js';
 import {
+  DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE,
   dispatchableLifecycleRepair,
   evaluateDispatchableLifecycle,
   taskStatusFromBody,
@@ -349,7 +350,7 @@ export function evaluateHandoffPreflight(input) {
     lifecycle = { status: evaluated.status, dispatchable: evaluated.ok };
     if (!evaluated.ok) {
       findings.error(
-        'task.lifecycle.not_dispatchable',
+        DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE,
         evaluated.reason,
         dispatchableLifecycleRepair(taskId, evaluated.status),
         evaluated.evidenceState

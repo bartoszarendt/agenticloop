@@ -23,6 +23,9 @@ import { KNOWN_TASK_STATUSES, LEGAL_TASK_STATUS_TRANSITIONS } from './task-trans
 /** The lifecycle status a role start moves a task into. */
 export const ROLE_START_STATUS = 'in-progress';
 
+/** The one diagnostic code every dispatchability refusal reports under. */
+export const DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE = 'task.lifecycle.not_dispatchable';
+
 /** Every status a dispatch packet may legally be created from. */
 export const DISPATCHABLE_TASK_STATUSES = Object.freeze(
   KNOWN_TASK_STATUSES.filter(status =>
@@ -81,20 +84,122 @@ export function evaluateDispatchableLifecycle(status) {
 }
 
 /**
- * The exact command that settles this prerequisite.
+ * The structured repair for one lifecycle refusal.
  *
- * Only `draft` has a single unambiguous forward move. Terminal statuses have no
- * safe automatic repair at all, so none is invented: the caller is told what is
- * true instead of being handed a command that would fail.
+ * Repairs used to be free-text strings assembled at each refusal site, and the
+ * `draft` string was not a runnable command at all: it named a `task set-status`
+ * subcommand that does not exist, omitted the required `--expect-digest`, and
+ * offered `--base` and `--base-paths` together even though `task status` refuses
+ * both (C12R-R2-F1). A string cannot be checked; a structure can.
+ *
+ * So every refusal produces one record instead:
+ *
+ * - `code`          - the diagnostic identity, shared by every boundary.
+ * - `prerequisite`  - the exact fact that must become true.
+ * - `reads`         - read-only commands that supply a placeholder value.
+ * - `primary`       - at most one command, executable once its declared
+ *                     placeholders are replaced and nothing else.
+ * - `alternatives`  - a separate command only where the choice is genuinely the
+ *                     operator's, each with the condition that selects it.
+ * - `statement`     - what is true, for the statuses where no command is safe.
+ *
+ * Owner and category are deliberately absent: `REPAIR_POLICY` already derives
+ * them from `code`, and `createDiagnostic` refuses an evaluator-supplied owner.
+ *
+ * @typedef {{ command: string, placeholders: string[] }} RepairCommand
+ * @typedef {{
+ *   code: string,
+ *   status: string|null,
+ *   prerequisite: string,
+ *   reads: RepairCommand[],
+ *   primary: RepairCommand|null,
+ *   alternatives: Array<RepairCommand & { when: string }>,
+ *   statement: string|null,
+ * }} LifecycleRepairPlan
  */
-export function dispatchableLifecycleRepair(taskId, status) {
+export function dispatchableLifecycleRepairPlan(taskId, status) {
+  const id = String(taskId ?? '').trim() || '<task-id>';
+  const base = {
+    code: DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE,
+    status: typeof status === 'string' ? status.trim() || null : null,
+    reads: [],
+    primary: null,
+    alternatives: [],
+    statement: null,
+  };
+
   if (status === 'draft') {
-    return `npx agenticloop task set-status ${taskId} --status agent-ready --base <ref> --base-paths <path> --dependencies <path>`;
+    // `task status` requires the exact current digest and exactly one baseline
+    // form. Both are represented as what they are: one read-only command that
+    // produces the digest, and one operator choice between two baselines.
+    return Object.freeze({
+      ...base,
+      prerequisite:
+        `${id} must be authored to the 'agent-ready' status with explicit base and dependency evidence`,
+      reads: Object.freeze([
+        Object.freeze({
+          command: `npx agenticloop task lint ${id} --json`,
+          placeholders: Object.freeze([]),
+        }),
+      ]),
+      primary: Object.freeze({
+        command:
+          `npx agenticloop task status ${id} agent-ready ` +
+          '--expect-digest <digest> --base <base-ref> --dependencies <dependencies.json>',
+        placeholders: Object.freeze(['<digest>', '<base-ref>', '<dependencies.json>']),
+      }),
+      alternatives: Object.freeze([
+        Object.freeze({
+          when: 'the baseline is an explicit path inventory rather than a Git ref',
+          command:
+            `npx agenticloop task status ${id} agent-ready ` +
+            '--expect-digest <digest> --base-paths <base-paths.json> --dependencies <dependencies.json>',
+          placeholders: Object.freeze(['<digest>', '<base-paths.json>', '<dependencies.json>']),
+        }),
+      ]),
+    });
   }
   if (status === 'accepted' || status === 'closed') {
-    return `Task ${taskId} has already completed its lifecycle; dispatch a new task instead of restarting this one.`;
+    return Object.freeze({
+      ...base,
+      prerequisite: `${id} has no remaining execution attempt to authorize`,
+      statement:
+        `Task ${id} has already completed its lifecycle; dispatch a new task instead of restarting this one.`,
+    });
   }
-  return `Restore ${taskId} to a dispatchable status before requesting a packet.`;
+  return Object.freeze({
+    ...base,
+    prerequisite: `${id} must hold a status that can legally reach '${ROLE_START_STATUS}'`,
+    statement: `Restore ${id} to a dispatchable status before requesting a packet.`,
+  });
+}
+
+/**
+ * Render one repair plan as the single-line `repairHint` the diagnostic surfaces
+ * carry.
+ *
+ * This is the only place a lifecycle repair becomes text, so preflight, packet
+ * preparation, prepared-packet validation, and role start cannot print different
+ * advice for the same fact.
+ */
+export function renderRepairPlan(plan) {
+  if (!plan) return '';
+  if (!plan.primary) return plan.statement ?? plan.prerequisite;
+  const parts = [];
+  for (const read of plan.reads) parts.push(`Read the current values with: ${read.command}.`);
+  parts.push(`Then run: ${plan.primary.command}`);
+  if (plan.primary.placeholders.length) {
+    parts.push(`Replace only ${plan.primary.placeholders.join(', ')}.`);
+  }
+  for (const alternative of plan.alternatives) {
+    parts.push(`Instead, when ${alternative.when}, run: ${alternative.command}`);
+  }
+  return parts.join(' ');
+}
+
+/** The rendered repair for one lifecycle refusal. */
+export function dispatchableLifecycleRepair(taskId, status) {
+  return renderRepairPlan(dispatchableLifecycleRepairPlan(taskId, status));
 }
 
 /** Statuses that have already finished their execution attempt. */
@@ -126,6 +231,3 @@ export function evaluatePacketDispatchableLifecycle(status) {
   }
   return evaluated;
 }
-
-/** The one diagnostic code every dispatchability refusal reports under. */
-export const DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE = 'task.lifecycle.not_dispatchable';

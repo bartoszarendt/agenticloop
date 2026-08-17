@@ -97,7 +97,12 @@ Run `task handoff-preflight <id> --json` before packet assembly to see one
 combined prerequisite result, including the lifecycle gate role start will
 apply: a task is dispatchable only from a status that legally reaches
 `in-progress`, so a `draft` task is refused here with its Maintainer-owned
-`task set-status` repair rather than at delegation. If its derived observations are stale, write a
+`task status <id> agent-ready` repair rather than at delegation. That repair is
+rendered from one structured plan shared by every refusal site: it names the
+read-only command that supplies the current digest, one primary command, and at
+most one identified alternative, and it never offers the mutually exclusive
+`--base` and `--base-paths` inside one command.
+If its derived observations are stale, write a
 plan with `--repair-plan <path>` and apply it explicitly with
 `task refresh-handoff-evidence <id> --plan <path> --yes`. The refresh writes only
 derived evidence under `.agenticloop/handoffs/derived-evidence/`, the

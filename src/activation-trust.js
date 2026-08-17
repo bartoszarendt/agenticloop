@@ -42,7 +42,7 @@ import {
   targetRepositoryIdentity,
   verifyHostPayload,
 } from './host-trust.js';
-import { displayPath, isPathOutside, pathIdentity } from './path-identity.js';
+import { displayPath, isPathOutside, isPathWithin, pathIdentity } from './path-identity.js';
 import { legacyRepositoryAuthorityIdentities, repositoryAuthorityDigest } from './repository-identity.js';
 
 export const OPERATOR_ACTIVATION_KEY_KIND = 'agenticloop.operator-activation-key';
@@ -363,6 +363,12 @@ export function loadOperatorActivationKey(target, options = {}) {
   if (!rootOutsideTarget(target, realPath)) {
     return { ok: false, state: 'malformed', key: null, errors: ['operator activation key resolves inside the target repository'], path: realPath };
   }
+  // The same membership assertion the explicit-path reader applies. This path is
+  // derived rather than supplied, so it is a redundancy on purpose: both readers
+  // state the whole boundary, and neither depends on the other's derivation.
+  if (!isPathWithin(realPath, configuredRoot)) {
+    return { ok: false, state: 'malformed', key: null, errors: ['operator activation key resolves outside the operator activation root'], path: realPath };
+  }
   let text;
   try {
     text = readFileSync(realPath, 'utf8');
@@ -399,6 +405,15 @@ export function readOperatorActivationKeyDocument(path, expectedIdentity, { targ
   if (!rootOutsideTarget(target, root)) {
     return { ok: false, state: 'malformed', key: null, errors: ['operator activation root must be outside the target repository'], path };
   }
+  // "Outside the target" and "inside the operator root" are two different
+  // claims, and only the first was proven (C12R-R2-F4). Any path anywhere else
+  // on the host satisfied the old check, so a future caller supplying an
+  // arbitrary path could have had its content accepted as operator material.
+  // Membership is asserted here lexically first, then again on the realpath, so
+  // neither a traversal argument nor a link that leaves the root can pass.
+  if (!isPathWithin(path, root)) {
+    return { ok: false, state: 'malformed', key: null, errors: ['operator activation key must remain below the operator activation root'], path };
+  }
   if (!existsSync(path)) return { ok: true, state: 'missing', key: null, errors: [], path };
   if (lstatSync(path).isSymbolicLink()) {
     return { ok: false, state: 'malformed', key: null, errors: ['operator activation key must not be a symbolic link'], path };
@@ -406,6 +421,9 @@ export function readOperatorActivationKeyDocument(path, expectedIdentity, { targ
   const realPath = displayPath(path);
   if (!rootOutsideTarget(target, realPath)) {
     return { ok: false, state: 'malformed', key: null, errors: ['operator activation key resolves inside the target repository'], path: realPath };
+  }
+  if (!isPathWithin(realPath, root)) {
+    return { ok: false, state: 'malformed', key: null, errors: ['operator activation key resolves outside the operator activation root'], path: realPath };
   }
   let text;
   try {

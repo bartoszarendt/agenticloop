@@ -192,7 +192,7 @@ describe('P35-C12R preflight refuses what role start would refuse', () => {
     assert.equal(result.lifecycle.dispatchable, false);
     const lifecycleError = result.diagnostics.find(item => item.code === 'task.lifecycle.not_dispatchable');
     assert.ok(lifecycleError, `expected a lifecycle diagnostic, got: ${result.diagnostics.map(d => d.code).join(', ')}`);
-    assert.match(lifecycleError.repairHint, /task set-status T-018 --status agent-ready/);
+    assert.match(lifecycleError.repairHint, /npx agenticloop task status T-018 agent-ready/);
     // The lifecycle prerequisite is Maintainer-owned authoring work, so the
     // refusal routes there rather than to the role that would have run.
     assert.equal(lifecycleError.category, 'task_contract');

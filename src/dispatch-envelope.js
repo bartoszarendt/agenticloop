@@ -64,6 +64,7 @@ import {
 import { PublicCommandError } from './public-error.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
 import {
+  DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE,
   dispatchableLifecycleRepair,
   evaluatePacketDispatchableLifecycle,
   taskStatusFromBody,
@@ -1998,7 +1999,7 @@ export function prepareRoleDispatch(input = {}, options = {}) {
     const lifecycle = evaluatePacketDispatchableLifecycle(taskStatusFromBody(snapshot?.body));
     if (!lifecycle.ok) {
       findings.add(lifecycle.evidenceState, lifecycle.reason, {
-        code: 'task.lifecycle.not_dispatchable',
+        code: DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE,
         repairHint: dispatchableLifecycleRepair(snapshot?.taskId ?? '<task-id>', lifecycle.status),
       });
       return failure(command, findings);
