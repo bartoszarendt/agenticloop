@@ -23,6 +23,32 @@
   and a `planDigest` over the whole closed plan. Without them the plan is
   display-only and lists its blockers. The plan schema version is now 2.
 
+### Fixed
+- `task readiness-apply` now guarantees the exact commit tree across Git hooks.
+  The exact staged tree is captured from the verified index before the commit,
+  and the created commit's tree must equal it after every hook has run: a hook
+  that stages an unplanned path (a product file above all) or rewrites the
+  staged bytes of a planned path can no longer make that content survive in a
+  readiness commit. The divergent commit is the transaction's own and is rolled
+  back narrowly - branch pointer back to the expected HEAD, index entries
+  restored one literal pathspec at a time, operation-owned paths restored to
+  their exact predecessor bytes - and reported `rolled_back`, never left behind
+  as `unresolved`. Hooks and signing policy remain fully honored (`--no-verify`
+  is never used).
+- `already_current` is now a proven state rather than an early exit. A fresh
+  ready plan is `already_current` only while its digest and bound facts still
+  match; a consumed plan only while HEAD is still its exact readiness commit
+  (parent = the plan's expected HEAD, reviewed message, exactly the planned
+  paths). Both forms still pass current applicability, repository safety, and
+  canonical committed verification. A later HEAD movement makes a consumed plan
+  `stale`; a detached HEAD or unrelated staged/dirty state makes the rerun
+  `blocked`; stale and blocked results never carry activation guidance.
+- Repository safety now refuses staged scratch: only untracked or unstaged
+  transient work under `.agenticloop/tmp/` is ignored, and a force-staged
+  (or otherwise staged) `.agenticloop/tmp/` entry is refused like any other
+  staged change, in `--dry-run` and `--yes` alike. The post-commit cleanliness
+  check applies the same staged-versus-unstaged distinction.
+
 ### Changed
 - `task readiness-apply` refuses a stale or altered plan before any write:
   unknown plan fields, an unsupported schema version, a tampered digest, a wrong
@@ -31,12 +57,15 @@
   fail closed, as does a moved HEAD, a changed carrier digest or status, damaged
   trusted history, a changed dependency snapshot, changed inventory membership, or
   a changed predecessor path state.
-- `task readiness-apply` never stages a path it did not plan. Any staged change,
-  unrelated tracked or untracked change, dirty planned path whose bytes the plan
-  did not bind, or detached HEAD is refused, and nothing unsafe is reset,
-  restored, or discarded. `git add -A` is never used and Git hooks and signing
-  policy are never bypassed. The write set is workflow evidence only; readiness
-  never writes activation and never activates.
+- `task readiness-apply` never stages a path it did not plan. Any staged entry
+  (including staged scratch under `.agenticloop/tmp/`), unrelated tracked or
+  untracked change, dirty planned path whose bytes the plan did not bind, or
+  detached HEAD is refused; a refusal resets, restores, and discards nothing,
+  and rollback on the transaction's own failures restores only operation-owned
+  paths and their index entries - no broad or destructive reset is performed
+  anywhere. `git add -A` is never used and Git hooks and signing policy are
+  never bypassed. The write set is workflow evidence only; readiness never
+  writes activation and never activates.
 - The readiness transaction prepares the decomposition over the prospective
   agent-ready carrier the same commit introduces, so the committed decomposition
   is no longer stale against its own commit.

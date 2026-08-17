@@ -32,12 +32,24 @@
  *   states that nothing was activated.
  * - **It never touches a product file.** Every write is workflow or task
  *   evidence under `.agenticloop/`.
- * - **It never stages anything it did not plan.** Paths are staged one literal
- *   pathspec at a time and the staged set is compared against the planned set
- *   before the commit; `git add -A` is never used, so an unrelated change cannot
- *   ride into a Maintainer readiness commit.
+ * - **The readiness commit carries exactly the validated write set.** Paths are
+ *   staged one literal pathspec at a time, the staged set is compared against
+ *   the planned set, and the exact staged tree is captured before the commit;
+ *   the created commit's tree must equal that captured tree after every hook
+ *   has run. A hook that mutates the index - staging an unplanned product path,
+ *   for example - cannot make that path survive in a readiness commit: the
+ *   divergent commit is the transaction's own, and it is rolled back narrowly
+ *   (branch pointer, per-path index entries, predecessor bytes) before any
+ *   receipt is emitted. `git add -A` is never used and hooks and signing policy
+ *   are never bypassed.
  * - **A stale plan cannot mutate.** Every bound input is re-resolved and the
  *   recomputed plan digest is compared before the first write.
+ *
+ * Idempotence is a proven state, never an assumption: `already_current` is
+ * returned only for a fresh ready plan whose facts still match or for a
+ * consumed plan whose exact readiness commit is still HEAD, and both forms
+ * still pass current applicability, repository safety, and the canonical
+ * committed-readiness verification.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -412,33 +424,53 @@ function activationGuidance(taskId) {
 }
 
 /**
+ * Parse one `git status --porcelain` line into its status code, its path, and
+ * whether the entry is staged (present in the index differing from HEAD).
+ * Renames report `orig -> new`; the new path is the one the index holds.
+ */
+function parsePorcelainEntry(line) {
+  const code = line.slice(0, 2);
+  const rest = line.slice(3);
+  const path = (rest.includes(' -> ') ? rest.split(' -> ')[1] : rest).replace(/^"|"$/g, '');
+  return { code, path, staged: code[0] !== ' ' && code[0] !== '?' };
+}
+
+/**
  * The one repository-safety precondition for the ordinary apply path.
  *
- * Any staged change is refused outright, so nothing already in the index can be
- * carried into the readiness commit. Worktree-only changes and untracked files
- * are refused too, except transient scratch under `.agenticloop/tmp/` and the
- * planned write paths whose current bytes are exactly the predecessor state the
- * plan bound. Nothing is reset, restored, or discarded: unsafe state is reported
- * and the operator decides.
+ * Every staged entry is refused outright - including force-staged scratch under
+ * `.agenticloop/tmp/`, because a staged entry is an index mutation and `git add
+ * -f` can stage even ignored paths. Only after an entry is proven *not* staged
+ * may transient untracked or unstaged scratch under `.agenticloop/tmp/` be
+ * ignored. Other worktree-only changes and untracked files are refused, and a
+ * planned path is accepted only while its current bytes are exactly the
+ * predecessor state the plan bound.
+ *
+ * Nothing here resets, restores, or discards anything: unsafe state is reported
+ * and the operator decides. (Bounded restoration of operation-owned paths is
+ * what rollback does on this transaction's own failures - see
+ * `restorePredecessors` and `rollbackCreatedCommit`.)
+ *
+ * `options.writes` overrides the plan's write binding; the proven no-op path
+ * uses it to evaluate a consumed plan against an empty binding, because after
+ * the readiness commit every path must be clean.
  */
-export function evaluateReadinessRepositorySafety(target, plan) {
+export function evaluateReadinessRepositorySafety(target, plan, options = {}) {
   const status = git(target, ['status', '--porcelain', '--untracked-files=all']);
   if (status.status !== 0) {
     return { ok: false, errors: [`the repository state could not be inspected: ${gitText(status)}`] };
   }
-  const bound = new Map((plan.executable.writes ?? []).map(entry => [entry.path, entry]));
+  const bound = new Map((options.writes ?? plan.executable?.writes ?? []).map(entry => [entry.path, entry]));
   const errors = [];
   for (const line of String(status.stdout ?? '').split(/\r?\n/).filter(Boolean)) {
-    const code = line.slice(0, 2);
-    const rest = line.slice(3);
-    // Renames report `orig -> new`; both halves are unrelated to a readiness write.
-    const path = (rest.includes(' -> ') ? rest.split(' -> ')[1] : rest).replace(/^"|"$/g, '');
-    if (path.startsWith('.agenticloop/tmp/')) continue;
-    const staged = code[0] !== ' ' && code[0] !== '?';
+    const { path, staged } = parsePorcelainEntry(line);
+    // Staged state is refused before any scratch allowance: only untracked or
+    // unstaged transient scratch may be ignored, never a staged entry.
     if (staged) {
       errors.push(`'${path}' is staged; readiness apply never commits an index entry it did not plan`);
       continue;
     }
+    if (path.startsWith('.agenticloop/tmp/')) continue;
     const entry = bound.get(path);
     if (!entry) {
       errors.push(`'${path}' has uncommitted changes unrelated to this readiness plan`);
@@ -657,21 +689,17 @@ export function applyReadinessPlan(input) {
 
   const priorTaskDigest = current.executable.expectedTaskDigest;
 
-  // --- 3. Idempotence: an already-settled task is a proven no-op ---------
+  // --- 3. Idempotence: an already-settled task is a *proven* no-op ---------
+  //
+  // `current.ready` alone is never sufficient. The no-op forms are proven by
+  // `verifyCurrentReadinessNoOp`, which still applies current applicability,
+  // repository safety, and canonical committed verification before any success
+  // receipt exists, and which classifies a moved HEAD as stale, a detached HEAD
+  // or other applicability blocker as blocked, and unsafe state as blocked.
   if (current.ready) {
-    return result({
-      taskId,
-      dryRun,
-      mutationDisposition: 'already_current',
-      planDigest: plan.planDigest,
-      expectedHead: executable.expectedHead,
-      resultingHead: current.executable.expectedHead,
-      priorTaskDigest,
-      resultingTaskDigest: priorTaskDigest,
-      changedPaths: [],
-      commitCount: 0,
-      readiness: readinessSummary(current),
-      nextAction: activationGuidance(taskId),
+    return verifyCurrentReadinessNoOp({
+      target, taskId, plan, current, projectConfig, base, dependencies,
+      enumerateInventory, io, dryRun, priorTaskDigest,
     });
   }
 
@@ -971,6 +999,40 @@ export function applyReadinessPlan(input) {
     target, plan, candidates, changedPaths, beforeCommit,
   });
   if (!commitOutcome.ok) {
+    if (commitOutcome.contaminated) {
+      // This transaction's own commit was created but is not the reviewed
+      // commit: a hook mutated the candidate index (an unplanned path or
+      // rewritten planned bytes entered the tree) or rewrote the message.
+      // Roll the commit back narrowly rather than leave an unreviewed commit
+      // at HEAD described as unresolved.
+      const rollback = rollbackCreatedCommit({
+        target, expectedHead: executable.expectedHead, createdHead: commitOutcome.head,
+        candidates, changedPaths,
+      });
+      const rolledBack = rollback.errors.length === 0 &&
+        candidates.every(item => predecessorMatches(target, item));
+      const leftover = rollback.unplannedPaths.length > 0
+        ? ` Hook-modified worktree state was left untouched for the operator: ${rollback.unplannedPaths.join(', ')}.`
+        : '';
+      return result({
+        taskId,
+        dryRun,
+        mutationDisposition: rolledBack ? 'rolled_back' : 'unresolved',
+        planDigest: plan.planDigest,
+        expectedHead: executable.expectedHead,
+        resultingHead: rolledBack ? executable.expectedHead : commitOutcome.head,
+        priorTaskDigest,
+        resultingTaskDigest: rolledBack ? priorTaskDigest : null,
+        changedPaths: rolledBack ? [] : changedPaths,
+        commitCount: 0,
+        readiness: readinessSummary(current),
+        errors: [...commitOutcome.errors, ...rollback.errors],
+        rollbackErrors: rollback.errors,
+        recovery: rolledBack
+          ? `No readiness commit exists: the created commit did not carry the exact validated content and was rolled back. The branch points at ${executable.expectedHead} again, the index entries it changed were restored per path, and the operation-owned paths hold their exact predecessor state.${leftover} Repair or remove the hook's commit mutation, then rerun: npx agenticloop task readiness-plan ${taskId} --json ...`
+          : `An invalid readiness commit (${String(commitOutcome.head)}) could not be proved rolled back. Inspect it and the reported paths before any further mutation; do not reuse this plan.${leftover}`,
+      });
+    }
     if (commitOutcome.committed) {
       // A commit exists but could not be verified. It is never reset or
       // rewritten automatically: the evidence is preserved and handed over.
@@ -985,7 +1047,7 @@ export function applyReadinessPlan(input) {
         resultingTaskDigest: taskRecordDigest(readFileSync(taskAbsolute, 'utf8')),
         changedPaths,
         commit: commitOutcome.commit ?? null,
-        commitCount: 1,
+        commitCount: commitOutcome.observedCommitCount ?? 1,
         readiness: readinessSummary(current),
         errors: commitOutcome.errors,
         recovery: `A readiness commit ${String(commitOutcome.head)} exists but failed post-commit verification. It was deliberately not reset or rewritten. ` +
@@ -1059,11 +1121,179 @@ export function applyReadinessPlan(input) {
 }
 
 /**
+ * Prove - never assume - that applying over an already-settled task is a no-op.
+ *
+ * Exactly two forms may return `already_current`:
+ *
+ * - **A fresh ready plan** (empty write set) whose digest and bound facts still
+ *   match the recomputed plan over the current HEAD.
+ * - **A consumed executable plan** whose exact readiness commit is still HEAD.
+ *   Its expected HEAD necessarily predates its own readiness commit, so generic
+ *   equality-based staleness would refuse it; only the explicit
+ *   `proveConsumedReadinessCommit` proof justifies the no-op.
+ *
+ * Both forms still pass, in order: current applicability (a named branch above
+ * all - a detached HEAD blocks even a no-op), the no-op form's own proof or
+ * staleness check, repository safety, and the canonical committed-readiness
+ * verification. A stale, blocked, or unsafe result never carries activation
+ * guidance.
+ */
+function verifyCurrentReadinessNoOp({
+  target, taskId, plan, current, projectConfig, base, dependencies,
+  enumerateInventory, io, dryRun, priorTaskDigest,
+}) {
+  const executable = plan.executable;
+  const refuse = (disposition, errors, extra = {}) => result({
+    taskId,
+    dryRun,
+    mutationDisposition: disposition,
+    errors,
+    planDigest: plan.planDigest,
+    expectedHead: executable.expectedHead,
+    priorTaskDigest,
+    readiness: readinessSummary(current),
+    ...extra,
+  });
+
+  // Current applicability gates a no-op exactly as it gates mutation.
+  if (!current.applicable) {
+    return refuse('blocked', current.blockers, {
+      recovery: 'Resolve the reported blocker, then regenerate the plan.',
+    });
+  }
+
+  if (executable.writes.length > 0) {
+    // Form B: the consumed plan. Only the explicit proof below can justify a
+    // no-op; a later HEAD movement is stale, not current.
+    const proof = proveConsumedReadinessCommit(target, plan);
+    if (!proof.ok) {
+      return refuse('stale', proof.errors, {
+        resultingHead: proof.head,
+        recovery: `The plan was consumed or superseded; regenerate and review it: npx agenticloop task readiness-plan ${taskId} --json ... > <plan.json>`,
+      });
+    }
+  } else {
+    // Form A: a fresh ready plan over the current HEAD; generic staleness
+    // applies directly.
+    const stale = stalenessErrors(plan, current);
+    if (stale.length > 0) {
+      return refuse('stale', stale, {
+        resultingHead: current.executable.expectedHead,
+        recovery: `Regenerate and review the plan: npx agenticloop task readiness-plan ${taskId} --json ... > <plan.json>`,
+      });
+    }
+  }
+
+  // Repository safety still applies to no-op execution. A consumed plan's
+  // predecessor bindings describe the pre-transaction state, so its rerun is
+  // evaluated against an empty binding: after the readiness commit every path
+  // must be clean, and any dirt is unrelated to a no-op.
+  const safety = evaluateReadinessRepositorySafety(
+    target, plan, executable.writes.length > 0 ? { writes: [] } : {});
+  if (!safety.ok) {
+    return refuse('blocked', safety.errors, {
+      recovery: 'Commit, stash, or revert the reported unrelated changes yourself, then rerun. Readiness apply never resets or discards work it does not own.',
+    });
+  }
+
+  // Canonical committed verification: the same gates a fresh commit must pass.
+  // This re-runs the readiness plan against actual HEAD, verifies the committed
+  // decomposition and dependency snapshot as exact Maintainer-attributed
+  // sources, proves no readiness-owned preflight blocker remains, and checks
+  // the worktree is clean - so an `already_current` receipt means readiness is
+  // genuinely settled, not merely that the lifecycle field says so.
+  const activationNow = readTaskActivationBinding(target, 'files', taskId).state;
+  const verification = verifyCommittedReadiness({
+    target, taskId, projectConfig, plan, base, dependencies, enumerateInventory, io,
+    activationBefore: activationNow,
+  });
+  if (!verification.ok) {
+    return refuse('blocked', verification.errors, { readiness: verification.readiness });
+  }
+
+  return result({
+    taskId,
+    dryRun,
+    mutationDisposition: 'already_current',
+    planDigest: plan.planDigest,
+    expectedHead: executable.expectedHead,
+    // Truthful heads: the current HEAD - which for a consumed plan is the
+    // readiness commit that consumed it.
+    resultingHead: current.executable.expectedHead,
+    priorTaskDigest,
+    resultingTaskDigest: priorTaskDigest,
+    changedPaths: [],
+    commitCount: 0,
+    readiness: verification.readiness,
+    nextAction: activationGuidance(taskId),
+  });
+}
+
+/**
+ * The explicit consumed-plan proof (no-op form B).
+ *
+ * Establishes that HEAD *is* the exact readiness commit this plan produced:
+ *
+ * - HEAD's parent is the plan's `expectedHead`, so the readiness commit is
+ *   HEAD - no later commit or carrier mutation has occurred;
+ * - HEAD carries the plan's exact final commit message and Maintainer
+ *   attribution, so a same-position foreign commit cannot impersonate it;
+ * - HEAD's committed path set equals the plan's exact write set, so no
+ *   unplanned path - a hook-injected product path or an activation - is part
+ *   of the readiness that is being claimed current.
+ *
+ * The repository identity facts were validated against the target at parse
+ * time. Semantic freshness beyond this shape (the agent-ready status, the
+ * trusted chain, committed decomposition and dependency evidence, preflight
+ * blockers) is not duplicated here: `verifyCommittedReadiness` re-runs the
+ * canonical validators over actual HEAD once this proof passes.
+ */
+function proveConsumedReadinessCommit(target, plan) {
+  const executable = plan.executable;
+  const head = gitOut(target, ['rev-parse', 'HEAD']);
+  if (!isGitObjectId(head)) {
+    return { ok: false, head: null, errors: ['the current HEAD cannot be resolved'] };
+  }
+  const parent = gitOut(target, ['rev-parse', `${head}^`]);
+  if (parent !== executable.expectedHead) {
+    return {
+      ok: false,
+      head,
+      errors: [
+        `HEAD moved since the plan was consumed (${executable.expectedHead} -> ${head}); the plan's readiness commit is no longer HEAD`,
+      ],
+    };
+  }
+  const errors = [];
+  const message = gitOut(target, ['show', '-s', '--format=%B', head]);
+  if (message !== executable.finalCommitMessage) {
+    errors.push('the commit at the readiness position does not carry the reviewed final commit message');
+  }
+  const attribution = evaluateCommitAttribution({ message, taskId: plan.taskId, role: 'maintainer' });
+  if (!attribution.ok) {
+    errors.push(...attribution.errors.map(error => `the commit at the readiness position is not the plan's commit: ${error}`));
+  }
+  const diff = git(target, ['diff-tree', '--no-commit-id', '--name-only', '-r', head]);
+  const changed = diff.status === 0
+    ? String(diff.stdout ?? '').split(/\r?\n/).filter(Boolean).sort()
+    : null;
+  if (changed === null) {
+    errors.push('the readiness commit path set could not be read');
+  } else if (canonicalJson(changed) !== canonicalJson([...plan.writeSet].sort())) {
+    errors.push(`the commit at the readiness position changed ${JSON.stringify(changed)} rather than the plan's exact write set ${JSON.stringify([...plan.writeSet].sort())}`);
+  }
+  return { ok: errors.length === 0, head, errors };
+}
+
+/**
  * Restore only the operation-owned paths - and, when a path set is supplied, only
  * their index entries - to their exact predecessor state.
  *
  * Nothing outside `candidates` is touched: no whole-repository reset, no
- * unrelated path, no discarded work.
+ * unrelated path, no discarded work. The index restoration is deliberately
+ * narrow - `git reset HEAD -- <literal pathspec>` per operation-owned path -
+ * and no broad or destructive reset (`--hard`, repository-wide) is performed
+ * anywhere in this module.
  */
 function restorePredecessors(target, candidates, changedPaths = null) {
   const rollback = executeMutationBatch(target, candidates.map(item => (item.predecessor.state === 'absent'
@@ -1112,11 +1342,37 @@ function readinessSummary(plan) {
 }
 
 /**
- * Stage exactly the planned literal paths and create one commit.
+ * Stage exactly the planned literal paths and create one commit whose tree is
+ * exactly the validated candidate tree.
  *
- * Hooks and signing policy are never bypassed. `git add -A` is never used, and
- * the staged set is compared with the planned set before the commit so a path
- * this operation did not plan cannot be included.
+ * Which index and tree are authoritative, and when hooks run:
+ *
+ * - The authoritative tree is captured from the index *after* staging:
+ *   repository safety proved the index held nothing but HEAD, the staging added
+ *   exactly the planned paths one literal pathspec at a time, and the staged
+ *   set was compared against the planned set. `git write-tree` freezes that
+ *   exact state as the tree the commit must carry.
+ * - The commit is an ordinary `git commit`, so every hook the repository
+ *   configures (pre-commit, commit-msg, ...) runs exactly as the operator set
+ *   it, and signing policy (including `commit.gpgsign`) applies unchanged -
+ *   `--no-verify` is never used and no commit flags are overridden.
+ * - Git advances the ref atomically with the commit, after every hook capable
+ *   of changing the candidate index has run. A hook that mutates the index
+ *   (staging an unplanned product path, or rewriting the staged bytes of a
+ *   planned path) can therefore change the tree Git commits - which is exactly
+ *   why the created commit's tree is compared against the captured tree
+ *   immediately after `git commit` returns, before the transaction accepts the
+ *   commit and before any success receipt exists.
+ * - On divergence the transaction's own commit is rolled back narrowly
+ *   (`rollbackCreatedCommit`): the branch pointer returns to the expected HEAD
+ *   only after proving HEAD is still the created commit, index entries are
+ *   restored one literal pathspec at a time for exactly the paths the commit
+ *   changed, and the operation-owned worktree paths are restored to their exact
+ *   predecessor bytes. No corrective commit is created and no unplanned commit
+ *   is left at HEAD.
+ * - On hook refusal `git commit` creates nothing; the ordinary bounded rollback
+ *   (`restorePredecessors`) restores the operation-owned paths and their index
+ *   entries, so the refusal state is exactly the pre-transaction state.
  */
 function createReadinessCommit({ target, plan, candidates, changedPaths, beforeCommit }) {
   const executable = plan.executable;
@@ -1152,9 +1408,16 @@ function createReadinessCommit({ target, plan, candidates, changedPaths, beforeC
       errors: [`the staged path set ${JSON.stringify(staged)} does not equal the planned path set ${JSON.stringify(changedPaths)}`],
     };
   }
+  // The authoritative tree: the exact staged state, captured before the commit
+  // so no later index mutation can redefine what "the validated tree" means.
+  const expectedTree = gitOut(target, ['write-tree']);
+  if (!/^[0-9a-f]{40,64}$/.test(expectedTree ?? '')) {
+    return { ok: false, committed: false, errors: ['the exact commit tree could not be captured from the verified index'] };
+  }
   const committed = git(target, ['commit', '-m', executable.finalCommitMessage]);
   const resultingHead = gitOut(target, ['rev-parse', 'HEAD']);
   if (committed.status !== 0) {
+    // Hook refusal or signing failure: nothing was created unless HEAD moved.
     const created = resultingHead !== null && resultingHead !== head;
     return {
       ok: false,
@@ -1166,23 +1429,128 @@ function createReadinessCommit({ target, plan, candidates, changedPaths, beforeC
   if (resultingHead === null || resultingHead === head) {
     return { ok: false, committed: false, errors: ['git reported success but HEAD did not advance; no readiness commit exists'] };
   }
+  // Every hook capable of changing the candidate index has now run. The tree
+  // of the created commit must equal the captured authoritative tree; a hook
+  // (or concurrent writer) that changed the committed content makes this the
+  // transaction's own invalid commit, which is rolled back - never accepted,
+  // never left behind as an unresolved outcome.
+  const tree = gitOut(target, ['rev-parse', `${resultingHead}^{tree}`]);
+  if (tree !== expectedTree) {
+    const injected = git(target, ['diff-tree', '--no-commit-id', '--name-only', '-r', resultingHead]);
+    const changed = injected.status === 0
+      ? String(injected.stdout ?? '').split(/\r?\n/).filter(Boolean).sort()
+      : [];
+    const unplanned = changed.filter(path => !changedPaths.includes(path));
+    return {
+      ok: false,
+      contaminated: true,
+      committed: false,
+      head: resultingHead,
+      unplannedPaths: unplanned,
+      errors: [
+        'the created readiness commit does not carry the exact validated tree; a hook or concurrent index mutation changed the commit content',
+        ...(unplanned.length > 0
+          ? [`unplanned path(s) entered the commit tree: ${unplanned.join(', ')}`]
+          : ['the staged bytes of a planned path were changed before the commit']),
+      ],
+    };
+  }
+  // Only this transaction's one commit may exist above the expected HEAD. A
+  // post-commit hook or concurrent writer that created more is not ours to
+  // rewrite: hand the exact state to the operator.
+  const commitsAbove = gitOut(target, ['rev-list', '--count', `${head}..HEAD`]);
+  if (commitsAbove !== '1') {
+    return {
+      ok: false,
+      committed: true,
+      head: resultingHead,
+      observedCommitCount: Number(commitsAbove ?? Number.NaN) || null,
+      errors: [`HEAD advanced by ${String(commitsAbove)} commits; only the readiness commit was created by this transaction`],
+    };
+  }
   const errors = [];
   const parent = gitOut(target, ['rev-parse', `${resultingHead}^`]);
   if (parent !== executable.expectedHead) {
     errors.push(`the readiness commit parent ${String(parent)} is not the expected HEAD ${executable.expectedHead}`);
   }
-  const showed = git(target, ['show', '--name-only', '--format=', resultingHead]);
-  const commitPaths = String(showed.stdout ?? '').split(/\r?\n/).filter(Boolean).sort();
-  if (showed.status !== 0 || canonicalJson(commitPaths) !== canonicalJson([...changedPaths].sort())) {
-    errors.push(`the readiness commit changed ${JSON.stringify(commitPaths)} rather than the planned ${JSON.stringify(changedPaths)}`);
-  }
   const message = gitOut(target, ['show', '-s', '--format=%B', resultingHead]);
+  if (message !== executable.finalCommitMessage) {
+    // A commit-msg hook rewrote the reviewed message.
+    errors.push('the readiness commit message does not equal the reviewed final commit message');
+  }
   const attribution = evaluateCommitAttribution({ message, taskId: plan.taskId, role: 'maintainer' });
   if (!attribution.ok) errors.push(...attribution.errors.map(error => `readiness commit attribution: ${error}`));
   if (errors.length > 0) {
-    return { ok: false, committed: true, head: resultingHead, commit: readinessCommitFacts(target, resultingHead), errors };
+    // The tree is exact but the commit is not the reviewed commit: still this
+    // transaction's own creation over the expected parent, so it is rolled
+    // back rather than left as an unreviewed commit at HEAD.
+    return { ok: false, contaminated: true, committed: false, head: resultingHead, errors };
   }
   return { ok: true, committed: true, head: resultingHead, commit: readinessCommitFacts(target, resultingHead), errors: [] };
+}
+
+/**
+ * Narrowly undo this transaction's own just-created commit.
+ *
+ * Called only when the created commit failed the exact-tree or exact-message
+ * validation in `createReadinessCommit` - a hook mutated the candidate index
+ * or rewrote the message. The rollback is bounded and non-destructive:
+ *
+ * - the branch pointer moves back only after proving HEAD is still the created
+ *   commit, so a concurrent writer's commit is never undone;
+ * - `git reset --soft` moves only that pointer, touching neither index nor
+ *   worktree;
+ * - index entries are restored one literal pathspec at a time, for exactly the
+ *   paths the commit changed, to their expected-HEAD state;
+ * - the operation-owned worktree paths are restored to their exact predecessor
+ *   bytes through the mutation kernel, as in every other rollback;
+ * - nothing outside the commit's own path set is touched: no `--hard`, no
+ *   repository-wide reset, no discarded worktree content. A hook's worktree
+ *   side effects (a file it created, for example) are left exactly as the hook
+ *   left them and reported to the operator.
+ */
+function rollbackCreatedCommit({ target, expectedHead, createdHead, candidates, changedPaths }) {
+  const errors = [];
+  const head = gitOut(target, ['rev-parse', 'HEAD']);
+  if (head !== createdHead) {
+    return {
+      errors: [`HEAD moved to ${String(head)} after the readiness commit was created; the invalid commit was left in place and must be recovered manually`],
+      unplannedPaths: [],
+    };
+  }
+  const diff = git(target, ['diff-tree', '--no-commit-id', '--name-only', '-r', createdHead]);
+  if (diff.status !== 0) {
+    return {
+      errors: [`the created commit's changed paths could not be read: ${gitText(diff)}`],
+      unplannedPaths: [],
+    };
+  }
+  const commitPaths = String(diff.stdout ?? '').split(/\r?\n/).filter(Boolean);
+  const unplannedPaths = commitPaths.filter(path => !changedPaths.includes(path));
+  const soft = git(target, ['reset', '--quiet', '--soft', expectedHead]);
+  if (soft.status !== 0) {
+    return { errors: [`the branch pointer could not be restored: ${gitText(soft)}`], unplannedPaths };
+  }
+  for (const path of commitPaths) {
+    const restored = git(target, ['reset', '--quiet', expectedHead, '--', literalPathspec(path)]);
+    if (restored.status !== 0) {
+      errors.push(`index entry for '${path}' could not be restored: ${gitText(restored)}`);
+    }
+  }
+  errors.push(...restorePredecessors(target, candidates, changedPaths));
+  // Proof of restoration: HEAD is the expected HEAD again, nothing is staged,
+  // and every operation-owned path matches its bound predecessor state (the
+  // caller checks the predecessor half).
+  if (gitOut(target, ['rev-parse', 'HEAD']) !== expectedHead) {
+    errors.push('HEAD did not return to the expected commit after rollback');
+  }
+  const staged = git(target, ['diff', '--cached', '--name-only']);
+  if (staged.status !== 0) {
+    errors.push(`the index could not be inspected after rollback: ${gitText(staged)}`);
+  } else if (String(staged.stdout ?? '').trim() !== '') {
+    errors.push(`the index still holds staged entries after rollback: ${String(staged.stdout ?? '').trim()}`);
+  }
+  return { errors, unplannedPaths };
 }
 
 function readinessCommitFacts(target, sha) {
@@ -1239,10 +1607,21 @@ function verifyCommittedReadiness({ target, taskId, projectConfig, plan, base, d
   }
 
   const clean = git(target, ['status', '--porcelain', '--untracked-files=all']);
-  const dirty = String(clean.stdout ?? '').split(/\r?\n/).filter(Boolean)
-    .filter(line => !line.slice(3).startsWith('.agenticloop/tmp/'));
-  if (clean.status !== 0) errors.push(`the resulting repository state could not be inspected: ${gitText(clean)}`);
-  else if (dirty.length > 0) errors.push(`the tracked worktree and index are not clean after the readiness commit: ${dirty.join('; ')}`);
+  if (clean.status !== 0) {
+    errors.push(`the resulting repository state could not be inspected: ${gitText(clean)}`);
+  } else {
+    // The same staged-versus-unstaged distinction as repository safety: a
+    // staged entry - even force-staged scratch under `.agenticloop/tmp/` - is
+    // dirty; only untracked or unstaged transient scratch is ignored.
+    const dirty = String(clean.stdout ?? '').split(/\r?\n/).filter(Boolean)
+      .filter(line => {
+        const { path, staged } = parsePorcelainEntry(line);
+        return staged || !path.startsWith('.agenticloop/tmp/');
+      });
+    if (dirty.length > 0) {
+      errors.push(`the tracked worktree and index are not clean after the readiness commit: ${dirty.join('; ')}`);
+    }
+  }
 
   let preflight = null;
   const silent = io ?? { out() {}, err() {}, warn() {} };

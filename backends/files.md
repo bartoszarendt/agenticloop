@@ -483,12 +483,19 @@ Mutation without `--yes` is refused, and `--dry-run` and `--yes` are mutually
 exclusive.
 
 Every bound input is re-resolved and the plan is recomputed before the first
-write, so a stale plan fails closed rather than mutating. Any staged change,
-unrelated tracked or untracked change, dirty planned path whose bytes the plan did
-not bind, or detached HEAD is refused; nothing is reset or discarded. Staging is
-one literal pathspec per planned path and the staged set is compared with the
-planned set, so `git add -A` is never used and unrelated work cannot ride along.
-Git hooks and signing policy are never bypassed.
+write, so a stale plan fails closed rather than mutating. Any staged entry -
+including force-staged scratch under `.agenticloop/tmp/` - any unrelated tracked
+or untracked change, any dirty planned path whose bytes the plan did not bind,
+and a detached HEAD are refused; only untracked or unstaged transient scratch
+under `.agenticloop/tmp/` is permitted. A refusal resets, restores, and discards
+nothing; rollback on the transaction's own failures restores only
+operation-owned paths and their index entries, narrowly, with no broad or
+destructive reset. Staging is one literal pathspec per planned path, the staged
+set is compared with the planned set, and the exact staged tree is captured
+before the commit; the created commit's tree must equal that captured tree
+after every hook has run, so a hook that stages an unplanned path cannot make
+it survive in a readiness commit - the divergent commit is rolled back and
+reported `rolled_back`. Git hooks and signing policy are never bypassed.
 
 The decomposition is prepared over the **prospective** agent-ready carrier the
 same commit introduces, so the committed decomposition is not stale against its
@@ -501,7 +508,12 @@ verification is preserved, never reset or rewritten automatically.
 Readiness **never activates**. Activation is the separate operator action that
 follows a successful readiness commit, and an existing activation is never
 authorization for readiness mutation. Reapplying against a ready task returns
-`already_current` and creates nothing.
+`already_current` only as a proven no-op: a fresh ready plan whose digest and
+bound facts still match, or a consumed plan whose exact readiness commit is
+still HEAD (its parent is the plan's expected HEAD, its message is the reviewed
+message, and its paths are exactly the planned write set) - each form still
+passing current applicability, repository safety, and canonical verification.
+Any later HEAD movement makes the consumed plan `stale`; regenerate it.
 
 GitHub apply is unsupported: no equivalent transactional carrier exists there, so
 `readiness-apply` returns the standard typed unsupported-backend result. The files

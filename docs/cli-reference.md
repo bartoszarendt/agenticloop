@@ -696,17 +696,22 @@ changed status, damaged trusted history, a refreshed dependency snapshot, change
 inventory membership, or a changed predecessor path state each refuse with one
 root cause and one safe repair.
 
-Repository safety is conservative and never destructive:
+Repository safety is conservative:
 
-- any staged change is refused, so nothing already in the index can ride along;
+- any staged entry is refused — including force-staged scratch under
+  `.agenticloop/tmp/` — so nothing already in the index can ride along;
 - unrelated tracked or untracked changes are refused;
 - a planned path whose bytes the plan did not bind is refused;
-- transient scratch under `.agenticloop/tmp/` is permitted;
+- only untracked or unstaged transient scratch under `.agenticloop/tmp/` is
+  permitted; a staged scratch entry is refused like any other staged change;
 - a detached HEAD is refused; a named branch is required;
 - Git hooks and signing policy are never bypassed, and `git add -A` is never used.
 
-Nothing unsafe is reset, restored, or discarded — it is reported, and the
-operator decides.
+A refusal resets, restores, and discards nothing: the unsafe state is reported
+and the operator decides. Bounded restoration exists only on this transaction's
+own failures (see the exact-tree and rollback paragraphs below) and touches only
+operation-owned paths and their index entries — no broad or destructive reset
+is performed anywhere.
 
 The write set is workflow evidence only and is at most three paths: the
 task-contract history append, the decomposition source, and the task carrier. A
@@ -714,14 +719,28 @@ product path and an activation path can never enter it. The decomposition is
 prepared over the **prospective** carrier — the agent-ready bytes the same commit
 introduces — so the committed decomposition is not stale against its own commit.
 
-Staging is one literal pathspec per planned path, and the staged set is compared
-with the planned set before the commit. After the commit, apply refetches from
-actual HEAD and re-runs the ordinary production gates: the readiness plan, the
-trusted chain, committed-source and Maintainer-attribution verification for the
-decomposition and the dependency snapshot, the canonical preflight, and a clean
-worktree check. If any of them refuses, the result is `unresolved` and readiness
-is not claimed. A commit that exists but fails verification is never reset or
-rewritten automatically.
+Staging is one literal pathspec per planned path, the staged set is compared
+with the planned set, and the exact staged tree is captured from the verified
+index before the commit. The commit is an ordinary `git commit`, so every
+configured hook runs and signing policy applies unchanged — and because a hook
+can still mutate the index Git commits, the created commit's tree is compared
+against the captured tree after every hook has run. A hook that stages an
+unplanned path (a product file above all) or rewrites the staged bytes of a
+planned path therefore cannot make that content survive in a readiness commit:
+the divergent commit is this transaction's own and is rolled back narrowly —
+the branch pointer returns to the expected HEAD, the index entries the commit
+changed are restored one literal pathspec at a time, and the operation-owned
+paths are restored to their exact predecessor bytes. The receipt is
+`rolled_back`; no corrective commit is created and no unplanned commit is left
+at HEAD.
+
+After the commit, apply refetches from actual HEAD and re-runs the ordinary
+production gates: the readiness plan, the trusted chain, committed-source and
+Maintainer-attribution verification for the decomposition and the dependency
+snapshot, the canonical preflight, and a clean worktree check. If any of them
+refuses, the result is `unresolved` and readiness is not claimed. A commit
+whose exact tree and message are valid but whose canonical verification refuses
+is preserved, never reset or rewritten automatically.
 
 **It never activates.** `activationPlanned` and `activationCreated` are both
 `false` in every receipt, and on success `nextAction` names activation as the
@@ -733,20 +752,26 @@ readiness state, and `mutationDisposition`:
 
 | disposition | meaning |
 | --- | --- |
-| `already_current` | the task is already ready; nothing was written and no commit was created |
+| `already_current` | the task is already ready by proof (see below); nothing was written and no commit was created |
 | `committed` | one Maintainer readiness commit settled the sequence |
 | `dry_run` | every possible validation passed; nothing was written |
-| `stale` | a bound input changed since the plan was reviewed |
+| `stale` | a bound input changed since the plan was reviewed, or a consumed plan's readiness commit is no longer HEAD |
 | `blocked` | the plan, the candidates, or the repository state refuse the transaction |
-| `rolled_back` | a failure before the commit restored the exact predecessor state |
+| `rolled_back` | a failure before or at the commit boundary restored the exact predecessor state — including a hook-contaminated commit whose tree did not equal the validated tree |
 | `partially_committed` | the filesystem batch failed and rollback reported errors |
 | `unresolved` | the outcome could not be proved; `recovery` names the exact paths |
 
-Rerunning is safe. Applying against a fully ready task returns
-`already_current` and creates no baseline, decomposition, carrier mutation, or
-commit. Reusing a consumed plan afterwards returns `already_current` rather than
-mutating again, and regenerating the plan over the ready task yields a ready plan
-with an empty write set.
+Rerunning is safe, and `already_current` is a proven state with exactly two
+forms. A freshly regenerated ready plan (empty write set) is `already_current`
+only while its digest and bound facts still match. A consumed plan is
+`already_current` only while HEAD is still its exact readiness commit — the
+commit directly above the plan's expected HEAD, carrying the reviewed message
+and exactly the planned paths. Both forms still pass current applicability (a
+detached HEAD blocks even a no-op), repository safety (staged or unrelated dirt
+blocks even a no-op), and the canonical committed verification. Any later HEAD
+movement makes a consumed plan `stale` — regenerate it rather than reuse it —
+and activation guidance is never attached to a stale, blocked, or unsafe
+result.
 
 **GitHub is unsupported.** `readiness-apply` is declared files-only because no
 equivalent transactional carrier exists there. Invoking it with the GitHub

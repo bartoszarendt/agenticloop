@@ -35,7 +35,7 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -730,6 +730,226 @@ describe('P35-C12R.3 idempotence and safe rerun', () => {
       'already_current', 'committed', 'dry_run', 'rolled_back', 'stale', 'blocked',
       'partially_committed', 'unresolved',
     ]);
+  });
+});
+
+/**
+ * Install one repository hook in a temporary target and point core.hooksPath at
+ * it. Only ever used inside disposable fixtures; the real repository's hook
+ * configuration is never touched.
+ */
+function installHook(target, name, body) {
+  const hooks = join(target, '.git', 'hooks-active');
+  mkdirSync(hooks, { recursive: true });
+  const hook = join(hooks, name);
+  writeFileSync(hook, body, 'utf8');
+  chmodSync(hook, 0o755);
+  git(target, ['config', 'core.hooksPath', hooks.replace(/\\/g, '/')]);
+  return hook;
+}
+
+/** Settle one task and leave its consumed executable plan on disk for rerun. */
+async function settleConsumed(name) {
+  const { target, taskId, baseHead, plan, result } = await settle(name);
+  assert.equal(result.mutationDisposition, 'committed', JSON.stringify(result.errors));
+  return { target, taskId, baseHead, plan };
+}
+
+describe('P35-C12R.3 repair R3-R2: already_current is a proven state', () => {
+  it('returns stale, not already_current, when a consumed plan is reapplied after a later commit', async () => {
+    const { target, taskId, baseHead } = await settleConsumed('repair-consumed-later-commit');
+    writeFileSync(join(target, 'src', 'later.txt'), 'later\n', 'utf8');
+    git(target, ['add', '--', 'src/later.txt']);
+    git(target, ['commit', '-m', `later\n\nTask: ${taskId}\nAgent: maintainer`]);
+    const movedHead = head(target);
+    const result = receipt(await applyPlan(target, taskId));
+    assert.equal(result.mutationDisposition, 'stale', JSON.stringify(result.errors));
+    assert.ok(result.errors.some(error => /HEAD moved|consumed/i.test(error)), JSON.stringify(result.errors));
+    assert.equal(result.commitCount, 0);
+    assert.deepEqual(result.changedPaths, []);
+    assert.equal(result.nextAction, null, 'a stale result never carries activation guidance');
+    assert.equal(head(target), movedHead);
+    assert.match(taskBody(target, taskId), /^status: agent-ready$/m);
+  });
+
+  it('returns blocked, not already_current, when a consumed plan is reapplied on a detached HEAD', async () => {
+    const { target, taskId } = await settleConsumed('repair-consumed-detached');
+    git(target, ['checkout', '--quiet', '--detach', 'HEAD']);
+    const result = receipt(await applyPlan(target, taskId));
+    assert.equal(result.mutationDisposition, 'blocked', JSON.stringify(result.errors));
+    assert.ok(result.errors.some(error => /detached/i.test(error)), JSON.stringify(result.errors));
+    assert.equal(result.commitCount, 0);
+    assert.equal(result.nextAction, null);
+    assert.match(taskBody(target, taskId), /^status: agent-ready$/m);
+  });
+
+  it('returns blocked when a consumed plan is reapplied over unrelated staged state', async () => {
+    const { target, taskId } = await settleConsumed('repair-consumed-staged');
+    const settledHead = head(target);
+    writeFileSync(join(target, 'src', 'unrelated-staged.txt'), 'unrelated\n', 'utf8');
+    git(target, ['add', '--', 'src/unrelated-staged.txt']);
+    const before = porcelain(target);
+    const result = receipt(await applyPlan(target, taskId));
+    assert.equal(result.mutationDisposition, 'blocked', JSON.stringify(result.errors));
+    assert.ok(result.errors.some(error => /unrelated-staged\.txt' is staged/.test(error)), JSON.stringify(result.errors));
+    assert.equal(result.commitCount, 0);
+    assert.equal(result.nextAction, null);
+    // Refusal preserves the unsafe state exactly: nothing written, unstaged, or discarded.
+    assert.equal(head(target), settledHead);
+    assert.equal(porcelain(target), before);
+    assert.match(porcelain(target), /A {2}src\/unrelated-staged\.txt/);
+    assert.equal(readFileSync(join(target, 'src', 'unrelated-staged.txt'), 'utf8'), 'unrelated\n');
+  });
+
+  it('returns blocked when a consumed plan is reapplied over unrelated unstaged work', async () => {
+    const { target, taskId } = await settleConsumed('repair-consumed-unstaged');
+    const settledHead = head(target);
+    writeFileSync(join(target, 'src', 'existing.txt'), 'changed\n', 'utf8');
+    const before = porcelain(target);
+    const result = receipt(await applyPlan(target, taskId));
+    assert.equal(result.mutationDisposition, 'blocked', JSON.stringify(result.errors));
+    assert.ok(result.errors.some(error => /unrelated to this readiness plan/.test(error)), JSON.stringify(result.errors));
+    assert.equal(result.commitCount, 0);
+    assert.equal(result.nextAction, null);
+    assert.equal(head(target), settledHead);
+    assert.equal(porcelain(target), before);
+    assert.equal(readFileSync(join(target, 'src', 'existing.txt'), 'utf8'), 'changed\n');
+  });
+
+  it('no no-op refusal path creates an activation or mutates the task evidence', async () => {
+    const { target, taskId } = await settleConsumed('repair-consumed-no-mutation');
+    const beforeBody = taskBody(target, taskId);
+
+    // Untracked unrelated work.
+    writeFileSync(join(target, 'src', 'later.txt'), 'later\n', 'utf8');
+    const untracked = receipt(await applyPlan(target, taskId));
+    assert.equal(untracked.mutationDisposition, 'blocked', JSON.stringify(untracked.errors));
+    assert.equal(untracked.activationCreated, false);
+    assert.equal(existsSync(join(target, '.agenticloop', 'activation')), false);
+    assert.equal(taskBody(target, taskId), beforeBody);
+    rmSync(join(target, 'src', 'later.txt'));
+
+    // Detached HEAD.
+    git(target, ['checkout', '--quiet', '--detach', 'HEAD']);
+    const detached = receipt(await applyPlan(target, taskId));
+    assert.equal(detached.mutationDisposition, 'blocked', JSON.stringify(detached.errors));
+    assert.equal(detached.activationCreated, false);
+    assert.equal(existsSync(join(target, '.agenticloop', 'activation')), false);
+    assert.equal(taskBody(target, taskId), beforeBody);
+    git(target, ['checkout', '--quiet', '-']);
+    assert.equal(porcelain(target), '');
+  });
+});
+
+describe('P35-C12R.3 repair R3-R3: staged scratch is refused, unstaged scratch is not', () => {
+  it('refuses a force-staged .agenticloop/tmp/ file through the exported safety evaluator', async () => {
+    const { target, taskId } = createReadinessTarget(temp, 'repair-staged-scratch-evaluator');
+    const { plan } = await writePlan(target, taskId);
+    assert.equal(evaluateReadinessRepositorySafety(target, plan).ok, true);
+    writeFileSync(join(target, '.agenticloop', 'tmp', 'staged.txt'), 'staged scratch\n', 'utf8');
+    git(target, ['add', '-f', '--', '.agenticloop/tmp/staged.txt']);
+    const unsafe = evaluateReadinessRepositorySafety(target, plan);
+    assert.equal(unsafe.ok, false, 'a staged index entry is refused even under .agenticloop/tmp/');
+    assert.ok(unsafe.errors.some(error => /staged\.txt' is staged/.test(error)), JSON.stringify(unsafe.errors));
+  });
+
+  it('refuses the same staged scratch in --dry-run before reporting a dry run', async () => {
+    const { target, taskId } = createReadinessTarget(temp, 'repair-staged-scratch-dry');
+    await writePlan(target, taskId);
+    writeFileSync(join(target, '.agenticloop', 'tmp', 'staged.txt'), 'staged scratch\n', 'utf8');
+    git(target, ['add', '-f', '--', '.agenticloop/tmp/staged.txt']);
+    const result = receipt(await applyPlan(target, taskId, '--dry-run'));
+    assert.equal(result.mutationDisposition, 'blocked', JSON.stringify(result.errors));
+    assert.ok(result.errors.some(error => /staged\.txt' is staged/.test(error)), JSON.stringify(result.errors));
+    assert.equal(result.commitCount, 0);
+    assert.match(taskBody(target, taskId), /^status: draft$/m);
+  });
+
+  it('refuses the same staged scratch in --yes before any candidate mutation', async () => {
+    const { target, taskId } = createReadinessTarget(temp, 'repair-staged-scratch-yes');
+    const baseHead = head(target);
+    await writePlan(target, taskId);
+    writeFileSync(join(target, '.agenticloop', 'tmp', 'staged.txt'), 'staged scratch\n', 'utf8');
+    git(target, ['add', '-f', '--', '.agenticloop/tmp/staged.txt']);
+    const result = receipt(await applyPlan(target, taskId));
+    assert.equal(result.mutationDisposition, 'blocked', JSON.stringify(result.errors));
+    assert.equal(result.commitCount, 0);
+    assert.equal(commitCountSince(target, baseHead), 0);
+    assert.match(taskBody(target, taskId), /^status: draft$/m);
+    assert.equal(existsSync(join(target, DECOMPOSITION_REF(taskId))), false);
+  });
+
+  it('preserves the staged scratch index entry and bytes exactly across the refusal', async () => {
+    const { target, taskId } = createReadinessTarget(temp, 'repair-staged-scratch-preserve');
+    await writePlan(target, taskId);
+    writeFileSync(join(target, '.agenticloop', 'tmp', 'staged.txt'), 'staged scratch\n', 'utf8');
+    git(target, ['add', '-f', '--', '.agenticloop/tmp/staged.txt']);
+    await applyPlan(target, taskId);
+    assert.match(porcelain(target), /A {2}\.agenticloop\/tmp\/staged\.txt/);
+    assert.equal(readFileSync(join(target, '.agenticloop', 'tmp', 'staged.txt'), 'utf8'), 'staged scratch\n');
+  });
+});
+
+describe('P35-C12R.3 repair R3-R1: the exact commit tree across hooks', () => {
+  it('cannot let a successful hook stage an unplanned product path into the readiness commit', async () => {
+    const { target, taskId } = createReadinessTarget(temp, 'repair-hook-product-path');
+    const baseHead = head(target);
+    await writePlan(target, taskId);
+    installHook(target, 'pre-commit',
+      '#!/bin/sh\necho hooked > src/hook-product.txt\ngit add -- src/hook-product.txt\nexit 0\n');
+    const result = receipt(await applyPlan(target, taskId));
+    assert.notEqual(result.mutationDisposition, 'committed', JSON.stringify(result));
+    assert.notEqual(result.mutationDisposition, 'unresolved',
+      'a hook-contaminated commit is rolled back, not left behind as unresolved');
+    assert.equal(result.mutationDisposition, 'rolled_back', JSON.stringify(result.errors));
+    assert.ok(result.errors.some(error => /hook-product\.txt|unplanned|exact/.test(error)), JSON.stringify(result.errors));
+    assert.equal(result.unresolved, false);
+    // The actual Git history, not the receipt: no readiness commit exists.
+    assert.equal(commitCountSince(target, baseHead), 0);
+    assert.equal(head(target), baseHead);
+    assert.equal(
+      git(target, ['show', '-s', '--format=%s', 'HEAD']),
+      git(target, ['log', '--format=%s', '-1', baseHead]),
+      'HEAD is still the pre-transaction fixture commit',
+    );
+    // Predecessor restoration: the carrier is a draft again and the evidence writes are gone.
+    assert.match(taskBody(target, taskId), /^status: draft$/m);
+    assert.equal(existsSync(join(target, DECOMPOSITION_REF(taskId))), false);
+    // The hook's own worktree side effect is preserved, unstaged, never committed.
+    assert.equal(readFileSync(join(target, 'src', 'hook-product.txt'), 'utf8'), 'hooked\n');
+    assert.match(porcelain(target), /\?\? src\/hook-product\.txt/);
+  });
+
+  it('rolls back when a hook rewrites the staged bytes of a planned path', async () => {
+    const { target, taskId } = createReadinessTarget(temp, 'repair-hook-rewrite');
+    const baseHead = head(target);
+    await writePlan(target, taskId);
+    installHook(target, 'pre-commit',
+      '#!/bin/sh\necho "\\nhooked" >> .agenticloop/tasks/T-018.md\ngit add -- .agenticloop/tasks/T-018.md\nexit 0\n');
+    const result = receipt(await applyPlan(target, taskId));
+    assert.equal(result.mutationDisposition, 'rolled_back', JSON.stringify(result.errors));
+    assert.equal(result.commitCount, 0);
+    assert.equal(commitCountSince(target, baseHead), 0);
+    assert.match(taskBody(target, taskId), /^status: draft$/m);
+    assert.doesNotMatch(taskBody(target, taskId), /hooked/);
+  });
+
+  it('still executes hooks and keeps the exact tree when a hook only observes', async () => {
+    const { target, taskId } = createReadinessTarget(temp, 'repair-hook-observe');
+    const baseHead = head(target);
+    const { plan } = await writePlan(target, taskId);
+    installHook(target, 'pre-commit', '#!/bin/sh\necho ran > .agenticloop/tmp/hook-ran.txt\nexit 0\n');
+    const result = receipt(await applyPlan(target, taskId));
+    assert.equal(result.mutationDisposition, 'committed', JSON.stringify(result.errors));
+    // The hook genuinely ran: hooks are not silently disabled.
+    assert.equal(readFileSync(join(target, '.agenticloop', 'tmp', 'hook-ran.txt'), 'utf8'), 'ran\n');
+    // The actual created commit tree carries exactly the validated planned paths.
+    assert.deepEqual(
+      git(target, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD']).split('\n').filter(Boolean).sort(),
+      [...plan.writeSet].sort(),
+    );
+    assert.equal(commitCountSince(target, baseHead), 1);
+    assert.equal(porcelain(target), '', 'ignored hook scratch under .agenticloop/tmp/ stays clean');
   });
 });
 
