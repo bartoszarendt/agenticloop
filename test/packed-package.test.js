@@ -912,6 +912,84 @@ describe('packed public handoff lifecycle', () => {
     assert.match(result.diagnostics[0].message, /--yes/);
   });
 
+  it('produces an installed applicable executable readiness plan', async () => {
+    const fixture = await createDispatchFixture(tmpBase, 'packed-readiness-plan');
+    const planned = await runPacked([
+      'task', 'readiness-plan', 'T-001',
+      '--actor', 'Agentic Loop Test', '--authority', 'task:T-001',
+      '--work-unit', 'fixture-work-unit', '--base', 'HEAD',
+      '--dependencies', 'dependencies.json',
+      '--json', '--target', fixture.root,
+    ]);
+    assert.equal(planned.status, 0, `${planned.stderr}\n${planned.stdout}`);
+    const plan = JSON.parse(planned.stdout);
+    assert.equal(plan.kind, 'agenticloop.readiness-plan');
+    assert.equal(plan.schemaVersion, 2);
+    assert.equal(plan.readOnly, true);
+    assert.equal(plan.ready, true, `pending: ${plan.pendingSteps.join(', ')}`);
+    assert.equal(plan.applicable, true, `blockers: ${plan.blockers.join('; ')}`);
+    assert.equal(plan.activationPlanned, false);
+    assert.deepEqual(plan.writeSet, []);
+    assert.match(plan.planDigest, /^sha256:agenticloop\.readiness-plan\.v2:[0-9a-f]{64}$/);
+    assert.ok(plan.executable.expectedHead, 'the plan binds the expected HEAD');
+  });
+
+  it('runs installed readiness-apply as a proven no-op on an already-ready task', async () => {
+    const fixture = await createDispatchFixture(tmpBase, 'packed-readiness-apply');
+    const planPath = '.agenticloop/tmp/T-001-readiness-plan.json';
+    const planned = await runPacked([
+      'task', 'readiness-plan', 'T-001',
+      '--actor', 'Agentic Loop Test', '--authority', 'task:T-001',
+      '--work-unit', 'fixture-work-unit', '--base', 'HEAD',
+      '--dependencies', 'dependencies.json',
+      '--json', '--target', fixture.root,
+    ]);
+    assert.equal(planned.status, 0, planned.stderr);
+    mkdirSync(join(fixture.root, '.agenticloop', 'tmp'), { recursive: true });
+    writeFileSync(join(fixture.root, planPath), planned.stdout, 'utf8');
+    const head = git(fixture.root, ['rev-parse', 'HEAD']);
+
+    const dry = await runPacked([
+      'task', 'readiness-apply', 'T-001', '--plan', planPath, '--dry-run', '--json', '--target', fixture.root,
+    ]);
+    assert.equal(dry.status, 0, `${dry.stderr}\n${dry.stdout}`);
+    assert.equal(JSON.parse(dry.stdout).mutationDisposition, 'already_current');
+
+    const applied = await runPacked([
+      'task', 'readiness-apply', 'T-001', '--plan', planPath, '--yes', '--json', '--target', fixture.root,
+    ]);
+    assert.equal(applied.status, 0, `${applied.stderr}\n${applied.stdout}`);
+    const result = JSON.parse(applied.stdout);
+    assert.equal(result.kind, 'agenticloop.readiness-apply-receipt');
+    assert.equal(result.mutationDisposition, 'already_current');
+    assert.equal(result.commitCount, 0);
+    assert.deepEqual(result.changedPaths, []);
+    assert.equal(result.activationPlanned, false);
+    assert.equal(result.activationCreated, false);
+    assert.equal(git(fixture.root, ['rev-parse', 'HEAD']), head, 'a no-op apply creates no commit');
+  });
+
+  it('installed readiness-apply refuses without an explicit --dry-run or --yes', async () => {
+    const fixture = await createDispatchFixture(tmpBase, 'packed-readiness-apply-no-yes');
+    const planPath = '.agenticloop/tmp/T-001-readiness-plan.json';
+    const planned = await runPacked([
+      'task', 'readiness-plan', 'T-001',
+      '--actor', 'Agentic Loop Test', '--authority', 'task:T-001',
+      '--work-unit', 'fixture-work-unit', '--base', 'HEAD',
+      '--dependencies', 'dependencies.json',
+      '--json', '--target', fixture.root,
+    ]);
+    mkdirSync(join(fixture.root, '.agenticloop', 'tmp'), { recursive: true });
+    writeFileSync(join(fixture.root, planPath), planned.stdout, 'utf8');
+    for (const args of [[], ['--dry-run', '--yes']]) {
+      const refused = await runPacked([
+        'task', 'readiness-apply', 'T-001', '--plan', planPath, ...args, '--json', '--target', fixture.root,
+      ]);
+      assert.equal(refused.status, 2, `${JSON.stringify(args)} should exit with a usage error`);
+      assert.match(JSON.parse(refused.stdout).diagnostics[0].message, /--dry-run or --yes/);
+    }
+  });
+
   it('returns one installed authoritative handoff verdict for all five adapters', { timeout: 300000 }, async () => {
     const verdicts = {};
     const successfulVerdicts = {};

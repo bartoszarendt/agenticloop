@@ -523,7 +523,7 @@ export const COMMAND_REGISTRY = {
   },
   task: {
     summary: 'Manage files-backed task records and canonical handoff preparation.',
-    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|handoff-preflight|refresh-handoff-evidence|attempt-status|abandon-attempt|adopt-historical|readiness-plan|measure|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|status> [options]',
+    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|handoff-preflight|refresh-handoff-evidence|attempt-status|abandon-attempt|adopt-historical|readiness-plan|readiness-apply|measure|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|status> [options]',
     subcommands: {
       list: {
         summary: 'List task records.',
@@ -560,13 +560,33 @@ export const COMMAND_REGISTRY = {
       },
       'readiness-plan': {
         summary: 'Report the complete ordered readiness sequence for one task. Read-only; writes nothing.',
-        usage: 'agenticloop task readiness-plan <id> [--actor <git-author>] [--authority <kind:reference>] [--json] [--target <dir>]',
+        usage: 'agenticloop task readiness-plan <id> [--actor <git-author>] [--authority <kind:reference>] [--work-unit <id>] [--base <ref> | --base-paths <path>] [--dependencies <path>] [--max-age-seconds <n>] [--route <route>] [--json] [--target <dir>]',
         receiptRevalidation: 'read-only',
         positionals: [{ name: 'id', required: true }],
         options: [
           targetOption(),
-          opt('actor', 'string', 'Expected committed Git author, used to render the exact baseline command.'),
-          opt('authority', 'string', 'Durable authorization reference, used to render the exact baseline command.'),
+          opt('actor', 'string', 'Expected committed Git author. Required for an applicable plan; never fabricated.'),
+          opt('authority', 'string', 'Durable authorization reference as <kind>:<reference>. Required for an applicable plan; never fabricated.'),
+          opt('work-unit', 'string', 'Durable work-unit identity such as milestone:M2. Required for an applicable plan; a per-task fallback is refused.'),
+          opt('base', 'string', 'Base ref resolved to its exact immutable tree identity. Mutually exclusive with --base-paths.'),
+          opt('base-paths', 'string', 'Target-relative JSON path inventory used as base evidence. Mutually exclusive with --base.'),
+          opt('dependencies', 'string', 'Exact committed Maintainer-attributed dependency-status snapshot. Required for an applicable plan.'),
+          opt('max-age-seconds', 'string', 'Override the decomposition freshness policy bound by the plan.'),
+          opt('route', 'string', 'Decomposition route bound by the plan. Defaults to serial.'),
+          opt('rescan-trigger', 'string', 'Override the semantic rescan trigger bound by the plan.'),
+          jsonOption,
+        ],
+      },
+      'readiness-apply': {
+        summary: 'Settle one reviewed executable readiness plan as a single transaction and at most one Maintainer-attributed commit. Never activates.',
+        usage: 'agenticloop task readiness-apply <id> --plan <path> (--dry-run | --yes) [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only-before-explicit-apply',
+        positionals: [{ name: 'id', required: true }],
+        options: [
+          targetOption(),
+          opt('plan', 'string', 'Target-relative executable readiness plan JSON produced by task readiness-plan. Required.'),
+          dryRunOption,
+          yesOption,
           jsonOption,
         ],
       },

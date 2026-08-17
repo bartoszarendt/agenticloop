@@ -463,6 +463,50 @@ against the chain, and appends it. The correction becomes trusted only after
 a separate commit. `task establish-baseline` refuses to create a second
 baseline when trusted history already contains one.
 
+### Readiness As One Transaction
+
+`task readiness-plan <id>` is read-only and reports the whole ordered readiness
+sequence. Supplied with every exact apply input (`--actor`, `--authority`,
+`--work-unit`, one of `--base`/`--base-paths`, `--dependencies`) it emits an
+**executable** plan: `applicable: true`, no blockers, and a `planDigest` over the
+expected HEAD, the expected carrier digest, the trusted-chain terminal state, the
+resolved base tree, the committed dependency snapshot, the observed task
+inventory, and the exact write set with each path's expected predecessor state.
+Without those inputs the plan is display-only and says so.
+
+`task readiness-apply <id> --plan <path> (--dry-run|--yes)` is the Maintainer-owned
+mutation that consumes one reviewed executable plan. It writes workflow and task
+evidence only - the task-contract history append, the decomposition source, and
+the task carrier - through `src/fs-mutation-kernel.js`, then creates **at most one**
+Maintainer-attributed commit (`settle readiness`, `Task: <id>`, `Agent: maintainer`).
+Mutation without `--yes` is refused, and `--dry-run` and `--yes` are mutually
+exclusive.
+
+Every bound input is re-resolved and the plan is recomputed before the first
+write, so a stale plan fails closed rather than mutating. Any staged change,
+unrelated tracked or untracked change, dirty planned path whose bytes the plan did
+not bind, or detached HEAD is refused; nothing is reset or discarded. Staging is
+one literal pathspec per planned path and the staged set is compared with the
+planned set, so `git add -A` is never used and unrelated work cannot ride along.
+Git hooks and signing policy are never bypassed.
+
+The decomposition is prepared over the **prospective** agent-ready carrier the
+same commit introduces, so the committed decomposition is not stale against its
+own commit. After the commit, the readiness plan, the trusted chain,
+committed-source and Maintainer-attribution verification, and the canonical
+preflight are re-run against actual HEAD; if any refuses, the receipt is
+`unresolved` and readiness is not claimed. A commit that fails post-commit
+verification is preserved, never reset or rewritten automatically.
+
+Readiness **never activates**. Activation is the separate operator action that
+follows a successful readiness commit, and an existing activation is never
+authorization for readiness mutation. Reapplying against a ready task returns
+`already_current` and creates nothing.
+
+GitHub apply is unsupported: no equivalent transactional carrier exists there, so
+`readiness-apply` returns the standard typed unsupported-backend result. The files
+and GitHub semantic readiness rules remain aligned.
+
 ### CLI Support
 
 The files backend remains Markdown-first; the CLI is a convenience and
@@ -489,6 +533,11 @@ Operation mapping:
 - Lint task records: `agenticloop task lint [<task-id>] [--json]`.
 - Establish a contract baseline: `agenticloop task establish-baseline <id>
   --actor <git-author> --authority <kind:reference>`, then commit separately.
+- Report the whole readiness sequence (read-only): `agenticloop task
+  readiness-plan <id> [--actor <git-author>] [--authority <kind:reference>]
+  [--work-unit <id>] [--base <ref>] [--dependencies <path>] [--json]`.
+- Settle readiness in one transaction and one Maintainer commit: `agenticloop
+  task readiness-apply <id> --plan <path> (--dry-run|--yes)`. It never activates.
 - Authorize a contract correction: `agenticloop task authorize-correction <id>
   --expect-prior-digest <digest> --reason <text> --authority <kind:reference>
   --actor <git-author>`, then commit separately.

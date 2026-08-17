@@ -64,7 +64,12 @@ acting.
   `role_return_receive` verifies its Ed25519 signature and current revocation
   state against the fixed operator-pinned authority; record digest consistency
   alone is not authorization.
-- Before `agent-ready`, run readiness and establish the trusted baseline. Own
+- Before `agent-ready`, run readiness and establish the trusted baseline. On a
+  files-backed target, read the whole sequence first with `task readiness-plan`
+  and settle it with `task readiness-apply --plan <path> --yes`, which produces
+  one Maintainer-attributed commit instead of the multi-command, two-commit
+  sequence; review its `--dry-run` result before confirming. Readiness never
+  activates - activation is the separate operator action that follows it. Own
   correction/recovery provenance; never widen `allowed_paths`.
 - Use the confirmed development stage to shape task boundaries, expected core areas,
   compatibility posture, and implementation notes. Stage never relaxes evidence,

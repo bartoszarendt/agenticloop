@@ -590,7 +590,9 @@ authority.
 ### Readiness plan
 
 ```text
-npx agenticloop task readiness-plan <task-id> [--actor <git-author>] [--authority <kind:reference>] [--json]
+npx agenticloop task readiness-plan <task-id> [--actor <git-author>] [--authority <kind:reference>]
+                                              [--work-unit <id>] [--base <ref> | --base-paths <path>]
+                                              [--dependencies <path>] [--json]
 ```
 
 Read-only. It computes the **whole** readiness sequence at once, in dependency
@@ -622,6 +624,135 @@ exits zero; an unsettled one exits non-zero with the remaining steps.
 A per-task `work-unit:<task-id>` fallback is reported as *not* a durable work
 unit, so the grouping confusion is caught at authoring time rather than at
 activation.
+
+#### Display-only and executable plans
+
+A plan produced from current facts alone is **display-only**: `applicable` is
+`false` and `blockers` lists the exact inputs it lacks. Supply every apply input
+— `--actor`, `--authority`, `--work-unit`, exactly one of `--base`/`--base-paths`,
+and `--dependencies` — and the plan becomes **executable**: `applicable` is
+`true`, `blockers` is empty, and the plan additionally binds `expectedHead`,
+`expectedTaskDigest`, the repository authority identity, the resolved base tree,
+the committed dependency snapshot and its source commit, the observed task
+inventory, the exact write set with each path's expected predecessor state
+(`absent` or an exact digest), `finalCommitMessage`, `activationPlanned: false`,
+and a `planDigest` over the whole closed plan.
+
+Nothing in the plan is a wall clock or a random id, so repeating it over
+unchanged facts produces byte-identical output. That is what makes `planDigest`
+usable as a staleness test.
+
+The actor, the authority, and the work-unit identity are never fabricated. If
+the current contract differs from its trusted baseline, the plan blocks and
+points at `task authorize-correction`; readiness never invents a correction or a
+human authority. An existing activation is left untouched and is never treated as
+authorization for readiness mutation — the plan states that readiness mutation may
+make an old task binding stale and that activation is evaluated again afterwards.
+
+### Readiness apply
+
+```text
+npx agenticloop task readiness-apply <task-id> --plan <path> (--dry-run | --yes) [--json]
+```
+
+Maintainer-owned mutation. It consumes one reviewed **executable** plan and
+settles the whole sequence as a single transaction: one filesystem batch through
+the shared mutation kernel, then **at most one** Maintainer-attributed commit.
+
+`readiness-plan` removed the discovery loop. This removes the execution loop:
+settling readiness by hand meant `establish-baseline`, a commit,
+`prepare-decomposition` redirected to a file, `task status agent-ready`, and a
+second commit — and a repair in the middle could invalidate what an earlier
+command had already produced.
+
+The two-phase flow:
+
+```text
+npx agenticloop task readiness-plan T-018 \
+  --actor "<git-author>" --authority "<kind:reference>" \
+  --work-unit "milestone:M2" --base "<ref>" \
+  --dependencies ".agenticloop/dependencies/T-018.json" \
+  --json > .agenticloop/tmp/T-018-readiness-plan.json
+
+npx agenticloop task readiness-apply T-018 --plan .agenticloop/tmp/T-018-readiness-plan.json --dry-run --json
+npx agenticloop task readiness-apply T-018 --plan .agenticloop/tmp/T-018-readiness-plan.json --yes    --json
+```
+
+`--dry-run` and `--yes` are mutually exclusive and one is required: mutation is
+never implicit. A dry run performs every validation that does not require
+writing. The plan file is transient scratch and belongs under
+`.agenticloop/tmp/`.
+
+Apply never executes a command string copied from the plan. It consumes the
+plan's structured facts and calls the same source functions the standalone
+commands call, so the two routes cannot accept different evidence.
+
+Before writing anything it parses the plan against a closed schema (unknown
+fields and unsupported versions fail closed), verifies `planDigest`, verifies the
+task, backend, repository authority and root, then **re-resolves every bound
+input** — base evidence, the committed dependency snapshot, the task inventory —
+recomputes the plan, and compares it. A moved HEAD, a changed carrier digest, a
+changed status, damaged trusted history, a refreshed dependency snapshot, changed
+inventory membership, or a changed predecessor path state each refuse with one
+root cause and one safe repair.
+
+Repository safety is conservative and never destructive:
+
+- any staged change is refused, so nothing already in the index can ride along;
+- unrelated tracked or untracked changes are refused;
+- a planned path whose bytes the plan did not bind is refused;
+- transient scratch under `.agenticloop/tmp/` is permitted;
+- a detached HEAD is refused; a named branch is required;
+- Git hooks and signing policy are never bypassed, and `git add -A` is never used.
+
+Nothing unsafe is reset, restored, or discarded — it is reported, and the
+operator decides.
+
+The write set is workflow evidence only and is at most three paths: the
+task-contract history append, the decomposition source, and the task carrier. A
+product path and an activation path can never enter it. The decomposition is
+prepared over the **prospective** carrier — the agent-ready bytes the same commit
+introduces — so the committed decomposition is not stale against its own commit.
+
+Staging is one literal pathspec per planned path, and the staged set is compared
+with the planned set before the commit. After the commit, apply refetches from
+actual HEAD and re-runs the ordinary production gates: the readiness plan, the
+trusted chain, committed-source and Maintainer-attribution verification for the
+decomposition and the dependency snapshot, the canonical preflight, and a clean
+worktree check. If any of them refuses, the result is `unresolved` and readiness
+is not claimed. A commit that exists but fails verification is never reset or
+rewritten automatically.
+
+**It never activates.** `activationPlanned` and `activationCreated` are both
+`false` in every receipt, and on success `nextAction` names activation as the
+separate operator action that follows.
+
+The JSON receipt reports `planDigest`, `expectedHead`, `resultingHead`,
+`priorTaskDigest`, `resultingTaskDigest`, `changedPaths`, `commit`, `commitCount`,
+readiness state, and `mutationDisposition`:
+
+| disposition | meaning |
+| --- | --- |
+| `already_current` | the task is already ready; nothing was written and no commit was created |
+| `committed` | one Maintainer readiness commit settled the sequence |
+| `dry_run` | every possible validation passed; nothing was written |
+| `stale` | a bound input changed since the plan was reviewed |
+| `blocked` | the plan, the candidates, or the repository state refuse the transaction |
+| `rolled_back` | a failure before the commit restored the exact predecessor state |
+| `partially_committed` | the filesystem batch failed and rollback reported errors |
+| `unresolved` | the outcome could not be proved; `recovery` names the exact paths |
+
+Rerunning is safe. Applying against a fully ready task returns
+`already_current` and creates no baseline, decomposition, carrier mutation, or
+commit. Reusing a consumed plan afterwards returns `already_current` rather than
+mutating again, and regenerating the plan over the ready task yields a ready plan
+with an empty write set.
+
+**GitHub is unsupported.** `readiness-apply` is declared files-only because no
+equivalent transactional carrier exists there. Invoking it with the GitHub
+backend returns the standard typed unsupported-backend result rather than a
+partial cross-carrier orchestration. The files and GitHub *semantic* readiness
+rules remain aligned.
 
 ### Operational measurement
 

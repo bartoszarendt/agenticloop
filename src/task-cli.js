@@ -153,6 +153,14 @@ import {
 } from './handoff-consumption.js';
 import { measureTaskWorkflow } from './workflow-measurement.js';
 import { buildReadinessPlan } from './readiness-plan.js';
+import { applyReadinessPlan } from './readiness-apply.js';
+import {
+  evaluateCurrentTaskCarrier,
+  prepareAgentReadyEvidence,
+  prepareTaskStatusCandidate,
+  prepareTrustedBaselineCandidate,
+  taskRecordDigest,
+} from './readiness-candidates.js';
 import {
   HISTORICAL_MISSING_EVIDENCE_CLASSES,
   createHistoricalAdoption,
@@ -303,6 +311,11 @@ const TASK_SUBCOMMAND_BACKENDS = Object.freeze({
   'adopt-historical': Object.freeze(['files']),
   measure: Object.freeze(['files']),
   'readiness-plan': Object.freeze(['files']),
+  // Readiness apply is a single-transaction Maintainer mutation. It is declared
+  // files-only because no equivalent transactional carrier exists on GitHub;
+  // an invocation there returns the standard typed unsupported-backend result
+  // rather than a partial cross-carrier orchestration.
+  'readiness-apply': Object.freeze(['files']),
   'attempt-status': Object.freeze(['files']),
   'authorize-correction': Object.freeze(['files']),
   'prepare-decomposition': Object.freeze(['files', 'github']),
@@ -515,11 +528,6 @@ function lintTaskFile(filePath, target, projectConfig, verificationContext) {
     warnings.push(...baseline.warnings);
   }
   return { file: filename, digest: taskRecordDigest(content), errors, warnings, diagnostics };
-}
-
-/** Digest of one exact task-record byte sequence. */
-function taskRecordDigest(content) {
-  return `sha256:${createHash('sha256').update(String(content ?? ''), 'utf8').digest('hex')}`;
 }
 
 /** Derive execution binding only from the authentic packet and current target facts. */
@@ -1226,8 +1234,19 @@ function enumerateFilesTaskInventory(target, projectConfig, options = {}) {
   const inventoryRoot = relative(target, dir).replace(/\\/g, '/');
   const inventoryId = `files:${inventoryRoot}`;
   const files = taskFiles(target, projectConfig);
+  // `overlay` supplies the exact prospective bytes of one already-enumerated
+  // carrier. It never adds, removes, or hides a member: the directory listing
+  // and the enumeration receipt are unchanged, so completeness is still derived
+  // from the authoritative enumeration. It exists because a single readiness
+  // transaction settles the lifecycle transition and the decomposition together,
+  // and a decomposition that bound the pre-transition carrier digest would be
+  // stale against its own commit.
+  const overlay = options.overlay ?? null;
   const entries = files.map(file => {
     const carrier = relative(target, file).replace(/\\/g, '/');
+    if (overlay && Object.hasOwn(overlay, carrier)) {
+      return { carrier, content: overlay[carrier], readError: null };
+    }
     try {
       return { carrier, content: readFileSync(file, 'utf8'), readError: null };
     } catch (error) {
@@ -1352,6 +1371,87 @@ function refetchDispatchParallelScanInventory(backend, enumerateInventory, decom
  */
 export function defaultDecompositionFreshnessSeconds(backend) {
   return backend === 'github' ? 3600 : PARALLEL_SCAN_MAX_FRESHNESS_SECONDS;
+}
+
+/**
+ * The canonical semantic rescan trigger a prepared decomposition declares.
+ *
+ * One constant, because `prepare-decomposition` and the readiness transaction
+ * must declare the identical trigger: a decomposition whose rescan condition
+ * differed between the two routes would be a different observation.
+ */
+export const DECOMPOSITION_RESCAN_TRIGGER =
+  'inventory membership or enumeration coverage, task carrier digests, base or dependency evidence, ' +
+  'ownership, coupling, or decomposition source revision changes';
+
+/**
+ * Resolve every exact input an executable readiness plan binds.
+ *
+ * Each input is resolved through the same canonical authority the standalone
+ * command uses, so the plan can never bind a fact derived a second way. An input
+ * that cannot be resolved becomes a blocker rather than a placeholder: a
+ * display-only plan is still useful, but it must say so.
+ */
+function readinessPlanInputs({ target, taskId, opts, projectConfig, backend }) {
+  const inputBlockers = [];
+  let base = null;
+  let dependencies = null;
+  let inventory = null;
+  if (opts.base || opts.basePaths) {
+    try {
+      base = readExplicitBaseEvidence(target, { base: opts.base, basePaths: opts.basePaths });
+    } catch (error) {
+      inputBlockers.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (opts.dependencies) {
+    try {
+      dependencies = readDependencyEvidence(target, opts.dependencies, taskId);
+    } catch (error) {
+      inputBlockers.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  try {
+    inventory = enumerateFilesTaskInventory(target, projectConfig);
+  } catch (error) {
+    inputBlockers.push(`the authoritative task inventory could not be enumerated: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return {
+    projectConfig,
+    actor: opts.actor ? String(opts.actor) : null,
+    authority: opts.authority ? String(opts.authority) : null,
+    workUnitId: opts.workUnit ? String(opts.workUnit) : null,
+    base,
+    dependencies,
+    dependencyRef: opts.dependencies ? String(opts.dependencies) : null,
+    inventory,
+    freshnessMaxAgeSeconds: opts.maxAgeSeconds === undefined
+      ? defaultDecompositionFreshnessSeconds(backend)
+      : Number(opts.maxAgeSeconds),
+    rescanTrigger: opts.rescanTrigger ? String(opts.rescanTrigger) : DECOMPOSITION_RESCAN_TRIGGER,
+    route: opts.route ? String(opts.route) : 'serial',
+    inputBlockers,
+  };
+}
+
+/**
+ * The canonical input bindings one readiness transaction re-resolves.
+ *
+ * Every one is the same authority the corresponding standalone command uses, so
+ * apply can never derive a bound fact a second way, and it never parses a
+ * rendered command string. Exported so failure-injection coverage exercises the
+ * exact production bindings rather than test doubles.
+ *
+ * @param {string} target
+ * @param {object} projectConfig
+ * @param {string} taskId
+ */
+export function createReadinessApplyBindings(target, projectConfig, taskId) {
+  return {
+    enumerateInventory: (options = {}) => enumerateFilesTaskInventory(target, projectConfig, options),
+    resolveBaseEvidence: options => readExplicitBaseEvidence(target, options),
+    resolveDependencyEvidence: relPath => readDependencyEvidence(target, relPath, taskId),
+  };
 }
 
 /**
@@ -1621,7 +1721,7 @@ export async function cmdTask(args, io = createIo()) {
     const suggestion = sub ? suggestName(sub, Object.keys(TASK_SUBCOMMANDS)) : null;
     throw new CliUsageError(suggestion
       ? `task: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
-      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, handoff-preflight, refresh-handoff-evidence, attempt-status, abandon-attempt, adopt-historical, readiness-plan, measure, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, status.');
+      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, handoff-preflight, refresh-handoff-evidence, attempt-status, abandon-attempt, adopt-historical, readiness-plan, readiness-apply, measure, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, status.');
   }
   const { opts, positional } = parseCommandArgs(`task ${sub}`, TASK_SUBCOMMANDS[sub], args.slice(1));
   const target = resolveCliTarget(io, opts.target);
@@ -1933,9 +2033,7 @@ export async function cmdTask(args, io = createIo()) {
         basePaths: base.paths,
         dependencies: dependency.statuses,
         readinessContext: { base: base.evidence, dependencies: dependency.evidence },
-        rescanTrigger: opts.rescanTrigger
-          ? String(opts.rescanTrigger)
-          : 'inventory membership or enumeration coverage, task carrier digests, base or dependency evidence, ownership, coupling, or decomposition source revision changes',
+        rescanTrigger: opts.rescanTrigger ? String(opts.rescanTrigger) : DECOMPOSITION_RESCAN_TRIGGER,
       });
       if (!prepared.ok) {
         // The canonical validation-result envelope is the diagnostic surface;
@@ -3538,11 +3636,9 @@ export async function cmdTask(args, io = createIo()) {
         io.err('task readiness-plan requires <id>');
         return EXIT_USAGE;
       }
-      const plan = buildReadinessPlan(target, taskId, {
-        projectConfig,
-        actor: opts.actor ? String(opts.actor) : null,
-        authority: opts.authority ? String(opts.authority) : null,
-      });
+      const plan = buildReadinessPlan(target, taskId, readinessPlanInputs({
+        target, taskId, opts, projectConfig, backend: selectedBackend.backend,
+      }));
       if (asJson) io.out(JSON.stringify(plan, null, 2));
       else {
         io.out(`Readiness plan for ${taskId}: ${plan.ready ? 'settled' : `${plan.pendingSteps.length} step(s) remaining`}`);
@@ -3555,9 +3651,64 @@ export async function cmdTask(args, io = createIo()) {
           for (const path of plan.writeSet) io.out(`    ${path}`);
         }
         if (!plan.ready) io.out(`  final commit trailer: ${plan.finalCommitTrailer.replace(/\n/g, ' / ')}`);
+        io.out(`  applicable: ${plan.applicable ? 'yes (task readiness-apply can settle this plan in one commit)' : 'no (display only)'}`);
+        for (const blocker of plan.blockers) io.out(`    blocker: ${blocker}`);
         io.out(`  ${plan.activationNote}`);
       }
       return plan.ready ? 0 : 1;
+    }
+
+    if (sub === 'readiness-apply') {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      const dryRun = opts.dryRun === true;
+      const yes = opts.yes === true;
+      if (!taskId || !opts.plan || dryRun === yes) {
+        const error = new CliUsageError(
+          'task readiness-apply requires <id>, --plan <path>, and exactly one of --dry-run or --yes; readiness mutation is never implicit'
+        );
+        return printGateResult('task readiness-apply',
+          commandFailure('task readiness-apply', error, 'usage', { task_id: taskId ?? null }, target), asJson, io, EXIT_USAGE);
+      }
+      let plan;
+      try {
+        plan = readTargetJson(target, opts.plan, 'readiness plan');
+      } catch (error) {
+        return printGateResult('task readiness-apply',
+          commandFailure('task readiness-apply', error, 'operational_error', { task_id: taskId }, target), asJson, io);
+      }
+      const applied = applyReadinessPlan({
+        target,
+        taskId,
+        plan,
+        projectConfig,
+        dryRun,
+        ...createReadinessApplyBindings(target, projectConfig, taskId),
+        io,
+      });
+      if (asJson) io.out(JSON.stringify(applied, null, 2));
+      else {
+        io.out(`agenticloop task readiness-apply ${taskId}`);
+        io.out(`  disposition:   ${applied.mutationDisposition}`);
+        io.out(`  plan digest:   ${applied.planDigest ?? '(unreadable)'}`);
+        io.out(`  expected HEAD: ${applied.expectedHead ?? '(none)'}`);
+        io.out(`  resulting HEAD:${applied.resultingHead ? ` ${applied.resultingHead}` : ' (unchanged)'}`);
+        io.out(`  commits:       ${applied.commitCount}`);
+        io.out(`  changed paths: ${applied.changedPaths.join(', ') || '(none)'}`);
+        io.out(`  activation:    planned=${applied.activationPlanned} created=${applied.activationCreated}`);
+        if (applied.readiness) {
+          io.out(`  readiness:     ${applied.readiness.ready ? 'ready' : `pending ${applied.readiness.pendingSteps.join(', ')}`}`);
+        }
+        for (const error of applied.errors) io.err(`  ERROR: ${error}`);
+        for (const error of applied.rollbackErrors) io.err(`  ROLLBACK: ${error}`);
+        if (applied.recovery) io.out(`  recovery:      ${applied.recovery}`);
+        if (applied.nextAction) io.out(`  next:          ${applied.nextAction}`);
+      }
+      return applied.mutationDisposition === 'committed' ||
+        applied.mutationDisposition === 'already_current' ||
+        applied.mutationDisposition === 'dry_run'
+        ? 0
+        : 1;
     }
 
     if (sub === 'measure') {
@@ -3760,37 +3911,24 @@ export async function cmdTask(args, io = createIo()) {
         return 1;
       }
       const body = readFileSync(filePath, 'utf8');
-      const contract = taskContractDigest(body);
-      if (!contract.ok) {
-        io.err(contract.error);
-        return 1;
-      }
-      const history = loadFilesTaskContractRecords(target, taskId);
-      if (history.errors.length) {
-        for (const error of history.errors) io.err(error);
-        return 1;
-      }
-      const record = createTaskContractBaselineRecord({
-        recordId: `files-task-contract:${randomUUID()}`,
+      // One shared preparer: `task readiness-apply` builds and validates the
+      // identical candidate through the identical validators, so the two routes
+      // can never accept a baseline the other would refuse.
+      const prepared = prepareTrustedBaselineCandidate({
+        target,
         taskId,
-        digest: contract.digest,
-        projection: contract.projection,
-        authority: String(opts.authority),
+        body,
         actor: String(opts.actor),
+        authority: String(opts.authority),
         timestamp: new Date().toISOString(),
+        recordId: `files-task-contract:${randomUUID()}`,
         affectedArtifact: relative(target, filePath).replace(/\\/g, '/'),
       });
-      // A second baseline is never created over trusted history: validate the
-      // prospective record against the committed chain before writing.
-      const prospective = validateTaskContractBaseline(body, {
-        lifecycle: 'legacy',
-        trustedRecords: history.trustedRecords,
-        prospectiveRecords: [record],
-      });
-      if (!prospective.ok) {
-        for (const error of prospective.errors) io.err(error);
+      if (!prepared.ok) {
+        for (const error of prepared.errors) io.err(error);
         return 1;
       }
+      const record = prepared.record;
       const historyPath = appendFilesTaskContractRecord(target, record);
       const message = `Wrote ${relative(target, historyPath).replace(/\\/g, '/')}; commit it separately before it can become a trusted baseline.`;
       if (opts.json) io.out(JSON.stringify({ ok: true, record, historyPath, warning: message }));
@@ -3980,36 +4118,38 @@ export async function cmdTask(args, io = createIo()) {
           if (error instanceof PublicCommandError) return failure(error);
           throw error;
         }
-        let base;
-        let dependencies;
+        let evidence;
         try {
-          base = readExplicitBaseEvidence(target, opts);
-          dependencies = readDependencyEvidence(target, opts.dependencies, taskId);
+          const base = readExplicitBaseEvidence(target, opts);
+          const dependencies = readDependencyEvidence(target, opts.dependencies, taskId);
+          // The one shared preparer. `task readiness-apply` calls it with a
+          // prospective baseline entering the same commit; this standalone route
+          // supplies none, so it still requires an already-committed trusted
+          // chain exactly as before.
+          evidence = prepareAgentReadyEvidence({
+            target,
+            taskId,
+            relPath,
+            currentContent,
+            parsedContent,
+            currentDigest,
+            currentStatus,
+            base,
+            dependencies,
+          });
         } catch (error) {
           if (error instanceof PublicCommandError) return failure(error);
           throw error;
         }
-        try {
-          evidenceContext = createTaskEvidenceContext({
-            backend: 'files',
-            task: { id: taskId, carrier: relPath, expectedDigest: currentDigest },
-            transition: { fromStatus: currentStatus, toStatus: nextStatus },
-            base: base.evidence,
-            dependencies: dependencies.evidence,
-          });
-        } catch (error) {
-          return failure(new VerificationContextMalformedError(error.message));
+        evidenceContext = evidence.evidenceContext ?? null;
+        if (!evidence.ok && evidence.stage === 'evidence_context') {
+          return failure(new VerificationContextMalformedError(evidence.errors[0]));
         }
-        const readiness = evaluateTaskReadiness({
-          taskBody: parsedContent,
-          basePaths: base.paths,
-          mode: 'authoring',
-          dependencies: dependencies.statuses,
-        });
         // Blocking is represented structurally: readiness facts stay verbatim
         // and the gate outcome is the blocking signal, never role prose
         // prepended to a factual warning.
-        if (readiness.errors.length > 0 || readiness.warnings.length > 0) {
+        if (!evidence.ok && evidence.stage === 'readiness') {
+          const readiness = evidence.readiness;
           return printGateResult('task status', {
             ok: false,
             diagnostics: readiness.diagnostics,
@@ -4028,14 +4168,8 @@ export async function cmdTask(args, io = createIo()) {
         }
         // Entering agent-ready is always a lifecycle transition: even a
         // schema-less legacy task requires a trusted baseline chain first.
-        const history = loadFilesTaskContractRecords(target, taskId);
-        const baseline = validateTaskContractBaseline(currentContent, {
-          lifecycle: 'transition',
-          trustedRecords: history.trustedRecords,
-          trustedRecordErrors: history.errors,
-        });
-        if (!baseline.ok) {
-          for (const error of baseline.errors) io.err(`Task cannot become agent-ready: ${error}`);
+        if (!evidence.ok) {
+          for (const error of evidence.errors) io.err(`Task cannot become agent-ready: ${error}`);
           return 1;
         }
       }
@@ -4167,29 +4301,29 @@ export async function cmdTask(args, io = createIo()) {
       }
 
       // --- 3. Candidate construction and complete candidate validation ---
-      let candidate = replaceFrontmatterField(currentContent, 'status', nextStatus);
-      candidate = nextStatus === 'blocked'
-        ? replaceFrontmatterField(candidate, 'block_category', blockCategory)
-        : replaceFrontmatterField(candidate, 'block_category', null);
-      if (opts.note && opts.note !== true) {
-        candidate = appendComment(candidate, String(opts.note));
-      }
-       const candidateDigest = taskRecordDigest(candidate);
+      // One shared candidate builder, used identically by the orchestrated
+      // readiness transaction.
+      const built = prepareTaskStatusCandidate({
+        currentContent,
+        relPath,
+        nextStatus,
+        blockCategory,
+        note: opts.note && opts.note !== true ? String(opts.note) : null,
+        appendNote: appendComment,
+      });
+      const candidate = built.candidate;
+      const candidateDigest = built.candidateDigest;
       if (roleStartRecognition?.recognized) {
         roleStartConsumption = createDispatchConsumption({
           backend: 'files', taskId, recognition: roleStartRecognition,
           currentCarrierDigest: candidateDigest,
         });
       }
-      const candidateRoot = evaluateTaskRecordRoot(candidate);
-      const candidateDiagnostics = candidateRoot.ok
-        ? validateTaskRecordDiagnostics(candidate, relPath)
-        : candidateRoot.diagnostics;
-      if (candidateDiagnostics.length > 0) {
+      if (!built.ok) {
         return printGateResult('task status', {
           ok: false,
-          diagnostics: candidateDiagnostics,
-          errors: candidateDiagnostics.map(item => `Task status candidate is invalid: ${item.message}`),
+          diagnostics: built.diagnostics,
+          errors: built.diagnostics.map(item => `Task status candidate is invalid: ${item.message}`),
           warnings: [],
           committedStateEvaluated: true,
           rollbackAuthorized: false,

@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+### Added
+- Added `task readiness-apply <id> --plan <path> (--dry-run|--yes)`, the
+  Maintainer-owned mutation that settles the whole files-backed readiness
+  sequence as one transaction. It consumes one reviewed executable readiness
+  plan, re-resolves every bound input, validates the exact candidate bundle
+  prospectively, writes the task-contract history append, the decomposition
+  source, and the task carrier through the shared filesystem mutation kernel, and
+  creates **at most one** Maintainer-attributed commit. Previously this took four
+  or five commands and usually two commits, and a repair in the middle could
+  invalidate evidence an earlier command had already produced.
+- Extended `task readiness-plan` with the exact apply inputs (`--actor`,
+  `--authority`, `--work-unit`, `--base`/`--base-paths`, `--dependencies`,
+  `--max-age-seconds`, `--route`, `--rescan-trigger`). The command remains
+  read-only. With every input supplied it emits an **executable** plan
+  (`applicable: true`) that binds the expected HEAD, the expected carrier digest,
+  the trusted contract-chain terminal state, the resolved base tree, the committed
+  dependency snapshot and its source commit, the observed task inventory, the exact
+  write set with each path's expected predecessor state, the final commit message,
+  and a `planDigest` over the whole closed plan. Without them the plan is
+  display-only and lists its blockers. The plan schema version is now 2.
+
+### Changed
+- `task readiness-apply` refuses a stale or altered plan before any write:
+  unknown plan fields, an unsupported schema version, a tampered digest, a wrong
+  task, backend, or repository identity, an unresolved placeholder, a product or
+  activation path in the write set, and duplicate or conflicting write entries all
+  fail closed, as does a moved HEAD, a changed carrier digest or status, damaged
+  trusted history, a changed dependency snapshot, changed inventory membership, or
+  a changed predecessor path state.
+- `task readiness-apply` never stages a path it did not plan. Any staged change,
+  unrelated tracked or untracked change, dirty planned path whose bytes the plan
+  did not bind, or detached HEAD is refused, and nothing unsafe is reset,
+  restored, or discarded. `git add -A` is never used and Git hooks and signing
+  policy are never bypassed. The write set is workflow evidence only; readiness
+  never writes activation and never activates.
+- The readiness transaction prepares the decomposition over the prospective
+  agent-ready carrier the same commit introduces, so the committed decomposition
+  is no longer stale against its own commit.
+- `task establish-baseline` and `task status <id> agent-ready` now build and
+  validate their candidates through the same extracted preparation functions the
+  readiness transaction uses, so the standalone and orchestrated routes cannot
+  accept different evidence. Their observable behavior is unchanged.
+- `task readiness-apply` is declared files-only. Invoking it with the GitHub
+  backend returns the standard typed unsupported-backend result rather than a
+  partial cross-carrier orchestration.
+
 ## 0.4.2 - 2026-08-16
 
 ### Highlights
