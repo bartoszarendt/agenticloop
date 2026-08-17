@@ -273,3 +273,40 @@ export function projectHistoricalAdoption(record) {
     digest: record.digest,
   });
 }
+
+/**
+ * Read and validate one task's adoption record, if it has one.
+ *
+ * Three outcomes, kept distinct on purpose:
+ *
+ * - no record: `{ ok: false, record: null, errors: [] }` - the ordinary case
+ *   for a task that simply was not adopted.
+ * - a valid record: `{ ok: true, record }`.
+ * - a record that exists but does not validate: `{ ok: false, errors }`.
+ *
+ * The third must never collapse into the first. A corrupted adoption falling
+ * back to "not adopted" would hide the damage behind an ordinary refusal, and
+ * the whole point of the record is that a reader can tell what happened years
+ * later.
+ */
+export function readHistoricalAdoption(target, taskId, expected = {}) {
+  const { existsSync, readFileSync } = globalThis.process.getBuiltinModule('node:fs');
+  const { join } = globalThis.process.getBuiltinModule('node:path');
+  let relPath;
+  try {
+    relPath = historicalAdoptionRelativePath(taskId);
+  } catch (error) {
+    return { ok: false, record: null, errors: [error.message] };
+  }
+  const path = join(target, ...relPath.split('/'));
+  if (!existsSync(path)) return { ok: false, record: null, errors: [] };
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    return { ok: false, record: null, errors: [`historical adoption is unreadable: ${error.message}`] };
+  }
+  const checked = validateHistoricalAdoption(parsed, { taskId, ...expected });
+  if (!checked.ok) return { ok: false, record: null, errors: checked.errors };
+  return { ok: true, record: Object.freeze(parsed), errors: [] };
+}

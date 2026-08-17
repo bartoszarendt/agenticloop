@@ -94,6 +94,7 @@ import { loadFilesTaskContractRecords } from './files-task-contract.js';
 import { provisionOperatorActivationKey, readExternalActivationRevocations } from './activation-trust.js';
 import { refetchGitHubReturnEvidence } from './github-return-evidence.js';
 import { currentDispatchConsumption } from './handoff-consumption.js';
+import { HISTORICAL_ADOPTION_ASSURANCE, readHistoricalAdoption } from './historical-adoption.js';
 import {
   createLegacyUnactivatedWaiver,
   readLegacyUnactivatedWaiver,
@@ -371,6 +372,40 @@ function resolveCoveredTaskAssurance(target, io, context) {
     return { taskId, usable: false, activation: null, failureCategory: activationFailureCategory(reasons), reasons };
   }
   if (!evidence) {
+    // A task adopted through the historical path has no activation grant and
+    // never will: it predates the lifecycle, and inventing one is the single
+    // thing that path exists to prevent (C12-F10). Its frozen adoption record
+    // is consumed here as a *reduced-assurance* terminal input, so a work unit
+    // containing historical work can complete closeout without either
+    // re-waiving the missing evidence for every task or fabricating it.
+    //
+    // The reduced grade travels with it. Nothing below promotes an adopted task
+    // to a canonical assurance, and `canonicalClosure: false` stays visible in
+    // the projection.
+    const adopted = readHistoricalAdoption(target, taskId, { backend, repositoryIdentity, contractDigest: identity.contract.digest });
+    if (adopted.ok) {
+      return {
+        taskId,
+        usable: true,
+        activation: HISTORICAL_ADOPTION_ASSURANCE,
+        source: 'historical_adoption',
+        derivation: 'historical_adoption',
+        producer: adopted.record.disposition.authority,
+        channel: 'human_adoption',
+        authorityDigest: adopted.record.digest,
+        evaluatedAt: 'not_applicable',
+        canonicalClosure: false,
+        missingEvidence: [...adopted.record.missingEvidence],
+        failureCategory: null,
+        reasons: [],
+      };
+    }
+    if (adopted.errors.length) {
+      // An adoption record that exists but does not validate is unevaluable
+      // state, never an absence: accepting it as "no adoption" would let a
+      // corrupted record fall back to an ordinary refusal and hide the damage.
+      return { taskId, usable: false, activation: null, failureCategory: 'activation_malformed', reasons: adopted.errors };
+    }
     return { taskId, usable: false, activation: null, failureCategory: 'activation_evidence_absent', reasons: ['no activation grant or legacy capture'] };
   }
   const externalRevocations = readExternalActivationRevocations(target, {

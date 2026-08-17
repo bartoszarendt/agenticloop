@@ -133,3 +133,59 @@ export function renderActivationRepair(facts = {}) {
     ...rest.map(option => `or, when ${option.when}: ${option.command}`),
   ].join('; ');
 }
+
+/**
+ * Revocation during execution is not expiry, and is not handled like it.
+ *
+ * C12-F9 asked that the two be kept apart, and the reason is that they mean
+ * opposite things about the work already done. Expiry says the authority ran
+ * out of time; the work it authorized was authorized, and pinning closeout to
+ * the consumption instant preserves that. Revocation says the operator
+ * withdrew the authority deliberately - and someone who revokes mid-execution
+ * is not saying "finish up", they are saying stop.
+ *
+ * So a revoked grant fails at every instant, including the consumption instant,
+ * and the disposition below is what a caller does about the work in flight. It
+ * is deliberately not automatic: discarding an Engineer's completed work and
+ * continuing to a return that a revoked authority no longer covers are both
+ * decisions a human makes.
+ */
+export const REVOCATION_DURING_EXECUTION_DISPOSITIONS = Object.freeze([
+  'abandon_attempt',
+  'operator_reauthorize',
+]);
+
+/**
+ * Describe what an operator may do about an attempt whose grant was revoked.
+ *
+ * @param {{ taskId?: string, attemptId?: string|null, hasRecordedWork?: boolean }} facts
+ */
+export function revocationDuringExecutionPlan(facts = {}) {
+  const taskId = facts.taskId ?? '<task-id>';
+  const attemptId = facts.attemptId ?? null;
+  return Object.freeze({
+    // Stated first, because the whole point is that this is not an expiry.
+    distinctFromExpiry: true,
+    note:
+      'A revoked grant fails at every instant, including the consumption instant. ' +
+      'Expiry is non-retroactive; revocation is not, because it is a deliberate withdrawal rather than a lapse.',
+    hasRecordedWork: facts.hasRecordedWork === true,
+    options: Object.freeze([
+      Object.freeze({
+        disposition: 'operator_reauthorize',
+        when: 'the revocation was not intended to stop this work',
+        command: `npx agenticloop activate ${taskId}`,
+      }),
+      Object.freeze({
+        disposition: 'abandon_attempt',
+        when: 'the work must stop and its execution evidence is discarded',
+        command: attemptId
+          ? `npx agenticloop task abandon-attempt ${taskId} --attempt ${attemptId} --reason <text> --authority <kind:reference>`
+          : `npx agenticloop task attempt-status ${taskId} --json`,
+      }),
+    ]),
+    // No default. Choosing between discarding completed work and continuing
+    // under withdrawn authority is not a decision this code may make.
+    defaultDisposition: null,
+  });
+}
