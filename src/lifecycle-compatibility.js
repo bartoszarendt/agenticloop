@@ -10,6 +10,7 @@ import { DISPATCH_CONSUMPTION_SCHEMA_VERSION } from './handoff-consumption.js';
 import { TASK_CARRIER_MUTATION_RECEIPT_SCHEMA_VERSION } from './task-evidence-contract.js';
 import { RETURN_VERIFICATION_SCHEMA_VERSION } from './return-verification.js';
 import { DISPATCH_PREPARATION_SCHEMA_VERSION } from './dispatch-envelope.js';
+import { EXECUTION_ATTEMPT_ABANDONMENT_SCHEMA_VERSION } from './execution-attempt.js';
 
 export const LIFECYCLE_COMPATIBILITY_SCHEMA_VERSION = 1;
 
@@ -25,6 +26,7 @@ function currentVersions() {
     'agenticloop.task-mutation-receipt': TASK_CARRIER_MUTATION_RECEIPT_SCHEMA_VERSION,
     'agenticloop.return-verification': RETURN_VERIFICATION_SCHEMA_VERSION,
     'agenticloop.dispatch-preparation': DISPATCH_PREPARATION_SCHEMA_VERSION,
+    'agenticloop.execution-attempt-abandonment': EXECUTION_ATTEMPT_ABANDONMENT_SCHEMA_VERSION,
   };
 }
 

@@ -150,6 +150,14 @@ import {
   listDispatchConsumptions,
   resolveCarrierLineage,
 } from './handoff-consumption.js';
+import {
+  EXECUTION_ATTEMPT_ABANDONMENT_KIND,
+  EXECUTION_ATTEMPT_ABANDONMENT_SCHEMA_VERSION,
+  PACKET_CONSERVATION_DIAGNOSTIC_CODE,
+  evaluateTaskPacketConservation,
+  executionAttemptAbandonmentRelativePath,
+  validateExecutionAttemptAbandonment,
+} from './execution-attempt.js';
 import { createDegradedEnforcementReports } from './host-role-capabilities.js';
 import { REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION, validateRequiredCheckEvidence, requiredCheckEvidenceMatchesInventory } from './required-checks.js';
 import { produceExecutionEvidence, parseRequiredCheckCommand, validateExecutionEvidence } from './execution-evidence.js';
@@ -282,6 +290,8 @@ const TASK_SUBCOMMAND_BACKENDS = Object.freeze({
   lint: Object.freeze(['files']),
   new: Object.freeze(['files']),
   'establish-baseline': Object.freeze(['files']),
+  'abandon-attempt': Object.freeze(['files']),
+  'attempt-status': Object.freeze(['files']),
   'authorize-correction': Object.freeze(['files']),
   'prepare-decomposition': Object.freeze(['files', 'github']),
   'prepare-dispatch': Object.freeze(['files', 'github']),
@@ -1576,7 +1586,7 @@ export async function cmdTask(args, io = createIo()) {
     const suggestion = sub ? suggestName(sub, Object.keys(TASK_SUBCOMMANDS)) : null;
     throw new CliUsageError(suggestion
       ? `task: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
-      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, handoff-preflight, refresh-handoff-evidence, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, status.');
+      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, handoff-preflight, refresh-handoff-evidence, attempt-status, abandon-attempt, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, status.');
   }
   const { opts, positional } = parseCommandArgs(`task ${sub}`, TASK_SUBCOMMANDS[sub], args.slice(1));
   const target = resolveCliTarget(io, opts.target);
@@ -2085,6 +2095,30 @@ export async function cmdTask(args, io = createIo()) {
           roleId: opts.role,
         }, dispatchOptions);
       } else {
+        // Packet conservation, asked only when a *new* packet is being minted.
+        // Re-validating an existing packet (`--packet`) is how a live attempt
+        // proves itself and must never be refused here.
+        //
+        // C12-F8: without this, a fresh packet silently replaced the one an
+        // Engineer had already built against, until no retained packet
+        // represented the start of the work that existed. The attempt reaches a
+        // canonical return or is explicitly abandoned.
+        const conservation = evaluateTaskPacketConservation(target, taskId, { backend });
+        if (!conservation.ok) {
+          const error = new PublicCommandError(conservation.reason, {
+            code: PACKET_CONSERVATION_DIAGNOSTIC_CODE,
+            evidenceState: 'negative',
+            disposition: 'blocked',
+            committedStateEvaluated: true,
+            publicMessage: conservation.reason,
+            safeRepair: conservation.repair,
+          });
+          return printGateResult(
+            'task prepare-dispatch',
+            commandFailure('task prepare-dispatch', error, 'operational_error', { task_id: taskId }, target),
+            asJson, io
+          );
+        }
         let assignment;
         try {
           const readinessSource = derivedSources?.readiness ?? input?.readiness;
@@ -3409,6 +3443,108 @@ export async function cmdTask(args, io = createIo()) {
       };
       if (asJson) io.out(JSON.stringify(result, null, 2));
       else io.out(`Prepared files review entry for ${taskId}: ${reviewPath}`);
+      return 0;
+    }
+
+    if (sub === 'attempt-status') {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      if (!taskId) {
+        io.err('task attempt-status requires <id>');
+        return EXIT_USAGE;
+      }
+      const conservation = evaluateTaskPacketConservation(target, taskId, { backend: selectedBackend.backend });
+      const report = {
+        command: 'task attempt-status',
+        taskId,
+        newPacketPermitted: conservation.ok,
+        liveAttempt: conservation.liveAttempt,
+        attempts: conservation.attempts,
+        ...(conservation.ok ? {} : { reason: conservation.reason, safeRepair: conservation.repair }),
+      };
+      if (asJson) io.out(JSON.stringify(report, null, 2));
+      else {
+        io.out(`Execution attempts for ${taskId}: ${conservation.attempts.length}`);
+        for (const attempt of conservation.attempts) {
+          io.out(`  ${attempt.sequence}. ${attempt.attemptId} [${attempt.state}]`);
+          io.out(`     packet:       ${attempt.packetId}`);
+          io.out(`     product base: ${attempt.productBaseHead}`);
+          io.out(`     consumed:     ${attempt.consumedAt}`);
+          if (attempt.abandonment) {
+            io.out(`     abandoned:    ${attempt.abandonment.abandonedAt} (${attempt.abandonment.authority})`);
+            io.out(`     reason:       ${attempt.abandonment.reason}`);
+          }
+        }
+        if (conservation.attempts.length === 0) io.out('  (none)');
+        io.out(`  new packet permitted: ${conservation.ok ? 'yes' : 'no'}`);
+        if (!conservation.ok) {
+          io.err(conservation.reason);
+          io.err(conservation.repair);
+        }
+      }
+      return conservation.ok ? 0 : 1;
+    }
+
+    if (sub === 'abandon-attempt') {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      if (!taskId || !opts.attempt || !opts.reason || !opts.authority) {
+        io.err('task abandon-attempt requires <id>, --attempt <attempt-id>, --reason <text>, and --authority <kind:reference>');
+        return EXIT_USAGE;
+      }
+      const backend = selectedBackend.backend;
+      const conservation = evaluateTaskPacketConservation(target, taskId, { backend });
+      const requested = String(opts.attempt);
+      const attempt = conservation.attempts.find(item => item.attemptId === requested) ?? null;
+      // Abandoning names an attempt that exists and is live. Inventing a record
+      // for an unknown or already-closed attempt would create exactly the kind
+      // of unbacked evidence this whole path exists to prevent.
+      if (!attempt) {
+        io.err(`Execution attempt '${requested}' is not recorded for ${taskId}.`);
+        io.err(`Run 'npx agenticloop task attempt-status ${taskId} --json' to read the exact attempt identities.`);
+        return 1;
+      }
+      if (attempt.state !== 'live') {
+        io.err(`Execution attempt '${requested}' is already ${attempt.state}; nothing to abandon.`);
+        return 1;
+      }
+      const record = {
+        kind: EXECUTION_ATTEMPT_ABANDONMENT_KIND,
+        schemaVersion: EXECUTION_ATTEMPT_ABANDONMENT_SCHEMA_VERSION,
+        backend,
+        taskId,
+        attemptId: attempt.attemptId,
+        packetId: attempt.packetId,
+        reason: String(opts.reason),
+        disposition: 'abandoned',
+        authority: String(opts.authority),
+        abandonedAt: new Date().toISOString(),
+      };
+      const checked = validateExecutionAttemptAbandonment(record, { taskId });
+      if (!checked.ok) {
+        for (const error of checked.errors) io.err(error);
+        return EXIT_USAGE;
+      }
+      const relPath = executionAttemptAbandonmentRelativePath(record);
+      const applied = executeMutationBatch(target, [{
+        type: 'create', path: relPath, content: `${JSON.stringify(record, null, 2)}\n`,
+      }]);
+      if (!applied.ok) {
+        for (const error of [...applied.errors, ...applied.rollbackErrors]) io.err(error);
+        return 1;
+      }
+      if (asJson) {
+        io.out(JSON.stringify({
+          command: 'task abandon-attempt', taskId, attemptId: attempt.attemptId,
+          packetId: attempt.packetId, path: relPath, record,
+        }, null, 2));
+      } else {
+        io.out(`Abandoned execution attempt ${attempt.attemptId} for ${taskId}`);
+        io.out(`  packet:   ${attempt.packetId}`);
+        io.out(`  record:   ${relPath}`);
+        io.out('  The abandoned attempt and its evidence are preserved, not deleted.');
+        io.out(`  next:     npx agenticloop task prepare-dispatch ${taskId} --host <host> --role engineer`);
+      }
       return 0;
     }
 

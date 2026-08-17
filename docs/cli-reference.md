@@ -562,6 +562,52 @@ either the grant and every binding land, or none do and the versioned mutation
 receipt says so. A failed multi-task activation therefore produces no partial
 authority.
 
+### Execution attempts and packet conservation
+
+```text
+npx agenticloop task attempt-status <task-id> [--json]
+npx agenticloop task abandon-attempt <task-id> --attempt <attempt-id> --reason <text> --authority <kind:reference> [--json]
+```
+
+A dispatch packet is not a ticket that can be reissued. It is the evidence that
+one execution attempt started from one product base, and once an Engineer has
+mutated anything under it, that packet is the only thing that can still explain
+what the mutation was relative to.
+
+So a consumed packet **reaches a canonical return or is explicitly abandoned**.
+`task prepare-dispatch` applies the rule before minting a new packet:
+
+| State | New packet |
+| --- | --- |
+| No attempt has been consumed | permitted |
+| A live attempt exists and has recorded no Engineer mutation | permitted — nothing was built against the old base |
+| A live attempt exists and has recorded Engineer mutations | **refused** |
+| The previous attempt was explicitly abandoned | permitted, with the abandoned attempt still on record |
+
+Re-validating an existing packet with `task prepare-dispatch <id> --packet
+<path>` is never refused by this rule: that is how a live attempt proves itself.
+
+The attempt identity is derived from the consumption that started it — its
+packet, invocation, and product base — rather than minted alongside it, so it
+cannot drift from the evidence it names. Two consumptions that share a packet id
+but not a product base are **not** the same attempt, which is exactly why a
+packet minted after product work can never be read as proof of the original
+base.
+
+`attempt-status` lists every attempt with its packet, product base, consumption
+instant, state, and — for abandoned attempts — the stated reason and authority.
+It exits non-zero when a new packet is not permitted.
+
+`abandon-attempt` is the explicit escape, and the refusal names it verbatim. It
+requires a stated `--reason` and a durable `--authority` reference: discarding
+execution evidence is an operator decision, so it is recorded as one. It refuses
+an attempt that is not recorded or is already closed, and it never deletes the
+abandoned attempt or its evidence.
+
+Unreadable consumption, abandonment, or carrier-mutation evidence fails closed.
+"I cannot read this abandonment" is never treated as "there is no abandonment",
+because that direction silently re-enables the reminting the rule prevents.
+
 ### `agenticloop activation`
 
 ```text

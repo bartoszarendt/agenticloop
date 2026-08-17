@@ -21,6 +21,7 @@ primary_repair_capabilities:
   - repair_review_workspace
   - repair_attribution_trailer
   - repair_preflight_gate
+  - complete_or_abandon_attempt
 ---
 
 # Engineer

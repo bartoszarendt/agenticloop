@@ -181,6 +181,18 @@ workflow records are workflow paths, never implementation deviations. After a
 verified return, `task review-prepare <id>` writes a files review-entry receipt
 only when its one command-local carrier snapshot remains current.
 
+That chain is conserved. Each consumption under `.agenticloop/handoffs/dispatch/`
+starts one **execution attempt**, identified by a value derived from its packet,
+invocation, and product base rather than minted beside them. A consumed packet
+reaches a canonical return or is explicitly abandoned: once carrier mutation
+receipts exist under the live attempt, `task prepare-dispatch` refuses to mint a
+replacement, and names both legal exits. `task attempt-status <id>` reports the
+attempts and whether a new packet is permitted; `task abandon-attempt <id>`
+records an explicit discard under `.agenticloop/handoffs/attempts/` with a stated
+reason and a durable authority, preserving the abandoned attempt rather than
+deleting it. Re-validating an existing packet with `--packet` is never refused by
+this rule. Unreadable consumption, abandonment, or receipt evidence fails closed.
+
 New files-backed tasks materialize `attempt_budget` from project
 `default_attempt_budget`, then built-in `5`. A task-specific override is an
 explicit task-record edit made before work begins; the files `task new` command

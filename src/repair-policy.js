@@ -98,6 +98,10 @@ export const REPAIR_POLICY = Object.freeze({
   'return.assurance.session_reported': policy('role_return', 'repair_evidence', 'none', 'The role return is session-reported: its producing role identity is not host-authenticated.'),
   'dispatch.packet.invalid': policy('dispatch', 'repair_evidence', 'none', 'Dispatch packet evidence is malformed or incomplete.'),
   'dispatch.packet.stale': policy('dispatch', 'repair_evidence', 'none', 'Dispatch packet evidence is stale or changed.'),
+  // Conservation is a human-authority boundary, not an evidence repair: the
+  // only ways past it are completing the attempt or explicitly discarding its
+  // execution evidence, and the second is an operator decision.
+  'dispatch.packet.conserved': policy('dispatch', 'complete_or_abandon_attempt', 'human_authority_disposition', 'A live execution attempt has recorded work and its consumed packet cannot be replaced.'),
   'capability.declaration.invalid': policy('role_capability', 'repair_evidence', 'none', 'The host-role capability declaration is missing, malformed, contradictory, or incomplete.'),
   'capability.enforcement.degraded': policy('role_capability', 'repair_evidence', 'none', 'The host cannot enforce this role action natively; the declared authoritative detection boundary must evaluate it.'),
   'capability.action.denied': policy('role_capability', 'repair_evidence', 'none', 'The assigned role is not authorized for the requested workflow action.'),

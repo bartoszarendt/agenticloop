@@ -523,7 +523,7 @@ export const COMMAND_REGISTRY = {
   },
   task: {
     summary: 'Manage files-backed task records and canonical handoff preparation.',
-    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|handoff-preflight|refresh-handoff-evidence|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|status> [options]',
+    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|handoff-preflight|refresh-handoff-evidence|attempt-status|abandon-attempt|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|status> [options]',
     subcommands: {
       list: {
         summary: 'List task records.',
@@ -557,6 +557,25 @@ export const COMMAND_REGISTRY = {
           opt('scaffold', 'boolean', 'Create generic non-activated task scaffolding. Before dispatch, activate the existing task with agenticloop activate; a protected host adapter is optional unless hardened policy requires host_signed assurance.'),
           jsonOption,
         ],
+      },
+      'abandon-attempt': {
+        summary: 'Explicitly discard one live execution attempt so a new dispatch packet may be minted.',
+        usage: 'agenticloop task abandon-attempt <id> --attempt <attempt-id> --reason <text> --authority <kind:reference> [--json] [--target <dir>]',
+        positionals: [{ name: 'id', required: true }],
+        options: [
+          targetOption(),
+          opt('attempt', 'string', 'Exact live execution attempt identity reported by the conservation refusal. Required.'),
+          opt('reason', 'string', 'Why the attempt cannot reach a canonical return. Required and recorded verbatim.'),
+          opt('authority', 'string', 'Durable authorization reference in <kind>:<reference> form. Required.'),
+          jsonOption,
+        ],
+      },
+      'attempt-status': {
+        summary: 'Report the execution attempts recorded for one task and whether a new packet may be minted.',
+        usage: 'agenticloop task attempt-status <id> [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only',
+        positionals: [{ name: 'id', required: true }],
+        options: [targetOption(), jsonOption],
       },
       'establish-baseline': {
         summary: 'Append a files-backend baseline payload; it becomes trusted only after a separate commit.',
