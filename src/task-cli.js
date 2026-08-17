@@ -98,6 +98,7 @@ import { gitTreeObjectId, isGitObjectId } from './git-oid.js';
 import { GIT_MAX_BUFFER } from './git-runner.js';
 import { validateCommittedSourcePath, verifyCommittedAttributedSource } from './committed-source.js';
 import {
+  PARALLEL_SCAN_MAX_FRESHNESS_SECONDS,
   createTaskInventoryEnumeration,
   normalizeFilesTaskInventory,
   normalizeGitHubTaskInventory,
@@ -1320,6 +1321,29 @@ function refetchDispatchParallelScanInventory(backend, enumerateInventory, decom
  * attribution are always derived again before the receipt is authenticated.
  */
 /**
+ * The default wall-clock freshness window for a decomposition observation.
+ *
+ * The window is chosen by asking one question of the backend: can a dependency
+ * status change without producing an observable repository event?
+ *
+ * - **files**: no. Dependency statuses are task records inside the repository,
+ *   and the scan already binds inventory membership, each carrier digest, the
+ *   protected contract, the base tree, and the dependency snapshot's own
+ *   provenance. Any real change breaks one of those bindings and is refused
+ *   semantically, at both preflight and dispatch. The clock adds nothing a
+ *   binding does not already catch, so it is set to the trusted maximum and
+ *   acts only as a backstop against an observation left lying around for a day.
+ * - **github**: yes. Issue state lives outside the repository and can change
+ *   with no local event at all, so nothing local would notice. There the clock
+ *   is the only mechanism, and it stays short.
+ *
+ * `--max-age-seconds` still overrides either default explicitly.
+ */
+export function defaultDecompositionFreshnessSeconds(backend) {
+  return backend === 'github' ? 3600 : PARALLEL_SCAN_MAX_FRESHNESS_SECONDS;
+}
+
+/**
  * Resolve explicit base evidence. There is no implicit HEAD and no default
  * branch: exactly one of `--base` or `--base-paths` must be supplied, and a
  * `--base` ref is resolved to its exact tree object id so a later branch move
@@ -1863,7 +1887,18 @@ export async function cmdTask(args, io = createIo()) {
       } catch (error) {
         return printGateResult('task prepare-decomposition', commandFailure('task prepare-decomposition', error, 'operational_error', {}, target), asJson, io);
       }
-      const maxAgeSeconds = opts.maxAgeSeconds === undefined ? 3600 : Number(opts.maxAgeSeconds);
+      // Wall-clock freshness is a backstop for state that can change *without*
+      // an observable repository event - never a substitute for the semantic
+      // binding, and never a timer on work that is progressing normally.
+      //
+      // C12-F6: the flat one-hour default guaranteed expiry before return for
+      // any Engineer session longer than an hour, on a files-backed route where
+      // every dependency status lives in the repository and every change to one
+      // is already caught by the scan's inventory-membership and carrier-digest
+      // bindings. The clock was measuring session length, not staleness.
+      const maxAgeSeconds = opts.maxAgeSeconds === undefined
+        ? defaultDecompositionFreshnessSeconds(selectedBackend.backend)
+        : Number(opts.maxAgeSeconds);
       // One observation instant for the enumeration receipt and the scan: they
       // describe the same observation, so the emitted source is byte-identical
       // for identical inputs.

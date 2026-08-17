@@ -351,6 +351,31 @@ verifies only that every declared dependency has a recorded status; it does not
 re-observe dependency state, so the Maintainer remains responsible for those
 statuses still being currently true.
 
+#### Why the freshness window differs by backend
+
+`task prepare-decomposition` chooses its default `maxAgeSeconds` by asking one
+question: **can a dependency status change without producing an observable
+repository event?**
+
+| Backend | Default | Why |
+| --- | --- | --- |
+| `files` | 86,400s (the trusted maximum) | No. Dependency statuses are task records inside the repository, and the scan already binds inventory membership, each carrier digest, the protected contract, the base tree, and the dependency snapshot's provenance. A real change breaks a binding and is refused semantically at preflight and at dispatch, so the clock is only a backstop. |
+| `github` | 3,600s | Yes. Issue state lives outside the repository and can change with no local event, so nothing local would notice. There the clock is the only mechanism and stays short. |
+
+`--max-age-seconds` overrides either default, and a window an observation
+already declared is part of that evidence: changing the default never
+retroactively widens an existing observation.
+
+The previous flat 3,600-second default applied the GitHub answer to both
+backends. On a files route it measured how long the Engineer session took rather
+than whether the evidence was stale, so any run over an hour expired before it
+could produce a return — with nothing having changed.
+
+The bound set is the status set for **declared** dependencies. A status recorded
+for a task this one does not depend on is not a material change, and does not
+invalidate readiness. Over-invalidation is a defect in the same way a false
+green is.
+
 `commit-attribution check` accepts `--role orchestrator|maintainer|engineer|auditor`.
 The role is validated against the canonical registry and the final contiguous
 `Task:`/`Agent:` trailer parser is shared with decomposition verification. The

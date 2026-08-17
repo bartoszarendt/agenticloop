@@ -62,6 +62,7 @@ const MANIFEST = {
     'test/cli-target-resolution.test.js',
     'test/closeout-waiver.test.js',
     'test/c12r-committed-evidence.test.js',
+    'test/c12r-dependency-freshness.test.js',
     'test/c12r-dispatchability.test.js',
     'test/c12r-attempt-cli.test.js',
     'test/c12r-identity-migration.test.js',
