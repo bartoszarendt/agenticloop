@@ -492,10 +492,14 @@ nothing; rollback on the transaction's own failures restores only
 operation-owned paths and their index entries, narrowly, with no broad or
 destructive reset. Staging is one literal pathspec per planned path, the staged
 set is compared with the planned set, and the exact staged tree is captured
-before the commit; the created commit's tree must equal that captured tree
-after every hook has run, so a hook that stages an unplanned path cannot make
-it survive in a readiness commit - the divergent commit is rolled back and
-reported `rolled_back`. Git hooks and signing policy are never bypassed.
+before the commit; commit and rollback ownership are bound to the reviewed
+branch ref (captured before the commit, inspected directly afterward - never
+ambient HEAD, which a hook may have switched), and the created commit must be
+the one new commit on that ref carrying the captured tree and the reviewed
+message. A hook that contaminates that one commit is rolled back by a
+compare-and-swap ref update; every other divergence - additional hook-created
+commits, a switched branch, a moved ref - is preserved and reported
+`unresolved`. Git hooks and signing policy are never bypassed.
 
 The decomposition is prepared over the **prospective** agent-ready carrier the
 same commit introduces, so the committed decomposition is not stale against its

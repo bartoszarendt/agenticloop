@@ -24,17 +24,27 @@
   display-only and lists its blockers. The plan schema version is now 2.
 
 ### Fixed
-- `task readiness-apply` now guarantees the exact commit tree across Git hooks.
-  The exact staged tree is captured from the verified index before the commit,
-  and the created commit's tree must equal it after every hook has run: a hook
-  that stages an unplanned path (a product file above all) or rewrites the
-  staged bytes of a planned path can no longer make that content survive in a
-  readiness commit. The divergent commit is the transaction's own and is rolled
-  back narrowly - branch pointer back to the expected HEAD, index entries
-  restored one literal pathspec at a time, operation-owned paths restored to
-  their exact predecessor bytes - and reported `rolled_back`, never left behind
-  as `unresolved`. Hooks and signing policy remain fully honored (`--no-verify`
-  is never used).
+- `task readiness-apply` now guarantees the exact commit tree across Git hooks,
+  with commit and rollback ownership bound to the reviewed branch ref. The
+  exact staged tree is captured from the verified index before the commit, the
+  full symbolic ref and its OID are captured immediately before `git commit`,
+  and after every hook has run the *reviewed ref* - never ambient HEAD, which a
+  hook may have switched - must hold exactly one new commit directly above the
+  expected HEAD whose tree equals the captured tree and whose message is the
+  reviewed message. A hook that stages an unplanned path (a product file above
+  all) or rewrites planned bytes makes that one commit the transaction's own
+  invalid commit: it is rolled back by a compare-and-swap ref update
+  (`git update-ref <ref> <expected> <created>`) that moves only if the ref
+  still points at the created commit, with index entries restored one literal
+  pathspec at a time and operation-owned paths restored to their exact
+  predecessor bytes, and reported `rolled_back`. Everything else is preserved
+  and reported `unresolved`: a post-commit hook that adds another commit
+  (changed-tree or same-tree), a hook that switches branches (the other branch
+  is never rewound), a ref that moves between detection and rollback, or a
+  compare-and-swap refusal - no commit outside the one this transaction created
+  is ever rewritten, and receipt heads and commit counts are derived from the
+  actual post-state rather than assumed. Hooks and signing policy remain fully
+  honored (`--no-verify` is never used).
 - `already_current` is now a proven state rather than an early exit. A fresh
   ready plan is `already_current` only while its digest and bound facts still
   match; a consumed plan only while HEAD is still its exact readiness commit

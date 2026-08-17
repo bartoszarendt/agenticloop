@@ -36,12 +36,15 @@
  *   staged one literal pathspec at a time, the staged set is compared against
  *   the planned set, and the exact staged tree is captured before the commit;
  *   the created commit's tree must equal that captured tree after every hook
- *   has run. A hook that mutates the index - staging an unplanned product path,
- *   for example - cannot make that path survive in a readiness commit: the
- *   divergent commit is the transaction's own, and it is rolled back narrowly
- *   (branch pointer, per-path index entries, predecessor bytes) before any
- *   receipt is emitted. `git add -A` is never used and hooks and signing policy
- *   are never bypassed.
+ *   has run. Commit and rollback ownership are bound to the reviewed symbolic
+ *   ref, captured before the commit and inspected directly afterward - never
+ *   to ambient HEAD, which a hook may have switched. A hook that mutates the
+ *   index, adds commits, or switches branches therefore cannot make its
+ *   content survive in a readiness commit and cannot have its own commits or
+ *   branch rewound by this transaction's rollback: contamination of the one
+ *   owned commit is rolled back by a compare-and-swap ref update, and every
+ *   other divergence is preserved and reported `unresolved`. `git add -A` is
+ *   never used and hooks and signing policy are never bypassed.
  * - **A stale plan cannot mutate.** Every bound input is re-resolved and the
  *   recomputed plan digest is compared before the first write.
  *
@@ -623,13 +626,18 @@ function validateProspectiveBundle({ plan, candidates, current }) {
  *   beforeWrite?: Function|null,
  *   afterWrite?: Function|null,
  *   beforeCommit?: Function|null,
+ *   beforeRollback?: Function|null,
+ *   beforeRefRestore?: Function|null,
  * }} input
  *
- * `beforeWrite`, `afterWrite`, and `beforeCommit` are the three testable
- * boundaries of the transaction - immediately before the filesystem batch,
- * between the batch and its verification, and before the commit. Production
- * callers omit them; failure-injection coverage uses them to prove every
- * boundary refuses and restores correctly.
+ * `beforeWrite`, `afterWrite`, `beforeCommit`, `beforeRollback`, and
+ * `beforeRefRestore` are the testable boundaries of the transaction -
+ * immediately before the filesystem batch, between the batch and its
+ * verification, before the commit, between contamination detection and the
+ * commit rollback, and between the rollback's ownership proof and its
+ * compare-and-swap ref restoration. Production callers omit them;
+ * failure-injection coverage uses them to prove every boundary refuses and
+ * restores correctly.
  */
 export function applyReadinessPlan(input) {
   const {
@@ -637,6 +645,7 @@ export function applyReadinessPlan(input) {
     enumerateInventory, resolveBaseEvidence, resolveDependencyEvidence,
     io = null, now = Date.now(), recordId = null,
     beforeWrite = null, afterWrite = null, beforeCommit = null,
+    beforeRollback = null, beforeRefRestore = null,
   } = input;
 
   const refuse = (disposition, errors, extra = {}) => result({
@@ -993,23 +1002,85 @@ export function applyReadinessPlan(input) {
   }
 
   // --- 10. Exactly one Maintainer-attributed commit ----------------------
-  const restore = () => restorePredecessors(target, candidates, changedPaths);
+  const restore = () => restorePredecessors(target, candidates, changedPaths, executable.expectedHead);
+  // The reviewed ref and its actual state, read from the repository rather
+  // than assumed: every receipt below derives its heads and counts from these.
+  const commitState = ref => ({
+    head: ref ? gitOut(target, ['rev-parse', '--verify', ref]) : null,
+    count: ref ? countCommitsAboveRef(target, ref, executable.expectedHead) : null,
+  });
 
   const commitOutcome = createReadinessCommit({
     target, plan, candidates, changedPaths, beforeCommit,
   });
   if (!commitOutcome.ok) {
+    if (commitOutcome.worldDiverged) {
+      // git commit refused AND a hook moved HEAD away from the reviewed
+      // branch. Nothing is rolled back in this state - restoration could act
+      // on the wrong branch - so every ref, index entry, and written file is
+      // preserved exactly and handed to the operator.
+      const state = commitState(commitOutcome.originalRef);
+      return result({
+        taskId,
+        dryRun,
+        mutationDisposition: 'unresolved',
+        planDigest: plan.planDigest,
+        expectedHead: executable.expectedHead,
+        resultingHead: state.head,
+        priorTaskDigest,
+        resultingTaskDigest: taskRecordDigest(readFileSync(taskAbsolute, 'utf8')),
+        changedPaths,
+        commitCount: state.count ?? 0,
+        readiness: readinessSummary(current),
+        errors: commitOutcome.errors,
+        recovery: 'The commit was refused while HEAD had already moved away from the reviewed branch. ' +
+          'Nothing was rolled back, unstaged, or discarded: every ref, the staged entries, and the written candidate files were preserved exactly. ' +
+          'Inspect the current branch and the reported paths, then rerun readiness-plan.',
+      });
+    }
     if (commitOutcome.contaminated) {
       // This transaction's own commit was created but is not the reviewed
       // commit: a hook mutated the candidate index (an unplanned path or
       // rewritten planned bytes entered the tree) or rewrote the message.
-      // Roll the commit back narrowly rather than leave an unreviewed commit
-      // at HEAD described as unresolved.
-      const rollback = rollbackCreatedCommit({
-        target, expectedHead: executable.expectedHead, createdHead: commitOutcome.head,
-        candidates, changedPaths,
-      });
+      if (!commitOutcome.rollbackable) {
+        // The world no longer shows exactly the created commit - a hook
+        // switched branches or the ref moved - so even this transaction's own
+        // invalid commit is preserved rather than rewritten.
+        const state = commitState(commitOutcome.originalRef);
+        return result({
+          taskId,
+          dryRun,
+          mutationDisposition: 'unresolved',
+          planDigest: plan.planDigest,
+          expectedHead: executable.expectedHead,
+          resultingHead: state.head ?? commitOutcome.head,
+          priorTaskDigest,
+          resultingTaskDigest: taskRecordDigest(readFileSync(taskAbsolute, 'utf8')),
+          changedPaths,
+          commitCount: state.count ?? 1,
+          readiness: readinessSummary(current),
+          errors: commitOutcome.errors,
+          recovery: `An invalid readiness commit (${String(commitOutcome.head)}) exists, but the repository moved after it was created, so it was preserved rather than rolled back. ` +
+            'Inspect it and the reported paths before any further mutation; do not reuse this plan.',
+        });
+      }
+      let rollback;
+      try {
+        beforeRollback?.();
+        rollback = rollbackCreatedCommit({
+          target, originalRef: commitOutcome.originalRef,
+          expectedHead: executable.expectedHead, createdHead: commitOutcome.head,
+          candidates, changedPaths, beforeRefRestore,
+        });
+      } catch (error) {
+        rollback = {
+          errors: [`the rollback was interrupted: ${error instanceof Error ? error.message : String(error)}`],
+          unplannedPaths: [],
+        };
+      }
+      const state = commitState(commitOutcome.originalRef);
       const rolledBack = rollback.errors.length === 0 &&
+        state.head === executable.expectedHead && state.count === 0 &&
         candidates.every(item => predecessorMatches(target, item));
       const leftover = rollback.unplannedPaths.length > 0
         ? ` Hook-modified worktree state was left untouched for the operator: ${rollback.unplannedPaths.join(', ')}.`
@@ -1020,21 +1091,22 @@ export function applyReadinessPlan(input) {
         mutationDisposition: rolledBack ? 'rolled_back' : 'unresolved',
         planDigest: plan.planDigest,
         expectedHead: executable.expectedHead,
-        resultingHead: rolledBack ? executable.expectedHead : commitOutcome.head,
+        resultingHead: state.head ?? (rolledBack ? executable.expectedHead : commitOutcome.head),
         priorTaskDigest,
         resultingTaskDigest: rolledBack ? priorTaskDigest : null,
         changedPaths: rolledBack ? [] : changedPaths,
-        commitCount: 0,
+        commitCount: state.count ?? (rolledBack ? 0 : 1),
         readiness: readinessSummary(current),
         errors: [...commitOutcome.errors, ...rollback.errors],
         rollbackErrors: rollback.errors,
         recovery: rolledBack
-          ? `No readiness commit exists: the created commit did not carry the exact validated content and was rolled back. The branch points at ${executable.expectedHead} again, the index entries it changed were restored per path, and the operation-owned paths hold their exact predecessor state.${leftover} Repair or remove the hook's commit mutation, then rerun: npx agenticloop task readiness-plan ${taskId} --json ...`
-          : `An invalid readiness commit (${String(commitOutcome.head)}) could not be proved rolled back. Inspect it and the reported paths before any further mutation; do not reuse this plan.${leftover}`,
+          ? `No readiness commit exists: the created commit did not carry the exact validated content and was rolled back by a compare-and-swap ref update. The reviewed ref points at ${executable.expectedHead} again, the index entries it changed were restored per path, and the operation-owned paths hold their exact predecessor state.${leftover} Repair or remove the hook's commit mutation, then rerun: npx agenticloop task readiness-plan ${taskId} --json ...`
+          : `An invalid readiness commit could not be proved rolled back, and every ref and commit was preserved. Inspect the reported paths before any further mutation; do not reuse this plan.${leftover}`,
       });
     }
     if (commitOutcome.committed) {
-      // A commit exists but could not be verified. It is never reset or
+      // Commits exist on the reviewed ref that are not this transaction's
+      // alone, or the commit landed away from it. They are never reset or
       // rewritten automatically: the evidence is preserved and handed over.
       return result({
         taskId,
@@ -1050,8 +1122,9 @@ export function applyReadinessPlan(input) {
         commitCount: commitOutcome.observedCommitCount ?? 1,
         readiness: readinessSummary(current),
         errors: commitOutcome.errors,
-        recovery: `A readiness commit ${String(commitOutcome.head)} exists but failed post-commit verification. It was deliberately not reset or rewritten. ` +
-          `Inspect it, then repair through the ordinary Maintainer route: npx agenticloop task readiness-plan ${taskId} --json ...`,
+        recovery: commitOutcome.recovery ??
+          `Readiness commits exist that this transaction cannot account for (${String(commitOutcome.head)}). They were deliberately not reset or rewritten. ` +
+          `Inspect them, then repair through the ordinary Maintainer route: npx agenticloop task readiness-plan ${taskId} --json ...`,
       });
     }
     const rollbackErrors = restore();
@@ -1291,17 +1364,18 @@ function proveConsumedReadinessCommit(target, plan) {
  *
  * Nothing outside `candidates` is touched: no whole-repository reset, no
  * unrelated path, no discarded work. The index restoration is deliberately
- * narrow - `git reset HEAD -- <literal pathspec>` per operation-owned path -
- * and no broad or destructive reset (`--hard`, repository-wide) is performed
- * anywhere in this module.
+ * narrow - `git reset <anchor> -- <literal pathspec>` per operation-owned
+ * path, anchored to the transaction's expected HEAD explicitly rather than to
+ * ambient HEAD - and no broad or destructive reset (`--hard`,
+ * repository-wide) is performed anywhere in this module.
  */
-function restorePredecessors(target, candidates, changedPaths = null) {
+function restorePredecessors(target, candidates, changedPaths = null, anchor = 'HEAD') {
   const rollback = executeMutationBatch(target, candidates.map(item => (item.predecessor.state === 'absent'
     ? { type: 'remove', path: item.path }
     : { type: 'write', path: item.path, content: item.predecessorBytes })));
   const errors = [...rollback.errors, ...rollback.rollbackErrors];
   if (changedPaths !== null) {
-    const unstaged = git(target, ['reset', '--quiet', 'HEAD', '--', ...changedPaths.map(literalPathspec)]);
+    const unstaged = git(target, ['reset', '--quiet', anchor, '--', ...changedPaths.map(literalPathspec)]);
     if (unstaged.status !== 0) errors.push(`index restore: ${gitText(unstaged)}`);
   }
   return errors;
@@ -1343,36 +1417,44 @@ function readinessSummary(plan) {
 
 /**
  * Stage exactly the planned literal paths and create one commit whose tree is
- * exactly the validated candidate tree.
+ * exactly the validated candidate tree, with ownership bound to the reviewed
+ * ref.
  *
- * Which index and tree are authoritative, and when hooks run:
+ * Which index, tree, and ref are authoritative, and when hooks run:
  *
  * - The authoritative tree is captured from the index *after* staging:
  *   repository safety proved the index held nothing but HEAD, the staging added
  *   exactly the planned paths one literal pathspec at a time, and the staged
  *   set was compared against the planned set. `git write-tree` freezes that
  *   exact state as the tree the commit must carry.
+ * - The authoritative *ref* is the full symbolic ref HEAD names, captured with
+ *   its exact OID immediately before `git commit` is invoked. Every judgment
+ *   after the hooks reads THIS ref - never ambient HEAD, which a hook may have
+ *   switched to another branch.
  * - The commit is an ordinary `git commit`, so every hook the repository
- *   configures (pre-commit, commit-msg, ...) runs exactly as the operator set
- *   it, and signing policy (including `commit.gpgsign`) applies unchanged -
+ *   configures (pre-commit through post-commit) runs exactly as the operator
+ *   set it, and signing policy (including `commit.gpgsign`) applies unchanged -
  *   `--no-verify` is never used and no commit flags are overridden.
- * - Git advances the ref atomically with the commit, after every hook capable
- *   of changing the candidate index has run. A hook that mutates the index
- *   (staging an unplanned product path, or rewriting the staged bytes of a
- *   planned path) can therefore change the tree Git commits - which is exactly
- *   why the created commit's tree is compared against the captured tree
- *   immediately after `git commit` returns, before the transaction accepts the
- *   commit and before any success receipt exists.
- * - On divergence the transaction's own commit is rolled back narrowly
- *   (`rollbackCreatedCommit`): the branch pointer returns to the expected HEAD
- *   only after proving HEAD is still the created commit, index entries are
- *   restored one literal pathspec at a time for exactly the paths the commit
- *   changed, and the operation-owned worktree paths are restored to their exact
- *   predecessor bytes. No corrective commit is created and no unplanned commit
- *   is left at HEAD.
+ * - After `git commit` returns - after every hook capable of changing the
+ *   candidate index, the ref, or the ambient branch - the reviewed ref is
+ *   inspected in this order: (1) did it move at all; (2) does it hold exactly
+ *   ONE commit directly above the expected HEAD. Count and ancestry come
+ *   BEFORE any tree or message classification, so a post-commit hook that
+ *   added another commit (changed-tree or same-tree) can never be mistaken
+ *   for contamination of this transaction's own commit - the whole sequence is
+ *   preserved and reported `unresolved`.
+ * - Only when the reviewed ref holds exactly this transaction's direct child
+ *   is the content validated: the commit's tree must equal the captured tree
+ *   and its message and attribution must equal the reviewed message. A divergent
+ *   commit is the transaction's own and is rolled back narrowly
+ *   (`rollbackCreatedCommit`) - but only while the world still shows exactly
+ *   it: the reviewed ref at the created commit AND ambient HEAD still on that
+ *   ref. A hook that switched branches leaves the invalid commit in place,
+ *   preserved, reported `unresolved`.
  * - On hook refusal `git commit` creates nothing; the ordinary bounded rollback
  *   (`restorePredecessors`) restores the operation-owned paths and their index
- *   entries, so the refusal state is exactly the pre-transaction state.
+ *   entries - unless the hook also moved HEAD away from the reviewed branch,
+ *   in which case nothing is touched and everything is preserved.
  */
 function createReadinessCommit({ target, plan, candidates, changedPaths, beforeCommit }) {
   const executable = plan.executable;
@@ -1414,94 +1496,169 @@ function createReadinessCommit({ target, plan, candidates, changedPaths, beforeC
   if (!/^[0-9a-f]{40,64}$/.test(expectedTree ?? '')) {
     return { ok: false, committed: false, errors: ['the exact commit tree could not be captured from the verified index'] };
   }
+  // Ownership binding: the full symbolic ref this transaction commits to, and
+  // its exact OID, captured before `git commit` is invoked. Every judgment
+  // after the hooks compares THIS ref - never ambient HEAD, which a hook may
+  // have switched to another branch.
+  const originalRef = gitOut(target, ['symbolic-ref', '--quiet', 'HEAD']);
+  if (!originalRef || !originalRef.startsWith('refs/')) {
+    return { ok: false, committed: false, errors: ['HEAD is not on a named branch; the readiness commit requires the reviewed branch'] };
+  }
+  const refBefore = gitOut(target, ['rev-parse', '--verify', originalRef]);
+  if (refBefore !== head) {
+    return { ok: false, committed: false, errors: [`the reviewed ref ${originalRef} points at ${String(refBefore)} rather than the expected HEAD ${head}`] };
+  }
   const committed = git(target, ['commit', '-m', executable.finalCommitMessage]);
-  const resultingHead = gitOut(target, ['rev-parse', 'HEAD']);
+  // Every hook (pre-commit through post-commit) has now run. Read the reviewed
+  // ref and the ambient world separately; neither is trusted alone.
+  const refAfter = gitOut(target, ['rev-parse', '--verify', originalRef]);
+  const ambientSymbolic = gitOut(target, ['symbolic-ref', '--quiet', 'HEAD']);
+  const ambientHead = gitOut(target, ['rev-parse', 'HEAD']);
+  const refMoved = refAfter !== null && refAfter !== refBefore;
   if (committed.status !== 0) {
-    // Hook refusal or signing failure: nothing was created unless HEAD moved.
-    const created = resultingHead !== null && resultingHead !== head;
+    if (refMoved) {
+      // The commit command failed, but something still advanced the reviewed
+      // ref: a hook committed on it despite the refusal. Preserve everything.
+      return {
+        ok: false,
+        committed: true,
+        originalRef,
+        head: refAfter,
+        observedCommitCount: countCommitsAboveRef(target, originalRef, head),
+        errors: [`git commit failed but the reviewed ref ${originalRef} advanced to ${refAfter}; every commit on it was preserved`],
+        recovery: 'The commit command failed, but the reviewed ref moved - a hook or concurrent writer committed on it. Nothing was reset or rewritten; inspect the ref before any further mutation.',
+      };
+    }
+    if (ambientSymbolic !== originalRef || ambientHead !== head) {
+      // Refused AND the ambient world moved: restoration here could act on the
+      // wrong branch, so nothing is rolled back at all.
+      return {
+        ok: false,
+        committed: false,
+        worldDiverged: true,
+        originalRef,
+        errors: [
+          'git commit failed and a hook moved HEAD away from the reviewed branch; nothing was rolled back and all state was preserved',
+          `HEAD is now ${ambientSymbolic ?? 'detached'} at ${String(ambientHead)}`,
+        ],
+      };
+    }
+    return { ok: false, committed: false, originalRef, errors: [`the readiness commit failed: ${gitText(committed)}`] };
+  }
+  if (!refMoved) {
+    // The commit did not land on the reviewed ref. Either nothing was created,
+    // or a pre-commit hook switched branches and the commit landed elsewhere:
+    // both are preserved and handed to the operator.
+    if (ambientHead !== null && ambientHead !== head) {
+      return {
+        ok: false,
+        committed: true,
+        originalRef,
+        head: ambientHead,
+        observedCommitCount: null,
+        errors: [`the commit did not land on the reviewed ref ${originalRef}; HEAD is now ${ambientSymbolic ?? 'detached'} at ${ambientHead}, and every ref was preserved`],
+        recovery: 'A hook redirected the commit away from the reviewed branch. Nothing was reset or rewritten; inspect where the commit landed before any further mutation.',
+      };
+    }
+    return { ok: false, committed: false, originalRef, errors: ['git reported success but the reviewed ref did not advance; no readiness commit exists on it'] };
+  }
+  // Exactly ONE commit directly above the expected HEAD on the reviewed ref
+  // may be this transaction's. Count and ancestry are checked BEFORE any tree
+  // or message classification: anything else on the ref is not ours alone and
+  // is never rewritten - including commits a post-commit hook added.
+  const commitsAbove = countCommitsAboveRef(target, originalRef, head);
+  if (commitsAbove !== 1) {
     return {
       ok: false,
-      committed: created,
-      head: created ? resultingHead : head,
-      errors: [`the readiness commit failed: ${gitText(committed)}`],
+      committed: true,
+      originalRef,
+      head: refAfter,
+      observedCommitCount: commitsAbove,
+      errors: [`${originalRef} holds ${String(commitsAbove)} commit(s) above the expected HEAD; only one direct readiness commit is this transaction's, and none were rewritten`],
+      recovery: 'Additional commits exist on the reviewed ref. Every commit was preserved; resolve the sequence manually, then regenerate the plan.',
     };
   }
-  if (resultingHead === null || resultingHead === head) {
-    return { ok: false, committed: false, errors: ['git reported success but HEAD did not advance; no readiness commit exists'] };
+  const parent = gitOut(target, ['rev-parse', `${refAfter}^`]);
+  if (parent !== head) {
+    return {
+      ok: false,
+      committed: true,
+      originalRef,
+      head: refAfter,
+      observedCommitCount: 1,
+      errors: [`the commit at ${originalRef} is not a direct child of the expected HEAD ${head}; it was preserved`],
+      recovery: 'The reviewed ref does not hold a direct child of the expected HEAD. Nothing was rewritten; inspect the ref before any further mutation.',
+    };
   }
-  // Every hook capable of changing the candidate index has now run. The tree
-  // of the created commit must equal the captured authoritative tree; a hook
-  // (or concurrent writer) that changed the committed content makes this the
-  // transaction's own invalid commit, which is rolled back - never accepted,
-  // never left behind as an unresolved outcome.
-  const tree = gitOut(target, ['rev-parse', `${resultingHead}^{tree}`]);
+  // Every hook capable of changing the committed content has now run, and the
+  // reviewed ref holds exactly one new commit. Validate its tree, message, and
+  // attribution against the plan.
+  const contentErrors = [];
+  const tree = gitOut(target, ['rev-parse', `${refAfter}^{tree}`]);
   if (tree !== expectedTree) {
-    const injected = git(target, ['diff-tree', '--no-commit-id', '--name-only', '-r', resultingHead]);
+    const injected = git(target, ['diff-tree', '--no-commit-id', '--name-only', '-r', refAfter]);
     const changed = injected.status === 0
       ? String(injected.stdout ?? '').split(/\r?\n/).filter(Boolean).sort()
       : [];
     const unplanned = changed.filter(path => !changedPaths.includes(path));
-    return {
-      ok: false,
-      contaminated: true,
-      committed: false,
-      head: resultingHead,
-      unplannedPaths: unplanned,
-      errors: [
-        'the created readiness commit does not carry the exact validated tree; a hook or concurrent index mutation changed the commit content',
-        ...(unplanned.length > 0
-          ? [`unplanned path(s) entered the commit tree: ${unplanned.join(', ')}`]
-          : ['the staged bytes of a planned path were changed before the commit']),
-      ],
-    };
+    contentErrors.push(
+      'the created readiness commit does not carry the exact validated tree; a hook or concurrent index mutation changed the commit content',
+      ...(unplanned.length > 0
+        ? [`unplanned path(s) entered the commit tree: ${unplanned.join(', ')}`]
+        : ['the staged bytes of a planned path were changed before the commit']),
+    );
   }
-  // Only this transaction's one commit may exist above the expected HEAD. A
-  // post-commit hook or concurrent writer that created more is not ours to
-  // rewrite: hand the exact state to the operator.
-  const commitsAbove = gitOut(target, ['rev-list', '--count', `${head}..HEAD`]);
-  if (commitsAbove !== '1') {
+  const message = gitOut(target, ['show', '-s', '--format=%B', refAfter]);
+  if (message !== executable.finalCommitMessage) {
+    // A commit-msg hook rewrote the reviewed message.
+    contentErrors.push('the readiness commit message does not equal the reviewed final commit message');
+  }
+  const attribution = evaluateCommitAttribution({ message, taskId: plan.taskId, role: 'maintainer' });
+  if (!attribution.ok) {
+    contentErrors.push(...attribution.errors.map(error => `readiness commit attribution: ${error}`));
+  }
+  if (contentErrors.length > 0) {
+    // Contaminated: a direct child of the expected HEAD created by this commit
+    // call, but not the reviewed content. Rolling it back is permitted only
+    // while the world still shows exactly it: the reviewed ref at the created
+    // commit AND ambient HEAD still on that ref. Any divergence - a hook that
+    // switched branches or moved the ref - preserves everything instead.
+    const rollbackable = ambientSymbolic === originalRef && ambientHead === refAfter;
+    return { ok: false, contaminated: true, rollbackable, committed: true, originalRef, head: refAfter, errors: contentErrors };
+  }
+  if (ambientSymbolic !== originalRef || ambientHead !== refAfter) {
+    // The commit is valid, but a hook moved HEAD elsewhere: preserve all refs.
     return {
       ok: false,
       committed: true,
-      head: resultingHead,
-      observedCommitCount: Number(commitsAbove ?? Number.NaN) || null,
-      errors: [`HEAD advanced by ${String(commitsAbove)} commits; only the readiness commit was created by this transaction`],
+      originalRef,
+      head: refAfter,
+      observedCommitCount: 1,
+      errors: [`the readiness commit ${refAfter} is valid on ${originalRef}, but HEAD is now ${ambientSymbolic ?? 'detached'} at ${String(ambientHead)}; every ref was preserved`],
+      recovery: 'A hook moved HEAD away from the reviewed branch after a valid readiness commit. Nothing was reset or rewritten; inspect both branches before any further mutation.',
     };
   }
-  const errors = [];
-  const parent = gitOut(target, ['rev-parse', `${resultingHead}^`]);
-  if (parent !== executable.expectedHead) {
-    errors.push(`the readiness commit parent ${String(parent)} is not the expected HEAD ${executable.expectedHead}`);
-  }
-  const message = gitOut(target, ['show', '-s', '--format=%B', resultingHead]);
-  if (message !== executable.finalCommitMessage) {
-    // A commit-msg hook rewrote the reviewed message.
-    errors.push('the readiness commit message does not equal the reviewed final commit message');
-  }
-  const attribution = evaluateCommitAttribution({ message, taskId: plan.taskId, role: 'maintainer' });
-  if (!attribution.ok) errors.push(...attribution.errors.map(error => `readiness commit attribution: ${error}`));
-  if (errors.length > 0) {
-    // The tree is exact but the commit is not the reviewed commit: still this
-    // transaction's own creation over the expected parent, so it is rolled
-    // back rather than left as an unreviewed commit at HEAD.
-    return { ok: false, contaminated: true, committed: false, head: resultingHead, errors };
-  }
-  return { ok: true, committed: true, head: resultingHead, commit: readinessCommitFacts(target, resultingHead), errors: [] };
+  return { ok: true, committed: true, originalRef, head: refAfter, commit: readinessCommitFacts(target, refAfter, originalRef), errors: [] };
 }
 
 /**
- * Narrowly undo this transaction's own just-created commit.
+ * Narrowly undo this transaction's own just-created commit on the reviewed ref.
  *
- * Called only when the created commit failed the exact-tree or exact-message
- * validation in `createReadinessCommit` - a hook mutated the candidate index
- * or rewrote the message. The rollback is bounded and non-destructive:
+ * Called only when the created commit is a proven direct child of the expected
+ * HEAD on the reviewed ref but failed exact-content validation in
+ * `createReadinessCommit`, and only while the world still shows exactly that
+ * commit. The rollback is bounded and non-destructive:
  *
- * - the branch pointer moves back only after proving HEAD is still the created
- *   commit, so a concurrent writer's commit is never undone;
- * - `git reset --soft` moves only that pointer, touching neither index nor
- *   worktree;
+ * - ownership is re-proved immediately before the ref moves: the reviewed ref
+ *   must still point at the created commit and ambient HEAD must still be that
+ *   commit on that ref - otherwise every ref and commit is preserved;
+ * - the ref itself is restored by a compare-and-swap
+ *   (`git update-ref <ref> <expected> <created>`), so the pointer moves back
+ *   only if it still holds the created commit; a concurrent writer that moved
+ *   it wins and its commits are preserved;
  * - index entries are restored one literal pathspec at a time, for exactly the
- *   paths the commit changed, to their expected-HEAD state;
+ *   paths the commit changed, to their expected-HEAD state (anchored to that
+ *   commit explicitly, never to ambient HEAD);
  * - the operation-owned worktree paths are restored to their exact predecessor
  *   bytes through the mutation kernel, as in every other rollback;
  * - nothing outside the commit's own path set is touched: no `--hard`, no
@@ -1509,12 +1666,14 @@ function createReadinessCommit({ target, plan, candidates, changedPaths, beforeC
  *   side effects (a file it created, for example) are left exactly as the hook
  *   left them and reported to the operator.
  */
-function rollbackCreatedCommit({ target, expectedHead, createdHead, candidates, changedPaths }) {
+function rollbackCreatedCommit({ target, originalRef, expectedHead, createdHead, candidates, changedPaths, beforeRefRestore = null }) {
   const errors = [];
-  const head = gitOut(target, ['rev-parse', 'HEAD']);
-  if (head !== createdHead) {
+  const ambientSymbolic = gitOut(target, ['symbolic-ref', '--quiet', 'HEAD']);
+  const ambientHead = gitOut(target, ['rev-parse', 'HEAD']);
+  const refNow = gitOut(target, ['rev-parse', '--verify', originalRef]);
+  if (refNow !== createdHead || ambientSymbolic !== originalRef || ambientHead !== createdHead) {
     return {
-      errors: [`HEAD moved to ${String(head)} after the readiness commit was created; the invalid commit was left in place and must be recovered manually`],
+      errors: [`rollback refused: ${originalRef} points at ${String(refNow)} and HEAD is ${ambientSymbolic ?? 'detached'} at ${String(ambientHead)}, not the created commit ${createdHead}; every ref and commit was preserved and must be recovered manually`],
       unplannedPaths: [],
     };
   }
@@ -1527,9 +1686,24 @@ function rollbackCreatedCommit({ target, expectedHead, createdHead, candidates, 
   }
   const commitPaths = String(diff.stdout ?? '').split(/\r?\n/).filter(Boolean);
   const unplannedPaths = commitPaths.filter(path => !changedPaths.includes(path));
-  const soft = git(target, ['reset', '--quiet', '--soft', expectedHead]);
-  if (soft.status !== 0) {
-    return { errors: [`the branch pointer could not be restored: ${gitText(soft)}`], unplannedPaths };
+  // Testable boundary between the ownership proof and the compare-and-swap: a
+  // racing writer moving the ref here must make the swap refuse, not win.
+  try {
+    beforeRefRestore?.();
+  } catch (error) {
+    return {
+      errors: [`the rollback was interrupted before the ref was restored: ${error instanceof Error ? error.message : String(error)}`],
+      unplannedPaths,
+    };
+  }
+  // Compare-and-swap ref restoration: the reviewed ref moves back to the
+  // expected HEAD only if it still points at the created commit.
+  const swapped = git(target, ['update-ref', originalRef, expectedHead, createdHead]);
+  if (swapped.status !== 0) {
+    return {
+      errors: [`the compare-and-swap restoration of ${originalRef} refused: ${gitText(swapped)}; every ref and commit was preserved`],
+      unplannedPaths,
+    };
   }
   for (const path of commitPaths) {
     const restored = git(target, ['reset', '--quiet', expectedHead, '--', literalPathspec(path)]);
@@ -1537,12 +1711,16 @@ function rollbackCreatedCommit({ target, expectedHead, createdHead, candidates, 
       errors.push(`index entry for '${path}' could not be restored: ${gitText(restored)}`);
     }
   }
-  errors.push(...restorePredecessors(target, candidates, changedPaths));
-  // Proof of restoration: HEAD is the expected HEAD again, nothing is staged,
-  // and every operation-owned path matches its bound predecessor state (the
-  // caller checks the predecessor half).
-  if (gitOut(target, ['rev-parse', 'HEAD']) !== expectedHead) {
-    errors.push('HEAD did not return to the expected commit after rollback');
+  errors.push(...restorePredecessors(target, candidates, changedPaths, expectedHead));
+  // Proof of restoration from the actual post-state: the reviewed ref, the
+  // commit count above the expected HEAD on it, and the staged set.
+  const refFinal = gitOut(target, ['rev-parse', '--verify', originalRef]);
+  if (refFinal !== expectedHead) {
+    errors.push(`the reviewed ref ${originalRef} points at ${String(refFinal)} after rollback, not the expected HEAD ${expectedHead}`);
+  }
+  const remaining = countCommitsAboveRef(target, originalRef, expectedHead);
+  if (remaining === null || remaining !== 0) {
+    errors.push(`the reviewed ref still holds ${String(remaining)} commit(s) above the expected HEAD after rollback`);
   }
   const staged = git(target, ['diff', '--cached', '--name-only']);
   if (staged.status !== 0) {
@@ -1553,9 +1731,18 @@ function rollbackCreatedCommit({ target, expectedHead, createdHead, candidates, 
   return { errors, unplannedPaths };
 }
 
-function readinessCommitFacts(target, sha) {
+/** Actual commit count on one ref above a base commit, or null if unreadable. */
+function countCommitsAboveRef(target, ref, base) {
+  const count = gitOut(target, ['rev-list', '--count', `${base}..${ref}`]);
+  if (count === null) return null;
+  const parsed = Number(count);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function readinessCommitFacts(target, sha, ref = null) {
   return Object.freeze({
     sha,
+    ref,
     parent: gitOut(target, ['rev-parse', `${sha}^`]),
     subject: gitOut(target, ['show', '-s', '--format=%s', sha]),
     author: gitOut(target, ['show', '-s', '--format=%an <%ae>', sha]),

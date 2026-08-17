@@ -953,3 +953,142 @@ describe('P35-C12R.3 repair R3-R1: the exact commit tree across hooks', () => {
   });
 });
 
+describe('P35-C12R.3 repair R3-R5: rollback is bound to the original ref', () => {
+  /** The fixture's current branch name and full ref. */
+  function currentBranch(target) {
+    return git(target, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  }
+
+  it('preserves every commit when a post-commit hook adds a changed-tree commit', async () => {
+    const { target, taskId } = createReadinessTarget(temp, 'repair-ref-post-commit-tree');
+    const baseHead = head(target);
+    await writePlan(target, taskId);
+    installHook(target, 'post-commit',
+      '#!/bin/sh\ntest -f .git/al-hook-ran && exit 0\ntouch .git/al-hook-ran\n' +
+      'echo hooked > src/post-hook-product.txt\ngit add -- src/post-hook-product.txt\n' +
+      'git commit --no-verify -q -m "post-hook commit"\nexit 0\n');
+    const result = receipt(await applyPlan(target, taskId));
+    assert.equal(result.mutationDisposition, 'unresolved', JSON.stringify(result.errors));
+    assert.ok(result.errors.some(error => /2 commits|commit\(s\) above/.test(error)), JSON.stringify(result.errors));
+    // Derived from actual state, not hard-coded: both commits remain on the branch.
+    assert.equal(result.commitCount, 2);
+    assert.equal(commitCountSince(target, baseHead), 2);
+    assert.equal(result.resultingHead, head(target));
+    assert.equal(result.nextAction, null);
+    git(target, ['cat-file', '-e', 'HEAD:src/post-hook-product.txt']);
+  });
+
+  it('preserves every commit when a post-commit hook adds a same-tree empty commit', async () => {
+    const { target, taskId } = createReadinessTarget(temp, 'repair-ref-post-commit-empty');
+    const baseHead = head(target);
+    await writePlan(target, taskId);
+    installHook(target, 'post-commit',
+      '#!/bin/sh\ntest -f .git/al-hook-ran && exit 0\ntouch .git/al-hook-ran\n' +
+      'git commit --no-verify --allow-empty -q -m "post-hook empty"\nexit 0\n');
+    const result = receipt(await applyPlan(target, taskId));
+    assert.equal(result.mutationDisposition, 'unresolved', JSON.stringify(result.errors));
+    assert.equal(result.commitCount, 2);
+    assert.equal(commitCountSince(target, baseHead), 2);
+    assert.match(git(target, ['show', '-s', '--format=%s', 'HEAD']), /post-hook empty/);
+  });
+
+  it('preserves both branches when a post-commit hook switches to a branch with existing history', async () => {
+    const { target, taskId } = createReadinessTarget(temp, 'repair-ref-post-commit-switch');
+    const branch = currentBranch(target);
+    const baseHead = head(target);
+    git(target, ['checkout', '-q', '-b', 'other']);
+    writeFileSync(join(target, 'src', 'other-own.txt'), 'other\n', 'utf8');
+    git(target, ['add', '--', 'src/other-own.txt']);
+    git(target, ['commit', '-q', '-m', 'other own commit']);
+    const otherTip = head(target);
+    git(target, ['checkout', '-q', branch]);
+    await writePlan(target, taskId);
+    installHook(target, 'post-commit', '#!/bin/sh\ngit checkout -q other\nexit 0\n');
+    const result = receipt(await applyPlan(target, taskId));
+    assert.equal(result.mutationDisposition, 'unresolved', JSON.stringify(result.errors));
+    assert.ok(result.errors.some(error => /HEAD is now refs\/heads\/other|moved HEAD/.test(error)), JSON.stringify(result.errors));
+    // The readiness commit is preserved on the original branch; nothing was rewound.
+    assert.equal(result.commitCount, 1);
+    assert.equal(git(target, ['rev-parse', branch]), result.resultingHead);
+    assert.equal(commitCountSince(target, baseHead), 1);
+    assert.match(git(target, ['show', '-s', '--format=%s', branch]), /^settle readiness$/);
+    // The other branch is untouched and still checked out.
+    assert.equal(git(target, ['rev-parse', 'other']), otherTip);
+    assert.equal(currentBranch(target), 'other');
+    git(target, ['cat-file', '-e', `${otherTip}:src/other-own.txt`]);
+  });
+
+  it('refuses rollback when the original ref moves between detection and rollback', async () => {
+    const { target, taskId } = createReadinessTarget(temp, 'repair-ref-moved-before-rollback');
+    const baseHead = head(target);
+    const { plan } = await writePlan(target, taskId);
+    installHook(target, 'pre-commit',
+      '#!/bin/sh\necho hooked > src/hook-product.txt\ngit add -- src/hook-product.txt\nexit 0\n');
+    const applied = applyReadinessPlan({
+      target,
+      taskId,
+      plan,
+      projectConfig: {},
+      ...createReadinessApplyBindings(target, {}, taskId),
+      // A racing writer lands another commit after detection, before rollback.
+      beforeRollback: () => {
+        git(target, ['commit', '--no-verify', '--allow-empty', '-q', '-m', 'external commit']);
+      },
+    });
+    assert.equal(applied.mutationDisposition, 'unresolved', JSON.stringify(applied.errors));
+    assert.ok(applied.rollbackErrors.some(error => /rollback refused/.test(error)), JSON.stringify(applied.rollbackErrors));
+    // The contaminated commit and the external commit are both preserved.
+    assert.equal(applied.commitCount, 2);
+    assert.equal(commitCountSince(target, baseHead), 2);
+    assert.equal(applied.nextAction, null);
+  });
+
+  it('refuses rollback through the compare-and-swap when the ref moves after the ownership proof', async () => {
+    const { target, taskId } = createReadinessTarget(temp, 'repair-ref-cas-refusal');
+    const baseHead = head(target);
+    const branch = currentBranch(target);
+    const { plan } = await writePlan(target, taskId);
+    installHook(target, 'pre-commit',
+      '#!/bin/sh\necho hooked > src/hook-product.txt\ngit add -- src/hook-product.txt\nexit 0\n');
+    const applied = applyReadinessPlan({
+      target,
+      taskId,
+      plan,
+      projectConfig: {},
+      ...createReadinessApplyBindings(target, {}, taskId),
+      // The ref moves after the ownership proof and before the ref update:
+      // only the compare-and-swap can catch this window.
+      beforeRefRestore: () => {
+        git(target, ['update-ref', `refs/heads/${branch}`, baseHead]);
+      },
+    });
+    assert.notEqual(applied.mutationDisposition, 'rolled_back');
+    assert.equal(applied.mutationDisposition, 'unresolved', JSON.stringify(applied.errors));
+    assert.ok(applied.rollbackErrors.some(error => /compare-and-swap/.test(error)), JSON.stringify(applied.rollbackErrors));
+    // Receipt fields are derived from the actual post-state, not hard-coded.
+    assert.equal(applied.commitCount, 0);
+    assert.equal(git(target, ['rev-parse', `refs/heads/${branch}`]), baseHead);
+    // Nothing was restored by us: the written candidates were left exactly as committed.
+    assert.match(taskBody(target, taskId), /^status: agent-ready$/m);
+  });
+
+  it('preserves everything when a refusing hook has already switched branches', async () => {
+    const { target, taskId } = createReadinessTarget(temp, 'repair-ref-refusal-switch');
+    const branch = currentBranch(target);
+    const baseHead = head(target);
+    await writePlan(target, taskId);
+    git(target, ['branch', 'other']);
+    installHook(target, 'pre-commit', '#!/bin/sh\ngit checkout -q other\nexit 1\n');
+    const result = receipt(await applyPlan(target, taskId));
+    assert.equal(result.mutationDisposition, 'unresolved', JSON.stringify(result.errors));
+    assert.ok(result.errors.some(error => /moved HEAD away from the reviewed branch/.test(error)), JSON.stringify(result.errors));
+    // No commit exists and nothing was rolled back, unstaged, or discarded.
+    assert.equal(result.commitCount, 0);
+    assert.equal(git(target, ['rev-parse', branch]), baseHead);
+    assert.equal(currentBranch(target), 'other');
+    assert.match(taskBody(target, taskId), /^status: agent-ready$/m);
+    assert.notEqual(porcelain(target), '', 'the staged candidates were preserved, not unstaged');
+    assert.match(porcelain(target), /agenticloop\/tasks\/T-018\.md/);
+  });
+});
+

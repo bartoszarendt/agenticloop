@@ -721,18 +721,24 @@ introduces — so the committed decomposition is not stale against its own commi
 
 Staging is one literal pathspec per planned path, the staged set is compared
 with the planned set, and the exact staged tree is captured from the verified
-index before the commit. The commit is an ordinary `git commit`, so every
-configured hook runs and signing policy applies unchanged — and because a hook
-can still mutate the index Git commits, the created commit's tree is compared
-against the captured tree after every hook has run. A hook that stages an
-unplanned path (a product file above all) or rewrites the staged bytes of a
-planned path therefore cannot make that content survive in a readiness commit:
-the divergent commit is this transaction's own and is rolled back narrowly —
-the branch pointer returns to the expected HEAD, the index entries the commit
-changed are restored one literal pathspec at a time, and the operation-owned
-paths are restored to their exact predecessor bytes. The receipt is
-`rolled_back`; no corrective commit is created and no unplanned commit is left
-at HEAD.
+index before the commit. Commit and rollback ownership are bound to the
+reviewed branch: the full symbolic ref and its OID are captured immediately
+before `git commit`, and after every hook has run the *reviewed ref* — never
+ambient HEAD, which a hook may have switched — must hold exactly one new
+commit directly above the expected HEAD. The commit is an ordinary
+`git commit`, so every configured hook runs and signing policy applies
+unchanged. The one owned commit must then carry the captured tree and the
+reviewed message; a hook that stages an unplanned path (a product file above
+all) or rewrites planned bytes makes it this transaction's own invalid commit,
+which is rolled back by a compare-and-swap ref update that moves only if the
+ref still points at it, with per-path index restoration and exact predecessor
+restoration — reported `rolled_back`. Everything else is preserved and
+reported `unresolved`: a post-commit hook that adds another commit (changed-
+tree or same-tree), a hook that switches branches (the other branch is never
+rewound), a ref that moves between detection and rollback, or a compare-and-
+swap refusal. No commit outside the one this transaction created is ever
+rewritten, and receipt heads and commit counts are derived from the actual
+post-state.
 
 After the commit, apply refetches from actual HEAD and re-runs the ordinary
 production gates: the readiness plan, the trusted chain, committed-source and
@@ -757,9 +763,9 @@ readiness state, and `mutationDisposition`:
 | `dry_run` | every possible validation passed; nothing was written |
 | `stale` | a bound input changed since the plan was reviewed, or a consumed plan's readiness commit is no longer HEAD |
 | `blocked` | the plan, the candidates, or the repository state refuse the transaction |
-| `rolled_back` | a failure before or at the commit boundary restored the exact predecessor state — including a hook-contaminated commit whose tree did not equal the validated tree |
+| `rolled_back` | a failure before or at the commit boundary restored the exact predecessor state — including this transaction's own hook-contaminated commit, undone by a compare-and-swap ref update |
 | `partially_committed` | the filesystem batch failed and rollback reported errors |
-| `unresolved` | the outcome could not be proved; `recovery` names the exact paths |
+| `unresolved` | the outcome could not be proved; every ref and commit is preserved — additional hook-created commits, a switched branch, or an unproved rollback all land here |
 
 Rerunning is safe, and `already_current` is a proven state with exactly two
 forms. A freshly regenerated ready plan (empty write set) is `already_current`
