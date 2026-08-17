@@ -199,6 +199,17 @@ explicit task-record edit made before work begins; the files `task new` command
 does not accept a budget override option. The field is the hard stop for
 equivalent no-progress attempts; existing stored task values remain authoritative.
 
+Work that predates the canonical lifecycle has its own terminal result rather
+than a waiver. `task adopt-historical <id>` writes a frozen record under
+`.agenticloop/adoptions/` binding the exact current task contract, an accepted
+implementation commit, an integration identity, an independent audit of that
+exact artifact, and an explicit human disposition — and naming every evidence
+class the task genuinely lacks. It reaches `historical_adoption_accepted` with
+assurance `historical_reduced`, never a canonical status, and projects
+`canonicalClosure: false` identically on both backends. It creates no dispatch,
+consumption, return, host receipt, or activation evidence, and refuses a task
+that already carries dispatch consumption.
+
 ## Parallel Write Lanes
 
 Concurrency safety is governed by mutation, not by role. Files-backed task

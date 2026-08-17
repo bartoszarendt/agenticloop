@@ -152,6 +152,12 @@ import {
   resolveCarrierLineage,
 } from './handoff-consumption.js';
 import {
+  HISTORICAL_MISSING_EVIDENCE_CLASSES,
+  createHistoricalAdoption,
+  historicalAdoptionRelativePath,
+  projectHistoricalAdoption,
+} from './historical-adoption.js';
+import {
   EXECUTION_ATTEMPT_ABANDONMENT_KIND,
   EXECUTION_ATTEMPT_ABANDONMENT_SCHEMA_VERSION,
   PACKET_CONSERVATION_DIAGNOSTIC_CODE,
@@ -292,6 +298,7 @@ const TASK_SUBCOMMAND_BACKENDS = Object.freeze({
   new: Object.freeze(['files']),
   'establish-baseline': Object.freeze(['files']),
   'abandon-attempt': Object.freeze(['files']),
+  'adopt-historical': Object.freeze(['files']),
   'attempt-status': Object.freeze(['files']),
   'authorize-correction': Object.freeze(['files']),
   'prepare-decomposition': Object.freeze(['files', 'github']),
@@ -1610,7 +1617,7 @@ export async function cmdTask(args, io = createIo()) {
     const suggestion = sub ? suggestName(sub, Object.keys(TASK_SUBCOMMANDS)) : null;
     throw new CliUsageError(suggestion
       ? `task: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
-      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, handoff-preflight, refresh-handoff-evidence, attempt-status, abandon-attempt, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, status.');
+      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, handoff-preflight, refresh-handoff-evidence, attempt-status, abandon-attempt, adopt-historical, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, status.');
   }
   const { opts, positional } = parseCommandArgs(`task ${sub}`, TASK_SUBCOMMANDS[sub], args.slice(1));
   const target = resolveCliTarget(io, opts.target);
@@ -3518,6 +3525,103 @@ export async function cmdTask(args, io = createIo()) {
         }
       }
       return conservation.ok ? 0 : 1;
+    }
+
+    if (sub === 'adopt-historical') {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      const missing = opts.missing === undefined
+        ? []
+        : (Array.isArray(opts.missing) ? opts.missing : [String(opts.missing)]);
+      if (!taskId || !opts.artifact || !opts.integration || !opts.integrationCommit ||
+          !opts.audit || !opts.authority || !opts.reason || missing.length === 0) {
+        io.err('task adopt-historical requires <id>, --artifact, --integration, --integration-commit, --audit, --authority, --reason, and at least one --missing <class>');
+        io.err(`Recognized --missing classes: ${HISTORICAL_MISSING_EVIDENCE_CLASSES.join(', ')}`);
+        return EXIT_USAGE;
+      }
+      const filePath = taskPathForId(target, projectConfig, taskId);
+      if (!existsSync(filePath)) {
+        io.err(`Task record not found: ${relative(target, filePath).replace(/\\/g, '/')}`);
+        return 1;
+      }
+      const body = readFileSync(filePath, 'utf-8');
+      const contract = taskContractDigest(body);
+      if (!contract.ok) {
+        io.err(contract.error);
+        return 1;
+      }
+      // Adoption is only for work that genuinely predates the lifecycle. A task
+      // that already produced a dispatch consumption entered the canonical
+      // path, and routing it here would launder real evidence into a
+      // reduced-assurance record.
+      const consumed = listDispatchConsumptions(target, taskId, { backend: 'files' });
+      if (!consumed.ok) {
+        for (const error of consumed.errors) io.err(error);
+        return 1;
+      }
+      if (consumed.records.length > 0) {
+        io.err(`Task ${taskId} has canonical dispatch consumption evidence and must complete normal closeout, not historical adoption.`);
+        io.err(`Run 'npx agenticloop task attempt-status ${taskId} --json' to inspect its execution attempts.`);
+        return 1;
+      }
+      const integrationMatch = String(opts.integration).match(/^([a-z_]+):(.+)$/);
+      if (!integrationMatch) {
+        io.err('--integration must be <git_merge|git_branch_containment|pull_request>:<reference>');
+        return EXIT_USAGE;
+      }
+      let record;
+      try {
+        record = createHistoricalAdoption({
+          backend: 'files',
+          taskId,
+          repositoryIdentity: targetRepositoryIdentity(target),
+          taskContractDigest: contract.digest,
+          implementationArtifact: { kind: 'git_commit', commit: String(opts.artifact) },
+          integration: {
+            kind: integrationMatch[1],
+            reference: integrationMatch[2],
+            commit: String(opts.integrationCommit),
+          },
+          audit: {
+            reference: String(opts.audit),
+            auditedArtifact: String(opts.artifact),
+            independent: true,
+          },
+          disposition: {
+            kind: 'human_adoption',
+            authority: String(opts.authority),
+            reason: String(opts.reason),
+          },
+          missingEvidence: missing.map(String),
+        });
+      } catch (error) {
+        io.err(error.message);
+        return EXIT_USAGE;
+      }
+      const relPath = historicalAdoptionRelativePath(taskId);
+      const applied = executeMutationBatch(target, [{
+        type: 'create', path: relPath, content: `${JSON.stringify(record, null, 2)}
+`,
+      }]);
+      if (!applied.ok) {
+        for (const error of [...applied.errors, ...applied.rollbackErrors]) io.err(error);
+        return 1;
+      }
+      const projection = projectHistoricalAdoption(record);
+      if (asJson) {
+        io.out(JSON.stringify({ command: 'task adopt-historical', path: relPath, projection, record }, null, 2));
+      } else {
+        io.out(`Adopted ${taskId} as ${projection.status} (assurance: ${projection.assurance})`);
+        io.out(`  canonical closure:  no`);
+        io.out(`  artifact:           ${projection.adoptedArtifact}`);
+        io.out(`  integration:        ${projection.integration}`);
+        io.out(`  audit:              ${projection.auditReference}`);
+        io.out(`  authority:          ${projection.dispositionAuthority}`);
+        io.out(`  missing evidence:   ${projection.missingEvidence.join(', ')}`);
+        io.out(`  record:             ${relPath}`);
+        io.out('  No dispatch, consumption, return, host receipt, or activation evidence was created.');
+      }
+      return 0;
     }
 
     if (sub === 'abandon-attempt') {

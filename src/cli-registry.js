@@ -523,7 +523,7 @@ export const COMMAND_REGISTRY = {
   },
   task: {
     summary: 'Manage files-backed task records and canonical handoff preparation.',
-    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|handoff-preflight|refresh-handoff-evidence|attempt-status|abandon-attempt|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|status> [options]',
+    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|handoff-preflight|refresh-handoff-evidence|attempt-status|abandon-attempt|adopt-historical|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|status> [options]',
     subcommands: {
       list: {
         summary: 'List task records.',
@@ -555,6 +555,22 @@ export const COMMAND_REGISTRY = {
           opt('activation-input', 'string', 'Host-signed activation-capture artifact. Only a supported and verified capture from the fixed operator trust registry can authorize creation; no shipped adapter qualifies.'),
           hostTrustStoreOption,
           opt('scaffold', 'boolean', 'Create generic non-activated task scaffolding. Before dispatch, activate the existing task with agenticloop activate; a protected host adapter is optional unless hardened policy requires host_signed assurance.'),
+          jsonOption,
+        ],
+      },
+      'adopt-historical': {
+        summary: 'Record a truthful reduced-assurance terminal adoption for work that predates the canonical lifecycle.',
+        usage: 'agenticloop task adopt-historical <id> --artifact <commit> --integration <kind:reference> --integration-commit <commit> --audit <kind:reference> --authority <kind:reference> --reason <text> --missing <class> [--json] [--target <dir>]',
+        positionals: [{ name: 'id', required: true }],
+        options: [
+          targetOption(),
+          opt('artifact', 'string', 'Exact accepted implementation commit. Required.'),
+          opt('integration', 'string', 'Integration identity as <git_merge|git_branch_containment|pull_request>:<reference>. Required.'),
+          opt('integration-commit', 'string', 'Exact commit proving the artifact landed. Required.'),
+          opt('audit', 'string', 'Independent audit reference in <kind>:<reference> form. Required.'),
+          opt('authority', 'string', 'Durable human adoption authority in <kind>:<reference> form. Required.'),
+          opt('reason', 'string', 'Why canonical execution evidence does not exist. Required and recorded verbatim.'),
+          opt('missing', 'string', 'One evidence class this task genuinely lacks. Repeatable and required.', { multiple: true }),
           jsonOption,
         ],
       },

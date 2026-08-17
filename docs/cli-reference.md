@@ -587,6 +587,47 @@ either the grant and every binding land, or none do and the versioned mutation
 receipt says so. A failed multi-task activation therefore produces no partial
 authority.
 
+### Historical adoption
+
+```text
+npx agenticloop task adopt-historical <task-id>   --artifact <commit> --integration <kind:reference> --integration-commit <commit>   --audit <kind:reference> --authority <kind:reference> --reason <text>   --missing <class> [--missing <class>...] [--json]
+```
+
+Some accepted, integrated, auditable work predates dispatch packets and verified
+returns. It cannot satisfy normal closeout, and there are only three ways to
+respond: re-waive the missing evidence (which devalues normal closeout for every
+task), synthesize it (which is the one thing the evidence model exists to
+prevent), or give that work its own terminal result that says exactly what it
+is. This is the third.
+
+**An adoption is not a closeout.** It reaches `historical_adoption_accepted`
+with assurance `historical_reduced` — a status distinct from every canonical
+lifecycle status, and a grade below every canonical one — so a reader can tell
+the difference without consulting a second record. Files and GitHub project the
+identical verdict, including `canonicalClosure: false`.
+
+It requires, in place of the evidence it lacks:
+
+| Input | Why |
+| --- | --- |
+| the exact **current** task contract | the thing adopted is the thing on disk now |
+| `--artifact` | an accepted implementation commit, as a real Git object |
+| `--integration` / `--integration-commit` | proof the artifact actually landed |
+| `--audit` | an independent audit naming that exact artifact |
+| `--authority` / `--reason` | reduced assurance is a decision a person makes |
+| `--missing` | every evidence class this task genuinely lacks |
+
+`--missing` accepts only recognized classes — `dispatch_packet`,
+`dispatch_consumption`, `carrier_mutation_lineage`, `verified_return`,
+`host_return_receipt`, `activation_grant` — and at least one is required: a task
+missing nothing belongs in normal closeout. The record has nowhere to put a
+packet, consumption, return, receipt, or activation, so none can be smuggled in,
+and a task that already has dispatch consumption evidence is refused outright
+rather than downgraded.
+
+Normal closeout is unchanged for every task that entered the canonical
+lifecycle.
+
 ### Execution attempts and packet conservation
 
 ```text
