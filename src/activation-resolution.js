@@ -34,6 +34,7 @@ import {
   VerificationContextError,
   VerificationContextMalformedError,
 } from './public-error.js';
+import { renderActivationRepair } from './activation-repair.js';
 
 /**
  * Resolve the operator activation key and the signature verifier for a target.
@@ -317,9 +318,7 @@ export function unactivatedTaskError(taskId) {
       evidenceState: 'missing',
       disposition: 'needs_context',
       committedStateEvaluated: false,
-      safeRepair:
-        `Run 'npx agenticloop activate ${taskId}' in an interactive terminal outside the agent session, ` +
-        'then continue in the same project. Never author activation JSON in model-visible text.',
+      safeRepair: renderActivationRepair({ taskId }),
       requiredContext: ['an operator-confirmed activation grant or a host-signed activation capture'],
     }
   );

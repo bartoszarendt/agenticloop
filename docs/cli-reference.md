@@ -718,6 +718,41 @@ operator material exists, and name `migrate-identity` as the repair. Silently
 provisioning there would look like ordinary first-time setup while orphaning the
 operator's real key and every deny tombstone bound to it.
 
+#### Activation refusals offer every scope you have
+
+Every activation refusal renders from one shared plan, so the same facts never
+produce different advice at different boundaries. It offers, in order:
+
+1. the exact task — `npx agenticloop activate <task-id>`;
+2. the current ready set as **one** confirmation, when there is more than one
+   ready task — `npx agenticloop activate T-018 T-019 T-020`;
+3. the canonical work unit, when a durable one is bound —
+   `npx agenticloop activate --work-unit milestone:M2`.
+
+A "batch" of one is not offered, and a synthesized `work-unit:<task-id>`
+fallback is never offered as a work unit: it is identical in effect to the
+exact-task command while implying broader coverage.
+
+Surfacing the batch options reduces how often a human is interrupted. It never
+reduces what a human has to see: every command is the interactive operator path,
+there is no `--yes`, and a task-list or work-unit authorization covers exactly
+the scope bound at confirmation — tasks added afterwards need a new one.
+
+#### Expiry is not retroactive
+
+Expiry means *this authority may not start new work*. It has never meant *the
+work it already started never happened*.
+
+- A grant that has expired cannot authorize a new dispatch.
+- Closeout evaluates the grant as of the **consumption instant** when a packet
+  was consumed for the task, so an execution that outlives its window does not
+  retroactively lose the authority it had when it began. The reported
+  `evaluatedAt` states which instant was used.
+- **Revocation is not expiry.** It is matched by grant identity and is
+  time-independent, so a revoked grant still fails at the consumption instant.
+- Pinning to a past instant can only narrow: a grant issued after an attempt
+  started does not retroactively authorize it.
+
 ### Assurance grades
 
 | Dimension | Grade | Meaning |

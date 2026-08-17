@@ -52,6 +52,7 @@ import {
   normalizeFilesTaskInventory,
   validateParallelScanInventoryBinding,
 } from './parallel-scan.js';
+import { renderActivationRepair } from './activation-repair.js';
 import { fileMatchesScopePattern } from './scope-matcher.js';
 import {
   FindingSet,
@@ -468,6 +469,25 @@ export function evaluateHandoffPreflight(input) {
     }
   }
 
+  // ── 1c. Decomposition source ──────────────────────────────────────────
+  // Loaded before activation and readiness because both consume it: readiness
+  // resolves its dependency snapshot through it, and an activation refusal
+  // reads the bound work unit and ready set from it so it can offer the batch
+  // and work-unit options instead of one task at a time.
+  let decompositionSource = null;
+
+  if (snapshot) {
+    const decompositionSourceRef = `.agenticloop/decompositions/${taskId}.json`;
+    const decompositionFullPath = join(resolvedTarget, decompositionSourceRef);
+    if (existsSync(decompositionFullPath)) {
+      try {
+        decompositionSource = JSON.parse(readFileSync(decompositionFullPath, 'utf8'));
+      } catch {
+        decompositionSource = null;
+      }
+    }
+  }
+
   // ── 2. Activation ─────────────────────────────────────────────────────
   let activationState = null;
   let activationAssurance = null;
@@ -542,10 +562,19 @@ export function evaluateHandoffPreflight(input) {
             const messages = Array.isArray(auth.errors) && auth.errors.length
               ? auth.errors
               : [`task '${taskId}' activation authorization is '${auth.state}'`];
+            // Preflight already knows the bound work unit and the ready set
+            // from the committed decomposition, so the refusal offers the
+            // batch and work-unit options instead of one task at a time.
             findings.error(
               code,
               messages.join('; '),
-              `npx agenticloop activate ${taskId}`,
+              renderActivationRepair({
+                taskId,
+                workUnitId: decompositionSource?.scan?.workUnit?.id ?? null,
+                readyTaskIds: (decompositionSource?.scan?.inventory?.members ?? [])
+                  .filter(member => member?.eligibility?.eligible !== false)
+                  .map(member => member?.taskId),
+              }),
               evidenceState
             );
           }
@@ -560,21 +589,6 @@ export function evaluateHandoffPreflight(input) {
       );
       operatorAuthorization = 'malformed';
       activationUsability = 'blocked';
-    }
-  }
-
-  // ── 3. Decomposition source (loaded early for readiness dependency resolution) ──
-  let decompositionSource = null;
-
-  if (snapshot) {
-    const decompositionSourceRef = `.agenticloop/decompositions/${taskId}.json`;
-    const decompositionFullPath = join(resolvedTarget, decompositionSourceRef);
-    if (existsSync(decompositionFullPath)) {
-      try {
-        decompositionSource = JSON.parse(readFileSync(decompositionFullPath, 'utf8'));
-      } catch {
-        decompositionSource = null;
-      }
     }
   }
 

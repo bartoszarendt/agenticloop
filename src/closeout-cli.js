@@ -379,6 +379,25 @@ function resolveCoveredTaskAssurance(target, io, context) {
   if (!externalRevocations.ok) {
     return { taskId, usable: false, activation: null, failureCategory: activationFailureCategory(externalRevocations.errors), reasons: externalRevocations.errors };
   }
+  // Expiry is not retroactive (C12-F9).
+  //
+  // Closeout used to evaluate the grant against the current clock, so a
+  // 12-hour authorization that expired *during* a long execution retroactively
+  // blocked closeout of work the operator had genuinely authorized when it
+  // started. Expiry means "this authority may not start new work", not "the
+  // work it already started never happened".
+  //
+  // So when a packet was consumed for this task, expiry is evaluated as of that
+  // consumption instant. Two properties keep this from being a loophole:
+  // revocation is matched by grant identity and is time-independent, so a
+  // revoked grant still fails here; and pinning to a past instant only ever
+  // narrows what qualifies - a grant issued *after* the attempt started does
+  // not retroactively authorize it.
+  const consumed = currentDispatchConsumption(target, taskId, { backend });
+  const consumedAtMs = consumed.ok && consumed.record ? Date.parse(consumed.record.consumedAt) : null;
+  const activationEvaluatedAt = Number.isFinite(consumedAtMs) && consumedAtMs <= Date.now()
+    ? consumedAtMs
+    : null;
   const resolved = resolveTaskActivationBinding({
     grant: evidence.grant,
     binding: evidence.binding,
@@ -388,6 +407,7 @@ function resolveCoveredTaskAssurance(target, io, context) {
     carrier: identity.carrier,
     taskContractDigest: identity.contract.digest,
     verifySignature: verify,
+    ...(activationEvaluatedAt === null ? {} : { now: activationEvaluatedAt }),
     revocations: [...externalRevocations.revocations, ...evidence.revocations],
     decomposition: evidence.binding?.derivation === 'committed_decomposition_membership'
       ? readCommittedDecomposition(target, evidence.binding?.decompositionSource?.sourceRef)
@@ -410,6 +430,11 @@ function resolveCoveredTaskAssurance(target, io, context) {
       },
       activation: null,
     }),
+    // Stated, not implied: a reader can see whether this verdict was reached
+    // against the consumption instant or against the current clock.
+    evaluatedAt: activationEvaluatedAt === null
+      ? 'current_clock'
+      : new Date(activationEvaluatedAt).toISOString(),
     failureCategory: resolved.ok ? null : activationFailureCategory(resolved.errors ?? []),
     reasons: resolved.ok ? [] : resolved.errors.map(item => item.message),
   };
