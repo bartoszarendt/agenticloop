@@ -587,6 +587,40 @@ either the grant and every binding land, or none do and the versioned mutation
 receipt says so. A failed multi-task activation therefore produces no partial
 authority.
 
+### Operational measurement
+
+```text
+npx agenticloop task measure <task-id> [--json]
+```
+
+Read-only, and it **persists nothing**. Every counter is derived on demand from
+evidence that already exists for its own reasons — consumption records,
+abandonment records, carrier mutation receipts. That is how the rule
+*telemetry is not task evidence and must not become a second workflow truth
+store* is kept: there is no second store to drift from the first, and deleting
+the output loses nothing. The result states `derived: true`, `persisted: false`,
+`authority: "none"` so a reader who finds it on disk knows what it is.
+
+It is privacy-clean by construction, not by policy. The inputs are identities,
+counts, and instants; the reader never opens a task body, a commit message, or
+an abandonment's stated reason, and the projection has no field to hold one.
+
+Reported counters: execution attempts, abandoned attempts, packet remints,
+distinct product bases, and carrier mutations. Durations are reported only where
+both endpoints are durable evidence — a stage whose start or end exists only in
+a transcript is **absent rather than estimated**, because an invented duration
+is not a measurement.
+
+Deviations from the ordinary shape (one attempt, none abandoned, one product
+base) are reported, never enforced. A missed target is a fact for a human to
+weigh. Two attempts against the *same* base is a retry; two against different
+bases means work was rebuilt on a base the earlier packet never described, and
+the counters keep that distinction.
+
+Unreadable evidence is named rather than counted as zero, and the command exits
+non-zero: a measurement that reads a broken store as "nothing happened" is worse
+than no measurement, because it looks like a clean run.
+
 ### Owner routing
 
 Every typed failure returns to the role that owns the repair, and the routing is

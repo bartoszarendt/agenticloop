@@ -151,6 +151,7 @@ import {
   listDispatchConsumptions,
   resolveCarrierLineage,
 } from './handoff-consumption.js';
+import { measureTaskWorkflow } from './workflow-measurement.js';
 import {
   HISTORICAL_MISSING_EVIDENCE_CLASSES,
   createHistoricalAdoption,
@@ -299,6 +300,7 @@ const TASK_SUBCOMMAND_BACKENDS = Object.freeze({
   'establish-baseline': Object.freeze(['files']),
   'abandon-attempt': Object.freeze(['files']),
   'adopt-historical': Object.freeze(['files']),
+  measure: Object.freeze(['files']),
   'attempt-status': Object.freeze(['files']),
   'authorize-correction': Object.freeze(['files']),
   'prepare-decomposition': Object.freeze(['files', 'github']),
@@ -1617,7 +1619,7 @@ export async function cmdTask(args, io = createIo()) {
     const suggestion = sub ? suggestName(sub, Object.keys(TASK_SUBCOMMANDS)) : null;
     throw new CliUsageError(suggestion
       ? `task: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
-      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, handoff-preflight, refresh-handoff-evidence, attempt-status, abandon-attempt, adopt-historical, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, status.');
+      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, handoff-preflight, refresh-handoff-evidence, attempt-status, abandon-attempt, adopt-historical, measure, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, status.');
   }
   const { opts, positional } = parseCommandArgs(`task ${sub}`, TASK_SUBCOMMANDS[sub], args.slice(1));
   const target = resolveCliTarget(io, opts.target);
@@ -3525,6 +3527,34 @@ export async function cmdTask(args, io = createIo()) {
         }
       }
       return conservation.ok ? 0 : 1;
+    }
+
+    if (sub === 'measure') {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      if (!taskId) {
+        io.err('task measure requires <id>');
+        return EXIT_USAGE;
+      }
+      const measurement = measureTaskWorkflow(target, taskId, { backend: selectedBackend.backend });
+      if (asJson) io.out(JSON.stringify(measurement, null, 2));
+      else {
+        io.out(`Workflow measurement for ${taskId} (derived; nothing stored)`);
+        io.out(`  execution attempts:  ${measurement.counters.executionAttempts}`);
+        io.out(`  abandoned attempts:  ${measurement.counters.abandonedAttempts}`);
+        io.out(`  packet remints:      ${measurement.counters.packetRemints}`);
+        io.out(`  distinct bases:      ${measurement.counters.distinctProductBases}`);
+        io.out(`  carrier mutations:   ${measurement.counters.carrierMutations}`);
+        if (measurement.durations.liveAttemptElapsedSeconds !== null) {
+          io.out(`  live attempt age:    ${measurement.durations.liveAttemptElapsedSeconds}s`);
+        }
+        for (const deviation of measurement.deviations) {
+          io.out(`  deviation:           ${deviation.shape} expected ${deviation.expected}, observed ${deviation.observed}`);
+        }
+        if (measurement.deviations.length === 0) io.out('  deviation:           (none)');
+        for (const item of measurement.unreadableEvidence) io.err(`unreadable evidence class: ${item}`);
+      }
+      return measurement.complete ? 0 : 1;
     }
 
     if (sub === 'adopt-historical') {

@@ -68,6 +68,7 @@ const MANIFEST = {
     'test/c12r-activation-scope.test.js',
     'test/c12r-attempt-cli.test.js',
     'test/c12r-identity-migration.test.js',
+    'test/c12r-measurement.test.js',
     'test/c12r-owner-routing.test.js',
     'test/c12r-packet-conservation.test.js',
     'test/c12r-preflight-convergence.test.js',
