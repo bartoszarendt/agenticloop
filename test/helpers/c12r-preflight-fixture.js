@@ -87,7 +87,7 @@ Proceed incrementally.
 }
 
 /** Write a committed-shaped decomposition source and its dependency snapshot. */
-export function makeDecomposition(target, taskId) {
+export function makeDecomposition(target, taskId, { workUnitId = `work-unit:${taskId}` } = {}) {
   const dir = join(target, '.agenticloop', 'decompositions');
   mkdirSync(dir, { recursive: true });
   const sourceRef = `.agenticloop/decompositions/${taskId}.json`;
@@ -109,7 +109,7 @@ export function makeDecomposition(target, taskId) {
 
   const basePaths = gitOut(target, ['ls-tree', '-r', '--name-only', baseTree]).split(/\r?\n/).filter(Boolean);
   const scanned = evaluateParallelScan({
-    workUnit: { id: `work-unit:${taskId}`, backend: 'files' },
+    workUnit: { id: workUnitId, backend: 'files' },
     inventory: normalizeFilesTaskInventory({
       inventoryId: 'files:.agenticloop/tasks',
       entries: [{

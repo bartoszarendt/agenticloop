@@ -152,6 +152,7 @@ import {
   resolveCarrierLineage,
 } from './handoff-consumption.js';
 import { measureTaskWorkflow } from './workflow-measurement.js';
+import { buildReadinessPlan } from './readiness-plan.js';
 import {
   HISTORICAL_MISSING_EVIDENCE_CLASSES,
   createHistoricalAdoption,
@@ -301,6 +302,7 @@ const TASK_SUBCOMMAND_BACKENDS = Object.freeze({
   'abandon-attempt': Object.freeze(['files']),
   'adopt-historical': Object.freeze(['files']),
   measure: Object.freeze(['files']),
+  'readiness-plan': Object.freeze(['files']),
   'attempt-status': Object.freeze(['files']),
   'authorize-correction': Object.freeze(['files']),
   'prepare-decomposition': Object.freeze(['files', 'github']),
@@ -1619,7 +1621,7 @@ export async function cmdTask(args, io = createIo()) {
     const suggestion = sub ? suggestName(sub, Object.keys(TASK_SUBCOMMANDS)) : null;
     throw new CliUsageError(suggestion
       ? `task: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
-      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, handoff-preflight, refresh-handoff-evidence, attempt-status, abandon-attempt, adopt-historical, measure, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, status.');
+      : 'task requires a subcommand: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, handoff-preflight, refresh-handoff-evidence, attempt-status, abandon-attempt, adopt-historical, readiness-plan, measure, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, status.');
   }
   const { opts, positional } = parseCommandArgs(`task ${sub}`, TASK_SUBCOMMANDS[sub], args.slice(1));
   const target = resolveCliTarget(io, opts.target);
@@ -3527,6 +3529,35 @@ export async function cmdTask(args, io = createIo()) {
         }
       }
       return conservation.ok ? 0 : 1;
+    }
+
+    if (sub === 'readiness-plan') {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      if (!taskId) {
+        io.err('task readiness-plan requires <id>');
+        return EXIT_USAGE;
+      }
+      const plan = buildReadinessPlan(target, taskId, {
+        projectConfig,
+        actor: opts.actor ? String(opts.actor) : null,
+        authority: opts.authority ? String(opts.authority) : null,
+      });
+      if (asJson) io.out(JSON.stringify(plan, null, 2));
+      else {
+        io.out(`Readiness plan for ${taskId}: ${plan.ready ? 'settled' : `${plan.pendingSteps.length} step(s) remaining`}`);
+        for (const item of plan.steps) {
+          io.out(`  [${item.settled ? 'x' : ' '}] ${item.id} (${item.owner}) - ${item.detail}`);
+          if (!item.settled && item.command) io.out(`        ${item.command.replace(/\n/g, ' ')}`);
+        }
+        if (plan.writeSet.length) {
+          io.out('  write set:');
+          for (const path of plan.writeSet) io.out(`    ${path}`);
+        }
+        if (!plan.ready) io.out(`  final commit trailer: ${plan.finalCommitTrailer.replace(/\n/g, ' / ')}`);
+        io.out(`  ${plan.activationNote}`);
+      }
+      return plan.ready ? 0 : 1;
     }
 
     if (sub === 'measure') {

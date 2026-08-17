@@ -74,6 +74,7 @@ const MANIFEST = {
     'test/c12r-packet-conservation.test.js',
     'test/c12r-preflight-convergence.test.js',
     'test/c12r-r2-repairs.test.js',
+    'test/c12r-readiness-plan.test.js',
     'test/committed-source.test.js',
     'test/dispatch-envelope-activation.test.js',
     'test/dispatch-envelope-blocked.test.js',

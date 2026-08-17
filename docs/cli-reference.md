@@ -587,6 +587,42 @@ either the grant and every binding land, or none do and the versioned mutation
 receipt says so. A failed multi-task activation therefore produces no partial
 authority.
 
+### Readiness plan
+
+```text
+npx agenticloop task readiness-plan <task-id> [--actor <git-author>] [--authority <kind:reference>] [--json]
+```
+
+Read-only. It computes the **whole** readiness sequence at once, in dependency
+order, from current facts — instead of letting the Maintainer discover one
+prerequisite per failed gate.
+
+That discovery loop is what the field record measured: 23 of 29 preflights and
+18 of 31 dispatch attempts failed, because each prerequisite was found by
+failing a gate, repaired, and then invalidated by the repair after it. The
+prerequisites were never wrong; they were only ever presented one at a time.
+
+Steps, in order: `task_contract`, `trusted_contract_baseline`,
+`dependency_observation`, `work_unit_identity`, `committed_decomposition`,
+`maintainer_attribution`, `lifecycle_agent_ready`. Each reports whether it is
+settled, what it depends on, its owner (always the Maintainer), and — where the
+command is derivable from current state — the exact command with the current
+HEAD and any supplied `--actor`/`--authority` already substituted.
+
+The plan shows its **complete write set before anything is written**, naming
+only real paths; a placeholder in a write set would defeat the point. Every
+write is workflow or task evidence, never a product file, and the plan names one
+final Maintainer-attributed commit.
+
+**It never plans activation**, and says so rather than leaving it to omission.
+Activation is the operator action that *follows* readiness — planning it here
+would reintroduce the exact ordering the field session got wrong. A settled plan
+exits zero; an unsettled one exits non-zero with the remaining steps.
+
+A per-task `work-unit:<task-id>` fallback is reported as *not* a durable work
+unit, so the grouping confusion is caught at authoring time rather than at
+activation.
+
 ### Operational measurement
 
 ```text
