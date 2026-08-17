@@ -22,7 +22,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -36,11 +36,13 @@ import {
 import { KNOWN_TASK_STATUSES } from '../src/task-transition.js';
 import { COMMAND_REGISTRY, parseCommandArgs } from '../src/cli-registry.js';
 import {
+  describeProtection,
   loadOperatorActivationKey,
   operatorActivationKeyPathForIdentity,
   readOperatorActivationKeyDocument,
   renderOperatorActivationKeyDocument,
 } from '../src/activation-trust.js';
+import { migrateOperatorActivationIdentity } from '../src/activation-identity-migration.js';
 import { HOST_SIGNATURE_ALGORITHM, exportPublicKey, targetRepositoryIdentity } from '../src/host-trust.js';
 import {
   legacyRepositoryAuthorityIdentities,
@@ -349,6 +351,51 @@ describe('C12R-R2-F2 a migration reports the state it produced', () => {
     const asJson = JSON.parse((await runActivation(fx, ['identity-status', '--json'])).stdout);
     assert.equal(asJson.currentKeyState, 'present');
     assert.equal(asJson.currentKeyId, material.keyId);
+  });
+
+  it('protects the migrated private key exactly as provisioning does', async function () {
+    // Reverification gap found while rerunning the 61c714a repair list: the
+    // migration applies owner protection to the copied private key and reports
+    // it, and nothing asserted either. A migrated key carries the same secret as
+    // a provisioned one, so it must not be less protected than one.
+    const fx = identityFixture('migrate-protection');
+    if (!fx.hasSupersededSpellings) { this.skip(); return; }
+    writeLegacyKey(fx, fx.legacyIdentities[0]);
+    const migrated = migrateOperatorActivationIdentity(fx.target, {
+      operatorActivationRoot: fx.operatorActivationRoot,
+    });
+    assert.equal(migrated.ok, true, migrated.errors.join('; '));
+    assert.equal(migrated.migrated, true);
+    const provisioned = describeProtection();
+    // The protection claim is whatever this platform actually enforces, never a
+    // stronger one: Windows reports the inherited ACL honestly rather than
+    // claiming an ACL the toolkit did not set.
+    const expected = process.platform === 'win32' ? 'platform_default_acl' : 'posix_owner_only';
+    assert.equal(migrated.ownerProtection.file, expected);
+    assert.equal(migrated.ownerProtection.directory, expected);
+    assert.equal(migrated.ownerProtection.platform, provisioned.platform);
+    assert.equal(migrated.ownerProtection.limitation, provisioned.limitation);
+    if (process.platform !== 'win32') {
+      const keyPath = operatorActivationKeyPathForIdentity(fx.currentIdentity, fx.operatorActivationRoot);
+      assert.equal(statSync(keyPath).mode & 0o777, 0o600);
+      assert.equal(statSync(resolve(keyPath, '..')).mode & 0o777, 0o700);
+    }
+  });
+
+  it('leaves the superseded key in place after migrating it', async function () {
+    // The migration copies forward and never deletes, so the operator can still
+    // recover if the new state is wrong. Reverified here because the receipt is
+    // what claims this, and a claim without a check is not evidence.
+    const fx = identityFixture('migrate-preserve');
+    if (!fx.hasSupersededSpellings) { this.skip(); return; }
+    const { path: legacyPath, material } = writeLegacyKey(fx, fx.legacyIdentities[0]);
+    const beforeBytes = readFileSync(legacyPath, 'utf8');
+    const report = JSON.parse((await runActivation(fx, ['migrate-identity', '--json'])).stdout);
+    assert.equal(report.migrated, true);
+    assert.equal(readFileSync(legacyPath, 'utf8'), beforeBytes, 'the superseded key is preserved byte for byte');
+    const superseded = report.supersededIdentities.find(item => item.identity === fx.legacyIdentities[0]);
+    assert.equal(superseded.keyState, 'present');
+    assert.equal(superseded.keyId, material.keyId);
   });
 
   it('is idempotent and reports the rerun truthfully', async function () {
