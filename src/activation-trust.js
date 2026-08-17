@@ -228,7 +228,7 @@ export function readExternalActivationRevocations(target, options = {}) {
  * than claimed: callers surface `ownerProtection` truthfully instead of
  * promising an ACL the toolkit did not set.
  */
-function applyOwnerProtection(path, mode) {
+export function applyOwnerProtection(path, mode) {
   if (process.platform === 'win32') return 'platform_default_acl';
   try {
     chmodSync(path, mode);
@@ -381,19 +381,39 @@ export function loadOperatorActivationKey(target, options = {}) {
  * Identity migration needs this: a key provisioned under a superseded identity
  * spelling is a valid document that simply names an older identity, and calling
  * it malformed would hide exactly the state the migration must find.
+ *
+ * It applies the same confinement `loadOperatorActivationKey` applies, because
+ * relaxing only the identity check must not also relax the trust boundary. A
+ * document reachable from inside the target repository is never operator
+ * material, and treating one as such would let repository content decide
+ * whether operator authority may be provisioned.
+ *
+ * @param {string} path
+ * @param {string} expectedIdentity
+ * @param {{ target: string, root: string }} confinement
  */
-export function readOperatorActivationKeyDocument(path, expectedIdentity) {
+export function readOperatorActivationKeyDocument(path, expectedIdentity, { target, root } = {}) {
+  if (typeof root !== 'string' || !root.trim() || !isAbsolute(root)) {
+    return { ok: false, state: 'malformed', key: null, errors: ['operator activation root must be an absolute path'], path };
+  }
+  if (!rootOutsideTarget(target, root)) {
+    return { ok: false, state: 'malformed', key: null, errors: ['operator activation root must be outside the target repository'], path };
+  }
   if (!existsSync(path)) return { ok: true, state: 'missing', key: null, errors: [], path };
   if (lstatSync(path).isSymbolicLink()) {
     return { ok: false, state: 'malformed', key: null, errors: ['operator activation key must not be a symbolic link'], path };
   }
+  const realPath = displayPath(path);
+  if (!rootOutsideTarget(target, realPath)) {
+    return { ok: false, state: 'malformed', key: null, errors: ['operator activation key resolves inside the target repository'], path: realPath };
+  }
   let text;
   try {
-    text = readFileSync(path, 'utf8');
+    text = readFileSync(realPath, 'utf8');
   } catch (error) {
-    return { ok: false, state: 'malformed', key: null, errors: [`operator activation key is unreadable: ${error.message}`], path };
+    return { ok: false, state: 'malformed', key: null, errors: [`operator activation key is unreadable: ${error.message}`], path: realPath };
   }
-  const parsed = parseKeyDocument(text, { expectedIdentity, path });
+  const parsed = parseKeyDocument(text, { expectedIdentity, path: realPath });
   if (!parsed.ok) return { ok: false, state: 'malformed', key: null, errors: parsed.errors, path };
   return { ok: true, state: 'present', key: parsed.key, errors: [], path };
 }
@@ -432,7 +452,7 @@ export function discoverLegacyOperatorActivationKeys(target, options = {}) {
       found.push({ identity, path: null, state: 'malformed', key: null, errors: [error.message] });
       continue;
     }
-    const read = readOperatorActivationKeyDocument(path, identity);
+    const read = readOperatorActivationKeyDocument(path, identity, { target, root });
     if (read.state === 'missing') continue;
     found.push({ identity, path, state: read.state, key: read.key, errors: read.errors });
   }
@@ -541,7 +561,7 @@ export function provisionOperatorActivationKey(target, options = {}) {
   };
 }
 
-function describeProtection() {
+export function describeProtection() {
   return process.platform === 'win32'
     ? {
         platform: 'win32',

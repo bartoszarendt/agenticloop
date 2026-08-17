@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { evaluateCommitAttribution } from './commit-attribution.js';
 import { GIT_OBJECT_ID_RE } from './git-oid.js';
 import { GIT_MAX_BUFFER } from './git-runner.js';
-import { isAbsoluteOrDriveQualifiedPath } from './path-identity.js';
+import { isAbsoluteOrDriveQualifiedPath, samePathAuthority } from './path-identity.js';
 
 function git(target, args, encoding = 'utf8') {
   return spawnSync('git', args, { cwd: target, encoding, maxBuffer: GIT_MAX_BUFFER });
@@ -41,18 +41,64 @@ function assertNoSymlinkSubstitution(target, sourceRef) {
 }
 
 /**
- * Ask Git whether the worktree path differs from HEAD.
+ * Require `target` to be the repository root the `HEAD:<path>` forms resolve
+ * against.
+ *
+ * `rev:path` is always root-relative, while a pathspec and the filesystem read
+ * are relative to `target`. If those bases differ, one leg of this verifier can
+ * describe a different file from the other: a subdirectory target with a
+ * same-named file at the root would have the root file's blob, provenance, and
+ * attribution accepted as evidence for the subdirectory path. Rather than
+ * silently picking a basis, refuse the input.
+ */
+function assertTargetIsRepositoryRoot(target) {
+  const toplevel = git(target, ['rev-parse', '--show-toplevel']);
+  const root = String(toplevel.stdout ?? '').trim();
+  if (toplevel.status !== 0 || !root) {
+    throw new Error('committed source verification requires a Git repository');
+  }
+  if (!samePathAuthority(root, target)) {
+    throw new Error(
+      'committed source verification requires the repository root; ' +
+      `'${resolve(target)}' is inside the repository at '${root}'`
+    );
+  }
+}
+
+/**
+ * Ask Git whether the path carries any uncommitted difference from HEAD.
  *
  * Git applies the path's `.gitattributes` eol rules and any clean filter before
  * comparing, so an ordinary Windows CRLF checkout and a smudged working copy
- * both report "unmodified" while a genuine content change - staged or not -
- * reports the path. An unusable `git diff` is treated as a difference so the
- * caller fails closed rather than inheriting an unproven worktree.
+ * both report "unmodified" while a genuine content change reports the path.
+ * Three separate questions are asked, because each can be true alone:
+ *
+ * - the worktree may differ from HEAD;
+ * - the index may differ from HEAD even when the worktree does not;
+ * - `assume-unchanged` or `skip-worktree` may be set, which tells Git to stop
+ *   looking at the worktree at all and would make both diffs report nothing.
+ *
+ * Every pathspec is `:(top,literal)` so it shares the root-relative basis of
+ * `HEAD:<path>` and cannot be reinterpreted as a glob. An unusable Git result
+ * is treated as a difference, so the caller fails closed rather than inheriting
+ * an unproven worktree.
  */
 function worktreeMatchesHead(target, path) {
-  const diff = git(target, ['diff', '--name-only', 'HEAD', '--', path]);
-  if (diff.status !== 0) return { ok: false, reason: 'could not be compared with HEAD' };
-  if (String(diff.stdout ?? '').trim() !== '') return { ok: false, reason: 'differs from HEAD' };
+  const pathspec = `:(top,literal)${path}`;
+  for (const [args, reason] of [
+    [['diff', '--name-only', 'HEAD', '--', pathspec], 'differs from HEAD'],
+    [['diff', '--name-only', '--cached', 'HEAD', '--', pathspec], 'has a staged difference from HEAD'],
+  ]) {
+    const result = git(target, args);
+    if (result.status !== 0) return { ok: false, reason: 'could not be compared with HEAD' };
+    if (String(result.stdout ?? '').trim() !== '') return { ok: false, reason };
+  }
+  const listed = git(target, ['ls-files', '-v', '--', pathspec]);
+  if (listed.status !== 0) return { ok: false, reason: 'could not be compared with HEAD' };
+  const tags = String(listed.stdout ?? '').split(/\r?\n/).filter(Boolean).map(line => line[0]);
+  if (tags.length !== 1 || tags[0] !== 'H') {
+    return { ok: false, reason: 'is not an ordinary tracked file whose worktree copy Git checks' };
+  }
   return { ok: true, reason: null };
 }
 
@@ -67,6 +113,7 @@ export function verifyCommittedAttributedSource(target, sourceRef, { taskId } = 
   const checkedPath = validateCommittedSourcePath(sourceRef);
   if (!checkedPath.ok) return { ok: false, evidenceState: 'malformed', error: checkedPath.error };
   try {
+    assertTargetIsRepositoryRoot(target);
     assertNoSymlinkSubstitution(target, checkedPath.path);
   } catch (error) {
     if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {

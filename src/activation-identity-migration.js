@@ -38,8 +38,10 @@ import {
   repositoryAuthorityDigest,
 } from './repository-identity.js';
 import {
+  applyOwnerProtection,
   assertSafeOperatorActivationKeyWritePath,
   defaultOperatorActivationRoot,
+  describeProtection,
   discoverLegacyOperatorActivationKeys,
   externalRevocationDirectoryForIdentity,
   loadOperatorActivationKey,
@@ -232,9 +234,16 @@ export function migrateOperatorActivationIdentity(target, options = {}) {
   }
 
   const destination = operatorActivationKeyPath(target, root);
+  let ownerProtection = null;
   try {
     assertSafeOperatorActivationKeyWritePath(target, root, destination);
-    mkdirSync(resolve(destination, '..'), { recursive: true });
+    const directory = resolve(destination, '..');
+    mkdirSync(directory, { recursive: true });
+    assertSafeOperatorActivationKeyWritePath(target, root, destination);
+    // The migrated document carries the same private key as the original, so it
+    // gets the same owner-only protection the provisioning path applies and the
+    // same honest disclosure of what this platform actually enforces.
+    const directoryProtection = applyOwnerProtection(directory, 0o700);
     assertSafeOperatorActivationKeyWritePath(target, root, destination);
     atomicWriteFile(destination, renderOperatorActivationKeyDocument({
       repositoryIdentity: inspection.currentIdentity,
@@ -244,6 +253,11 @@ export function migrateOperatorActivationIdentity(target, options = {}) {
       privateKey: legacyDocument.privateKey,
       createdAt: legacyDocument.createdAt,
     }));
+    ownerProtection = {
+      directory: directoryProtection,
+      file: applyOwnerProtection(destination, 0o600),
+      ...describeProtection(),
+    };
   } catch (error) {
     return {
       ok: false,
@@ -304,6 +318,7 @@ export function migrateOperatorActivationIdentity(target, options = {}) {
     errors: [],
     receiptPath: inspection.receiptPath,
     receipt: Object.freeze(receipt),
+    ownerProtection,
   };
 }
 

@@ -14,11 +14,14 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+import { createDispatchFixture, git as fixtureGit, prepare, sha256 } from './helpers/dispatch-fixture.js';
+
 import {
+  DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE,
   DISPATCHABLE_TASK_STATUSES,
   ROLE_START_STATUS,
   TERMINAL_TASK_STATUSES,
@@ -115,6 +118,63 @@ describe('P35-C12R lifecycle dispatchability is one derived rule', () => {
   it('reads the status from a task record body', () => {
     assert.equal(taskStatusFromBody('---\ntask_id: T-1\nstatus: draft\n---\n\n# body\n'), 'draft');
     assert.equal(taskStatusFromBody('no frontmatter at all'), null);
+  });
+});
+
+describe('P35-C12R the packet constructor applies the same gate', () => {
+  it('refuses to mint a packet for a draft task', async () => {
+    const fixture = await createDispatchFixture(tmpDir, 'c12r-draft-packet');
+    const body = readFileSync(fixture.taskPath, 'utf8');
+    const draftBody = body.replace(/^status: .*$/m, 'status: draft');
+    writeFileSync(fixture.taskPath, draftBody, 'utf8');
+    // Commit it, so the refusal is the lifecycle gate and not the clean gate.
+    fixtureGit(fixture.root, ['add', '-A']);
+    fixtureGit(fixture.root, ['commit', '-m', 'set draft\n\nTask: T-001\nAgent: maintainer']);
+    const snapshot = fixture.snapshot();
+
+    const prepared = prepare(fixture, {
+      refetchTask: () => ({ ...snapshot, body: draftBody, digest: sha256(draftBody) }),
+    });
+    assert.equal(prepared.ok, false, 'a draft task must never receive a dispatch packet');
+    const messages = prepared.validation.errors.join(' ');
+    assert.match(messages, /cannot begin an execution attempt/);
+    assert.match(messages, /draft/);
+  });
+
+  it('mints a packet for the same task once it is agent-ready', async () => {
+    const fixture = await createDispatchFixture(tmpDir, 'c12r-ready-packet');
+    const prepared = prepare(fixture);
+    assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
+  });
+
+  it('pins the disclosed terminal-status narrowing so its removal is visible', async () => {
+    // Today `prepareRoleDispatch` accepts a terminal status and preflight
+    // refuses it. That asymmetry is the P35-C12R.5 deferral, not a decision:
+    // this case exists so closing the gate is a deliberate change here, never a
+    // silent one. Deleting it is part of the reopen gate.
+    const fixture = await createDispatchFixture(tmpDir, 'c12r-terminal-packet');
+    const body = readFileSync(fixture.taskPath, 'utf8');
+    const acceptedBody = body.replace(/^status: .*$/m, 'status: accepted');
+    writeFileSync(fixture.taskPath, acceptedBody, 'utf8');
+    fixtureGit(fixture.root, ['add', '-A']);
+    fixtureGit(fixture.root, ['commit', '-m', 'set accepted\n\nTask: T-001\nAgent: maintainer']);
+    const snapshot = fixture.snapshot();
+
+    const prepared = prepare(fixture, {
+      refetchTask: () => ({ ...snapshot, body: acceptedBody, digest: sha256(acceptedBody) }),
+    });
+    // Whatever else this fixture's evidence does or does not satisfy, the one
+    // thing the constructor must not currently say is that the lifecycle blocks
+    // it. When the narrowing is removed, this assertion fails and has to be
+    // deleted deliberately.
+    const codes = (prepared.validation.diagnostics ?? []).map(item => item.code);
+    assert.equal(
+      codes.includes(DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE),
+      false,
+      'deferred, not refused; see evaluatePacketDispatchableLifecycle'
+    );
+    assert.equal(evaluateDispatchableLifecycle('accepted').ok, false, 'the canonical rule still refuses it');
+    assert.equal(evaluatePacketDispatchableLifecycle('accepted').enforcedAt, 'preflight');
   });
 });
 

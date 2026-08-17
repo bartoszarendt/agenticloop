@@ -83,8 +83,9 @@ and reread decomposition from an unmodified committed source whose last change
 has canonical Maintainer attribution. "Unmodified" is Git's verdict, so the
 path's own `.gitattributes` eol rules and any clean filter apply, and the
 content the verifier consumes is the committed blob rather than the host's
-checked-out spelling: an ordinary Windows CRLF checkout is not drift, while a
-genuine content change - staged or not - still is. The committed decomposition persists its
+checked-out spelling: an ordinary Windows CRLF checkout is not drift. A worktree
+difference, a staged-only difference, an `assume-unchanged` or `skip-worktree`
+bit, and a target that is not the repository root are all refused. The committed decomposition persists its
 own revalidation selectors: the base as an exact `git-tree:<oid>` identity and
 each dependency snapshot as the semantic `source` identity plus a confined
 target-relative `sourceRef` artifact path. Inline readiness results or decomposition

@@ -16,7 +16,7 @@
  */
 
 import { parseFrontmatterStrict } from './frontmatter.js';
-import { createDiagnostic } from './repair-policy.js';
+
 import { stripTaskContractMarkers } from './task-contract-baseline.js';
 import { KNOWN_TASK_STATUSES, LEGAL_TASK_STATUS_TRANSITIONS } from './task-transition.js';
 
@@ -127,18 +127,5 @@ export function evaluatePacketDispatchableLifecycle(status) {
   return evaluated;
 }
 
-/** One canonical diagnostic for a non-dispatchable lifecycle status. */
-export function dispatchableLifecycleDiagnostic(taskId, evaluation) {
-  return createDiagnostic({
-    code: 'task.lifecycle.not_dispatchable',
-    message: evaluation.reason,
-    evidence: {
-      state: evaluation.evidenceState,
-      supplied: true,
-      rollbackAuthorized: false,
-      status: evaluation.status,
-      dispatchableStatuses: [...DISPATCHABLE_TASK_STATUSES],
-    },
-    repairHint: dispatchableLifecycleRepair(taskId, evaluation.status),
-  });
-}
+/** The one diagnostic code every dispatchability refusal reports under. */
+export const DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE = 'task.lifecycle.not_dispatchable';

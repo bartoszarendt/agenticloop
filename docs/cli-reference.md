@@ -277,6 +277,12 @@ restated, so a task is dispatchable exactly when its status can legally reach
 start and failing there as an illegal transition. An absent or unrecognized
 status is reported as missing or malformed evidence, never as a negative answer.
 
+One asymmetry is deliberate and temporary: `task prepare-dispatch` currently
+refuses only the statuses that have **not yet** reached an execution attempt.
+The terminal statuses `accepted` and `closed` are refused by preflight but still
+accepted by the packet constructor, so a caller that skips preflight can mint a
+packet for finished work. Run `task handoff-preflight` before packet assembly.
+
 Apply a plan explicitly with:
 
 ```text
@@ -561,8 +567,15 @@ command is a no-op.
 
 Revocation tombstones need no migration at all: external deny evidence is always
 read as the fail-closed union of the current and superseded registries, so a
-revoked grant stays revoked whether or not a migration was ever run. Any
-unreadable record in any of those registries fails the whole read closed.
+revoked grant stays revoked whether or not a migration was ever run.
+
+Any unreadable record, or any non-`.json` entry, in **any** of those registries
+fails the whole read closed for that repository, which blocks activation until
+it is resolved. `migrate-identity` deliberately does not touch revocations, so
+the repair is to inspect
+`~/.agenticloop/operator-activation/revocations/<identity-digest>/` directly.
+`identity-status` reports each superseded identity's digest and tombstone count
+so the affected directory can be located.
 
 When more than one superseded key claims the same repository, both commands
 report `conflict` and refuse. Choosing which operator identity survives is an

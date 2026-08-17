@@ -107,12 +107,6 @@ describe('P35-C12R committed evidence is platform-safe', () => {
     assert.equal(modified.ok, false);
     assert.equal(modified.evidenceState, 'changed');
 
-    // A staged-but-uncommitted difference is still not committed evidence.
-    git(root, ['add', '--', 'evidence/dependencies.json']);
-    const staged = verifyCommittedAttributedSource(root, 'evidence/dependencies.json', { taskId: 'T-001' });
-    assert.equal(staged.ok, false);
-    assert.equal(staged.evidenceState, 'changed');
-
     git(root, ['checkout', 'HEAD', '--', 'evidence/dependencies.json']);
     const restored = verifyCommittedAttributedSource(root, 'evidence/dependencies.json', { taskId: 'T-001' });
     assert.equal(restored.ok, true, `expected the restored checkout to verify: ${restored.error ?? ''}`);
@@ -128,6 +122,56 @@ describe('P35-C12R committed evidence is platform-safe', () => {
     const deleted = verifyCommittedAttributedSource(root, 'evidence/dependencies.json', { taskId: 'T-001' });
     assert.equal(deleted.ok, false);
     assert.equal(deleted.evidenceState, 'missing');
+  });
+
+  it('refuses a staged difference whose worktree copy was restored', () => {
+    // `git diff HEAD` compares the worktree against HEAD and ignores the index,
+    // so this case is invisible to it and needs its own question.
+    const root = fixture('staged-only');
+    commit(root, 'evidence/dependencies.json', EVIDENCE, MAINTAINER_MESSAGE);
+    writeFileSync(join(root, 'evidence', 'dependencies.json'), '{"statuses":{"T-002":"blocked"}}\n', 'utf8');
+    git(root, ['add', '--', 'evidence/dependencies.json']);
+    writeFileSync(join(root, 'evidence', 'dependencies.json'), EVIDENCE, 'utf8');
+
+    const staged = verifyCommittedAttributedSource(root, 'evidence/dependencies.json', { taskId: 'T-001' });
+    assert.equal(staged.ok, false, 'an index that diverges from HEAD is pending, uncommitted drift');
+    assert.equal(staged.evidenceState, 'changed');
+    assert.match(staged.error, /staged difference/);
+  });
+
+  it('refuses a path whose worktree copy Git has been told to stop checking', () => {
+    // `assume-unchanged` and `skip-worktree` make both diffs report nothing, so
+    // "Git says unmodified" would otherwise be an unproven claim.
+    for (const bit of ['--assume-unchanged', '--skip-worktree']) {
+      const root = fixture(`bit-${bit.replace(/-/g, '')}`);
+      commit(root, 'evidence/dependencies.json', EVIDENCE, MAINTAINER_MESSAGE);
+      git(root, ['update-index', bit, '--', 'evidence/dependencies.json']);
+      writeFileSync(join(root, 'evidence', 'dependencies.json'), '{"statuses":{"FORGED":"yes"}}\n', 'utf8');
+
+      const checked = verifyCommittedAttributedSource(root, 'evidence/dependencies.json', { taskId: 'T-001' });
+      assert.equal(checked.ok, false, `${bit} must not be able to suppress the drift gate`);
+      assert.equal(checked.evidenceState, 'changed');
+    }
+  });
+
+  it('refuses a target that is not the repository root, decoy or not', () => {
+    // `HEAD:<path>` is root-relative while a pathspec and the filesystem read
+    // are target-relative. A subdirectory target must never let a same-named
+    // root file supply the blob, provenance, and attribution.
+    const root = fixture('subdirectory-target');
+    commit(root, 'evidence/dependencies.json', '{"statuses":{"ROOT":"DECOY"}}\n', MAINTAINER_MESSAGE);
+    commit(root, 'app/evidence/dependencies.json', EVIDENCE, MAINTAINER_MESSAGE);
+
+    const checked = verifyCommittedAttributedSource(join(root, 'app'), 'evidence/dependencies.json', { taskId: 'T-001' });
+    assert.equal(checked.ok, false, 'a non-root target must be refused, not silently resolved against the root');
+    assert.equal(checked.evidenceState, 'malformed');
+    assert.match(checked.error, /repository root/);
+    assert.doesNotMatch(String(checked.source ?? ''), /DECOY/);
+
+    // The same file verifies normally when addressed from the repository root.
+    const fromRoot = verifyCommittedAttributedSource(root, 'app/evidence/dependencies.json', { taskId: 'T-001' });
+    assert.equal(fromRoot.ok, true, fromRoot.error ?? '');
+    assert.equal(fromRoot.source, EVIDENCE);
   });
 
   it('keeps Maintainer attribution mandatory for a clean CRLF checkout', () => {

@@ -33,6 +33,7 @@ import {
   operatorActivationKeyPathForIdentity,
   provisionOperatorActivationKey,
   readExternalActivationRevocations,
+  readOperatorActivationKeyDocument,
   renderOperatorActivationKeyDocument,
 } from '../src/activation-trust.js';
 import { HOST_SIGNATURE_ALGORITHM, exportPublicKey, targetRepositoryIdentity } from '../src/host-trust.js';
@@ -161,6 +162,35 @@ describe('P35-C12R legacy operator keys are never silently replaced', () => {
     assert.equal(provisioned.ok, true, provisioned.errors.join('; '));
     assert.equal(provisioned.created, true);
     assert.equal(loadOperatorActivationKey(fx.target, fx.options).state, 'present');
+  });
+
+  it('never treats material inside the target repository as operator state', () => {
+    // Relaxing the identity check must not relax the trust boundary: repository
+    // content deciding whether operator authority may be provisioned would let
+    // a writable repo permanently wedge activation.
+    const fx = fixture('inside-target');
+    const insideRoot = join(fx.target, '.agenticloop', 'operator-activation');
+    mkdirSync(insideRoot, { recursive: true });
+    const options = { operatorActivationRoot: insideRoot, legacyIdentities: fx.legacyIdentities };
+    const path = operatorActivationKeyPathForIdentity(fx.legacyIdentities[0], insideRoot);
+    writeFileSync(path, renderOperatorActivationKeyDocument({
+      repositoryIdentity: fx.legacyIdentities[0],
+      ...keyMaterial(),
+    }), 'utf8');
+
+    const read = readOperatorActivationKeyDocument(path, fx.legacyIdentities[0], {
+      target: fx.target,
+      root: insideRoot,
+    });
+    assert.equal(read.ok, false);
+    assert.match(read.errors.join(' '), /outside the target repository/);
+
+    // Discovery reports it as unusable, never as operator key material, and the
+    // ordinary loader refuses the same root before provisioning is reached.
+    const discovered = discoverLegacyOperatorActivationKeys(fx.target, options);
+    assert.equal(discovered.every(item => item.state === 'malformed' && item.key === null), true);
+    assert.equal(loadOperatorActivationKey(fx.target, options).ok, false);
+    assert.equal(provisionOperatorActivationKey(fx.target, options).ok, false);
   });
 
   it('discovers superseded key material and reports unreadable documents', () => {

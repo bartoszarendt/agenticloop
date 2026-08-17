@@ -407,7 +407,10 @@ export async function cmdActivate(args, io = createIo()) {
         });
     if (!provisioned.ok) {
       throw new VerificationContextMalformedError(
-        `Operator activation key could not be provisioned: ${provisioned.errors.join('; ')}`
+        `Operator activation key could not be provisioned: ${provisioned.errors.join('; ')}` +
+        (provisioned.diagnostic?.code === 'activation.identity.migration_required'
+          ? ". Run 'npx agenticloop activation migrate-identity' to carry the existing operator identity forward."
+          : '')
       );
     }
     const operatorKey = provisioned.key;
