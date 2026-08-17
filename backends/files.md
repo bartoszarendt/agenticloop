@@ -102,6 +102,17 @@ rendered from one structured plan shared by every refusal site: it names the
 read-only command that supplies the current digest, one primary command, and at
 most one identified alternative, and it never offers the mutually exclusive
 `--base` and `--base-paths` inside one command.
+
+That single result is the complete blocker list: a preflight that passes over a
+set of facts cannot be refused by packet preparation or role start over those
+same unchanged facts, with the operator's activation action as the one permitted
+outstanding item. Preflight and dispatch therefore share one authority per
+dimension — lifecycle, relevant clean state, committed append-only contract
+history, committed decomposition, and freshly enumerated work-unit membership.
+A dirty relevant checkout blocks here rather than being advised about; transient
+output under `.agenticloop/tmp/` is excluded at both boundaries, while durable
+uncommitted evidence still fails closed and must be committed first.
+
 If its derived observations are stale, write a
 plan with `--repair-plan <path>` and apply it explicitly with
 `task refresh-handoff-evidence <id> --plan <path> --yes`. The refresh writes only

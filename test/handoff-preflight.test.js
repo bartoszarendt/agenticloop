@@ -427,6 +427,11 @@ describe('handoff-preflight', () => {
     git(target, ['commit', '-m', 'task T-006\n\nTask: T-006\nAgent: maintainer']);
     mkdirSync(join(target, '.agenticloop', 'decompositions'), { recursive: true });
     writeFileSync(join(target, '.agenticloop', 'decompositions', 'T-006.json'), 'not valid json', 'utf8');
+    // Committed, so this case isolates the malformed decomposition. Left
+    // untracked it would also - correctly - fail the clean gate, which preflight
+    // now enforces at the same strength dispatch does.
+    git(target, ['add', '.']);
+    git(target, ['commit', '-m', 'decomposition T-006\n\nTask: T-006\nAgent: maintainer']);
 
     const result = evaluateHandoffPreflight({
       target, taskId: 'T-006', backend: 'files',
@@ -944,6 +949,10 @@ describe('handoff-preflight', () => {
     git(target, ['commit', '-m', 'task T-020\n\nTask: T-020\nAgent: maintainer']);
     mkdirSync(join(target, '.agenticloop', 'decompositions'), { recursive: true });
     writeFileSync(join(target, '.agenticloop', 'decompositions', 'T-020.json'), 'not valid json', 'utf8');
+    // Committed, so the two failures this case is about - activation and
+    // decomposition - are the only two reported.
+    git(target, ['add', '.']);
+    git(target, ['commit', '-m', 'decomposition T-020\n\nTask: T-020\nAgent: maintainer']);
 
     const result = evaluateHandoffPreflight({
       target, taskId: 'T-020', backend: 'files',

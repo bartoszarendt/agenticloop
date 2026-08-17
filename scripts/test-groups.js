@@ -64,6 +64,7 @@ const MANIFEST = {
     'test/c12r-committed-evidence.test.js',
     'test/c12r-dispatchability.test.js',
     'test/c12r-identity-migration.test.js',
+    'test/c12r-preflight-convergence.test.js',
     'test/c12r-r2-repairs.test.js',
     'test/committed-source.test.js',
     'test/dispatch-envelope-activation.test.js',

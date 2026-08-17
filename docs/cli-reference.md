@@ -267,6 +267,41 @@ bounded plan for derived evidence only. Add `--host <host>` to evaluate a
 specific host adapter, `--return-adapter <id>` to select a return adapter, and
 `--output <path>` to write the result to a file.
 
+### One preflight is the complete list of blockers
+
+Preflight holds one property, and it is the reason to run it at all:
+
+> A preflight that passes over a set of facts cannot be refused by packet
+> preparation, prepared-packet validation, or role start over those same
+> unchanged facts.
+
+Activation is the one exception the property permits: preflight may report a
+green result whose only outstanding item is the external operator action. Every
+other prerequisite is reported here or it is a defect.
+
+The property is enforced the only way it can be — by evaluating the same
+dimensions with the same authorities, then checking the pair of verdicts over a
+matrix of single-dimension mutations. Concretely:
+
+| Dimension | Shared authority |
+| --- | --- |
+| Lifecycle | `evaluateDispatchableLifecycle`, derived from the legal-transition table |
+| Relevant clean state | `evaluateDispatchCleanState` |
+| Trusted contract baseline | committed append-only history from `loadFilesTaskContractRecords` |
+| Committed decomposition | `validateDecomposition` |
+| Work-unit membership | `validateParallelScanInventoryBinding` over a freshly enumerated inventory |
+
+A dirty relevant checkout is an **error**, not an advisory: preflight and
+`prepare-dispatch` call the same clean-state evaluator, so reporting it as a
+warning here while refusing it there produced a green preflight and a blocked
+dispatch over identical facts. Transient output under `.agenticloop/tmp/` and
+operator-owned state are excluded by that evaluator at both boundaries, so
+scratch never self-blocks the next gate; durable uncommitted evidence still
+fails closed and has to be committed by the Maintainer first.
+
+Preflight is permitted to refuse *earlier* than a later boundary would. The
+property is one-directional: it forbids the false green, not the early refusal.
+
 The `lifecycle` field answers one question preflight, packet preparation, and
 role start all have to agree on: may this task begin an execution attempt right
 now? The rule is derived from the single legal-transition authority rather than

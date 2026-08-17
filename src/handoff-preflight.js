@@ -11,7 +11,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
@@ -47,6 +47,11 @@ import { loadAgenticLoopConfig } from './json.js';
 import { resolveGitHubTaskIdentityStrict } from './github-task-identity.js';
 import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
 import { createDecompositionEligibilityProjection } from './decomposition-eligibility.js';
+import {
+  createTaskInventoryEnumeration,
+  normalizeFilesTaskInventory,
+  validateParallelScanInventoryBinding,
+} from './parallel-scan.js';
 import { fileMatchesScopePattern } from './scope-matcher.js';
 import {
   FindingSet,
@@ -68,6 +73,81 @@ function runGit(target, args) {
 function gitText(target, args) {
   const result = runGit(target, args);
   return result.status === 0 ? String(result.stdout ?? '').trim() : null;
+}
+
+function isObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Enumerate the current files-backed task inventory the same way dispatch does.
+ *
+ * Read-only and best effort: an unreadable task directory returns null so the
+ * caller reports nothing rather than inventing a membership verdict from an
+ * inventory it could not enumerate. "Could not read" is never "nothing there".
+ */
+function enumerateFilesTaskInventory(target, projectConfig) {
+  const template = projectConfig?.task_file_template ?? '.agenticloop/tasks/{taskId}.md';
+  const directory = join(target, template.replace(/\{taskId\}.*$/, '').replace(/[\\/]+$/, ''));
+  let names;
+  try {
+    names = readdirSync(directory).filter(name => name.endsWith('.md')).sort();
+  } catch {
+    return null;
+  }
+  const entries = [];
+  for (const name of names) {
+    try {
+      entries.push({
+        carrier: `${relative(target, join(directory, name)).replace(/\\/g, '/')}`,
+        content: readFileSync(join(directory, name), 'utf8'),
+        readError: null,
+      });
+    } catch (error) {
+      // An unreadable member is reported as such, never skipped: dropping it
+      // would silently shrink membership and make a stale scan look current.
+      entries.push({ carrier: name, content: null, readError: String(error.message ?? error) });
+    }
+  }
+  return normalizeFilesTaskInventory({
+    inventoryId: 'files:.agenticloop/tasks',
+    entries,
+    complete: true,
+    enumeration: createTaskInventoryEnumeration({
+      backend: 'files',
+      inventoryId: 'files:.agenticloop/tasks',
+      observedAt: new Date().toISOString(),
+      discovered: entries.length,
+      returned: entries.length,
+    }),
+  });
+}
+
+/**
+ * The exact repair for one dirty-checkout refusal.
+ *
+ * Different dirty shapes have different safe repairs, and lumping them into one
+ * sentence sends the caller to the wrong action: staged and unstaged tracked
+ * changes are committed or reverted, relevant untracked state is committed or
+ * moved into scratch, and pre-existing ignored state has to be removed because
+ * it could otherwise be force-added and attributed to the role's work.
+ */
+function cleanStateRepair(state) {
+  const parts = [];
+  if (state?.stagedPaths?.length || state?.unstagedPaths?.length) {
+    parts.push('Commit or revert the tracked changes');
+  }
+  if (state?.untrackedRelevantPaths?.length) {
+    parts.push(
+      'commit the relevant untracked paths as Maintainer-authored evidence, or move transient output under ' +
+      `${(state.permittedScratchPrefixes ?? ['.agenticloop/tmp/']).join(' or ')}`
+    );
+  }
+  if (state?.ignoredRelevantPaths?.length) {
+    parts.push('remove the pre-existing ignored task-scope paths so they cannot be attributed to the role');
+  }
+  if (parts.length === 0) return 'Restore a clean checkout before requesting a packet.';
+  return `${parts.join('; ')}, then rerun this preflight.`;
 }
 
 /**
@@ -211,12 +291,42 @@ export function evaluateHandoffPreflight(input) {
               trustedRecords: [], trustedRecordErrors: [],
             };
             // Load trusted records for contract baseline validation.
+            //
+            // These errors used to be collected and then dropped - "optional for
+            // the preflight report" - while `prepareRoleDispatch` refuses any
+            // packet whose readiness evidence carries a non-empty
+            // `trustedRecordErrors`. A deleted or rewritten append-only contract
+            // history therefore produced a green preflight and a blocked
+            // dispatch over identical committed facts (C12R-R2-F6).
+            //
+            // The trusted contract baseline is one of the dimensions a single
+            // preflight is required to answer for, and a broken append-only
+            // provenance chain is Maintainer-owned authoring work, so it is
+            // reported here with its owning repair.
             try {
               const history = loadFilesTaskContractRecords(resolvedTarget, taskId);
               snapshot.trustedRecords = history.trustedRecords;
               snapshot.trustedRecordErrors = history.errors;
-            } catch {
-              // Trusted records are optional for the preflight report.
+              for (const message of history.errors ?? []) {
+                findings.error(
+                  'contract.baseline.invalid',
+                  message,
+                  `Restore the committed append-only contract history for ${taskId} from Git history, or ` +
+                  `authorize a correction with 'npx agenticloop task authorize-correction ${taskId}'. ` +
+                  'The history is append-only, so it is repaired by restoring the committed chain, never by rewriting it.',
+                  'malformed'
+                );
+              }
+            } catch (error) {
+              // An unreadable history is unevaluable state, not proof of
+              // absence: dispatch would refuse it, so preflight refuses too.
+              snapshot.trustedRecordErrors = [`task-contract history is unreadable: ${error.message}`];
+              findings.error(
+                'contract.baseline.invalid',
+                `task-contract history for ${taskId} is unreadable: ${error.message}`,
+                `Ensure '.agenticloop/task-contract-history/${taskId}.jsonl' is readable and committed, then rerun.`,
+                'malformed'
+              );
             }
           }
         }
@@ -615,6 +725,43 @@ export function evaluateHandoffPreflight(input) {
           now: Date.parse(now) || undefined,
         });
 
+        // The bound scan is only as current as the inventory it was taken over.
+        // `validateDecomposition` checks the record's own shape; it does not
+        // re-enumerate the backend, so adding or removing a task carrier left
+        // the decomposition looking valid here while `prepare-dispatch` refused
+        // it as stale over the same committed facts (C12R-R2-F7).
+        //
+        // This is the same authority dispatch uses, given the same
+        // `eligibilityRecheck`, so prose-only carrier drift stays accepted at
+        // both boundaries and material membership drift fails at both. Running
+        // it here is what makes "work-unit membership" a dimension one preflight
+        // actually answers for.
+        //
+        // Only asked when the record itself is well formed: a malformed scan is
+        // the root cause, and reporting membership staleness derived from it
+        // would name a symptom beside the cause.
+        if (dispatchFindings.length === 0 && backend === 'files' && isObject(decompositionSource?.scan?.workUnit)) {
+          const currentInventory = enumerateFilesTaskInventory(resolvedTarget, projectConfig);
+          if (currentInventory) {
+            const eligibilityRecheck = taskContract?.ok
+              ? {
+                taskId,
+                backend: decompositionSource.scan.workUnit.backend,
+                currentContractDigest: taskContractDigestValue,
+                runGit: args => runGit(resolvedTarget, args),
+                baseEvidence: decompositionSource?.scan?.readinessContext?.base ?? null,
+                dependencyEvidence: decompositionSource?.scan?.readinessContext?.dependencies ?? null,
+              }
+              : undefined;
+            const binding = validateParallelScanInventoryBinding(
+              decompositionSource.scan, currentInventory, { eligibilityRecheck },
+            );
+            for (const message of binding.errors) {
+              findings.error('parallel_scan.decomposition.invalid', message, repairCommand(), 'stale');
+            }
+          }
+        }
+
         for (const item of dispatchFindings.items) {
           findings.error(
             item.code ?? 'parallel_scan.decomposition.invalid',
@@ -690,10 +837,24 @@ export function evaluateHandoffPreflight(input) {
         });
         cleanStateClassification = cleanState.ok ? 'clean' : 'dirty';
         if (!cleanState.ok) {
+          // One evaluator, one verdict. Preflight and `prepare-dispatch` have
+          // always called the same `evaluateDispatchCleanState`, but preflight
+          // downgraded its findings to warnings and told the caller the gate
+          // "may" refuse later - so a dirty checkout produced a green preflight
+          // and a blocked dispatch over identical facts (C12R-R2-F5). That is
+          // the C12-F1 defect in a second dimension, and it is what the field
+          // session hit when generated workflow state failed the clean gate
+          // after preflight had passed.
+          //
+          // Scratch and operator-state prefixes are already excluded by the
+          // shared evaluator, so what remains here is genuinely relevant state
+          // that dispatch will refuse. Reporting it as an error is what makes
+          // one preflight the complete list of blockers.
           for (const finding of cleanState.findings) {
-            findings.warning(
+            findings.error(
               'worktree.clean_gate.failed',
-              `${finding.message}; clean state is evaluated at dispatch time; a dirty checkout may be refused by prepare-dispatch`,
+              finding.message,
+              cleanStateRepair(cleanState.state),
               'negative'
             );
           }
