@@ -587,6 +587,34 @@ either the grant and every binding land, or none do and the versioned mutation
 receipt says so. A failed multi-task activation therefore produces no partial
 authority.
 
+### Owner routing
+
+Every typed failure returns to the role that owns the repair, and the routing is
+*derived* rather than declared at each site: `REPAIR_POLICY` maps a diagnostic
+code to a repair kind, and `agents/*.md` frontmatter binds each repair kind to
+exactly one primary owner. Evaluators report facts and never name a role.
+
+The boundary that matters in practice is that an Engineer cannot be handed
+Maintainer-owned work from inside its own run. These categories always route to
+the Maintainer: `task_contract` (lifecycle, baseline, record structure),
+`task_identity`, `task_policy`, `path_intent` (scope and base inventory),
+`generated_paths`, `parallel_scan` (decomposition and its inventory),
+`review_checkpoint`, `review_provenance`, and `review_audit`.
+
+Decomposition is in that list because `task prepare-decomposition` is
+Maintainer-owned authoring and its committed source must carry Maintainer
+attribution to be accepted — so an Engineer regenerating it inside its own run
+could never produce a source that dispatch would take.
+
+Two adjacent repair kinds read alike and are deliberately split:
+`repair_attribution_trailer` is the Engineer fixing its own commit trailer;
+`repair_task_attribution` is Maintainer-owned task-record provenance.
+
+A second, independent layer backs this up: `ROLE_ALLOWED_ACTIONS` withholds the
+`task_workflow_mutate` action class from the Engineer entirely, so even a
+misrouted repair cannot be carried out. Human-authority escalations resolve to
+the human boundary and never to an agent role.
+
 ### Historical adoption
 
 ```text

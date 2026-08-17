@@ -30,6 +30,7 @@ primary_repair_capabilities:
   - repair_review_provenance
   - repair_preflight_input
   - repair_review_audit
+  - regenerate_decomposition
 escalation_capabilities:
   - contract_reconciliation
   - record_recovery

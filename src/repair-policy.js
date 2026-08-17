@@ -166,10 +166,15 @@ export const REPAIR_POLICY = Object.freeze({
   'projection.fact.contradiction': policy('projection', 'repair_evidence', 'contract_reconciliation', 'Two current authoritative carriers report contradictory values for one fact.'),
   'projection.authority.untyped': policy('projection', 'repair_evidence', 'none', 'An untyped carrier confers no lifecycle authority and is advisory only.'),
   'projection.state.unexplained': policy('workspace', 'repair_review_workspace', 'contract_reconciliation', 'Observed state is unclassified drift and blocks authority-sensitive conclusions.'),
-  'parallel_scan.inventory.incomplete': policy('parallel_scan', 'repair_evidence', 'contract_reconciliation', 'The bounded work-unit task inventory is incomplete and cannot support a complete ready-set conclusion.'),
-  'parallel_scan.record.invalid': policy('parallel_scan', 'repair_evidence', 'none', 'The parallel-scan record is malformed, mis-digested, or does not account for its inventory.'),
-  'parallel_scan.evidence.stale': policy('parallel_scan', 'repair_evidence', 'none', 'The parallel-scan observation is outside its declared freshness policy.'),
-  'parallel_scan.decomposition.invalid': policy('parallel_scan', 'repair_evidence', 'contract_reconciliation', 'The decomposition source, attribution, or completeness declaration is invalid.'),
+  // Decomposition and its parallel-scan inventory are Maintainer authoring
+  // work: `task prepare-decomposition` produces them and their committed source
+  // must carry Maintainer attribution. Routing their repair to Engineer is the
+  // C12-F11 defect - it is what let the field session's Engineer regenerate
+  // decomposition and rewrite provenance inside its own run.
+  'parallel_scan.inventory.incomplete': policy('parallel_scan', 'regenerate_decomposition', 'contract_reconciliation', 'The bounded work-unit task inventory is incomplete and cannot support a complete ready-set conclusion.'),
+  'parallel_scan.record.invalid': policy('parallel_scan', 'regenerate_decomposition', 'none', 'The parallel-scan record is malformed, mis-digested, or does not account for its inventory.'),
+  'parallel_scan.evidence.stale': policy('parallel_scan', 'regenerate_decomposition', 'none', 'The parallel-scan observation is outside its declared freshness policy.'),
+  'parallel_scan.decomposition.invalid': policy('parallel_scan', 'regenerate_decomposition', 'contract_reconciliation', 'The decomposition source, attribution, or completeness declaration is invalid.'),
   // Canonical handoff recognition. These reuse the existing repair and
   // escalation kinds: the operator- or role-facing repair is always to produce
   // the canonical artifact - a fresh `task prepare-dispatch` packet or a

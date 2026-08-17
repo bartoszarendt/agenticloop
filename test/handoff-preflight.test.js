@@ -400,7 +400,7 @@ describe('handoff-preflight', () => {
     assert.ok(result.errors.some(e => e.includes('malformed') || e.includes('invalid')), `expected malformed error, got: ${JSON.stringify(result.errors)}`);
   });
 
-  it('reports missing decomposition with engineer disposition owner', () => {
+  it('reports missing decomposition with maintainer disposition owner', () => {
     const target = makeTarget('no-decomposition');
     writeTask(target, 'T-005', { withActivation: true });
     git(target, ['add', '.']);
@@ -414,7 +414,12 @@ describe('handoff-preflight', () => {
 
     assertPreflight(result, { expectOk: false, expectErrors: 1 });
     assert.equal(result.evidenceState, 'missing');
-    assert.equal(result.dispositionOwner, 'engineer');
+    // Decomposition is Maintainer authoring work: `task prepare-decomposition`
+    // produces it and its committed source must carry Maintainer attribution.
+    // This asserted 'engineer' until P35-C12R.8, which is the C12-F11 defect -
+    // it is what let the field session's Engineer regenerate decomposition
+    // inside its own run instead of routing back to the owner.
+    assert.equal(result.dispositionOwner, 'maintainer');
     assert.ok(result.diagnostics[0].code.includes('decomposition'), `expected decomposition code, got ${result.diagnostics[0].code}`);
     assert.ok(result.firstSafeRepair, 'first safe repair should be present');
     assert.ok(result.firstSafeRepair.includes('prepare-decomposition'), 'first safe repair should mention prepare-decomposition');
@@ -441,7 +446,7 @@ describe('handoff-preflight', () => {
 
     assertPreflight(result, { expectOk: false, expectErrors: 1 });
     assert.equal(result.evidenceState, 'malformed');
-    assert.equal(result.dispositionOwner, 'engineer');
+    assert.equal(result.dispositionOwner, 'maintainer');
     assert.ok(result.diagnostics[0].code.includes('decomposition'), `expected decomposition code, got ${result.diagnostics[0].code}`);
   });
 
@@ -470,7 +475,7 @@ describe('handoff-preflight', () => {
     assert.ok(result.errors.length >= 1, `expected at least 1 error, got ${result.errors.length}`);
     assert.ok(['negative', 'malformed'].includes(result.evidenceState),
       `expected negative or malformed evidenceState, got ${result.evidenceState}`);
-    assert.equal(result.dispositionOwner, 'engineer');
+    assert.equal(result.dispositionOwner, 'maintainer');
     assert.ok(result.decomposition, 'decomposition should be reported');
     assert.equal(result.decomposition.dispatchCompatible, false);
     assert.ok(result.diagnostics.some(d => d.code.includes('decomposition')), `expected decomposition code, got ${result.diagnostics.map(d => d.code).join(', ')}`);
