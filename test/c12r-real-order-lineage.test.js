@@ -467,17 +467,19 @@ describe('P35-C12R.5 acceptance answers to the Engineer return terminal', () => 
     recordReview(root, productHead);
     // The review provenance the acceptance gate requires has already moved the
     // carrier off the Engineer return terminal. Acceptance must still succeed.
-    assert.notEqual(carrierDigest(root), returnCarrierDigest);
+    const preAcceptanceDigest = carrierDigest(root);
+    assert.notEqual(preAcceptanceDigest, returnCarrierDigest);
     const accepted = await runCliInProcess([
-      'task', 'status', 'T-001', 'accepted', '--expect-digest', carrierDigest(root), '--json', '--target', root,
+      'task', 'status', 'T-001', 'accepted', '--expect-digest', preAcceptanceDigest, '--json', '--target', root,
     ], cli);
     assert.equal(accepted.status, 0, `${accepted.stdout}${accepted.stderr}`);
     const payload = JSON.parse(accepted.stdout);
     assert.equal(payload.handoff_recognition.recognized, true);
     assert.equal(payload.handoff_recognition.boundIdentity.currentCarrierDigest, returnCarrierDigest);
-    assert.equal(payload.receipt.expectedDigest, returnCarrierDigest === payload.receipt.expectedDigest
-      ? returnCarrierDigest
-      : payload.receipt.expectedDigest);
+    // The receipt is expected against the live pre-acceptance carrier read from
+    // disk, which is no longer the recognized Engineer return terminal.
+    assert.equal(payload.receipt.expectedDigest, preAcceptanceDigest);
+    assert.notEqual(payload.receipt.expectedDigest, returnCarrierDigest);
     assert.notEqual(payload.receipt.resultingDigest, returnCarrierDigest);
   });
 
