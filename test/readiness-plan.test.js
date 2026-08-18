@@ -1,5 +1,5 @@
 /**
- * P35-C12R.3 (C12-F2, C12-F3): readiness is a sequence, shown as one.
+ * Readiness is a sequence, shown as one.
  *
  * These are the two most expensive findings in the field record and they are
  * one failure seen twice. The Maintainer could not see the readiness sequence
@@ -27,11 +27,11 @@ import { spawnSync } from 'node:child_process';
 import { READINESS_STEPS, buildReadinessPlan } from '../src/readiness-plan.js';
 import { createTaskProjectFixture } from './helpers/task-fixture.js';
 import { git } from './helpers/git-fixture.js';
-import { makePreflightTask, makeDecomposition, taskPath } from './helpers/c12r-preflight-fixture.js';
+import { makePreflightTask, makeDecomposition, taskPath } from './helpers/preflight-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 
 let temp;
-before(() => { temp = mkdtempSync(join(tmpdir(), 'al-c12r-readiness-')); });
+before(() => { temp = mkdtempSync(join(tmpdir(), 'al-readiness-')); });
 after(() => { rmSync(temp, { recursive: true, force: true }); });
 
 function newTarget(name, taskId, { status = 'draft' } = {}) {
@@ -49,7 +49,7 @@ function newTarget(name, taskId, { status = 'draft' } = {}) {
 
 const stepById = (plan, id) => plan.steps.find(item => item.id === id);
 
-describe('P35-C12R.3 the plan is ordered and complete before anything is written', () => {
+describe('the plan is ordered and complete before anything is written', () => {
   it('reports every readiness step, in dependency order', () => {
     const target = newTarget('order', 'T-018');
     const plan = buildReadinessPlan(target, 'T-018');
@@ -101,7 +101,7 @@ describe('P35-C12R.3 the plan is ordered and complete before anything is written
 
   it('routes every step to the maintainer', () => {
     // Readiness is Maintainer authoring work end to end. An Engineer arriving
-    // at any of these is the C12-F11 churn this ordering exists to stop.
+    // at any of these is the role churn this ordering exists to stop.
     const target = newTarget('owner', 'T-018');
     for (const item of buildReadinessPlan(target, 'T-018').steps) {
       assert.equal(item.owner, 'maintainer', item.id);
@@ -109,9 +109,9 @@ describe('P35-C12R.3 the plan is ordered and complete before anything is written
   });
 });
 
-describe('P35-C12R.3 the plan never plans activation', () => {
+describe('the plan never plans activation', () => {
   it('says so explicitly rather than by omission', () => {
-    // C12-F2 found activation happening before readiness was settled. A plan
+    // The field record found activation happening before readiness was settled. A plan
     // that included it would reintroduce exactly that ordering.
     const target = newTarget('activation', 'T-018');
     const plan = buildReadinessPlan(target, 'T-018');
@@ -126,7 +126,7 @@ describe('P35-C12R.3 the plan never plans activation', () => {
   });
 });
 
-describe('P35-C12R.3 the plan is read-only and converges', () => {
+describe('the plan is read-only and converges', () => {
   it('writes nothing and is stable over repeated evaluation', async () => {
     const target = newTarget('stable', 'T-018');
     const first = await runCliInProcess(['task', 'readiness-plan', 'T-018', '--json', '--target', target]);
@@ -139,7 +139,7 @@ describe('P35-C12R.3 the plan is read-only and converges', () => {
   });
 
   it('settles each step as its evidence appears, without disturbing the others', async () => {
-    // Convergence is the property C12-F3 found missing: repairing the named
+    // Convergence is the property the field record found missing: repairing the named
     // step must move the plan forward rather than invalidating what came before.
     const target = newTarget('converge', 'T-019');
     const before = buildReadinessPlan(target, 'T-019');
@@ -148,7 +148,7 @@ describe('P35-C12R.3 the plan is read-only and converges', () => {
 
     const baseline = await runCliInProcess([
       'task', 'establish-baseline', 'T-019',
-      '--actor', 'Agentic Loop Test', '--authority', 'plan:P35-C12R', '--target', target,
+      '--actor', 'Agentic Loop Test', '--authority', 'plan:x', '--target', target,
     ]);
     assert.equal(baseline.status, 0, baseline.stderr);
     // A durable grouping, because the per-task fallback is deliberately not
@@ -172,7 +172,7 @@ describe('P35-C12R.3 the plan is read-only and converges', () => {
     const target = newTarget('ready', 'T-020', { status: 'agent-ready' });
     await runCliInProcess([
       'task', 'establish-baseline', 'T-020',
-      '--actor', 'Agentic Loop Test', '--authority', 'plan:P35-C12R', '--target', target,
+      '--actor', 'Agentic Loop Test', '--authority', 'plan:x', '--target', target,
     ]);
     makeDecomposition(target, 'T-020', { workUnitId: 'milestone:M2' });
     git(target, ['add', '-A']);
@@ -188,16 +188,16 @@ describe('P35-C12R.3 the plan is read-only and converges', () => {
   });
 });
 
-describe('P35-C12R.3 the plan renders exact commands where it can', () => {
+describe('the plan renders exact commands where it can', () => {
   it('substitutes the supplied actor and authority into the baseline command', () => {
     const target = newTarget('exact', 'T-018');
     const plan = buildReadinessPlan(target, 'T-018', {
       actor: 'Agentic Loop Test',
-      authority: 'plan:P35-C12R',
+      authority: 'plan:x',
     });
     const baseline = stepById(plan, 'trusted_contract_baseline');
     assert.match(baseline.command, /--actor Agentic Loop Test/);
-    assert.match(baseline.command, /--authority plan:P35-C12R/);
+    assert.match(baseline.command, /--authority plan:x/);
     assert.doesNotMatch(baseline.command, /<git-author>|<kind:reference>/);
   });
 
@@ -209,7 +209,7 @@ describe('P35-C12R.3 the plan renders exact commands where it can', () => {
   });
 
   it('does not call a per-task work-unit fallback a durable grouping', () => {
-    // The C12-F9 confusion, caught at authoring time rather than at activation.
+    // The scope confusion, caught at authoring time rather than at activation.
     const target = newTarget('workunit', 'T-021');
     makeDecomposition(target, 'T-021');
     git(target, ['add', '-A']);

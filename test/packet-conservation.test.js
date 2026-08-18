@@ -1,7 +1,7 @@
 /**
- * P35-C12R.5: a consumed packet is conserved.
+ * A consumed packet is conserved.
  *
- * C12-F8 recorded a session that dispatched before readiness was settled, then
+ * The field record shows a session that dispatched before readiness was settled, then
  * minted fresh packets and repaired history after implementation until no
  * retained packet represented the start of the work that existed. Return
  * production then had nothing truthful to bind, and the session concluded that
@@ -35,7 +35,7 @@ import {
 import { repairPolicyFor } from '../src/repair-policy.js';
 
 let temp;
-before(() => { temp = mkdtempSync(join(tmpdir(), 'al-c12r-conserve-')); });
+before(() => { temp = mkdtempSync(join(tmpdir(), 'al-conserve-')); });
 after(() => { rmSync(temp, { recursive: true, force: true }); });
 
 /** A consumption-shaped record carrying only the fields conservation reads. */
@@ -62,13 +62,13 @@ function abandonment(attemptId, overrides = {}) {
     packetId: 'dispatch:11111111-1111-4111-8111-111111111111',
     reason: 'the retained packet was minted after product work and cannot prove the original base',
     disposition: 'abandoned',
-    authority: 'operator:P35-C12R',
+    authority: 'operator:x',
     abandonedAt: '2026-08-01T12:00:00.000Z',
     ...overrides,
   };
 }
 
-describe('P35-C12R.5 execution-attempt identity', () => {
+describe('execution-attempt identity', () => {
   it('is derived from the evidence rather than minted beside it', () => {
     const record = consumption();
     assert.equal(executionAttemptIdentity(record), executionAttemptIdentity({ ...record }));
@@ -76,7 +76,7 @@ describe('P35-C12R.5 execution-attempt identity', () => {
   });
 
   it('distinguishes attempts that share a packet but not a product base', () => {
-    // The exact confusion C12-F8 produced: a packet minted after product work
+    // The exact confusion the field session produced: a packet minted after product work
     // names a different base, and must never be read as the original attempt.
     const first = consumption({ productBaseHead: '1'.repeat(40) });
     const reminted = consumption({ productBaseHead: '2'.repeat(40) });
@@ -99,7 +99,7 @@ describe('P35-C12R.5 execution-attempt identity', () => {
   });
 });
 
-describe('P35-C12R.5 attempts are grouped from durable evidence', () => {
+describe('attempts are grouped from durable evidence', () => {
   it('orders attempts deterministically and marks the abandoned ones', () => {
     const first = consumption({ consumedAt: '2026-08-01T10:00:00.000Z' });
     const second = consumption({
@@ -116,7 +116,7 @@ describe('P35-C12R.5 attempts are grouped from durable evidence', () => {
     assert.equal(attempts[0].attemptId, executionAttemptIdentity(first));
     assert.equal(attempts[0].state, 'abandoned');
     assert.equal(attempts[1].state, 'live');
-    assert.equal(attempts[0].abandonment.authority, 'operator:P35-C12R');
+    assert.equal(attempts[0].abandonment.authority, 'operator:x');
   });
 
   it('preserves each attempt product base distinctly', () => {
@@ -135,7 +135,7 @@ describe('P35-C12R.5 attempts are grouped from durable evidence', () => {
   });
 });
 
-describe('P35-C12R.5 packet conservation decides new dispatch', () => {
+describe('packet conservation decides new dispatch', () => {
   it('permits a first attempt', () => {
     const verdict = evaluatePacketConservation({ consumptions: [], abandonments: [] });
     assert.equal(verdict.ok, true);
@@ -191,7 +191,7 @@ describe('P35-C12R.5 packet conservation decides new dispatch', () => {
   });
 });
 
-describe('P35-C12R.5 abandonment records are authored, never inferred', () => {
+describe('abandonment records are authored, never inferred', () => {
   it('requires a stated reason and a durable authority', () => {
     const base = abandonment('attempt:' + 'a'.repeat(32));
     assert.equal(validateExecutionAttemptAbandonment(base, { taskId: 'T-001' }).ok, true);
@@ -226,7 +226,7 @@ describe('P35-C12R.5 abandonment records are authored, never inferred', () => {
   });
 });
 
-describe('P35-C12R.5 unreadable evidence fails closed', () => {
+describe('unreadable evidence fails closed', () => {
   function targetWith(files) {
     const root = mkdtempSync(join(temp, 'target-'));
     for (const [relPath, content] of Object.entries(files)) {

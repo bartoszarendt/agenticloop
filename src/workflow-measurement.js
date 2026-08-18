@@ -1,7 +1,7 @@
 /**
  * Bounded operational measurement, derived and never stored.
  *
- * C12-F11 measured the field session and found the process spending more effort
+ * The field session was measured from outside and the process was found spending more effort
  * on its own evidence than on the product task: 26 `prepare-return` calls, all
  * failing; 31 `prepare-dispatch` calls, 18 failing; repeated role invocations
  * including empty returns. None of that was visible from inside the run. The

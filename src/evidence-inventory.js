@@ -1,7 +1,7 @@
 /**
  * What every persisted evidence class is for, and who is allowed to see it.
  *
- * Two findings meet here. C12-F5 asked for a storage taxonomy, because Agentic
+ * Two requirements meet here. The platform-safety work asked for a storage taxonomy, because Agentic
  * Loop wrote generated state under `.agenticloop/` and then rejected it at the
  * clean gate - a class confusion, not a bug in either component. And the
  * remediation's governing principle asks the harder question of every field:
@@ -29,7 +29,7 @@
  */
 
 /**
- * The four storage classes (C12R.4).
+ * The four storage classes.
  *
  * The clean-gate rule is the reason the taxonomy exists: a command must not
  * write ordinary output into a class its next required gate rejects.

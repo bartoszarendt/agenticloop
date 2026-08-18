@@ -506,7 +506,7 @@ describe('github closeout evaluation', () => {
     // The packet is minted from the carrier as it stood during the attempt -
     // `in-progress` - and the issue reaches `closed` afterwards. Preparing a
     // packet from a terminal carrier is refused by the packet constructor
-    // itself since P35-C12R.5, and it was never what happened here. The
+    // itself, and it was never what happened here. The
     // protected task contract is identical in both bodies, so the closeout's
     // contract expectations are unchanged.
     const dispatchBody = body.replace(/^status: .*$/m, 'status: in-progress');

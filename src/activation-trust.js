@@ -406,7 +406,7 @@ export function readOperatorActivationKeyDocument(path, expectedIdentity, { targ
     return { ok: false, state: 'malformed', key: null, errors: ['operator activation root must be outside the target repository'], path };
   }
   // "Outside the target" and "inside the operator root" are two different
-  // claims, and only the first was proven (C12R-R2-F4). Any path anywhere else
+  // claims, and only the first was proven. Any path anywhere else
   // on the host satisfied the old check, so a future caller supplying an
   // arbitrary path could have had its content accepted as operator material.
   // Membership is asserted here lexically first, then again on the realpath, so

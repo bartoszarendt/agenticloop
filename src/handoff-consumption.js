@@ -226,7 +226,7 @@ export function listCarrierMutationReceipts(target, taskId, { backend = null } =
  * authenticated return through role-owned lifecycle transitions (today the
  * guarded GitHub `acceptance_transition`), terminating at the live carrier.
  *
- * They are not the same digest and must not be conflated: P35-C12R.5 measured
+ * They are not the same digest and must not be conflated: extending the
  * exactly one failure mode from doing so - extending the Engineer chain with a
  * post-return acceptance receipt moves its terminal off the carrier the
  * verified return names, and every return refetch then reports a terminal

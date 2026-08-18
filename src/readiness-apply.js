@@ -1,7 +1,7 @@
 /**
  * One bounded readiness transaction for the files backend.
  *
- * `task readiness-plan` removed the *discovery* loop C12-F2 and C12-F3
+ * `task readiness-plan` removed the *discovery* loop the field record
  * measured: the Maintainer can now see the whole ordered sequence instead of
  * finding one prerequisite per failed gate. It did not remove the *execution*
  * loop. Settling readiness by hand still meant `establish-baseline`, a commit,

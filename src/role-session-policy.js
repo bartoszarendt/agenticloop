@@ -1,7 +1,7 @@
 /**
  * When a role invocation may be retried, and when a session may be reused.
  *
- * C12-F11 recorded repeated Maintainer invocations "including empty returns" -
+ * The field record showed repeated Maintainer invocations "including empty returns" -
  * a role invoked, producing nothing, invoked again. Nothing bounded that loop,
  * so it could only end when a human noticed. An unbounded retry of a step that
  * produced no evidence is not resilience; it is a way to spend a budget without

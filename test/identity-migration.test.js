@@ -1,8 +1,8 @@
 /**
- * P35-C12R.0/.1 characterization: operator activation material must survive a
+ * Operator activation material must survive a
  * repository-identity version change.
  *
- * C12-F7 recorded that Windows authority-path case folding relocated the digest
+ * The field record showed that Windows authority-path case folding relocated the digest
  * that addresses operator keys and external revocation tombstones. Existing
  * keys became unreachable, existing deny tombstones stopped being consulted,
  * and the next activation silently provisioned a brand new identity - which is
@@ -44,7 +44,7 @@ import {
 } from '../src/repository-identity.js';
 
 let temp;
-before(() => { temp = mkdtempSync(join(tmpdir(), 'agenticloop-c12r-identity-')); });
+before(() => { temp = mkdtempSync(join(tmpdir(), 'agenticloop-identity-')); });
 after(() => { rmSync(temp, { recursive: true, force: true }); });
 
 /** Real signing material, so a migrated key must load through the real loader. */
@@ -110,7 +110,7 @@ function writeRevocationUnder(fx, identity, { grantId = `grant:${randomUUID()}` 
   return { path, record };
 }
 
-describe('P35-C12R repository-identity derivation is versioned', () => {
+describe('repository-identity derivation is versioned', () => {
   it('derives superseded Windows spellings and none on POSIX', () => {
     const options = { platform: 'win32', exists: () => false };
     const current = repositoryAuthorityIdentity('C:\\Apps\\Repo', options);
@@ -137,7 +137,7 @@ describe('P35-C12R repository-identity derivation is versioned', () => {
   });
 });
 
-describe('P35-C12R legacy operator keys are never silently replaced', () => {
+describe('legacy operator keys are never silently replaced', () => {
   it('refuses to provision a fresh identity while superseded key material exists', () => {
     const fx = fixture('no-silent-reprovision');
     const legacy = writeKeyUnder(fx, fx.legacyIdentities[0]);
@@ -205,7 +205,7 @@ describe('P35-C12R legacy operator keys are never silently replaced', () => {
   });
 });
 
-describe('P35-C12R identity migration is explicit, verified, and idempotent', () => {
+describe('identity migration is explicit, verified, and idempotent', () => {
   it('migrates one superseded key forward and preserves the legacy state', () => {
     const fx = fixture('migrate');
     const legacy = writeKeyUnder(fx, fx.legacyIdentities[0]);
@@ -310,7 +310,7 @@ describe('P35-C12R identity migration is explicit, verified, and idempotent', ()
   });
 });
 
-describe('P35-C12R deny evidence unions superseded registries fail-closed', () => {
+describe('deny evidence unions superseded registries fail-closed', () => {
   it('still denies a grant whose tombstone lives under a superseded identity', () => {
     const fx = fixture('legacy-tombstone');
     const legacy = writeRevocationUnder(fx, fx.legacyIdentities[0]);

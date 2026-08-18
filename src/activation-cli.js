@@ -613,8 +613,8 @@ function runIdentityMigrationSubcommand(sub, { target, io, asJson, command }) {
     : null;
   // `applied.inspection` is the state the migration *read*, before it wrote
   // anything. Projecting that as `current` reported `currentKeyState: missing`
-  // alongside `migrated: true` for a migration that had just succeeded
-  // (C12R-R2-F2). A mutation is reported from the state it produced, so the
+  // alongside `migrated: true` for a migration that had just succeeded. A
+  // mutation is reported from the state it produced, so the
   // filesystem is re-read after a successful apply and the pre-migration view is
   // kept only under its own name.
   const priorInspection = applied?.inspection ?? null;
@@ -631,7 +631,7 @@ function runIdentityMigrationSubcommand(sub, { target, io, asJson, command }) {
     currentKeyId: inspection.currentKeyId,
     // The digest is the directory name under `<root>/revocations/`, so the
     // documented manual repair can only name a locatable path when the digest
-    // is reported (C12R-R2-F3).
+    // is reported.
     supersededIdentities: inspection.legacy.map(item => ({
       identity: item.identity,
       digest: item.digest,

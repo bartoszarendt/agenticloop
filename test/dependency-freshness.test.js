@@ -1,5 +1,5 @@
 /**
- * P35-C12R.3 (C12-F6): wall-clock freshness is a backstop, not a session timer.
+ * Wall-clock freshness is a backstop, not a session timer.
  *
  * The field session's Engineer run lasted about 130 minutes against a flat
  * 3,600-second decomposition freshness window, so the observation expired before
@@ -29,10 +29,10 @@ import { runCliInProcess } from './helpers/run-cli.js';
 import { evaluateHandoffPreflight } from '../src/handoff-preflight.js';
 
 let temp;
-before(() => { temp = mkdtempSync(join(tmpdir(), 'al-c12r-freshness-')); });
+before(() => { temp = mkdtempSync(join(tmpdir(), 'al-freshness-')); });
 after(() => { rmSync(temp, { recursive: true, force: true }); });
 
-describe('P35-C12R.3 the freshness default follows the backend, not a constant', () => {
+describe('the freshness default follows the backend, not a constant', () => {
   it('keeps a short window only where state changes without a repository event', () => {
     // GitHub issue state can change with no local event at all, so the clock is
     // the only mechanism there and stays short.
@@ -59,7 +59,7 @@ describe('P35-C12R.3 the freshness default follows the backend, not a constant',
   });
 });
 
-describe('P35-C12R.3 the emitted observation carries the new default', () => {
+describe('the emitted observation carries the new default', () => {
   it('writes a files decomposition that outlasts an ordinary Engineer session', async () => {
     // The change is to what `prepare-decomposition` *emits*. An observation that
     // already declares a policy keeps it - a declared window is evidence, not a
@@ -107,13 +107,13 @@ describe('P35-C12R.3 the emitted observation carries the new default', () => {
   });
 });
 
-describe('P35-C12R.3 semantic bindings still carry the weight', () => {
+describe('semantic bindings still carry the weight', () => {
   it('binds the declared dependency set, not the snapshot file bytes', async () => {
     // Written as a stronger claim first - "any committed change to
     // dependencies.json is refused" - and that was wrong. The scan binds the
     // status set for *declared* dependencies (`statusCount: 0` for this task),
     // so a status for a task this one does not depend on is genuinely not
-    // material. That is the C12-F3 correction in miniature: over-invalidation is
+    // material. That is the over-invalidation correction in miniature: it is
     // a defect too, and this case guards against reintroducing it while
     // relaxing the clock.
     const fixture = await createDispatchFixture(temp, 'freshness-undeclared');

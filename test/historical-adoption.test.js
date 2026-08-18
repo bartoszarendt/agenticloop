@@ -1,5 +1,5 @@
 /**
- * P35-C12R.7 (C12-F10): historical work reaches a truthful terminal state.
+ * Historical work reaches a truthful terminal state.
  *
  * T-016 and T-017 were implemented, accepted, integrated, and independently
  * auditable - and could not be closed. They predate dispatch packets and
@@ -35,11 +35,11 @@ import { ACTIVATION_ASSURANCE_ORDER } from '../src/activation-grant.js';
 import { KNOWN_TASK_STATUSES } from '../src/task-transition.js';
 import { createTaskProjectFixture } from './helpers/task-fixture.js';
 import { git } from './helpers/git-fixture.js';
-import { makePreflightTask } from './helpers/c12r-preflight-fixture.js';
+import { makePreflightTask } from './helpers/preflight-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 
 let temp;
-before(() => { temp = mkdtempSync(join(tmpdir(), 'al-c12r-adoption-')); });
+before(() => { temp = mkdtempSync(join(tmpdir(), 'al-adoption-')); });
 after(() => { rmSync(temp, { recursive: true, force: true }); });
 
 const COMMIT = 'a'.repeat(40);
@@ -56,7 +56,7 @@ function adoptionInput(overrides = {}) {
     audit: { reference: 'audit:WU-1', auditedArtifact: COMMIT, independent: true },
     disposition: {
       kind: 'human_adoption',
-      authority: 'operator:P35-C12R',
+      authority: 'operator:x',
       reason: 'this task predates canonical dispatch and return evidence',
     },
     missingEvidence: ['dispatch_packet', 'verified_return'],
@@ -65,7 +65,7 @@ function adoptionInput(overrides = {}) {
   };
 }
 
-describe('P35-C12R.7 an adoption is visibly not a closeout', () => {
+describe('an adoption is visibly not a closeout', () => {
   it('carries a distinct terminal status and a reduced assurance grade', () => {
     const record = createHistoricalAdoption(adoptionInput());
     assert.equal(record.status, HISTORICAL_ADOPTION_STATUS);
@@ -105,7 +105,7 @@ describe('P35-C12R.7 an adoption is visibly not a closeout', () => {
   });
 });
 
-describe('P35-C12R.7 an adoption names what it lacks and invents nothing', () => {
+describe('an adoption names what it lacks and invents nothing', () => {
   it('requires at least one declared missing evidence class', () => {
     assert.throws(
       () => createHistoricalAdoption(adoptionInput({ missingEvidence: [] })),
@@ -138,7 +138,7 @@ describe('P35-C12R.7 an adoption names what it lacks and invents nothing', () =>
   });
 });
 
-describe('P35-C12R.7 an adoption binds current, exact, independently audited facts', () => {
+describe('an adoption binds current, exact, independently audited facts', () => {
   it('requires the exact current task contract', () => {
     const record = createHistoricalAdoption(adoptionInput());
     const checked = validateHistoricalAdoption(record, {
@@ -199,7 +199,7 @@ describe('P35-C12R.7 an adoption binds current, exact, independently audited fac
   });
 });
 
-describe('P35-C12R.7 the CLI adopts only what genuinely predates the lifecycle', () => {
+describe('the CLI adopts only what genuinely predates the lifecycle', () => {
   function makeTarget(name, taskId) {
     const target = mkdtempSync(join(temp, `${name}-`));
     createTaskProjectFixture(target);
@@ -215,7 +215,7 @@ describe('P35-C12R.7 the CLI adopts only what genuinely predates the lifecycle',
     '--integration', 'git_merge:main',
     '--integration-commit', INTEGRATION_COMMIT,
     '--audit', 'audit:WU-1',
-    '--authority', 'operator:P35-C12R',
+    '--authority', 'operator:x',
     '--reason', 'this task predates canonical dispatch and return evidence',
     '--missing', 'dispatch_packet',
     '--missing', 'verified_return',

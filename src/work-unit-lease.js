@@ -1,7 +1,7 @@
 /**
  * Deriving a per-task execution lease from work-unit intent already given.
  *
- * C12-F9's operator complaint, stated precisely: a milestone of eight tasks
+ * The field operator complaint, stated precisely: a milestone of eight tasks
  * read as eight interactive confirmations. Surfacing `--work-unit` in every
  * refusal (see `activation-repair.js`) fixes the *discovery* half of that. This
  * is the other half - what happens to a task that becomes ready **after** the

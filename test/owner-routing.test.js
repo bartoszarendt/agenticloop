@@ -1,5 +1,5 @@
 /**
- * P35-C12R.8 (C12-F11): a typed failure returns to the role that owns it.
+ * A typed failure returns to the role that owns it.
  *
  * The field session let its Engineer perform lifecycle, decomposition,
  * attribution, and history repair inside its own run. That is why the process
@@ -12,7 +12,7 @@
  * exactly one primary owner - so the risk is not that routing is missing. It is
  * that a *new* diagnostic quietly points Maintainer-domain work at the Engineer,
  * which is exactly what `parallel_scan.decomposition.invalid` did until
- * P35-C12R.8.
+ * owner routing was corrected.
  *
  * These cases are written over the whole catalog rather than over examples, so
  * a code added later cannot escape them.
@@ -48,7 +48,7 @@ const MAINTAINER_OWNED_CATEGORIES = Object.freeze([
   'review_audit',
 ]);
 
-describe('P35-C12R.8 every typed failure resolves to exactly one owner', () => {
+describe('every typed failure resolves to exactly one owner', () => {
   it('routes every catalog code to a declared primary owner', () => {
     const unrouted = codes.filter(code => !ownerFor(code));
     assert.deepEqual(unrouted, [], `these codes resolve to no owner: ${unrouted.join(', ')}`);
@@ -76,7 +76,7 @@ describe('P35-C12R.8 every typed failure resolves to exactly one owner', () => {
   });
 });
 
-describe('P35-C12R.8 the Engineer cannot be handed Maintainer-owned repair', () => {
+describe('the Engineer cannot be handed Maintainer-owned repair', () => {
   for (const category of MAINTAINER_OWNED_CATEGORIES) {
     it(`routes every '${category}' failure to the maintainer`, () => {
       const inCategory = codes.filter(code => repairPolicyFor(code).category === category);
@@ -93,7 +93,7 @@ describe('P35-C12R.8 the Engineer cannot be handed Maintainer-owned repair', () 
   }
 
   it('keeps decomposition repair with the role that authors it', () => {
-    // The specific defect P35-C12R.8 found: decomposition failures pointed at
+    // The specific defect owner routing found: decomposition failures pointed at
     // `repair_evidence`, an Engineer capability, although the committed
     // decomposition source must carry Maintainer attribution to be accepted.
     for (const code of [
@@ -138,7 +138,7 @@ describe('P35-C12R.8 the Engineer cannot be handed Maintainer-owned repair', () 
   });
 });
 
-describe('P35-C12R.8 human-authority decisions never resolve to an agent role', () => {
+describe('human-authority decisions never resolve to an agent role', () => {
   it('routes every human-authority escalation to the boundary, not a role', () => {
     const humanCodes = codes.filter(code => repairPolicyFor(code).escalationKind.startsWith('human_authority'));
     assert.ok(humanCodes.length > 0, 'the catalog declares at least one human-authority escalation');

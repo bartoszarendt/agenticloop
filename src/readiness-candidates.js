@@ -6,7 +6,7 @@
  * baseline record, the agent-ready evidence context, and the agent-ready task
  * carrier bytes. Before this module each one lived inline in a single command
  * body, so the only way to orchestrate them together was to re-run the commands
- * - which is exactly the multi-command, multi-commit sequence C12-F2 and C12-F3
+ * - which is exactly the multi-command, multi-commit sequence the field record
  * measured, because each command commits nothing and the next one refuses
  * uncommitted evidence.
  *

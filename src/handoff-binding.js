@@ -78,8 +78,8 @@ export function canonicalDispatchValidator({
   target, io, hostTrustStore = undefined,
   // Optional: the instant this packet's activation authority is judged at. A
   // boundary revalidating an already-consumed attempt supplies the consumption
-  // instant, because expiry is not retroactive for work it already authorized
-  // (C12-F9). Boundaries that authorize *new* work leave it absent and get the
+  // instant, because expiry is not retroactive for work it already authorized.
+  // Boundaries that authorize *new* work leave it absent and get the
   // current clock.
   activationInstantFor = null,
 }) {
@@ -211,7 +211,7 @@ export function recognizeLifecycleReturn({
     });
   }
   const dispatch = consumed.record;
-  // Expiry is not retroactive (C12-F9). Every transition reached here acts on an
+  // Expiry is not retroactive. Every transition reached here acts on an
   // attempt that was already consumed, so the authority that authorized it is
   // judged as of that consumption instant rather than the current clock -
   // exactly as terminal closeout already does. A 12-hour grant whose window
@@ -227,7 +227,7 @@ export function recognizeLifecycleReturn({
   // (`review_status`, `review_mode`, `reviewed_artifact`, `## Scope Completed`,
   // `## Evidence`). The live carrier therefore cannot still equal the carrier
   // the Engineer returned, and demanding that equality made acceptance
-  // unreachable through the canonical chain (P35-C12R.5 layer 3).
+  // unreachable through the canonical chain.
   //
   // The expectation is replaced, not dropped: the verified return must describe
   // the durably recognized Engineer return terminal. That digest is resolved

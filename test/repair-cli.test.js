@@ -1,7 +1,7 @@
 /**
- * P35-C12R second-review findings C12R-R2-F1 through C12R-R2-F4.
+ * The second review of the first remediation response.
  *
- * The first review response (`61c714a`) passed every suite it shipped and was
+ * The first review response passed every suite it shipped and was
  * still wrong in four places. What the passing suites had in common is that they
  * asserted over *fragments*: a command prefix, a boolean disposition, a refusal
  * message. None of them asserted that the artifact a role or operator actually
@@ -9,13 +9,13 @@
  *
  * These cases assert the whole thing:
  *
- * - F1: every rendered repair is accepted by the real CLI parser, names no
+ * - every rendered repair is accepted by the real CLI parser, names no
  *   mutually exclusive option pair, and - for the one status with an
  *   unambiguous forward move - actually performs the repair end to end.
- * - F2: a mutation reports the state it produced, not the state it read.
- * - F3: every superseded identity reports the digest that names its revocation
+ * - a mutation reports the state it produced, not the state it read.
+ * - every superseded identity reports the digest that names its revocation
  *   directory, in JSON and in text.
- * - F4: the explicit-path key reader proves membership beneath the configured
+ * - the explicit-path key reader proves membership beneath the configured
  *   operator root, not merely absence from the target repository.
  */
 
@@ -52,14 +52,14 @@ import { cmdActivation } from '../src/activation-cli.js';
 
 import { createTaskProjectFixture } from './helpers/task-fixture.js';
 import { git } from './helpers/git-fixture.js';
-import { makePreflightTask, makeDecomposition, taskPath } from './helpers/c12r-preflight-fixture.js';
+import { makePreflightTask, makeDecomposition, taskPath } from './helpers/preflight-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 
 let temp;
-before(() => { temp = mkdtempSync(join(tmpdir(), 'agenticloop-c12r-r2-')); });
+before(() => { temp = mkdtempSync(join(tmpdir(), 'agenticloop-repair-cli-')); });
 after(() => { rmSync(temp, { recursive: true, force: true }); });
 
-// ── C12R-R2-F1 ────────────────────────────────────────────────────────────────
+// ── Rendered lifecycle repairs ───────────────────────────────────────────────
 
 /** Every command a repair plan can hand a caller, including its alternatives. */
 function everyCommand(plan) {
@@ -77,7 +77,7 @@ function toArgv(command) {
   return tokens.slice(2);
 }
 
-describe('C12R-R2-F1 every rendered lifecycle repair is a real, valid command', () => {
+describe('every rendered lifecycle repair is a real, valid command', () => {
   const domain = [...KNOWN_TASK_STATUSES, 'made-up', '', null, undefined];
 
   it('never offers two mutually exclusive baseline options in one command', () => {
@@ -195,7 +195,7 @@ describe('C12R-R2-F1 every rendered lifecycle repair is a real, valid command', 
     makeDecomposition(target, 'T-018');
     const baseline = await runCliInProcess([
       'task', 'establish-baseline', 'T-018',
-      '--actor', 'Agentic Loop Test', '--authority', 'plan:P35-C12R', '--target', target,
+      '--actor', 'Agentic Loop Test', '--authority', 'plan:x', '--target', target,
     ]);
     assert.equal(baseline.status, 0, baseline.stderr);
     git(target, ['add', '-A']);
@@ -221,7 +221,7 @@ describe('C12R-R2-F1 every rendered lifecycle repair is a real, valid command', 
   });
 });
 
-// ── C12R-R2-F2 and C12R-R2-F3 ────────────────────────────────────────────────
+// ── Mutation and identity reporting ──────────────────────────────────────────
 
 function keyMaterial() {
   const { publicKey, privateKey } = generateKeyPairSync(HOST_SIGNATURE_ALGORITHM);
@@ -286,7 +286,7 @@ async function runActivation(fx, args) {
   return { status, stdout: out.join('\n'), stderr: err.join('\n') };
 }
 
-describe('C12R-R2-F2 a migration reports the state it produced', () => {
+describe('a migration reports the state it produced', () => {
   it('reports the migrated key as present, in JSON', async function () {
     const fx = identityFixture('migrate-json');
     if (!fx.hasSupersededSpellings) {
@@ -354,10 +354,10 @@ describe('C12R-R2-F2 a migration reports the state it produced', () => {
   });
 
   it('protects the migrated private key exactly as provisioning does', async function () {
-    // Reverification gap found while rerunning the 61c714a repair list: the
-    // migration applies owner protection to the copied private key and reports
-    // it, and nothing asserted either. A migrated key carries the same secret as
-    // a provisioned one, so it must not be less protected than one.
+    // Reverification gap: the migration applies owner protection to the copied
+    // private key and reports it, and nothing asserted either. A migrated key
+    // carries the same secret as a provisioned one, so it must not be less
+    // protected than one.
     const fx = identityFixture('migrate-protection');
     if (!fx.hasSupersededSpellings) { this.skip(); return; }
     writeLegacyKey(fx, fx.legacyIdentities[0]);
@@ -412,7 +412,7 @@ describe('C12R-R2-F2 a migration reports the state it produced', () => {
   });
 });
 
-describe('C12R-R2-F3 superseded identities report a locatable digest', () => {
+describe('superseded identities report a locatable digest', () => {
   it('reports the current digest even with no state at all', async () => {
     const fx = identityFixture('digest-none');
     const report = JSON.parse((await runActivation(fx, ['identity-status', '--json'])).stdout);
@@ -493,9 +493,9 @@ describe('C12R-R2-F3 superseded identities report a locatable digest', () => {
   });
 });
 
-// ── C12R-R2-F4 ────────────────────────────────────────────────────────────────
+// ── Key-document path membership ─────────────────────────────────────────────
 
-describe('C12R-R2-F4 the key reader proves membership beneath its root', () => {
+describe('the key reader proves membership beneath its root', () => {
   function keyFixture(name) {
     const root = mkdtempSync(join(temp, `${name}-`));
     const target = join(root, 'target');

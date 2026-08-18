@@ -1,5 +1,5 @@
 /**
- * P35-C12R.6 (C12-F9): activation scope and time.
+ * Activation scope and time.
  *
  * The field evidence separated two things that had been conflated. The
  * *assurance* semantics were already right - the interactive CLI correctly stops
@@ -39,7 +39,7 @@ import {
   grantFor,
 } from './helpers/activation-fixture.js';
 
-describe('P35-C12R.6 one renderer offers every scope the operator actually has', () => {
+describe('one renderer offers every scope the operator actually has', () => {
   it('offers the exact task when that is all the site knows', () => {
     const plan = activationRepairPlan({ taskId: 'T-018' });
     assert.deepEqual(plan.options.map(option => option.scope), ['exact_task']);
@@ -111,9 +111,9 @@ describe('P35-C12R.6 one renderer offers every scope the operator actually has',
   });
 });
 
-describe('P35-C12R.6 a work unit is not forced into a task lease', () => {
+describe('a work unit is not forced into a task lease', () => {
   it('allows a lifetime longer than the per-task default', () => {
-    // C12-F9: a milestone that takes days should not be re-confirmed every
+    // A milestone that takes days should not be re-confirmed every
     // twelve hours. The grant ceiling is what makes a work-unit-appropriate
     // lifetime expressible at all.
     assert.equal(DEFAULT_GRANT_TTL_SECONDS, 43_200);
@@ -127,7 +127,7 @@ describe('P35-C12R.6 a work unit is not forced into a task lease', () => {
 
 // ── Temporal semantics ───────────────────────────────────────────────────────
 
-describe('P35-C12R.6 expiry blocks new work without erasing finished work', () => {
+describe('expiry blocks new work without erasing finished work', () => {
   const alwaysVerify = () => true;
   const authenticated = record => ({
     ...record,
@@ -160,7 +160,7 @@ describe('P35-C12R.6 expiry blocks new work without erasing finished work', () =
   });
 
   it('still accepts the same grant evaluated as of the consumption instant', () => {
-    // The C12-F9 defect: closeout re-evaluated a 12-hour grant against the
+    // The defect: closeout re-evaluated a 12-hour grant against the
     // current clock, so an execution that outlived the window retroactively
     // lost authority it genuinely had when it started. Pinning the evaluation
     // to the consumption instant is what `closeout-cli` now does.

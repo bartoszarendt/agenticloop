@@ -1,7 +1,7 @@
 /**
- * P35-C12R.0/.2 characterization: one canonical dispatchability answer.
+ * One canonical dispatchability answer.
  *
- * C12-F1 recorded that `task handoff-preflight` and `task prepare-dispatch`
+ * The field record showed that `task handoff-preflight` and `task prepare-dispatch`
  * both accepted a `draft` task, and the refusal only arrived at role start as
  * an illegal `draft -> in-progress` transition - inside the Engineer session,
  * after delegation, for a Maintainer-owned prerequisite.
@@ -38,10 +38,10 @@ import {
 import { evaluateHandoffPreflight } from '../src/handoff-preflight.js';
 import { createTaskProjectFixture } from './helpers/task-fixture.js';
 import { git } from './helpers/git-fixture.js';
-import { makePreflightTask, makeDecomposition } from './helpers/c12r-preflight-fixture.js';
+import { makePreflightTask, makeDecomposition } from './helpers/preflight-fixture.js';
 
 let tmpDir;
-before(() => { tmpDir = mkdtempSync(join(tmpdir(), 'al-c12r-dispatchability-')); });
+before(() => { tmpDir = mkdtempSync(join(tmpdir(), 'al-dispatchability-')); });
 after(() => { rmSync(tmpDir, { recursive: true, force: true }); });
 
 function makeTarget(name) {
@@ -60,7 +60,7 @@ function preflight(target, taskId) {
   });
 }
 
-describe('P35-C12R lifecycle dispatchability is one derived rule', () => {
+describe('lifecycle dispatchability is one derived rule', () => {
   it('accepts exactly the statuses that can legally reach a role start', () => {
     for (const status of KNOWN_TASK_STATUSES) {
       const reachesRoleStart = status === ROLE_START_STATUS ||
@@ -78,7 +78,7 @@ describe('P35-C12R lifecycle dispatchability is one derived rule', () => {
   });
 
   it('never reports dispatchable where role start would refuse', () => {
-    // The property C12-F1 violated, checked over the whole status domain.
+    // The property the field record violated, checked over the whole status domain.
     for (const status of [...KNOWN_TASK_STATUSES, 'nonsense', '', null]) {
       const dispatchable = evaluateDispatchableLifecycle(status).ok;
       const roleStartRefusal = validateTaskStatusTransition(status, ROLE_START_STATUS, null);
@@ -98,7 +98,7 @@ describe('P35-C12R lifecycle dispatchability is one derived rule', () => {
   });
 
   it('enforces the whole rule inside the packet constructor', () => {
-    // P35-C12R.5 removed the disclosed narrowing that let terminal statuses
+    // The real-order lineage work removed the disclosed narrowing that let terminal statuses
     // through packet construction. The constructor now answers exactly what the
     // canonical rule answers, for every status in the domain.
     for (const status of [...KNOWN_TASK_STATUSES, 'made-up', '', null]) {
@@ -148,9 +148,9 @@ describe('P35-C12R lifecycle dispatchability is one derived rule', () => {
   });
 });
 
-describe('P35-C12R the packet constructor applies the same gate', () => {
+describe('the packet constructor applies the same gate', () => {
   it('refuses to mint a packet for a draft task', async () => {
-    const fixture = await createDispatchFixture(tmpDir, 'c12r-draft-packet');
+    const fixture = await createDispatchFixture(tmpDir, 'draft-packet');
     const body = readFileSync(fixture.taskPath, 'utf8');
     const draftBody = body.replace(/^status: .*$/m, 'status: draft');
     writeFileSync(fixture.taskPath, draftBody, 'utf8');
@@ -169,17 +169,17 @@ describe('P35-C12R the packet constructor applies the same gate', () => {
   });
 
   it('mints a packet for the same task once it is agent-ready', async () => {
-    const fixture = await createDispatchFixture(tmpDir, 'c12r-ready-packet');
+    const fixture = await createDispatchFixture(tmpDir, 'ready-packet');
     const prepared = prepare(fixture);
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
   });
 
   for (const status of ['accepted', 'closed']) {
     it(`refuses to mint a packet for a ${status} task`, async () => {
-      // P35-C12R.5 closed the reopen gate: a terminal task now receives the
+      // The real-order lineage work closed the reopen gate: a terminal task now receives the
       // ordinary typed lifecycle refusal from the constructor itself, not a
       // deferral to preflight.
-      const fixture = await createDispatchFixture(tmpDir, `c12r-${status}-packet`);
+      const fixture = await createDispatchFixture(tmpDir, `${status}-packet`);
       const body = readFileSync(fixture.taskPath, 'utf8');
       const terminalBody = body.replace(/^status: .*$/m, `status: ${status}`);
       writeFileSync(fixture.taskPath, terminalBody, 'utf8');
@@ -203,7 +203,7 @@ describe('P35-C12R the packet constructor applies the same gate', () => {
   }
 });
 
-describe('P35-C12R preflight refuses what role start would refuse', () => {
+describe('preflight refuses what role start would refuse', () => {
   it('blocks a draft task at preflight with the owning repair', () => {
     const target = makeTarget('draft');
     makePreflightTask(target, 'T-018', { status: 'draft' });

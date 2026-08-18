@@ -345,7 +345,7 @@ export function evaluateHandoffPreflight(input) {
             // packet whose readiness evidence carries a non-empty
             // `trustedRecordErrors`. A deleted or rewritten append-only contract
             // history therefore produced a green preflight and a blocked
-            // dispatch over identical committed facts (C12R-R2-F6).
+            // dispatch over identical committed facts.
             //
             // The trusted contract baseline is one of the dimensions a single
             // preflight is required to answer for, and a broken append-only
@@ -486,7 +486,7 @@ export function evaluateHandoffPreflight(input) {
 
   // ── 1b. Lifecycle dispatchability ─────────────────────────────────────
   // The same gate role start applies, asked here so a green preflight cannot be
-  // refused later over unchanged facts (C12-F1).
+  // refused later over unchanged facts.
   let lifecycle = null;
 
   if (snapshot) {
@@ -735,7 +735,7 @@ export function evaluateHandoffPreflight(input) {
         // the eligibility recheck below - and projects the result. It used to
         // run `validateDecomposition` itself and re-enumerate membership beside
         // packet preparation doing the same; that duplication is what made
-        // C12R-R2-F7 possible and is now removed.
+        // the membership divergence possible and is now removed.
         if (backend === 'files' && isObject(decompositionSource?.scan?.workUnit)) {
           currentTaskInventory = enumerateFilesTaskInventory(resolvedTarget, projectConfig);
           if (taskContract?.ok) {
@@ -814,7 +814,7 @@ export function evaluateHandoffPreflight(input) {
       // called the same `evaluateDispatchCleanState`, but preflight downgraded
       // its findings to warnings and told the caller the gate "may" refuse
       // later - so a dirty checkout produced a green preflight and a blocked
-      // dispatch over identical facts (C12R-R2-F5). Preflight now only observes;
+      // dispatch over identical facts. Preflight now only observes;
       // the classification is the canonical evaluator's, so the two boundaries
       // are structurally unable to disagree about it again.
       try {
@@ -901,7 +901,7 @@ export function evaluateHandoffPreflight(input) {
         } else {
           // Packet preparation refuses an invalid declaration outright. Preflight
           // used to report it as advice, which is the same false-green shape as
-          // C12R-R2-F5; the canonical evaluator now decides it for both.
+          // the clean-state divergence; the canonical evaluator now decides it for both.
           hostRoleCapabilityFact = { host, roleId: 'engineer', declaration: null, errors: checked.errors };
         }
       }

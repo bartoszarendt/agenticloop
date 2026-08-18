@@ -1,9 +1,9 @@
 /**
- * P35-C12R.2: one preflight is the complete list of blockers.
+ * One preflight is the complete list of blockers.
  *
- * The C12R.2 exit gate is a property, not a feature: **no later execution
+ * The exit gate is a property, not a feature: **no later execution
  * boundary may discover a prerequisite that the canonical preflight passed.**
- * C12-F1 was one instance of its violation (lifecycle), and repairing only that
+ * The draft lifecycle refusal was one instance of its violation, and repairing only that
  * instance left the property itself unproven.
  *
  * So this suite states the property directly and checks it over a matrix of
@@ -12,11 +12,11 @@
  * facts - which is exactly the precondition the invariant is stated over.
  *
  * Running it as a matrix rather than as hand-written pairs is deliberate: it is
- * what found C12R-R2-F5 (clean state reported as an advisory warning at
- * preflight and enforced as a blocking gate at dispatch), C12R-R2-F6 (committed
- * append-only contract-history errors loaded and then discarded), and
- * C12R-R2-F7 (work-unit inventory membership never re-enumerated at preflight).
- * None of those were visible from any single hand-written case.
+ * what found clean state reported as an advisory warning at preflight and
+ * enforced as a blocking gate at dispatch, committed append-only
+ * contract-history errors loaded and then discarded, and work-unit inventory
+ * membership never re-enumerated at preflight. None of those were visible from
+ * any single hand-written case.
  *
  * The converse - preflight stricter than dispatch - is deliberately *not* an
  * error. Preflight is allowed to refuse earlier; it may not pass later.
@@ -33,7 +33,7 @@ import { evaluateHandoffPreflight } from '../src/handoff-preflight.js';
 import { DISPATCHABLE_TASK_STATUSES } from '../src/dispatchability.js';
 
 let temp;
-before(() => { temp = mkdtempSync(join(tmpdir(), 'al-c12r-converge-')); });
+before(() => { temp = mkdtempSync(join(tmpdir(), 'al-converge-')); });
 after(() => { rmSync(temp, { recursive: true, force: true }); });
 
 function preflight(root, taskId = 'T-001') {
@@ -65,7 +65,7 @@ function commitAll(root, message) {
 }
 
 /**
- * Every mutation is one dimension the C12R.2 exit gate names, expressed as a
+ * Every mutation is one dimension the exit gate names, expressed as a
  * change to committed or working-tree state rather than to supplied evidence.
  */
 const MUTATIONS = {
@@ -152,7 +152,7 @@ function setStatus(fx, status) {
   commitAll(fx.root, `set ${status}`);
 }
 
-describe('P35-C12R.2 a green preflight is never refused by a later boundary', () => {
+describe('a green preflight is never refused by a later boundary', () => {
   for (const [name, mutate] of Object.entries(MUTATIONS)) {
     it(`converges over unchanged facts: ${name}`, async () => {
       const fixture = await createDispatchFixture(temp, `conv-${name.replace(/[^a-z0-9]+/gi, '-')}`);
@@ -194,9 +194,9 @@ describe('P35-C12R.2 a green preflight is never refused by a later boundary', ()
   });
 });
 
-describe('P35-C12R.2 preflight enforces the dimensions it reports on', () => {
+describe('preflight enforces the dimensions it reports on', () => {
   it('refuses a dirty relevant checkout instead of advising about it', async () => {
-    // C12R-R2-F5. Preflight and dispatch have always shared
+    // Preflight and dispatch have always shared
     // `evaluateDispatchCleanState`; preflight downgraded the result to a warning
     // and told the caller dispatch "may" refuse later.
     const fixture = await createDispatchFixture(temp, 'clean-gate-enforced');
@@ -213,7 +213,7 @@ describe('P35-C12R.2 preflight enforces the dimensions it reports on', () => {
 
   it('permits scratch output that the clean gate already excludes', async () => {
     // The other half of the same rule: transient output written under the
-    // permitted scratch prefix must not self-block the next gate (C12-F5).
+    // permitted scratch prefix must not self-block the next gate.
     const fixture = await createDispatchFixture(temp, 'clean-gate-scratch');
     mkdirSync(join(fixture.root, '.agenticloop', 'tmp'), { recursive: true });
     writeFileSync(join(fixture.root, '.agenticloop', 'tmp', 'scratch.json'), '{}\n', 'utf8');
@@ -223,7 +223,7 @@ describe('P35-C12R.2 preflight enforces the dimensions it reports on', () => {
   });
 
   it('reports a broken append-only contract history instead of discarding it', async () => {
-    // C12R-R2-F6. The errors were loaded into the snapshot and dropped as
+    // The errors were loaded into the snapshot and dropped as
     // "optional for the preflight report", while dispatch refuses on them.
     const fixture = await createDispatchFixture(temp, 'contract-history-enforced');
     rmSync(join(fixture.root, '.agenticloop', 'task-contract-history'), { recursive: true, force: true });
@@ -240,7 +240,7 @@ describe('P35-C12R.2 preflight enforces the dimensions it reports on', () => {
   });
 
   it('re-enumerates work-unit membership instead of trusting the bound scan', async () => {
-    // C12R-R2-F7. `validateDecomposition` checks the record's own shape; only
+    // `validateDecomposition` checks the record's own shape; only
     // dispatch re-enumerated the backend, so membership drift passed preflight.
     const fixture = await createDispatchFixture(temp, 'membership-enforced');
     const body = readFileSync(fixture.taskPath, 'utf8').replaceAll('T-001', 'T-778');
@@ -254,7 +254,7 @@ describe('P35-C12R.2 preflight enforces the dimensions it reports on', () => {
   });
 });
 
-describe('P35-C12R.2 guards for interpretations the field evidence rejected', () => {
+describe('guards for interpretations the field evidence rejected', () => {
   it('does not treat an unrelated commit as invalidating readiness', async () => {
     // The disproved claim from the field session: that every HEAD change
     // invalidates decomposition. Only bound semantic inputs may.

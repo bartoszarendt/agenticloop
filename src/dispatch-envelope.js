@@ -158,7 +158,7 @@ import {
 
 
 // Preserved public surface: these names were exported from this module
-// before the C12R.2 consolidation moved their definitions one layer down.
+// before the validator consolidation moved their definitions one layer down.
 export {
   ACTIVATION_CAPTURE_KIND,
   ACTIVATION_CAPTURE_SCHEMA_VERSION,

@@ -1,5 +1,5 @@
 /**
- * P35-C12R.9: every persisted evidence class earns its place.
+ * Every persisted evidence class earns its place.
  *
  * The governing principle of the remediation is that rich internal state must
  * produce a *simpler* external workflow, and its test is blunt: every persisted
@@ -42,7 +42,7 @@ function declaredStorageRoots() {
   return roots;
 }
 
-describe('P35-C12R.9 the inventory satisfies its own contract', () => {
+describe('the inventory satisfies its own contract', () => {
   it('gives every class a producer, consumer, decision, retention, storage class, and projection', () => {
     const checked = validateEvidenceInventory();
     assert.equal(checked.ok, true, checked.errors.join('\n'));
@@ -75,7 +75,7 @@ describe('P35-C12R.9 the inventory satisfies its own contract', () => {
   });
 
   it('records the one class that does not fully earn its place', () => {
-    // C12R.9 asks for redundant persisted values to be removed. This one is a
+    // The inventory contract asks for redundant persisted values to be removed. This one is a
     // cache that changes no gate outcome, and it is recorded as a
     // reclassification candidate rather than quietly kept.
     const cache = EVIDENCE_INVENTORY.handoff_derived_evidence;
@@ -97,7 +97,7 @@ describe('P35-C12R.9 the inventory satisfies its own contract', () => {
   });
 });
 
-describe('P35-C12R.9 the inventory cannot go stale', () => {
+describe('the inventory cannot go stale', () => {
   it('accounts for every storage root the source declares', () => {
     const declared = declaredStorageRoots();
     const inventoried = new Set(Object.values(EVIDENCE_INVENTORY).map(item => item.root));
@@ -131,7 +131,7 @@ describe('P35-C12R.9 the inventory cannot go stale', () => {
 
   it('agrees with the clean gate about what scratch is', () => {
     // The storage taxonomy is only true if the gate implements it. This is the
-    // C12-F5 class confusion stated as an assertion.
+    // Generated-state class confusion stated as an assertion.
     const scratch = STORAGE_CLASSES.transient_scratch;
     assert.equal(scratch.cleanGate, 'excluded');
     assert.ok(
@@ -153,7 +153,7 @@ describe('P35-C12R.9 the inventory cannot go stale', () => {
   });
 });
 
-describe('P35-C12R.9 each role receives a bounded projection', () => {
+describe('each role receives a bounded projection', () => {
   it('keeps activation, audit, and closeout internals out of the Engineer view', () => {
     // An Engineer implementing a bounded change needs the contract, the packet
     // lineage, and its own receipts. Handing it the authority machinery around

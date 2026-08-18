@@ -1,8 +1,8 @@
 /**
  * One ordered answer to "what is left before this task can be dispatched?".
  *
- * C12-F2 and C12-F3 are the two most expensive findings in the field record,
- * and they are the same failure seen from two angles. The Maintainer had no way
+ * The two most expensive findings in the field record are the same failure
+ * seen from two angles. The Maintainer had no way
  * to see the readiness sequence as a sequence: each prerequisite was discovered
  * by failing a gate, repaired, and then invalidated by the repair after it. The
  * measured cost was 23 of 29 preflights failing and 18 of 31 dispatch attempts
@@ -45,8 +45,8 @@
  * Two things it deliberately does not do:
  *
  * - **It never plans activation.** Activation is the operator's external action
- *   and belongs *after* readiness, which is precisely the ordering C12-F2 found
- *   inverted. A readiness plan that included it would reintroduce the defect.
+ *   and belongs *after* readiness, which is precisely the ordering the field
+ *   record found inverted. A readiness plan that included it would reintroduce the defect.
  * - **It never plans a product-file change.** Readiness settles workflow and
  *   task evidence. A plan that could touch the product would be a plan that
  *   could do the Engineer's work.
@@ -324,7 +324,7 @@ export function buildReadinessPlan(target, taskId, options = {}) {
 
   const workUnitId = decomposition?.scan?.workUnit?.id ?? null;
   // A synthesized `work-unit:<task-id>` is a fallback, not a durable grouping.
-  // Reporting it as settled would hide exactly the C12-F9 confusion where a
+  // Reporting it as settled would hide exactly the scope confusion where a
   // per-task identity is mistaken for a milestone.
   const isDurable = value => Boolean(value) && value !== `work-unit:${taskId}` && value !== taskId;
   const durableWorkUnit = isDurable(workUnitId);
@@ -363,7 +363,7 @@ export function buildReadinessPlan(target, taskId, options = {}) {
   // transition *and* the decomposition, and a parallel scan binds every task
   // carrier digest. A decomposition prepared over the pre-transition draft would
   // therefore be stale against the very commit that introduced it - which is
-  // exactly the C12-F3 shape where one repair invalidates another. So the plan
+  // exactly the shape where one repair invalidates another. So the plan
   // binds the prospective carrier, and the decomposition is prepared over it.
   let prospectiveTaskDigest = currentTaskDigest;
   let prospectiveTaskContent = body;

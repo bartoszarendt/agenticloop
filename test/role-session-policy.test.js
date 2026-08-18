@@ -1,5 +1,5 @@
 /**
- * P35-C12R.6/.7/.8 remainders: retry bounds, session reuse, revocation, adoption.
+ * Retry bounds, session reuse, revocation, adoption.
  *
  * Four small policies that each close one named deferral. They share a shape:
  * the field record showed a loop or a conflation that nothing bounded, and the
@@ -33,12 +33,12 @@ import {
 import { repairPolicyFor } from '../src/repair-policy.js';
 
 let temp;
-before(() => { temp = mkdtempSync(join(tmpdir(), 'al-c12r-role-policy-')); });
+before(() => { temp = mkdtempSync(join(tmpdir(), 'al-role-policy-')); });
 after(() => { rmSync(temp, { recursive: true, force: true }); });
 
-// ── Empty-return retry bounds (C12R.8) ───────────────────────────────────────
+// ── Empty-return retry bounds ────────────────────────────────────────────────
 
-describe('P35-C12R.8 an empty-return loop is bounded', () => {
+describe('an empty-return loop is bounded', () => {
   it('permits retries below the budget', () => {
     const verdict = evaluateEmptyReturnBudget({ emptyReturns: 1, budget: 3 });
     assert.equal(verdict.ok, true);
@@ -46,7 +46,7 @@ describe('P35-C12R.8 an empty-return loop is bounded', () => {
   });
 
   it('stops and reports once the budget is reached', () => {
-    // C12-F11 recorded repeated invocations "including empty returns" with
+    // The field record showed repeated invocations "including empty returns" with
     // nothing bounding the loop. The budget converts an invisible loop into one
     // explicit diagnostic.
     const verdict = evaluateEmptyReturnBudget({
@@ -83,9 +83,9 @@ describe('P35-C12R.8 an empty-return loop is bounded', () => {
   });
 });
 
-// ── Session reuse (C12R.8) ───────────────────────────────────────────────────
+// ── Session reuse ────────────────────────────────────────────────────────────
 
-describe('P35-C12R.8 a session is reused only while it still describes the work', () => {
+describe('a session is reused only while it still describes the work', () => {
   const identity = {
     taskId: 'T-018',
     taskContractDigest: `sha256:v1:${'a'.repeat(64)}`,
@@ -136,9 +136,9 @@ describe('P35-C12R.8 a session is reused only while it still describes the work'
   });
 });
 
-// ── Revocation during execution (C12R.6) ─────────────────────────────────────
+// ── Revocation during execution ──────────────────────────────────────────────
 
-describe('P35-C12R.6 revocation during execution is not expiry', () => {
+describe('revocation during execution is not expiry', () => {
   it('states the distinction rather than implying it', () => {
     // Expiry is non-retroactive because the authority lapsed. Revocation is a
     // deliberate withdrawal, so it fails at every instant including consumption.
@@ -175,9 +175,9 @@ describe('P35-C12R.6 revocation during execution is not expiry', () => {
   });
 });
 
-// ── Adoption reader (C12R.7) ─────────────────────────────────────────────────
+// ── Adoption reader ──────────────────────────────────────────────────────────
 
-describe('P35-C12R.7 closeout can consume an adoption without inventing evidence', () => {
+describe('closeout can consume an adoption without inventing evidence', () => {
   const COMMIT = 'a'.repeat(40);
 
   function adoptionRecord(overrides = {}) {
@@ -191,7 +191,7 @@ describe('P35-C12R.7 closeout can consume an adoption without inventing evidence
       audit: { reference: 'audit:WU-1', auditedArtifact: COMMIT, independent: true },
       disposition: {
         kind: 'human_adoption',
-        authority: 'operator:P35-C12R',
+        authority: 'operator:x',
         reason: 'this task predates canonical dispatch and return evidence',
       },
       missingEvidence: ['dispatch_packet', 'verified_return'],

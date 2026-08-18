@@ -1,8 +1,8 @@
 /**
- * P35-C12R.0/.4 characterization: committed-source authority must survive
+ * Committed-source authority must survive
  * ordinary platform checkout behavior.
  *
- * C12-F4 recorded that `verifyCommittedAttributedSource` compared raw
+ * The field record showed that `verifyCommittedAttributedSource` compared raw
  * working-tree bytes with the committed blob, so a clean Windows checkout
  * failed byte identity after CRLF conversion and any clean/smudge filter did
  * the same on every platform.
@@ -26,7 +26,7 @@ const MAINTAINER_MESSAGE = 'record evidence\n\nTask: T-001\nAgent: maintainer';
 const EVIDENCE = '{"statuses":{}}\n';
 
 let temp;
-before(() => { temp = mkdtempSync(join(tmpdir(), 'agenticloop-c12r-evidence-')); });
+before(() => { temp = mkdtempSync(join(tmpdir(), 'agenticloop-committed-evidence-')); });
 after(() => { rmSync(temp, { recursive: true, force: true }); });
 
 function fixture(name) {
@@ -51,7 +51,7 @@ function recheckout(root, relPath) {
   git(root, ['checkout', '--', relPath]);
 }
 
-describe('P35-C12R committed evidence is platform-safe', () => {
+describe('committed evidence is platform-safe', () => {
   it('accepts a clean checkout whose worktree bytes were CRLF-converted', () => {
     const root = fixture('crlf');
     // `text eol=crlf` normalizes to LF in the object database and materializes

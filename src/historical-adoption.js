@@ -1,7 +1,7 @@
 /**
  * Truthful adoption of work that predates the canonical lifecycle.
  *
- * C12-F10: T-016 and T-017 were implemented, accepted, integrated, and
+ * Two tasks were implemented, accepted, integrated, and
  * independently auditable - and they could not be closed. They predate dispatch
  * packets and verified returns, the `return_evidence_absent` waiver scope is
  * retired, and no amount of operator intent can make a mechanical gate accept

@@ -1,5 +1,5 @@
 /**
- * P35-C12R.5 at the CLI boundary: the real order, not a unit-level rehearsal.
+ * At the CLI boundary: the real order, not a unit-level rehearsal.
  *
  * The conservation rule only means something if the commands an operator
  * actually runs enforce it. These cases build a genuine dispatch packet,
@@ -33,7 +33,7 @@ import { executionAttemptIdentity } from '../src/execution-attempt.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 
 let temp;
-before(() => { temp = mkdtempSync(join(tmpdir(), 'al-c12r-attempt-cli-')); });
+before(() => { temp = mkdtempSync(join(tmpdir(), 'al-attempt-cli-')); });
 after(() => { rmSync(temp, { recursive: true, force: true }); });
 
 /**
@@ -112,7 +112,7 @@ function cli(fixture, args, extra = {}) {
   });
 }
 
-describe('P35-C12R.5 the CLI conserves a consumed packet', () => {
+describe('the CLI conserves a consumed packet', () => {
   it('reports no attempts and permits dispatch before anything is consumed', async () => {
     const fixture = await createDispatchFixture(temp, 'attempt-none');
     const status = await cli(fixture, ['task', 'attempt-status', 'T-001', '--json']);
@@ -138,7 +138,7 @@ describe('P35-C12R.5 the CLI conserves a consumed packet', () => {
   });
 
   it('refuses to mint a replacement once Engineer work is recorded', async () => {
-    // The exact C12-F8 move, through the real command.
+    // The exact field-session move, through the real command.
     const fixture = await createDispatchFixture(temp, 'attempt-refuse');
     const { consumption, attemptId } = consumeOnePacket(fixture);
     recordEngineerMutation(fixture, consumption);
@@ -162,7 +162,7 @@ describe('P35-C12R.5 the CLI conserves a consumed packet', () => {
     const abandoned = await cli(fixture, [
       'task', 'abandon-attempt', 'T-001', '--attempt', attemptId,
       '--reason', 'the retained packet cannot prove the original product base',
-      '--authority', 'operator:P35-C12R', '--json',
+      '--authority', 'operator:x', '--json',
     ]);
     assert.equal(abandoned.status, 0, abandoned.stderr);
     const record = JSON.parse(abandoned.stdout);
@@ -179,7 +179,7 @@ describe('P35-C12R.5 the CLI conserves a consumed packet', () => {
     // stated reason all survive so the history stays explicable.
     assert.equal(report.attempts[0].abandonment.reason,
       'the retained packet cannot prove the original product base');
-    assert.equal(report.attempts[0].abandonment.authority, 'operator:P35-C12R');
+    assert.equal(report.attempts[0].abandonment.authority, 'operator:x');
     assert.ok(report.attempts[0].productBaseHead);
   });
 
@@ -189,7 +189,7 @@ describe('P35-C12R.5 the CLI conserves a consumed packet', () => {
     const result = await cli(fixture, [
       'task', 'abandon-attempt', 'T-001', '--attempt', `attempt:${'f'.repeat(32)}`,
       '--reason', 'inventing a record for an attempt that never happened',
-      '--authority', 'operator:P35-C12R', '--json',
+      '--authority', 'operator:x', '--json',
     ]);
     assert.equal(result.status, 1);
     assert.match(result.stderr, /is not recorded for T-001/);
@@ -203,7 +203,7 @@ describe('P35-C12R.5 the CLI conserves a consumed packet', () => {
     const args = [
       'task', 'abandon-attempt', 'T-001', '--attempt', attemptId,
       '--reason', 'the retained packet cannot prove the original product base',
-      '--authority', 'operator:P35-C12R', '--json',
+      '--authority', 'operator:x', '--json',
     ];
     assert.equal((await cli(fixture, args)).status, 0);
     const second = await cli(fixture, args);
@@ -220,16 +220,16 @@ describe('P35-C12R.5 the CLI conserves a consumed packet', () => {
 
     const weak = await cli(fixture, [
       'task', 'abandon-attempt', 'T-001', '--attempt', attemptId,
-      '--reason', 'wip', '--authority', 'operator:P35-C12R',
+      '--reason', 'wip', '--authority', 'operator:x',
     ]);
     assert.equal(weak.status, 2);
     assert.match(weak.stderr, /reason must state why/);
   });
 });
 
-describe('P35-C12R.5 guards the interpretation the field session got wrong', () => {
+describe('guards the interpretation the field session got wrong', () => {
   it('keeps the same-checkout dispatch-to-consumption flow working', async () => {
-    // C12-F8's correction: same-checkout execution is supported. The field run
+    // The correction: same-checkout execution is supported. The field run
     // lost its lineage; it did not prove a protocol impossibility. If this ever
     // fails, the conservation rule has over-reached.
     const fixture = await createDispatchFixture(temp, 'attempt-same-checkout');

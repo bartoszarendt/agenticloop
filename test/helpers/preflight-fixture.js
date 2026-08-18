@@ -1,6 +1,6 @@
 /**
- * Minimal files-backed task and decomposition fixtures for the P35-C12R
- * characterization suites.
+ * Minimal files-backed task and decomposition fixtures for the preflight
+ * and dispatchability characterization suites.
  *
  * Deliberately small: these cases care about lifecycle and dispatchability
  * boundaries, not about the full dispatch envelope, so the fixture builds the
@@ -57,7 +57,7 @@ Implement the feature.
 - README.md
 
 ## Current State
-Authored for a P35-C12R characterization case.
+Authored for a characterization case.
 
 ## Scope
 src/** and docs/** only.
@@ -148,7 +148,7 @@ export function makeDecomposition(target, taskId, { workUnitId = `work-unit:${ta
       },
       dependencies: parsedDep.evidence,
     },
-    rescanTrigger: 'c12r-characterization',
+    rescanTrigger: 'characterization',
   });
   if (!scanned.ok) throw new Error(`parallel scan failed: ${scanned.result.errors.join('; ')}`);
 

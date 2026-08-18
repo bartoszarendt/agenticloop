@@ -344,7 +344,7 @@ export function resolveCloseoutAssuranceContext(target, io, backend, params) {
 /**
  * The instant an existing attempt's activation is evaluated at.
  *
- * Expiry is not retroactive (C12-F9): an authorization that was current when
+ * Expiry is not retroactive: an authorization that was current when
  * the packet was consumed keeps authorizing that attempt through closeout, so
  * every activation check the closeout makes - the covered-task assurance and
  * the return revalidation alike - is pinned to the same consumption instant.
@@ -418,7 +418,7 @@ function resolveCoveredTaskAssurance(target, io, context) {
   if (!evidence) {
     // A task adopted through the historical path has no activation grant and
     // never will: it predates the lifecycle, and inventing one is the single
-    // thing that path exists to prevent (C12-F10). Its frozen adoption record
+    // thing that path exists to prevent. Its frozen adoption record
     // is consumed here as a *reduced-assurance* terminal input, so a work unit
     // containing historical work can complete closeout without either
     // re-waiving the missing evidence for every task or fabricating it.
@@ -458,7 +458,7 @@ function resolveCoveredTaskAssurance(target, io, context) {
   if (!externalRevocations.ok) {
     return { taskId, usable: false, activation: null, failureCategory: activationFailureCategory(externalRevocations.errors), reasons: externalRevocations.errors };
   }
-  // Expiry is not retroactive (C12-F9).
+  // Expiry is not retroactive.
   //
   // Closeout used to evaluate the grant against the current clock, so a
   // 12-hour authorization that expired *during* a long execution retroactively

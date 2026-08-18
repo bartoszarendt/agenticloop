@@ -1,8 +1,8 @@
 /**
- * P35-C12R.3 (C12-F2, C12-F3): readiness settles as one transaction.
+ * Readiness settles as one transaction.
  *
  * Showing the whole sequence removed the *discovery* loop. It did not remove the
- * *execution* loop, and C12-F2/C12-F3 measured both. Settling readiness by hand
+ * *execution* loop, and the field record measured both. Settling readiness by hand
  * meant `establish-baseline`, a commit, `prepare-decomposition` redirected to a
  * file, `task status agent-ready`, and a second commit - four or five commands,
  * usually two commits, with every repair able to invalidate what an earlier
@@ -11,8 +11,8 @@
  * ## What these cases are
  *
  * They are **current-artifact property regressions for the new implementation**,
- * not reproductions of an a037534 baseline failure. `task readiness-apply` did
- * not exist at a037534, and neither did the executable plan it consumes, so there
+ * not reproductions of a pre-remediation baseline failure. `task readiness-apply` did
+ * not exist at that baseline, and neither did the executable plan it consumes, so there
  * is no command or fixture there to fail. The two characterization cases that
  * *do* describe the prior artifact are named as such: they assert that the
  * manual route needs more than one commit and that an intermediate state is
@@ -41,7 +41,7 @@ import { tmpdir } from 'node:os';
 
 import { git } from './helpers/git-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
-import { taskPath } from './helpers/c12r-preflight-fixture.js';
+import { taskPath } from './helpers/preflight-fixture.js';
 import { buildReadinessPlan, readinessPlanDigest } from '../src/readiness-plan.js';
 import {
   READINESS_APPLY_DISPOSITIONS,
@@ -73,7 +73,7 @@ import {
 } from './helpers/readiness-apply-fixture.js';
 
 let temp;
-before(() => { temp = mkdtempSync(join(tmpdir(), 'al-c12r-apply-')); });
+before(() => { temp = mkdtempSync(join(tmpdir(), 'al-apply-')); });
 after(() => { rmSync(temp, { recursive: true, force: true }); });
 
 const receipt = result => JSON.parse(result.stdout);
@@ -87,7 +87,7 @@ async function settle(name, options = {}) {
   return { target, taskId, baseHead, plan, applied, result: receipt(applied) };
 }
 
-describe('P35-C12R.3 one transaction, one commit', () => {
+describe('one transaction, one commit', () => {
   it('takes a draft task to agent-ready in exactly one Maintainer-attributed commit', async () => {
     const { target, taskId, baseHead, result } = await settle('one-commit');
     assert.equal(result.kind, READINESS_APPLY_RECEIPT_KIND);
@@ -189,7 +189,7 @@ describe('P35-C12R.3 one transaction, one commit', () => {
   });
 });
 
-describe('P35-C12R.3 the prior artifact genuinely needed more than one commit', () => {
+describe('the prior artifact genuinely needed more than one commit', () => {
   // Current-artifact characterization of the standalone route. These commands
   // still behave exactly as they did, which is why the orchestration exists.
   it('refuses an uncommitted baseline as untrusted intermediate state', async () => {
@@ -243,7 +243,7 @@ describe('P35-C12R.3 the prior artifact genuinely needed more than one commit', 
   });
 });
 
-describe('P35-C12R.3 readiness-plan stays read-only', () => {
+describe('readiness-plan stays read-only', () => {
   it('writes nothing while producing an applicable executable plan', async () => {
     const { target, taskId } = createReadinessTarget(temp, 'plan-readonly');
     const first = await runCliInProcess(planArgs(target, taskId));
@@ -309,7 +309,7 @@ describe('P35-C12R.3 readiness-plan stays read-only', () => {
   });
 });
 
-describe('P35-C12R.3 plan integrity fails closed', () => {
+describe('plan integrity fails closed', () => {
   const cases = [
     ['unknown fields', plan => { plan.extra = true; }, /closed schema/],
     ['unsupported schema version', plan => { plan.schemaVersion = 99; }, /unsupported readiness plan schemaVersion/],
@@ -395,7 +395,7 @@ describe('P35-C12R.3 plan integrity fails closed', () => {
   });
 });
 
-describe('P35-C12R.3 a stale plan cannot mutate', () => {
+describe('a stale plan cannot mutate', () => {
   const staleCases = [
     ['HEAD moved', (target, taskId) => {
       writeFileSync(join(target, 'src', 'moved.txt'), 'm\n', 'utf8');
@@ -455,7 +455,7 @@ describe('P35-C12R.3 a stale plan cannot mutate', () => {
   });
 });
 
-describe('P35-C12R.3 unrelated work is never committed', () => {
+describe('unrelated work is never committed', () => {
   it('refuses an unrelated staged product file', async () => {
     const { target, taskId } = createReadinessTarget(temp, 'safety-staged');
     await writePlan(target, taskId);
@@ -543,7 +543,7 @@ describe('P35-C12R.3 unrelated work is never committed', () => {
   });
 });
 
-describe('P35-C12R.3 failure injection and rollback', () => {
+describe('failure injection and rollback', () => {
   it('restores the exact predecessor state when a Git hook rejects the commit', async () => {
     const { target, taskId } = createReadinessTarget(temp, 'inject-hook');
     const baseHead = head(target);
@@ -656,7 +656,7 @@ describe('P35-C12R.3 failure injection and rollback', () => {
   });
 });
 
-describe('P35-C12R.3 idempotence and safe rerun', () => {
+describe('idempotence and safe rerun', () => {
   it('returns already_current for a fully ready task and creates nothing', async () => {
     const { target, taskId, baseHead } = await settle('idempotent');
     const rerun = receipt(await applyPlan(target, taskId));
@@ -755,7 +755,7 @@ async function settleConsumed(name) {
   return { target, taskId, baseHead, plan };
 }
 
-describe('P35-C12R.3 repair R3-R2: already_current is a proven state', () => {
+describe('already_current is a proven state', () => {
   it('returns stale, not already_current, when a consumed plan is reapplied after a later commit', async () => {
     const { target, taskId, baseHead } = await settleConsumed('repair-consumed-later-commit');
     writeFileSync(join(target, 'src', 'later.txt'), 'later\n', 'utf8');
@@ -841,7 +841,7 @@ describe('P35-C12R.3 repair R3-R2: already_current is a proven state', () => {
   });
 });
 
-describe('P35-C12R.3 repair R3-R3: staged scratch is refused, unstaged scratch is not', () => {
+describe('staged scratch is refused, unstaged scratch is not', () => {
   it('refuses a force-staged .agenticloop/tmp/ file through the exported safety evaluator', async () => {
     const { target, taskId } = createReadinessTarget(temp, 'repair-staged-scratch-evaluator');
     const { plan } = await writePlan(target, taskId);
@@ -890,7 +890,7 @@ describe('P35-C12R.3 repair R3-R3: staged scratch is refused, unstaged scratch i
   });
 });
 
-describe('P35-C12R.3 repair R3-R1: the exact commit tree across hooks', () => {
+describe('the exact commit tree across hooks', () => {
   it('cannot let a successful hook stage an unplanned product path into the readiness commit', async () => {
     const { target, taskId } = createReadinessTarget(temp, 'repair-hook-product-path');
     const baseHead = head(target);
@@ -953,7 +953,7 @@ describe('P35-C12R.3 repair R3-R1: the exact commit tree across hooks', () => {
   });
 });
 
-describe('P35-C12R.3 repair R3-R5: rollback is bound to the original ref', () => {
+describe('rollback is bound to the original ref', () => {
   /** The fixture's current branch name and full ref. */
   function currentBranch(target) {
     return git(target, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
@@ -1091,4 +1091,3 @@ describe('P35-C12R.3 repair R3-R5: rollback is bound to the original ref', () =>
     assert.match(porcelain(target), /agenticloop\/tasks\/T-018\.md/);
   });
 });
-

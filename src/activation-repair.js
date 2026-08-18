@@ -1,7 +1,7 @@
 /**
  * One renderer for every activation refusal.
  *
- * C12-F9 recorded that activation was *not* the dominant source of measured
+ * The field record showed that activation was *not* the dominant source of measured
  * churn - it was one refusal among hundreds - but that it still mattered more
  * than its count, because it is the only step an operator must perform
  * personally. What the field session met at that step was a set of independently
@@ -137,7 +137,7 @@ export function renderActivationRepair(facts = {}) {
 /**
  * Revocation during execution is not expiry, and is not handled like it.
  *
- * C12-F9 asked that the two be kept apart, and the reason is that they mean
+ * The two must be kept apart, and the reason is that they mean
  * opposite things about the work already done. Expiry says the authority ran
  * out of time; the work it authorized was authorized, and pinning closeout to
  * the consumption instant preserves that. Revocation says the operator

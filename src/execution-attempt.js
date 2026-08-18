@@ -6,7 +6,7 @@
  * and once an Engineer has mutated anything under it, that evidence is the only
  * thing that can still explain what the mutation was relative to.
  *
- * C12-F8 recorded what happens without that rule. The field session dispatched
+ * The field record shows what happens without that rule. The field session dispatched
  * before readiness was settled, then minted fresh packets and repaired history
  * after implementation, until no retained packet represented the start of the
  * work that had actually been done. `prepare-return` then had nothing truthful

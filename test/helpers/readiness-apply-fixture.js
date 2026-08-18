@@ -1,11 +1,11 @@
 /**
- * Files-backed fixtures for the P35-C12R.3 readiness-apply suite.
+ * Files-backed fixtures for the readiness-apply suite.
  *
  * The fixture builds only what a readiness transaction genuinely consumes: a
  * task record, a committed Maintainer-attributed dependency snapshot, and a
  * clean tracked worktree. Everything the transaction itself is supposed to
  * produce - the trusted baseline, the decomposition, the lifecycle transition -
- * is deliberately absent, because that is the state C12-F2 and C12-F3 measured.
+ * is deliberately absent, because that is the state the field record measured.
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { canonicalJson } from '../../src/canonical-json.js';
 import { createTaskProjectFixture } from './task-fixture.js';
 import { git } from './git-fixture.js';
-import { makePreflightTask, taskPath } from './c12r-preflight-fixture.js';
+import { makePreflightTask, taskPath } from './preflight-fixture.js';
 import { runCliInProcess } from './run-cli.js';
 
 export const DEPENDENCY_REF = taskId => `.agenticloop/dependencies/${taskId}.json`;
@@ -22,7 +22,7 @@ export const HISTORY_REF = taskId => `.agenticloop/task-contract-history/${taskI
 export const DECOMPOSITION_REF = taskId => `.agenticloop/decompositions/${taskId}.json`;
 export const PLAN_REF = taskId => `.agenticloop/tmp/${taskId}-readiness-plan.json`;
 export const ACTOR = 'Agentic Loop Test';
-export const AUTHORITY = 'plan:P35-C12R';
+export const AUTHORITY = 'plan:x';
 export const WORK_UNIT = 'milestone:M2';
 
 /** Canonical, committable dependency-status snapshot bytes. */

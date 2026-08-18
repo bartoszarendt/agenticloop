@@ -1,7 +1,7 @@
 /**
- * P35-C12R.6: a task that becomes ready inside authorized intent.
+ * A task that becomes ready inside authorized intent.
  *
- * C12-F9's operator complaint was that a milestone of eight tasks read as eight
+ * The field operator complaint was that a milestone of eight tasks read as eight
  * confirmations. Surfacing `--work-unit` at every refusal fixes discovery; this
  * fixes the rest - a task that reaches the ready set *after* the operator
  * authorized its work unit is inside their stated intent but outside the set
@@ -42,7 +42,7 @@ function grantFor(overrides = {}) {
   };
 }
 
-describe('P35-C12R.6 the scope digest is what the operator agreed to', () => {
+describe('the scope digest is what the operator agreed to', () => {
   it('is order-independent, because membership is a set', () => {
     assert.equal(workUnitScopeDigest(members), workUnitScopeDigest([...members].reverse()));
   });
@@ -62,7 +62,7 @@ describe('P35-C12R.6 the scope digest is what the operator agreed to', () => {
   });
 });
 
-describe('P35-C12R.6 an in-scope task derives a lease without asking again', () => {
+describe('an in-scope task derives a lease without asking again', () => {
   it('derives for a member of the exact confirmed scope', () => {
     const verdict = evaluateWorkUnitLease({
       grant: grantFor(),
@@ -84,7 +84,7 @@ describe('P35-C12R.6 an in-scope task derives a lease without asking again', () 
   });
 });
 
-describe('P35-C12R.6 scope expansion always returns to the operator', () => {
+describe('scope expansion always returns to the operator', () => {
   it('refuses a task added after confirmation', () => {
     // The operator never saw this task. That is the whole reason it cannot be
     // covered by their earlier confirmation.

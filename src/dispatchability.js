@@ -3,10 +3,10 @@
  *
  * Preflight, packet preparation, prepared-packet validation, and role-start
  * recognition all need one identical answer to "may this task begin an
- * execution attempt right now?". Before P35-C12R only the last of them asked:
+ * execution attempt right now?". Before the lifecycle gate existed only the last of them asked:
  * preflight and `prepare-dispatch` reported success for a `draft` task, and the
  * refusal arrived at role start, inside the Engineer session, as an illegal
- * lifecycle transition (C12-F1). That handed Maintainer-owned readiness work to
+ * lifecycle transition. That handed Maintainer-owned readiness work to
  * the wrong role and started the repair cascade the field sessions measured.
  *
  * The rule is derived from the one legal-transition authority rather than being
@@ -90,7 +90,7 @@ export function evaluateDispatchableLifecycle(status) {
  * `draft` string was not a runnable command at all: it named a `task set-status`
  * subcommand that does not exist, omitted the required `--expect-digest`, and
  * offered `--base` and `--base-paths` together even though `task status` refuses
- * both (C12R-R2-F1). A string cannot be checked; a structure can.
+ * both. A string cannot be checked; a structure can.
  *
  * So every refusal produces one record instead:
  *
@@ -210,13 +210,13 @@ export const TERMINAL_TASK_STATUSES = Object.freeze(
 /**
  * The rule the packet constructor enforces.
  *
- * Until P35-C12R.5 this narrowed the canonical rule: it let `accepted` and
+ * Until the closeout fixtures were rebuilt this narrowed the canonical rule: it let `accepted` and
  * `closed` through and left them to preflight, because the closeout fixtures
  * built their carrier lineage *retroactively* - they set a task terminal and
  * then minted the packet that was supposed to have preceded it. That was
  * disclosed as a fixture dependency, never as a correctness claim.
  *
- * C12R.5 rebuilt those fixtures in real chronological order - dispatchable
+ * Those fixtures are now rebuilt in real chronological order - dispatchable
  * carrier, packet, consumption, Engineer work, return, review, acceptance,
  * audit, closeout - so nothing needs a packet minted from a terminal task any
  * more. The constructor now applies `evaluateDispatchableLifecycle` unchanged,

@@ -1,7 +1,7 @@
 /**
- * P35-C12R.5 characterization: one execution attempt, in real order.
+ * One execution attempt, in real order.
  *
- * Before C12R.5 the closeout fixtures built their evidence backwards. They set
+ * Before the lineage work the closeout fixtures built their evidence backwards. They set
  * a task to `accepted`, committed that, and only then minted the packet that
  * was supposed to have preceded it. Nothing in the product was wrong about the
  * rule - `evaluateDispatchableLifecycle` refused terminal statuses everywhere -
@@ -58,7 +58,7 @@ import { taskStatusFromBody } from '../src/dispatchability.js';
 const TEST_TMP_ROOT = fileURLToPath(new URL('../.agenticloop/tmp/', import.meta.url));
 
 let temp;
-before(() => { mkdirSync(TEST_TMP_ROOT, { recursive: true }); temp = mkdtempSync(join(TEST_TMP_ROOT, 'al-c12r5-')); });
+before(() => { mkdirSync(TEST_TMP_ROOT, { recursive: true }); temp = mkdtempSync(join(TEST_TMP_ROOT, 'al-lineage-')); });
 after(() => { rmSync(temp, { recursive: true, force: true }); });
 
 function taskFile(root) {
@@ -211,7 +211,7 @@ function recordReview(root, productHead) {
   fixtureGit(root, ['commit', '-m', 'record maintainer review\n\nTask: T-001\nAgent: maintainer']);
 }
 
-describe('P35-C12R.5 the closeout fixture builds one attempt in real order', () => {
+describe('the closeout fixture builds one attempt in real order', () => {
   const closeoutFixture = createCloseoutCliFixture();
   before(() => { closeoutFixture.setup(); });
   after(() => { closeoutFixture.cleanup(); });
@@ -283,7 +283,7 @@ describe('P35-C12R.5 the closeout fixture builds one attempt in real order', () 
   });
 });
 
-describe('P35-C12R.5 the execution and lifecycle carrier boundaries stay separate', () => {
+describe('the execution and lifecycle carrier boundaries stay separate', () => {
   it('refuses an unrecognized boundary rather than defaulting to a permissive one', async () => {
     const attempt = await realOrderAttempt('boundary-name');
     const resolved = resolveCarrierLineage(attempt.root, 'T-001', {
@@ -460,7 +460,7 @@ describe('P35-C12R.5 the execution and lifecycle carrier boundaries stay separat
   });
 });
 
-describe('P35-C12R.5 acceptance answers to the Engineer return terminal', () => {
+describe('acceptance answers to the Engineer return terminal', () => {
   it('accepts against the durably recognized return terminal, not the live carrier', async () => {
     const attempt = await realOrderAttempt('acceptance-terminal');
     const { root, cli, productHead, returnCarrierDigest } = attempt;
@@ -568,7 +568,7 @@ describe('P35-C12R.5 acceptance answers to the Engineer return terminal', () => 
   });
 });
 
-describe('P35-C12R.6 an expired grant still closes out the attempt it authorized', () => {
+describe('an expired grant still closes out the attempt it authorized', () => {
   it('completes the consumed attempt, refuses a new packet, and keeps revocation separate', async () => {
     const projectMap = CLOSEOUT_PROJECT_MAP.replace('work_unit_audit: enabled', 'work_unit_audit: disabled');
     const fixture = await createDispatchFixture(temp, 'grant-closeout', {

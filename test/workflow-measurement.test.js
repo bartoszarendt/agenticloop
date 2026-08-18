@@ -1,7 +1,7 @@
 /**
- * P35-C12R.8 measurement: derived, bounded, privacy-clean, and not a truth store.
+ * Measurement: derived, bounded, privacy-clean, and not a truth store.
  *
- * C12-F11 measured the field session from outside and found the process
+ * The field session was measured from outside and the process was found
  * spending more effort on its own evidence than on the product task. Getting
  * those numbers back is useful; getting them back as a second persisted store
  * is not, because a second store drifts from the first and then a reader has to
@@ -33,7 +33,7 @@ import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 
 let temp;
-before(() => { temp = mkdtempSync(join(tmpdir(), 'al-c12r-measure-')); });
+before(() => { temp = mkdtempSync(join(tmpdir(), 'al-measure-')); });
 after(() => { rmSync(temp, { recursive: true, force: true }); });
 
 /** Consume one genuine packet. */
@@ -75,7 +75,7 @@ function writeConsumption(fixture, consumption) {
  * So the first consumption is committed (which is what an operator does, and
  * what clears the clean gate that otherwise blocks a second packet), and the
  * moved HEAD gives the second packet a genuinely different product base. That
- * is exactly the shape C12-F8 describes: work rebuilt on a base the earlier
+ * is exactly the field shape: work rebuilt on a base the earlier
  * packet never described.
  */
 function recordSecondAttempt(fixture, taskId = 'T-001', { moveBase = true } = {}) {
@@ -94,7 +94,7 @@ function recordSecondAttempt(fixture, taskId = 'T-001', { moveBase = true } = {}
   return consume(fixture, taskId);
 }
 
-describe('P35-C12R.8 measurement stores nothing and says so', () => {
+describe('measurement stores nothing and says so', () => {
   it('declares itself derived and non-authoritative', async () => {
     const fixture = await createDispatchFixture(temp, 'measure-declares');
     const measurement = measureTaskWorkflow(fixture.root, 'T-001');
@@ -144,7 +144,7 @@ describe('P35-C12R.8 measurement stores nothing and says so', () => {
       packetId: consumption.packetId,
       reason,
       disposition: 'abandoned',
-      authority: 'operator:P35-C12R',
+      authority: 'operator:x',
       abandonedAt: new Date().toISOString(),
     };
     const path = join(fixture.root, executionAttemptAbandonmentRelativePath(record));
@@ -158,7 +158,7 @@ describe('P35-C12R.8 measurement stores nothing and says so', () => {
   });
 });
 
-describe('P35-C12R.8 the ordinary shape and its deviations', () => {
+describe('the ordinary shape and its deviations', () => {
   it('reports the ordinary fixture as one attempt with no deviations', async () => {
     // The exit-gate case: one packet, one attempt, nothing abandoned, nothing
     // rebuilt on a second base.
@@ -173,7 +173,7 @@ describe('P35-C12R.8 the ordinary shape and its deviations', () => {
   });
 
   it('reports a remint against a second product base as a deviation', async () => {
-    // The C12-F8 shape, counted: two attempts against two different bases means
+    // The field shape, counted: two attempts against two different bases means
     // work was rebuilt on a base the earlier packet never described.
     const fixture = await createDispatchFixture(temp, 'measure-remint');
     const first = consume(fixture);
@@ -212,7 +212,7 @@ describe('P35-C12R.8 the ordinary shape and its deviations', () => {
   });
 });
 
-describe('P35-C12R.8 measurement never invents a number', () => {
+describe('measurement never invents a number', () => {
   it('omits a duration whose endpoints are not both durable evidence', async () => {
     const fixture = await createDispatchFixture(temp, 'measure-duration');
     const measurement = measureTaskWorkflow(fixture.root, 'T-001');

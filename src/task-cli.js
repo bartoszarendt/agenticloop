@@ -2002,7 +2002,7 @@ export async function cmdTask(args, io = createIo()) {
       // an observable repository event - never a substitute for the semantic
       // binding, and never a timer on work that is progressing normally.
       //
-      // C12-F6: the flat one-hour default guaranteed expiry before return for
+      // The flat one-hour default guaranteed expiry before return for
       // any Engineer session longer than an hour, on a files-backed route where
       // every dependency status lives in the repository and every change to one
       // is already caught by the scan's inventory-membership and carrier-digest
@@ -2243,7 +2243,7 @@ export async function cmdTask(args, io = createIo()) {
         // Re-validating an existing packet (`--packet`) is how a live attempt
         // proves itself and must never be refused here.
         //
-        // C12-F8: without this, a fresh packet silently replaced the one an
+        // Without this, a fresh packet silently replaced the one an
         // Engineer had already built against, until no retained packet
         // represented the start of the work that existed. The attempt reaches a
         // canonical return or is explicitly abandoned.

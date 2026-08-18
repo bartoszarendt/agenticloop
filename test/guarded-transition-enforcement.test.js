@@ -527,8 +527,8 @@ describe('GitHub closeout resumes the terminal transition after publication', ()
 
     // The packet belongs to the attempt, which ran while the issue was
     // `in-progress`; the carrier reached `accepted` only afterwards. Preparing
-    // from a terminal carrier is refused by the packet constructor itself since
-    // P35-C12R.5, and the protected task contract is identical in both bodies.
+    // from a terminal carrier is refused by the packet constructor itself, and
+    // the protected task contract is identical in both bodies.
     const dispatchBody = carrier.body.replace(/^status: .*$/m, 'status: in-progress');
     const snapshot = {
       ...fixture.snapshot(), backend: 'github', carrier: 'issue:1', body: dispatchBody,

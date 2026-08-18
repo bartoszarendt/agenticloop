@@ -9,9 +9,9 @@
  *   3. prepared-packet validation    - a sealed, authenticated packet;
  *   4. Engineer role-start           - the sealed packet, then live revalidation.
  *
- * Before P35-C12R.2 those boundaries each ran their own decision sequence over
+ * Before the consolidation those boundaries each ran their own decision sequence over
  * the same dimensions. Convergence was then a property to be tested rather than
- * a structural fact, and every divergence found by the C12R-R2 matrix
+ * a structural fact, and every divergence found by the convergence matrix
  * (clean state graded as advisory at one boundary and blocking at another,
  * contract-history errors loaded and discarded, work-unit membership never
  * re-enumerated) was an instance of the same shape. This module removes the
@@ -1196,7 +1196,7 @@ export function validateCurrentTask(snapshot, findings) {
   });
   // The trusted append-only contract chain is its own dimension with its own
   // Maintainer-owned repair, so it is coded here rather than inheriting the
-  // caller boundary default code (C12R-R2-F6, generalized by C12R.2).
+  // caller boundary default code.
   if (!baseline.ok) for (const message of baseline.errors) findings.malformed(message, { code: 'contract.baseline.invalid' });
   if (contract.ok && contract.projection?.task_id !== snapshot.taskId) findings.malformed('current task snapshot identity does not match the material contract');
   return contract.ok ? contract : null;
@@ -1393,7 +1393,7 @@ export const DISPATCH_ELIGIBILITY_DIMENSIONS = Object.freeze([
  * A sub-validator that classifies its own failure precisely keeps its own code;
  * this is the code an otherwise-uncoded finding in that dimension receives. The
  * same fault therefore reports the same code - and routes to the same owning
- * role through `repair-policy.js` - at every boundary. Before C12R.2 a broken
+ * role through `repair-policy.js` - at every boundary. Before the consolidation a broken
  * decomposition was `parallel_scan.decomposition.invalid` (Maintainer,
  * regenerate) at preflight and `dispatch.packet.invalid` (dispatch, repair
  * evidence) at packet preparation, for one fault over identical facts.
@@ -1597,7 +1597,7 @@ function shapeRefusal(factShape, message) {
  * not decide anything - whether a dirty path blocks, and with which evidence
  * state and code, is decided once in `evaluateDispatchEligibility`. Preflight
  * and packet preparation calling the same evaluator but grading its result
- * differently is exactly the C12R-R2-F5 defect.
+ * differently is exactly the clean-state divergence defect.
  */
 export function observeDispatchInitialState({
   runGit, scopePatterns, intendedCreations, priorGateReceipts = [], readCarrierDigest = null,
@@ -1739,7 +1739,7 @@ function evaluateLiveDispatch(candidate) {
 
   // 1. Lifecycle, asked before any other fact. A task that cannot legally reach
   //    a role start must never receive a packet, or the refusal surfaces inside
-  //    the Engineer session instead (C12-F1).
+  //    the Engineer session instead.
   const lifecycleSink = dimensionFindings('lifecycle');
   const lifecycle = evaluateDispatchableLifecycle(taskStatusFromBody(snapshot?.body));
   if (!lifecycle.ok) {
@@ -1913,7 +1913,7 @@ function evaluateLiveReadiness(candidate) {
   } = candidate;
 
   // 1. Lifecycle - the same gate role start applies, asked here so a green
-  //    preflight cannot be refused later over unchanged facts (C12-F1).
+  //    preflight cannot be refused later over unchanged facts.
   const lifecycleSink = dimensionFindings('lifecycle');
   const lifecycle = evaluateDispatchableLifecycle(taskStatusFromBody(snapshot?.body));
   if (!lifecycle.ok) {
@@ -2000,7 +2000,7 @@ function evaluateLiveReadiness(candidate) {
   findings.extend(decompositionSink.items);
 
   // 6. Current work-unit membership, re-enumerated rather than trusted, and
-  //    only over a well-formed scan (C12R-R2-F7).
+  //    only over a well-formed scan.
   const membershipSink = dimensionFindings('work_unit_membership');
   if (decompositionRefused || !isObject(parallelScanInventory)) {
     ledger.record('work_unit_membership', 'not_applicable', {
@@ -2058,7 +2058,7 @@ function evaluateLiveReadiness(candidate) {
 
   // 9. Relevant clean state, at dispatch strength. Preflight used to report a
   //    dirty relevant checkout as advice while dispatch failed closed over the
-  //    same evaluator (C12R-R2-F5); the verdict is now decided once.
+  //    same evaluator; the verdict is now decided once.
   const cleanSink = dimensionFindings('clean_state');
   const cleanState = decideCleanState(cleanStateObservation, cleanSink);
   ledger.absorb('clean_state', cleanSink, findings);

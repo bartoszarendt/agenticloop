@@ -1,7 +1,7 @@
 /**
- * P35-C12R.2: one canonical dispatch-eligibility validator, four consumers.
+ * One canonical dispatch-eligibility validator, four consumers.
  *
- * `test/c12r-preflight-convergence.test.js` states the *behavioural* exit gate:
+ * `test/preflight-convergence.test.js` states the *behavioural* exit gate:
  * no later boundary may discover a prerequisite the canonical preflight passed.
  * That property held while preflight and packet preparation still ran two
  * separate decision sequences, which meant it had to be re-proved by matrix
@@ -53,7 +53,7 @@ import {
 import { createDispatchFixture, git, prepare, sha256 } from './helpers/dispatch-fixture.js';
 
 let temp;
-before(() => { temp = mkdtempSync(join(tmpdir(), 'al-c12r2-structural-')); });
+before(() => { temp = mkdtempSync(join(tmpdir(), 'al-structural-')); });
 after(() => { rmSync(temp, { recursive: true, force: true }); });
 
 function preflight(root, taskId = 'T-001') {
@@ -95,7 +95,7 @@ function currentPrepare(fixture) {
   return prepare(fixture, liveRefetchers(fixture));
 }
 
-describe('P35-C12R.2 the shared prerequisite inventory is closed', () => {
+describe('the shared prerequisite inventory is closed', () => {
   it('declares one canonical dimension inventory with no duplicates', () => {
     assert.ok(DISPATCH_ELIGIBILITY_DIMENSIONS.length >= 19);
     assert.equal(
@@ -192,7 +192,7 @@ describe('P35-C12R.2 the shared prerequisite inventory is closed', () => {
   });
 });
 
-describe('P35-C12R.2 all four boundaries consume the canonical evaluator', () => {
+describe('all four boundaries consume the canonical evaluator', () => {
   it('routes preflight, packet preparation, packet validation, and role start through it', async () => {
     const fixture = await createDispatchFixture(temp, 'four-boundaries');
 
@@ -242,7 +242,7 @@ describe('P35-C12R.2 all four boundaries consume the canonical evaluator', () =>
   });
 });
 
-describe('P35-C12R.2 live-fact convergence over one shared decision', () => {
+describe('live-fact convergence over one shared decision', () => {
   const LIVE_MUTATIONS = {
     'lifecycle: draft': fx => setStatus(fx, 'draft'),
     'lifecycle: closed': fx => setStatus(fx, 'closed'),
@@ -307,7 +307,7 @@ describe('P35-C12R.2 live-fact convergence over one shared decision', () => {
   });
 });
 
-describe('P35-C12R.2 sealed-artifact convergence over one exact packet', () => {
+describe('sealed-artifact convergence over one exact packet', () => {
   it('agrees between packet validation and role-start authentication', async () => {
     const fixture = await createDispatchFixture(temp, 'sealed-agree');
     const prepared = currentPrepare(fixture);
@@ -360,7 +360,7 @@ describe('P35-C12R.2 sealed-artifact convergence over one exact packet', () => {
   });
 });
 
-describe('P35-C12R.2 shared dimensions carry one diagnostic classification', () => {
+describe('shared dimensions carry one diagnostic classification', () => {
   it('reports a decomposition fault with the same owning code at both live boundaries', async () => {
     const fixture = await createDispatchFixture(temp, 'code-decomposition');
     rmSync(join(fixture.root, '.agenticloop', 'decompositions', 'T-001.json'), { force: true });

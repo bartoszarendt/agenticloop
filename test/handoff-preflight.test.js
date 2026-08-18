@@ -201,7 +201,7 @@ function makeDecompositionSource(target, taskId, { depSnapshot: depSnapshotOverr
  * Make a fixture task dispatch-grade by committing its trusted task-contract
  * baseline record, exactly as `task establish-baseline` does.
  *
- * Before C12R.2 these fixtures carried no baseline record and still asserted a
+ * Before the validator consolidation these fixtures carried no baseline record and still asserted a
  * green preflight, while `prepare-dispatch` refused them with "missing
  * task-contract baseline record" over identical facts. Consolidating the four
  * boundaries onto one evaluator surfaced that false green, so the fixtures now
@@ -454,8 +454,8 @@ describe('handoff-preflight', () => {
     assert.equal(result.evidenceState, 'missing');
     // Decomposition is Maintainer authoring work: `task prepare-decomposition`
     // produces it and its committed source must carry Maintainer attribution.
-    // This asserted 'engineer' until P35-C12R.8, which is the C12-F11 defect -
-    // it is what let the field session's Engineer regenerate decomposition
+    // This asserted 'engineer' until owner routing was corrected - the field
+    // defect - it is what let the field session's Engineer regenerate decomposition
     // inside its own run instead of routing back to the owner.
     assert.equal(result.dispositionOwner, 'maintainer');
     assert.ok(result.diagnostics[0].code.includes('decomposition'), `expected decomposition code, got ${result.diagnostics[0].code}`);
