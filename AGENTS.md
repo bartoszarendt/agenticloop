@@ -37,6 +37,17 @@ Use these files as the durable repository contract:
 The `docs/` directory is the user-facing setup and authoring surface. Keep it practical and adoption-oriented.
 Stable Agentic Loop vocabulary belongs in `AGENTIC_LOOP.md`.
 
+## Optional private project context
+
+When `PROJECT_CONTEXT_ROOT` is set and a request involves product direction,
+architecture tradeoffs, prioritization, or development recommendations, read
+`PROJECT.md`, `STRATEGY.md`, `STATUS.md`, and relevant `decisions/` entries from
+that directory before recommending a direction.
+
+That context supplements but never overrides this public repository's source of
+truth. Surface conflicts explicitly, and never copy private planning or decision
+content into public files unless the user explicitly promotes it.
+
 Repository layout ownership:
 
 - The toolkit repo authors canonical source at the repository root (`AGENTIC_LOOP.md`, `agents/`, `skills/`, `backends/`, `commands/`, `memory/`, `config.json`, `agenticloop.template.json`, `manifest.json`).
