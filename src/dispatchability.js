@@ -208,35 +208,20 @@ export const TERMINAL_TASK_STATUSES = Object.freeze(
 );
 
 /**
- * The subset of the rule the packet constructor enforces today.
+ * The rule the packet constructor enforces.
  *
- * `prepareRoleDispatch` refuses every status that has not yet reached an
- * execution attempt - the C12-F1 defect - and reports terminal statuses to the
- * caller through preflight rather than refusing them here.
+ * Until P35-C12R.5 this narrowed the canonical rule: it let `accepted` and
+ * `closed` through and left them to preflight, because the closeout fixtures
+ * built their carrier lineage *retroactively* - they set a task terminal and
+ * then minted the packet that was supposed to have preceded it. That was
+ * disclosed as a fixture dependency, never as a correctness claim.
  *
- * This is a deliberate, disclosed narrowing, not a correctness claim: minting a
- * packet for an `accepted` task is genuinely wrong, but refusing it inside the
- * constructor also refuses the retroactive lineage the closeout fixtures build,
- * and building that lineage truthfully needs the carrier-generation chain that
- * P35-C12R.5 owns. The reopen gate is P35-C12R.5: once a closeout fixture can
- * express dispatch, consumption, carrier mutation receipts, and return in real
- * order, this narrowing is deleted and `evaluateDispatchableLifecycle` is
- * applied here unchanged.
- *
- * P35-C12R.5 measured what that gate actually costs. Deleting the narrowing and
- * running the full suite fails roughly twenty closeout suites, because the
- * closeout fixtures still build their lineage *retroactively*: they set a task
- * terminal and then mint the packet that is supposed to have preceded it. The
- * narrowing is therefore load-bearing for the fixtures, not for the product
- * rule - `evaluateDispatchableLifecycle` already refuses terminal statuses
- * everywhere else, and preflight refuses them at the boundary an operator
- * actually runs. Closing it is fixture work, not evaluator work.
+ * C12R.5 rebuilt those fixtures in real chronological order - dispatchable
+ * carrier, packet, consumption, Engineer work, return, review, acceptance,
+ * audit, closeout - so nothing needs a packet minted from a terminal task any
+ * more. The constructor now applies `evaluateDispatchableLifecycle` unchanged,
+ * and every boundary asks one question with one answer.
  */
 export function evaluatePacketDispatchableLifecycle(status) {
-  const evaluated = evaluateDispatchableLifecycle(status);
-  if (evaluated.ok) return evaluated;
-  if (TERMINAL_TASK_STATUSES.includes(evaluated.status)) {
-    return { ...evaluated, ok: true, evidenceState: 'current', enforcedAt: 'preflight' };
-  }
-  return evaluated;
+  return evaluateDispatchableLifecycle(status);
 }

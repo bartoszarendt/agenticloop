@@ -93,7 +93,7 @@ import {
 import { loadFilesTaskContractRecords } from './files-task-contract.js';
 import { provisionOperatorActivationKey, readExternalActivationRevocations } from './activation-trust.js';
 import { refetchGitHubReturnEvidence } from './github-return-evidence.js';
-import { currentDispatchConsumption } from './handoff-consumption.js';
+import { currentDispatchConsumption, resolveCarrierLineage } from './handoff-consumption.js';
 import { HISTORICAL_ADOPTION_ASSURANCE, readHistoricalAdoption } from './historical-adoption.js';
 import {
   createLegacyUnactivatedWaiver,
@@ -194,10 +194,31 @@ export function resolveCloseoutAssuranceContext(target, io, backend, params) {
     // Return verifications carry implementation results, and a dispatch
     // assignment is always the immutable Engineer role.
     expectedProducerRole: 'engineer',
-    resolveDispatchConsumption: taskId => currentDispatchConsumption(target, taskId, { backend }),
+    // The consumption alone names the carrier as it stood at role start. An
+    // Engineer that recorded evidence on its own carrier moved it afterwards,
+    // under receipts, so the carrier the verified return must describe is the
+    // Engineer return-lineage terminal - not the role-start carrier and not the
+    // live one, which review and acceptance have already moved again.
+    resolveDispatchConsumption: taskId => {
+      const consumed = currentDispatchConsumption(target, taskId, { backend });
+      if (!consumed.ok || !consumed.record) return consumed;
+      const lineage = resolveCarrierLineage(target, taskId, {
+        backend,
+        taskContractDigest: consumed.record.taskContractDigest,
+        boundary: 'engineer_return',
+      });
+      return lineage.ok
+        ? { ...consumed, returnCarrierDigest: lineage.currentCarrierDigest }
+        : { ok: false, errors: lineage.errors, records: consumed.records, record: null };
+    },
     // The packet each verification consumed is revalidated against operator-owned
     // trust, so an intact-looking record whose packet was never prepared fails.
-    validatePreparedDispatch: canonicalDispatchValidator({ target, io }),
+    // Its activation authority is judged as of the consumption that used it,
+    // the same pinned instant every other closeout activation check uses.
+    validatePreparedDispatch: canonicalDispatchValidator({
+      target, io,
+      activationInstantFor: packet => consumedActivationInstant(target, packet?.backend ?? backend, packet?.task?.id),
+    }),
     resolveTask: taskId => resolveCoveredTaskAssurance(target, io, {
       backend,
       taskId,
@@ -217,6 +238,7 @@ export function resolveCloseoutAssuranceContext(target, io, backend, params) {
         backend, taskId, params, projectConfig: projectConfigForTasks, repositoryIdentity, verify: verification.verify,
       });
       if (!identity) return { taskId, usable: false, records: [], failureCategory: 'return_verification_failed', reasons: [`task '${taskId}' could not be read for return evaluation`] };
+      const activationEvaluatedAt = consumedActivationInstant(target, backend, taskId);
       const expectedContractDigest = identity.contract.digest;
       const listed = listReturnVerifications(target, taskId, {
         taskContractDigest: identity.contract.digest,
@@ -239,7 +261,11 @@ export function resolveCloseoutAssuranceContext(target, io, backend, params) {
       const validateVerifiedReturn = record => revalidateReturnVerification(record, {
         target,
         capabilities: activationCapabilityInventory(trustedAdapters),
-        resolveActivationBinding: packet => resolvePacketActivationBinding(target, io, packet),
+        // Same pinned instant as the covered-task assurance above: the retained
+        // packet's authority is judged as of the consumption that used it.
+        resolveActivationBinding: packet => resolvePacketActivationBinding(target, io, packet, {
+          ...(activationEvaluatedAt === null ? {} : { now: activationEvaluatedAt }),
+        }),
         resolveTrustedAdapter: adapterId => {
           const adapter = trustedAdapters[adapterId];
           if (!adapter) throw new PublicCommandError(`return adapter '${adapterId}' is not currently trusted through the protected boundary`);
@@ -315,6 +341,24 @@ export function resolveCloseoutAssuranceContext(target, io, backend, params) {
 }
 
 /** Authenticate one covered task's durable activation evidence, if any. */
+/**
+ * The instant an existing attempt's activation is evaluated at.
+ *
+ * Expiry is not retroactive (C12-F9): an authorization that was current when
+ * the packet was consumed keeps authorizing that attempt through closeout, so
+ * every activation check the closeout makes - the covered-task assurance and
+ * the return revalidation alike - is pinned to the same consumption instant.
+ * Pinning only ever narrows: a grant issued after the attempt started still
+ * fails, and revocation is matched by grant identity and stays
+ * time-independent. Returns `null` when there is no usable consumption, which
+ * leaves the current clock in force.
+ */
+function consumedActivationInstant(target, backend, taskId) {
+  const consumed = currentDispatchConsumption(target, taskId, { backend });
+  const consumedAtMs = consumed.ok && consumed.record ? Date.parse(consumed.record.consumedAt) : null;
+  return Number.isFinite(consumedAtMs) && consumedAtMs <= Date.now() ? consumedAtMs : null;
+}
+
 function resolveCoveredTaskAssurance(target, io, context) {
   const { backend, taskId, params, projectConfig: config, repositoryIdentity, verify } = context;
   let identity;
@@ -428,11 +472,7 @@ function resolveCoveredTaskAssurance(target, io, context) {
   // revoked grant still fails here; and pinning to a past instant only ever
   // narrows what qualifies - a grant issued *after* the attempt started does
   // not retroactively authorize it.
-  const consumed = currentDispatchConsumption(target, taskId, { backend });
-  const consumedAtMs = consumed.ok && consumed.record ? Date.parse(consumed.record.consumedAt) : null;
-  const activationEvaluatedAt = Number.isFinite(consumedAtMs) && consumedAtMs <= Date.now()
-    ? consumedAtMs
-    : null;
+  const activationEvaluatedAt = consumedActivationInstant(target, backend, taskId);
   const resolved = resolveTaskActivationBinding({
     grant: evidence.grant,
     binding: evidence.binding,

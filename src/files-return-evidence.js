@@ -45,6 +45,10 @@ function exactWorkflowPaths(target, packet, signedEvidence, runGit, workflowHead
   const lineage = resolveCarrierLineage(target, packet?.task?.id, {
     backend: 'files',
     taskContractDigest: packet?.task?.taskContractDigest,
+    // Return evidence asks for the execution terminal, which is the carrier the
+    // signed return names - never the live carrier, which legitimately advances
+    // once review, acceptance, and closeout own it.
+    boundary: 'engineer_return',
     currentCarrierDigest: signedEvidence?.task?.currentCarrierDigest,
   });
   if (!lineage.ok) {

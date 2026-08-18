@@ -323,11 +323,13 @@ one identified alternative with the condition that selects it. `--base` and
 command. Statuses with no safe forward move receive a statement of what is true
 and no command at all.
 
-One asymmetry is deliberate and temporary: `task prepare-dispatch` currently
-refuses only the statuses that have **not yet** reached an execution attempt.
-The terminal statuses `accepted` and `closed` are refused by preflight but still
-accepted by the packet constructor, so a caller that skips preflight can mint a
-packet for finished work. Run `task handoff-preflight` before packet assembly.
+Packet creation applies the whole rule, not part of it. `task prepare-dispatch`
+refuses the terminal statuses `accepted` and `closed` exactly as preflight does,
+so a caller that skips preflight cannot mint a packet for finished work. The
+refusal carries the same diagnostic code and states the fact rather than
+inventing a repair: a completed task has no remaining execution attempt to
+authorize, and no operator action or packet remint reopens one. Dispatch a new
+task instead.
 
 Apply a plan explicitly with:
 
@@ -1048,7 +1050,10 @@ work it already started never happened*.
 - Closeout evaluates the grant as of the **consumption instant** when a packet
   was consumed for the task, so an execution that outlives its window does not
   retroactively lose the authority it had when it began. The reported
-  `evaluatedAt` states which instant was used.
+  `evaluatedAt` states which instant was used. Every activation check the
+  closeout makes uses that same pinned instant — the covered-task assurance, the
+  revalidation of the stored return, and the revalidation of the retained packet
+  alike — so a consumed attempt cannot pass one of them and fail another.
 - **Revocation is not expiry.** It is matched by grant identity and is
   time-independent, so a revoked grant still fails at the consumption instant.
 - Pinning to a past instant can only narrow: a grant issued after an attempt

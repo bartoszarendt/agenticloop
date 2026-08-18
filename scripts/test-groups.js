@@ -178,6 +178,7 @@ const MANIFEST = {
     'test/audit-e2e.test.js',
     'test/audit-github-runner.test.js',
     'test/bootstrap-labels.test.js',
+    'test/c12r-real-order-lineage.test.js',
     'test/cli-main.test.js',
     'test/cli-smoke.test.js',
     'test/closeout-adversarial.test.js',

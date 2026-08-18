@@ -193,6 +193,30 @@ reason and a durable authority, preserving the abandoned attempt rather than
 deleting it. Re-validating an existing packet with `--packet` is never refused by
 this rule. Unreadable consumption, abandonment, or receipt evidence fails closed.
 
+One generation has two carrier terminals, and they are not the same digest. The
+**execution terminal** is the consumption plus the Engineer's own receipts; that
+is the carrier a signed return describes, and return refetch, closeout, and the
+acceptance gate all resolve against it. The **live lifecycle carrier** is what
+review, acceptance, and closeout move afterwards under their own authority. The
+separation is required rather than incidental: acceptance is legal only once the
+Maintainer has recorded review provenance on the carrier (`review_status`,
+`review_mode`, a `reviewed_artifact` equal to `implementation_artifact`, and
+non-empty `## Scope Completed` and `## Evidence`), so the live carrier has
+necessarily moved past the Engineer terminal before acceptance can run. An
+Engineer return lineage never absorbs a Maintainer-, Reviewer-, or
+closeout-owned mutation to make an equality pass, and a lifecycle receipt can
+never bridge a gap in the Engineer chain — an interrupted chain still fails
+closed. Because expiry is not retroactive, every activation check the closeout
+makes is evaluated as of the consumption that used the packet; revocation is
+matched by grant identity and stays time-independent.
+
+The order this produces is the order the commands enforce: a dispatchable task,
+one packet, one consumption, the Engineer product range, the Engineer's own
+carrier evidence, the verified return, then review, acceptance, audit, and
+closeout. Acceptance never belongs inside the Engineer product range, where
+return-evidence refetch reads it as Engineer product work and rejects it for
+lacking `Agent: engineer`.
+
 New files-backed tasks materialize `attempt_budget` from project
 `default_attempt_budget`, then built-in `5`. A task-specific override is an
 explicit task-record edit made before work begins; the files `task new` command

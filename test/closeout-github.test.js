@@ -503,9 +503,16 @@ describe('github closeout evaluation', () => {
     };
     const identity = buildGitHubTaskIdentityInventory(harness.issues);
     assert.equal(resolveCoveredGitHubTask(identity, 'T-001').found, true, JSON.stringify(identity.errors));
+    // The packet is minted from the carrier as it stood during the attempt -
+    // `in-progress` - and the issue reaches `closed` afterwards. Preparing a
+    // packet from a terminal carrier is refused by the packet constructor
+    // itself since P35-C12R.5, and it was never what happened here. The
+    // protected task contract is identical in both bodies, so the closeout's
+    // contract expectations are unchanged.
+    const dispatchBody = body.replace(/^status: .*$/m, 'status: in-progress');
     const snapshot = {
-      ...fixture.snapshot(), backend: 'github', carrier: 'issue:1', body,
-      digest: `sha256:${(await import('node:crypto')).createHash('sha256').update(body, 'utf8').digest('hex')}`,
+      ...fixture.snapshot(), backend: 'github', carrier: 'issue:1', body: dispatchBody,
+      digest: `sha256:${(await import('node:crypto')).createHash('sha256').update(dispatchBody, 'utf8').digest('hex')}`,
     };
     const readiness = {
       ...fixture.readiness,

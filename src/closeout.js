@@ -580,12 +580,28 @@ export function summarizeCloseoutAssurance(input, coveredTasks = []) {
       ? input.resolveDispatchConsumption(taskId)
       : null;
     const consumed = dispatch?.ok === true ? dispatch.record : null;
-    const records = observed?.usable && (!consumptionRequired || consumed) ? observed.records ?? [] : [];
+    // The terminal of the recognized Engineer carrier lineage. It is required
+    // whenever a consumption is: without it the closeout has no durable answer
+    // to "which carrier did this return describe?", and falling back to the
+    // role-start carrier would silently accept a return from a task whose
+    // Engineer evidence receipts are missing.
+    const returnCarrierDigest = consumed && typeof dispatch.returnCarrierDigest === 'string'
+      ? dispatch.returnCarrierDigest
+      : null;
+    const records = observed?.usable && (!consumptionRequired || (consumed && returnCarrierDigest))
+      ? observed.records ?? []
+      : [];
     if (consumptionRequired && !consumed) {
       reasons.push({
         category: 'return_evidence_absent',
         message: `covered task ${taskId} has no usable durable canonical dispatch consumption`,
         repair: `npx agenticloop task prepare-dispatch ${taskId} ...`,
+      });
+    } else if (consumptionRequired && !returnCarrierDigest) {
+      reasons.push({
+        category: 'return_evidence_absent',
+        message: `covered task ${taskId} has no recognized Engineer return carrier lineage terminal`,
+        repair: `npx agenticloop task verify-return ${taskId} --packet <packet.json> --return <role-return.json>`,
       });
     }
     const grades = records.map(record => record.observedReturnGrade);
@@ -603,7 +619,7 @@ export function summarizeCloseoutAssurance(input, coveredTasks = []) {
         roleId: input.expectedProducerRole ?? 'engineer',
         taskContractDigest: observed?.taskContractDigest ?? null,
         dispatchCarrierDigest: consumed?.dispatchCarrierDigest ?? null,
-        currentCarrierDigest: consumed?.currentCarrierDigest ?? null,
+        currentCarrierDigest: returnCarrierDigest,
         packetId: consumed?.packetId ?? null,
         packetDigest: consumed?.packetDigest ?? null,
         workUnitIdentity: consumed?.workUnitIdentity ?? input.workUnitIdentity ?? null,

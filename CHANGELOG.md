@@ -23,7 +23,51 @@
   and a `planDigest` over the whole closed plan. Without them the plan is
   display-only and lists its blockers. The plan schema version is now 2.
 
+### Changed
+- **Packet creation refuses terminal tasks.** `task prepare-dispatch` applied
+  only part of the dispatchability rule: it refused everything that had not yet
+  reached an execution attempt, but accepted `accepted` and `closed` and left
+  them to preflight. That narrowing existed solely because the closeout fixtures
+  built their evidence backwards — setting a task terminal and then minting the
+  packet that was supposed to have preceded it. Those fixtures now build one
+  attempt in real chronological order, and the packet constructor applies
+  `evaluateDispatchableLifecycle` unchanged. A terminal task receives the same
+  typed refusal everywhere, and no operator action or packet remint reopens it.
+
 ### Fixed
+- **A files-backed acceptance can now complete through the canonical handoff
+  chain.** It never could: the acceptance gate requires post-return Maintainer
+  review provenance on the carrier (`review_status`, `review_mode`,
+  `reviewed_artifact`, `## Scope Completed`, `## Evidence`), yet the transition
+  demanded that the verified return still describe the *live* carrier — a
+  condition that recording review provenance makes impossible. `task status <id>
+  accepted` now expects the return to describe the durably recognized **Engineer
+  return terminal** (the dispatch consumption plus the Engineer receipt chain,
+  resolved from stored records rather than supplied by the caller), and
+  rederives return evidence against the retained return head the way terminal
+  closeout already does. The live carrier keeps its own authority: the
+  `--expect-digest` gate and the atomic write that performs the transition.
+- `resolveCarrierLineage` now names the boundary it is asked about. An
+  `engineer_return` resolution terminates at the last Engineer receipt and
+  refuses to absorb a lifecycle-owned mutation such as `acceptance_transition`;
+  a `lifecycle` resolution continues through it to the live carrier. A lifecycle
+  receipt can never bridge a gap in the Engineer chain — an interrupted chain
+  still fails closed — and a receipt that chains itself onto any member of the
+  active generation with a mismatched dispatch identity is now refused instead
+  of being ignored as unrelated history.
+- Closeout compared the verified return against the **role-start** carrier, so
+  an Engineer that recorded its own carrier evidence under a valid receipt could
+  not close out. It now compares against the Engineer return-lineage terminal,
+  and refuses when that terminal cannot be resolved at all.
+- Expiry is now non-retroactive across every transition that acts on an
+  already-consumed attempt, not just the closeout's covered-task assurance. The
+  revalidation of the stored return and of the retained packet — at review
+  entry, acceptance, integration, and closeout alike — is evaluated as of the
+  consumption instant, so a 12-hour grant whose window closes during review no
+  longer blocks acceptance of work it genuinely authorized. Revocation is
+  unchanged: it is matched by grant identity, stays time-independent, and still
+  refuses. Pinning only narrows — a grant issued after the attempt started still
+  fails.
 - `task readiness-apply` now guarantees the exact commit tree across Git hooks,
   with commit and rollback ownership bound to the reviewed branch ref. The
   exact staged tree is captured from the verified index before the commit, the

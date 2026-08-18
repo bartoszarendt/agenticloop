@@ -4277,10 +4277,19 @@ export async function cmdTask(args, io = createIo()) {
             trustedRecords: history.trustedRecords,
             trustedRecordErrors: history.errors,
           }),
+          // By the time acceptance or closeout is legal, the workflow head has
+          // legitimately advanced past the return: the durable return
+          // verification record is committed, and the Maintainer review
+          // provenance the acceptance gate requires is committed after it.
+          // Rederive against the retained return head, exactly as terminal
+          // closeout already does; ancestry, the product range and its
+          // attribution, every workflow path in that range, and the Engineer
+          // carrier-lineage terminal are all still reproved.
           refetchRepositoryEvidence: record => refetchFilesReturnEvidence(
             target,
             record.evidence.packet,
-            record.evidence.repositoryEvidence
+            record.evidence.repositoryEvidence,
+            { historicalCloseout: true }
           ),
           hostTrustStore: opts.hostTrustStore,
         });

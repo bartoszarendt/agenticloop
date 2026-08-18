@@ -36,7 +36,7 @@ import {
   CURRENT_REQUIRED_CHECK_EVIDENCE_ASSURANCE,
   revalidateReturnVerification,
 } from './return-verification.js';
-import { currentDispatchConsumption } from './handoff-consumption.js';
+import { currentDispatchConsumption, resolveCarrierLineage } from './handoff-consumption.js';
 
 /**
  * Read the operator-owned capability inventory for packet validation.
@@ -74,13 +74,23 @@ function packetCapabilities(target, io, assertedPath) {
  * @param {{target: string, io: any, hostTrustStore?: string|undefined}} context
  * @returns {(packet: any) => {ok: boolean, errors: string[]}}
  */
-export function canonicalDispatchValidator({ target, io, hostTrustStore = undefined }) {
+export function canonicalDispatchValidator({
+  target, io, hostTrustStore = undefined,
+  // Optional: the instant this packet's activation authority is judged at. A
+  // boundary revalidating an already-consumed attempt supplies the consumption
+  // instant, because expiry is not retroactive for work it already authorized
+  // (C12-F9). Boundaries that authorize *new* work leave it absent and get the
+  // current clock.
+  activationInstantFor = null,
+}) {
   return packet => {
     try {
+      const now = typeof activationInstantFor === 'function' ? activationInstantFor(packet) : null;
       const checked = validateDispatchPreparation(packet, {
         capabilities: packetCapabilities(target, io, hostTrustStore),
         resolveActivationBinding: value => resolvePacketActivationBinding(target, io, value, {
           hostTrustStorePath: hostTrustStore,
+          ...(typeof now === 'number' && Number.isFinite(now) ? { now } : {}),
         }),
       });
       return createPreparedDispatchValidation(packet, { ok: checked.ok, errors: checked.errors });
@@ -201,6 +211,47 @@ export function recognizeLifecycleReturn({
     });
   }
   const dispatch = consumed.record;
+  // Expiry is not retroactive (C12-F9). Every transition reached here acts on an
+  // attempt that was already consumed, so the authority that authorized it is
+  // judged as of that consumption instant rather than the current clock -
+  // exactly as terminal closeout already does. A 12-hour grant whose window
+  // closes during review must not block acceptance of work it genuinely
+  // authorized. Pinning only narrows: a grant issued after the attempt started
+  // still fails, and revocation is matched by grant identity and stays
+  // time-independent.
+  const consumedAtMs = Date.parse(dispatch.consumedAt);
+  const activationEvaluatedAt = Number.isFinite(consumedAtMs) && consumedAtMs <= Date.now() ? consumedAtMs : null;
+  const pinnedActivationOptions = activationEvaluatedAt === null ? {} : { now: activationEvaluatedAt };
+  // Acceptance is the first transition after the return, and its own gate
+  // requires post-return Maintainer review provenance on the carrier
+  // (`review_status`, `review_mode`, `reviewed_artifact`, `## Scope Completed`,
+  // `## Evidence`). The live carrier therefore cannot still equal the carrier
+  // the Engineer returned, and demanding that equality made acceptance
+  // unreachable through the canonical chain (P35-C12R.5 layer 3).
+  //
+  // The expectation is replaced, not dropped: the verified return must describe
+  // the durably recognized Engineer return terminal. That digest is resolved
+  // from the dispatch consumption and the Engineer receipt chain, so no caller
+  // may substitute a convenient value, and a return from another carrier
+  // generation is still refused. The live carrier keeps its own authority - the
+  // `--expect-digest` gate and the atomic write that performs the transition.
+  let returnTerminal = null;
+  if (transition === 'acceptance') {
+    const lineage = resolveCarrierLineage(target, taskId, {
+      backend, taskContractDigest, boundary: 'engineer_return',
+    });
+    if (!lineage.ok) {
+      return recognizeHandoff({
+        transition,
+        expectation: {
+          backend, taskId, roleId: 'engineer', taskContractDigest,
+          minimumReturnAssurance: 'session_reported',
+        },
+        observations: lineage.errors.map(label => ({ label })),
+      });
+    }
+    returnTerminal = lineage.currentCarrierDigest;
+  }
   let policy = null;
   let adapters = {};
   let trustErrors = [];
@@ -235,6 +286,7 @@ export function recognizeLifecycleReturn({
       capabilities: activationCapabilityInventory(adapters),
       resolveActivationBinding: packet => resolvePacketActivationBinding(target, io, packet, {
         hostTrustStorePath: hostTrustStore,
+        ...pinnedActivationOptions,
       }),
       resolveTrustedAdapter: adapterId => {
         const adapter = adapters[adapterId];
@@ -265,7 +317,10 @@ export function recognizeLifecycleReturn({
   return recognizeStoredReturnHandoff({
     target,
     transition,
-    validatePreparedDispatch: canonicalDispatchValidator({ target, io, hostTrustStore }),
+    validatePreparedDispatch: canonicalDispatchValidator({
+      target, io, hostTrustStore,
+      activationInstantFor: () => activationEvaluatedAt,
+    }),
     returnVerificationContext: {
       resolveTrustedAdapter: adapterId => {
         const adapter = adapters[adapterId];
@@ -288,7 +343,7 @@ export function recognizeLifecycleReturn({
        dispatchCarrierDigest: dispatch.dispatchCarrierDigest,
        currentCarrierDigest: transition === 'integration' || transition === 'closeout'
          ? null
-         : currentCarrierDigest,
+         : transition === 'acceptance' ? returnTerminal : currentCarrierDigest,
        invocationId: dispatch.invocationId,
       packetId: dispatch.packetId,
       packetDigest: dispatch.packetDigest,

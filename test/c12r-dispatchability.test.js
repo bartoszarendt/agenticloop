@@ -25,6 +25,7 @@ import {
   DISPATCHABLE_TASK_STATUSES,
   ROLE_START_STATUS,
   TERMINAL_TASK_STATUSES,
+  dispatchableLifecycleRepairPlan,
   evaluateDispatchableLifecycle,
   evaluatePacketDispatchableLifecycle,
   taskStatusFromBody,
@@ -96,22 +97,48 @@ describe('P35-C12R lifecycle dispatchability is one derived rule', () => {
     assert.equal(evaluateDispatchableLifecycle('draft').evidenceState, 'negative');
   });
 
-  it('enforces the pre-execution half of the rule inside the packet constructor', () => {
-    // The disclosed narrowing: packet preparation refuses everything that has
-    // not yet reached an execution attempt, and leaves terminal statuses to
-    // preflight until P35-C12R.5 gives the closeout fixtures a truthful
-    // carrier-generation chain.
+  it('enforces the whole rule inside the packet constructor', () => {
+    // P35-C12R.5 removed the disclosed narrowing that let terminal statuses
+    // through packet construction. The constructor now answers exactly what the
+    // canonical rule answers, for every status in the domain.
+    for (const status of [...KNOWN_TASK_STATUSES, 'made-up', '', null]) {
+      const canonical = evaluateDispatchableLifecycle(status);
+      const packetLevel = evaluatePacketDispatchableLifecycle(status);
+      assert.deepEqual(packetLevel, canonical, `packet and canonical answers differ for '${String(status)}'`);
+      assert.equal(
+        Object.hasOwn(packetLevel, 'enforcedAt'),
+        false,
+        'no answer may defer enforcement to another boundary'
+      );
+    }
     for (const status of ['draft', '', null, 'made-up']) {
       assert.equal(evaluatePacketDispatchableLifecycle(status).ok, false, String(status));
     }
     for (const status of DISPATCHABLE_TASK_STATUSES) {
       assert.equal(evaluatePacketDispatchableLifecycle(status).ok, true, status);
     }
+  });
+
+  it('refuses packet construction for every terminal status', () => {
+    assert.deepEqual([...TERMINAL_TASK_STATUSES].sort(), ['accepted', 'closed']);
     for (const status of TERMINAL_TASK_STATUSES) {
       const packetLevel = evaluatePacketDispatchableLifecycle(status);
-      assert.equal(packetLevel.ok, true, `${status} is deferred, not accepted as correct`);
-      assert.equal(packetLevel.enforcedAt, 'preflight');
-      assert.equal(evaluateDispatchableLifecycle(status).ok, false, `${status} is still non-dispatchable`);
+      assert.equal(packetLevel.ok, false, `${status} must be refused by packet construction`);
+      assert.equal(packetLevel.evidenceState, 'negative');
+      assert.equal(packetLevel.status, status);
+    }
+  });
+
+  it('keeps one diagnostic code and one safe repair for a terminal task', () => {
+    for (const status of TERMINAL_TASK_STATUSES) {
+      const plan = dispatchableLifecycleRepairPlan('T-777', status);
+      assert.equal(plan.code, DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE);
+      assert.equal(plan.primary, null, 'a terminal task has no command that repairs it');
+      assert.deepEqual(plan.alternatives, []);
+      assert.deepEqual(plan.reads, []);
+      assert.match(plan.statement, /already completed its lifecycle/);
+      // No restart, remint, or status-rewrite guidance may be invented here.
+      assert.doesNotMatch(plan.statement, /prepare-dispatch|remint|restart this|set-status|task status T-777/);
     }
   });
 
@@ -147,35 +174,33 @@ describe('P35-C12R the packet constructor applies the same gate', () => {
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
   });
 
-  it('pins the disclosed terminal-status narrowing so its removal is visible', async () => {
-    // Today `prepareRoleDispatch` accepts a terminal status and preflight
-    // refuses it. That asymmetry is the P35-C12R.5 deferral, not a decision:
-    // this case exists so closing the gate is a deliberate change here, never a
-    // silent one. Deleting it is part of the reopen gate.
-    const fixture = await createDispatchFixture(tmpDir, 'c12r-terminal-packet');
-    const body = readFileSync(fixture.taskPath, 'utf8');
-    const acceptedBody = body.replace(/^status: .*$/m, 'status: accepted');
-    writeFileSync(fixture.taskPath, acceptedBody, 'utf8');
-    fixtureGit(fixture.root, ['add', '-A']);
-    fixtureGit(fixture.root, ['commit', '-m', 'set accepted\n\nTask: T-001\nAgent: maintainer']);
-    const snapshot = fixture.snapshot();
+  for (const status of ['accepted', 'closed']) {
+    it(`refuses to mint a packet for a ${status} task`, async () => {
+      // P35-C12R.5 closed the reopen gate: a terminal task now receives the
+      // ordinary typed lifecycle refusal from the constructor itself, not a
+      // deferral to preflight.
+      const fixture = await createDispatchFixture(tmpDir, `c12r-${status}-packet`);
+      const body = readFileSync(fixture.taskPath, 'utf8');
+      const terminalBody = body.replace(/^status: .*$/m, `status: ${status}`);
+      writeFileSync(fixture.taskPath, terminalBody, 'utf8');
+      fixtureGit(fixture.root, ['add', '-A']);
+      fixtureGit(fixture.root, ['commit', '-m', `set ${status}\n\nTask: T-001\nAgent: maintainer`]);
+      const snapshot = fixture.snapshot();
 
-    const prepared = prepare(fixture, {
-      refetchTask: () => ({ ...snapshot, body: acceptedBody, digest: sha256(acceptedBody) }),
+      const prepared = prepare(fixture, {
+        refetchTask: () => ({ ...snapshot, body: terminalBody, digest: sha256(terminalBody) }),
+      });
+      assert.equal(prepared.ok, false, `a ${status} task must never receive a dispatch packet`);
+      const diagnostic = (prepared.validation.diagnostics ?? [])
+        .find(item => item.code === DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE);
+      assert.ok(diagnostic, `expected the canonical lifecycle refusal, got: ${
+        (prepared.validation.diagnostics ?? []).map(item => item.code).join(', ')}`);
+      assert.match(diagnostic.message, /cannot begin an execution attempt/);
+      assert.match(diagnostic.repairHint, /already completed its lifecycle/);
+      assert.doesNotMatch(diagnostic.repairHint, /prepare-dispatch|remint|restart this/);
+      assert.equal(evaluateDispatchableLifecycle(status).ok, false);
     });
-    // Whatever else this fixture's evidence does or does not satisfy, the one
-    // thing the constructor must not currently say is that the lifecycle blocks
-    // it. When the narrowing is removed, this assertion fails and has to be
-    // deleted deliberately.
-    const codes = (prepared.validation.diagnostics ?? []).map(item => item.code);
-    assert.equal(
-      codes.includes(DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE),
-      false,
-      'deferred, not refused; see evaluatePacketDispatchableLifecycle'
-    );
-    assert.equal(evaluateDispatchableLifecycle('accepted').ok, false, 'the canonical rule still refuses it');
-    assert.equal(evaluatePacketDispatchableLifecycle('accepted').enforcedAt, 'preflight');
-  });
+  }
 });
 
 describe('P35-C12R preflight refuses what role start would refuse', () => {

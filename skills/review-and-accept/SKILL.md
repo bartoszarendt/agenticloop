@@ -221,6 +221,15 @@ copy the canonical `implementation_artifact` value into `reviewed_artifact`.
 These are mutable current state; review detail sections are append-only history.
 Accepted or closed tasks require an accepted, artifact-matched review.
 
+This edit belongs **after** the engineer's return is verified and its
+verification is committed, and it is maintainer-attributed. It legitimately
+moves the task carrier past the carrier that return describes: the return's
+terminal stays the engineer's own, and `task status <id> accepted` resolves
+against that terminal rather than against the live carrier. Recording review
+provenance before the return would put a maintainer mutation inside the
+engineer's carrier lineage, and committing it inside the engineer product range
+would make return verification refuse it for lacking `Agent: engineer`.
+
 ## Event Logging
 
 Event logging is optional and off by default. When `event_logging: enabled`,

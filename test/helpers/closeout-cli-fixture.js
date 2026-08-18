@@ -4,9 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createDispatchConsumption, dispatchConsumptionRelativePath } from '../../src/handoff-consumption.js';
-import { recognizeHandoff } from '../../src/handoff-recognition.js';
-import { createTaskReadinessEvidence } from '../../src/task-evidence-contract.js';
+import { resolveCarrierLineage } from '../../src/handoff-consumption.js';
+import { taskStatusFromBody } from '../../src/dispatchability.js';
 import { produceExecutionEvidence } from '../../src/execution-evidence.js';
 import {
   createResettableDispatchFixturePool,
@@ -18,7 +17,6 @@ import {
   sha256,
 } from './dispatch-fixture.js';
 import { initTestGitRepository, git } from './git-fixture.js';
-import { fixtureDispatchValidator } from './handoff-fixture.js';
 import { protectedHostBoundary } from './host-trust-fixture.js';
 import { runCliInProcess } from './run-cli.js';
 
@@ -215,75 +213,61 @@ export function createCloseoutCliFixture() {
     cacheStats.certificationExecutions += 1;
     cacheStats.lastRestoredCheckpoint = null;
     assert.deepEqual(tasks, ['T-001']);
-    writeFileSync(
-      fixture.taskPath,
-      readFileSync(fixture.taskPath, 'utf8').replace(/^status: .*$/m, 'status: accepted'),
-      'utf8'
-    );
-    commitAll(target, 'record accepted task');
-    const snapshot = fixture.snapshot;
-    fixture.snapshot = () => {
-      const value = snapshot();
-      const body = readFileSync(fixture.taskPath, 'utf8');
-      return { ...value, body, digest: sha256(body) };
-    };
-    fixture.refetchTask = fixture.snapshot;
-    const readinessEvidence = createTaskReadinessEvidence({
-      ...fixture.readiness.evidence,
-      task: { ...fixture.readiness.evidence.task, expectedDigest: fixture.snapshot().digest },
-    });
-    fixture.readiness = { ...fixture.readiness, evidence: readinessEvidence };
-    fixture.refetchReadiness = () => fixture.readiness;
-    fixture.refetchParallelScanInventory = () => fixture.closeoutScanInventory;
+    const cli = { operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: protectedHostBoundary(fixture.trust) };
+    const taskBody = () => readFileSync(fixture.taskPath, 'utf8');
+    const carrierDigest = () => sha256(taskBody());
+
+    // 1 - the genuine dispatchable carrier, with the readiness evidence that
+    // was bound to it. Nothing here is rewritten to make a later state fit.
+    assert.equal(taskStatusFromBody(taskBody()), 'agent-ready', 'certification must begin from a dispatchable task');
+    assert.equal(fixture.readiness.evidence.task.expectedDigest, carrierDigest());
+    const dispatchableCarrierDigest = carrierDigest();
+
+    // 2 - one packet, prepared from that exact carrier and retained for the
+    // whole attempt. It is never reminted after Engineer mutation. The packet
+    // base is reread here because a consumer may have committed setup of its
+    // own between binding the fixture and starting the attempt.
     const repository = fixture.repository;
-    const currentHead = fixtureGit(target, ['rev-parse', 'HEAD']);
-    fixture.repository = () => ({ ...repository(), head: currentHead, baseHead: currentHead });
+    const attemptBase = fixtureGit(target, ['rev-parse', 'HEAD']);
+    fixture.repository = () => ({ ...repository(), head: attemptBase, baseHead: attemptBase });
     fixture.refetchRepository = fixture.repository;
     const prepared = prepare(fixture);
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
     const packet = prepared.packet;
+    assert.equal(packet.task.dispatchCarrierDigest, dispatchableCarrierDigest,
+      'the packet must seal the carrier observed at attempt start');
     const packetPath = '.agenticloop/tmp/engineer-dispatch.json';
     writeFileSync(join(target, packetPath), JSON.stringify(packet, null, 2), 'utf8');
 
-    const recognition = recognizeHandoff({
-      transition: 'role_start',
-      expectation: {
-        backend: 'files', taskId: 'T-001', roleId: 'engineer',
-        taskContractDigest: packet.task.contractDigest, carrierDigest: packet.task.digest,
-        packetId: packet.packetId, packetDigest: packet.digest,
-        workUnitIdentity: packet.decomposition.workUnitId, artifactHead: packet.repository.head,
-        worktreeRoot: packet.repository.worktree, minimumActivationAssurance: 'operator_confirmed',
-      },
-      preparedDispatch: packet,
-      validatePreparedDispatch: fixtureDispatchValidator(fixture),
-    });
-    assert.equal(recognition.recognized, true, JSON.stringify(recognition.diagnostics));
-    const consumption = createDispatchConsumption({ backend: 'files', taskId: 'T-001', recognition });
-    const consumptionPath = join(target, dispatchConsumptionRelativePath(consumption));
-    mkdirSync(join(consumptionPath, '..'), { recursive: true });
-    writeFileSync(consumptionPath, `${JSON.stringify(consumption, null, 2)}\n`, 'utf8');
+    // 3 - role start recognized against that packet through the public
+    // command, which persists the one dispatch consumption.
+    const started = await runCliInProcess([
+      'task', 'status', 'T-001', 'in-progress', '--expect-digest', carrierDigest(),
+      '--dispatch-packet', packetPath, '--json', '--target', target,
+    ], cli);
+    assert.equal(started.status, 0, `${started.stdout}${started.stderr}`);
 
+    // 4 - Engineer product work. The product commit is the only commit in the
+    // product range, so no workflow or lifecycle commit is ever read as
+    // Engineer product work.
     writeFileSync(join(target, 'src', 'existing.js'), 'export const current = "closeout-ready";\n', 'utf8');
     fixtureGit(target, ['add', 'src/existing.js']);
     fixtureGit(target, ['commit', '-m', 'record closeout candidate\n\nTask: T-001\nAgent: engineer']);
     const productHead = fixtureGit(target, ['rev-parse', 'HEAD']);
-    const artifact = `commit:${productHead}`;
-    if (!skipAudit) {
-      const created = await audit([
-        'new', '--work-unit', 'milestone:M00', '--covered-tasks', tasks.join(','),
-        '--artifact', artifact, '--goal', 'Deliver the milestone.',
-        '--completion-oracle', 'Observable completion.', '--evidence', 'npm test (pass)',
-      ], target);
-      assert.equal(created.status, 0, `${created.stdout}${created.stderr}`);
-      fixtureGit(target, ['add', '.agenticloop/audits']);
-      fixtureGit(target, ['commit', '-m', 'record audit\n\nTask: T-001\nAgent: engineer']);
-      const reportPath = join(target, '.agenticloop', 'tmp', 'run-1.json');
-      writeFileSync(reportPath, JSON.stringify(wireReport(artifact, tasks, reportOverrides)), 'utf8');
-      const reported = await audit(['report', 'AUD-001', '--file', reportPath], target, auditOptions);
-      assert.equal(reported.status, 0, `${reported.stdout}${reported.stderr}`);
-      fixtureGit(target, ['add', '.agenticloop/audits']);
-      fixtureGit(target, ['commit', '-m', 'record audit report\n\nTask: T-001\nAgent: engineer']);
-    }
+
+    // 5 - the Engineer's own carrier evidence, written by the guarded command
+    // that also records its lineage receipt.
+    const evidenced = await runCliInProcess([
+      'task', 'evidence', 'T-001', '--class', 'implementation_artifact_evidence',
+      '--expect-digest', carrierDigest(), '--product-head', productHead, '--json', '--target', target,
+    ], cli);
+    assert.equal(evidenced.status, 0, `${evidenced.stdout}${evidenced.stderr}`);
+    fixtureGit(target, ['add', '.agenticloop/tasks/T-001.md']);
+    fixtureGit(target, ['commit', '-m', 'record implementation artifact\n\nTask: T-001\nAgent: engineer']);
+
+    // 6 - the return, prepared and verified against the retained packet. Its
+    // carrier lineage is the recognized Engineer chain, read from durable
+    // records rather than asserted.
     const returnHead = fixtureGit(target, ['rev-parse', 'HEAD']);
     const changedPaths = fixtureGit(target, ['diff', '--name-only', `${packet.repository.head}..${returnHead}`])
       .split(/\r?\n/).filter(Boolean);
@@ -291,6 +275,11 @@ export function createCloseoutCliFixture() {
       .split(/\r?\n/).filter(Boolean);
     const commits = fixtureGit(target, ['rev-list', '--reverse', `${packet.repository.head}..${productHead}`])
       .split(/\r?\n/).filter(Boolean);
+    const lineage = resolveCarrierLineage(target, 'T-001', {
+      backend: 'files', taskContractDigest: packet.task.taskContractDigest,
+      boundary: 'engineer_return', currentCarrierDigest: carrierDigest(),
+    });
+    assert.equal(lineage.ok, true, lineage.errors?.join('; '));
     const evidence = repositoryEvidence(packet, { head: productHead, changedPaths: productChangedPaths });
     evidence.workflowHead = returnHead;
     evidence.productChangedPaths = productChangedPaths;
@@ -299,9 +288,10 @@ export function createCloseoutCliFixture() {
       range: { base: packet.repository.head, head: productHead },
       commits,
     };
+    evidence.task.currentCarrierDigest = carrierDigest();
     evidence.carrierLineage = {
-      dispatchConsumptionDigest: consumption.digest,
-      evidenceMutationReceiptDigests: [],
+      dispatchConsumptionDigest: lineage.dispatchConsumption.digest,
+      evidenceMutationReceiptDigests: lineage.receipts.map(receipt => receipt.digest),
     };
     const executionReferences = new Map(evidence.checks.filter(check => check.kind === 'command').map(check => {
       const [command, ...args] = check.command.split(' ');
@@ -333,10 +323,66 @@ export function createCloseoutCliFixture() {
     const verified = await runCliInProcess([
       'task', 'verify-return', 'T-001', '--packet', packetPath, '--return', returnPath,
       '--repository-evidence', evidencePath, '--target', target,
-    ], { operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: protectedHostBoundary(fixture.trust) });
+    ], cli);
     assert.equal(verified.status, 0, `${verified.stdout}${verified.stderr}`);
     fixtureGit(target, ['add', '-f', '.agenticloop/returns/verifications']);
     fixtureGit(target, ['commit', '-m', 'record return verification\n\nTask: T-001\nAgent: maintainer']);
+    const returnCarrierDigest = carrierDigest();
+
+    // 7 - Maintainer review provenance. This is the post-return carrier
+    // mutation the acceptance gate requires, and it is Maintainer-attributed:
+    // it never enters the Engineer return lineage.
+    writeFileSync(
+      fixture.taskPath,
+      `${taskBody()
+        .replace(/^review_status:.*$/m, 'review_status: accepted')
+        .replace(/^reviewed_artifact:.*$/m, `reviewed_artifact: commit:${productHead}`)
+        .replace(/^review_mode:.*$/m, 'review_mode: host_subagent')}` +
+      '\n## Scope Completed\n\n- Delivered the closeout candidate.\n' +
+      '\n## Evidence\n\n- npm test (pass)\n',
+      'utf8'
+    );
+    fixtureGit(target, ['add', '.agenticloop/tasks/T-001.md']);
+    fixtureGit(target, ['commit', '-m', 'record maintainer review\n\nTask: T-001\nAgent: maintainer']);
+
+    // 8 - acceptance, through the guarded transition that revalidates the
+    // retained return under its own Maintainer authority.
+    const accepted = await runCliInProcess([
+      'task', 'status', 'T-001', 'accepted', '--expect-digest', carrierDigest(), '--json', '--target', target,
+    ], cli);
+    assert.equal(accepted.status, 0, `${accepted.stdout}${accepted.stderr}`);
+    fixtureGit(target, ['add', '.agenticloop/tasks/T-001.md']);
+    fixtureGit(target, ['commit', '-m', 'record accepted task\n\nTask: T-001\nAgent: maintainer']);
+    const artifact = `commit:${fixtureGit(target, ['rev-parse', 'HEAD'])}`;
+
+    // 9 - audit and closeout follow acceptance, in their actual order.
+    if (!skipAudit) {
+      const created = await audit([
+        'new', '--work-unit', 'milestone:M00', '--covered-tasks', tasks.join(','),
+        '--artifact', artifact, '--goal', 'Deliver the milestone.',
+        '--completion-oracle', 'Observable completion.', '--evidence', 'npm test (pass)',
+      ], target);
+      assert.equal(created.status, 0, `${created.stdout}${created.stderr}`);
+      fixtureGit(target, ['add', '.agenticloop/audits']);
+      fixtureGit(target, ['commit', '-m', 'record audit\n\nTask: T-001\nAgent: maintainer']);
+      const reportPath = join(target, '.agenticloop', 'tmp', 'run-1.json');
+      writeFileSync(reportPath, JSON.stringify(wireReport(artifact, tasks, reportOverrides)), 'utf8');
+      const reported = await audit(['report', 'AUD-001', '--file', reportPath], target, auditOptions);
+      assert.equal(reported.status, 0, `${reported.stdout}${reported.stderr}`);
+      fixtureGit(target, ['add', '.agenticloop/audits']);
+      fixtureGit(target, ['commit', '-m', 'record audit report\n\nTask: T-001\nAgent: maintainer']);
+    }
+    // The Engineer return terminal and the live lifecycle carrier are distinct
+    // by construction here, and the fixture asserts that rather than hoping.
+    assert.notEqual(returnCarrierDigest, carrierDigest());
+    assert.equal(
+      resolveCarrierLineage(target, 'T-001', {
+        backend: 'files', taskContractDigest: packet.task.taskContractDigest,
+        boundary: 'engineer_return', currentCarrierDigest: returnCarrierDigest,
+      }).ok,
+      true,
+      'the Engineer return terminal must survive review, acceptance, and audit unchanged'
+    );
     if (checkpoint) {
       const restoredState = closeoutCertificationFingerprint(target, {
         tasks, grouping, reportOverrides, auditOptions, skipAudit,

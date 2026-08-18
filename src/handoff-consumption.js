@@ -6,7 +6,7 @@ import { canonicalSha256 } from './canonical-json.js';
 import { GIT_OBJECT_ID_RE } from './git-oid.js';
 import { validateHandoffRecognition } from './handoff-recognition.js';
 import { executeMutationBatch } from './fs-mutation-kernel.js';
-import { validateCarrierMutationReceipt } from './task-evidence-contract.js';
+import { ENGINEER_CARRIER_MUTATION_CLASSES, validateCarrierMutationReceipt } from './task-evidence-contract.js';
 import { classifyLifecycleCompatibility, compatibilityMessage } from './lifecycle-compatibility.js';
 
 export const DISPATCH_CONSUMPTION_KIND = 'agenticloop.dispatch-consumption';
@@ -218,12 +218,39 @@ export function listCarrierMutationReceipts(target, taskId, { backend = null } =
 }
 
 /**
+ * The two carrier boundaries one task generation has.
+ *
+ * `engineer_return` is the execution boundary: the chain the Engineer built
+ * during its own attempt, terminating at the carrier the signed return
+ * describes. `lifecycle` is the broader boundary that continues past the
+ * authenticated return through role-owned lifecycle transitions (today the
+ * guarded GitHub `acceptance_transition`), terminating at the live carrier.
+ *
+ * They are not the same digest and must not be conflated: P35-C12R.5 measured
+ * exactly one failure mode from doing so - extending the Engineer chain with a
+ * post-return acceptance receipt moves its terminal off the carrier the
+ * verified return names, and every return refetch then reports a terminal
+ * mismatch. Callers therefore name the boundary they are asking about.
+ */
+export const CARRIER_LINEAGE_BOUNDARIES = Object.freeze(['engineer_return', 'lifecycle']);
+
+/**
  * Verify the one ordered mutable-carrier lineage accepted during an Engineer
  * run. No current task body can substitute for a missing edge.
+ *
+ * @param {string} target
+ * @param {string} taskId
+ * @param {object} options
+ * @param {'engineer_return'|'lifecycle'} [options.boundary]  Which terminal is
+ *   being asked for. `engineer_return` refuses to absorb a lifecycle-owned
+ *   mutation into the Engineer chain; `lifecycle` accepts the full vocabulary.
  */
 export function resolveCarrierLineage(target, taskId, {
-  backend, taskContractDigest, currentCarrierDigest,
+  backend, taskContractDigest, currentCarrierDigest, boundary = 'lifecycle',
 } = {}) {
+  if (!CARRIER_LINEAGE_BOUNDARIES.includes(boundary)) {
+    return { ok: false, errors: [`carrier lineage boundary '${boundary}' is not recognized`], records: [] };
+  }
   const consumed = currentDispatchConsumption(target, taskId, { backend });
   if (!consumed.ok || !consumed.record) {
     return { ok: false, errors: consumed.errors?.length ? consumed.errors : ['no recognized dispatch consumption exists'], records: [] };
@@ -245,12 +272,22 @@ export function resolveCarrierLineage(target, taskId, {
     receipt.producer.invocationId === start.invocationId &&
     receipt.producer.workUnitIdentity === start.workUnitIdentity &&
     receipt.producer.repositoryIdentity === start.repositoryIdentity;
-  const remaining = listed.records.filter(isGenerationReceipt);
-  // A receipt that reuses this dispatch carrier is an attempted member of this
-  // generation even if one of its other bindings is forged. It must fail here,
-  // not disappear as an unrelated historical record.
+  // An Engineer return terminates where the Engineer stopped. A lifecycle-owned
+  // mutation of the same generation is a real record, but it belongs to the
+  // later boundary: absorbing it here would move the return terminal onto a
+  // carrier the Engineer never authored and never signed for. It is excluded
+  // from the chain, never used to bridge one: a lifecycle receipt standing
+  // between two Engineer receipts still leaves the Engineer chain interrupted,
+  // and that fails closed below.
+  const remaining = listed.records.filter(receipt => isGenerationReceipt(receipt) &&
+    (boundary !== 'engineer_return' || ENGINEER_CARRIER_MUTATION_CLASSES.includes(receipt.mutationClass)));
+  // A receipt that reuses this dispatch carrier, or chains itself onto this
+  // generation's consumption or onto any of its receipts, is an attempted
+  // member of the generation even if one of its other bindings is forged. It
+  // must fail here, not disappear as an unrelated historical record.
+  const generationDigests = new Set([start.digest, ...listed.records.filter(isGenerationReceipt).map(item => item.digest)]);
   for (const receipt of listed.records.filter(receipt =>
-    (receipt.dispatchCarrierDigest === start.dispatchCarrierDigest || receipt.predecessor.digest === start.digest) &&
+    (receipt.dispatchCarrierDigest === start.dispatchCarrierDigest || generationDigests.has(receipt.predecessor.digest)) &&
     !isGenerationReceipt(receipt)
   )) {
     errors.push(`carrier mutation receipt '${receipt.receiptId}' claims the active dispatch generation with mismatched identity`);
