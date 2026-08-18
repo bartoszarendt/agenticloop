@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.4.3 - 2026-08-18
+
+### Highlights
+- **Atomic files-backed readiness.** `task readiness-plan` can now produce an
+  exact, reviewable execution plan, and `task readiness-apply` settles the
+  task-contract history, decomposition, and carrier as one guarded transaction
+  with at most one Maintainer-attributed commit.
+- **Canonical acceptance and closeout lineage.** Post-return review mutations no
+  longer invalidate the Engineer evidence they review: acceptance and closeout
+  resolve the durable Engineer return terminal while preserving the live
+  carrier's own transition authority.
+- **Consistent terminal dispatch refusal.** Dispatch packet creation now applies
+  the same lifecycle rule as preflight, so accepted and closed tasks cannot be
+  reminted into a new execution attempt.
+
 ### Added
 - Added `task readiness-apply <id> --plan <path> (--dry-run|--yes)`, the
   Maintainer-owned mutation that settles the whole files-backed readiness
