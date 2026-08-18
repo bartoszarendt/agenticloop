@@ -8,7 +8,7 @@
  * ancestry proof is a precondition rather than an optional extra check.
  */
 
-import { evaluateCommitAttribution } from './commit-attribution.js';
+import { commitMessageProducerHint, evaluateCommitAttribution } from './commit-attribution.js';
 import { isGitObjectId, sameGitObjectFormat } from './git-oid.js';
 
 /**
@@ -117,7 +117,15 @@ export function deriveCommitRange(input = {}) {
       }
       const attribution = evaluateCommitAttribution({ message: String(shown.stdout ?? ''), taskId, role: roleId });
       if (!attribution.ok) {
-        return malformed(`commit ${commit} has invalid canonical Task:/Agent: trailers: ${attribution.errors.join('; ')}`);
+        // The trailer grammar is almost never got wrong on purpose: `git commit
+        // -m … -m …` inserts a blank line between every `-m` and strands
+        // `Task:` outside the final contiguous block. Name the producer here,
+        // where the defect is reported, rather than leaving each role to
+        // rediscover the mechanism.
+        return malformed(
+          `commit ${commit} has invalid canonical Task:/Agent: trailers: ${attribution.errors.join('; ')}. ` +
+          commitMessageProducerHint(taskId ?? '<task-id>')
+        );
       }
     }
   }

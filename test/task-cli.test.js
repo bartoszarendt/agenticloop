@@ -94,11 +94,12 @@ function canonicalJson(value) {
 function externalRoleReturn(fields) {
   const value = {
     kind: 'agenticloop.role-return',
-    schemaVersion: 4,
+    schemaVersion: 5,
     requiredCheckEvidenceContract: 2,
+    productLineage: null,
     ...fields,
   };
-  value.digest = `sha256:agenticloop.role-return.v4:${createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex')}`;
+  value.digest = `sha256:agenticloop.role-return.v5:${createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex')}`;
   return value;
 }
 
@@ -1676,7 +1677,7 @@ describe('return evidence, cancellation provenance, and current-repository verif
     const strippedReturn = structuredClone(readyReturn(packet, buildEvidence(fixture, packet, productHead, strippedChecks)));
     for (const check of strippedReturn.checks) delete check.executionEvidence;
     const { digest, ...unsigned } = strippedReturn;
-    strippedReturn.digest = `sha256:agenticloop.role-return.v4:${canonicalSha256(unsigned)}`;
+    strippedReturn.digest = `sha256:agenticloop.role-return.v5:${canonicalSha256(unsigned)}`;
     writeFileSync(join(fixture.root, returnPath), JSON.stringify(strippedReturn, null, 2), 'utf8');
     writeFileSync(join(fixture.root, evidencePath), JSON.stringify(buildEvidence(fixture, packet, productHead, strippedChecks), null, 2), 'utf8');
     const strippedVerified = await runCliInProcess([
@@ -2004,7 +2005,7 @@ describe('return evidence, cancellation provenance, and current-repository verif
         dispatchCarrierDigest: packet.task.dispatchCarrierDigest, currentCarrierDigest: currentBodyDigest(),
       },
       worktree: packet.assignment.worktree, branch: 'task/T-001', productBaseHead: packet.repository.head,
-      productHead: head, workflowHead: head, candidateHead: null,
+      productLineage: null, productHead: head, workflowHead: head, candidateHead: null,
       productChangedPaths: ['src/existing.js'], workflowChangedPaths: [],
       productAttribution: { range: { base: packet.repository.head, head }, commits: [head] },
       checks: repositoryChecks,

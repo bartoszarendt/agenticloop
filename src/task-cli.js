@@ -66,7 +66,12 @@ import {
   parseDependencySnapshot,
   shellQuoteArgument,
 } from './task-evidence-contract.js';
-import { evaluateCommitAttribution } from './commit-attribution.js';
+import {
+  COMMIT_MESSAGE_CLASSES,
+  COMMIT_MESSAGE_CLASS_LIST,
+  evaluateCommitAttribution,
+  renderCommitMessage,
+} from './commit-attribution.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
 import { fileMatchesScopePattern } from './scope-matcher.js';
 import { createValidationResult, validationResultDigest, VALIDATION_RESULT_KIND } from './result-envelope.js';
@@ -95,6 +100,9 @@ import {
 import { createExecutionReceiptReplayAuthority, loadHostTrustStore, targetRepositoryIdentity } from './host-trust.js';
 import { CommitRangeError, deriveCommitRange } from './commit-range.js';
 import { gitTreeObjectId, isGitObjectId } from './git-oid.js';
+import { DISPATCH_LIVENESS_WINDOW_SECONDS } from './dispatch-eligibility.js';
+import { commitCarriesProductPaths, isWorkflowPath } from './product-lineage.js';
+import { renderHandoffSequence } from './handoff-sequence.js';
 import { GIT_MAX_BUFFER } from './git-runner.js';
 import { validateCommittedSourcePath, verifyCommittedAttributedSource } from './committed-source.js';
 import {
@@ -193,6 +201,60 @@ function implementationArtifactHead(content) {
   if (commit) return commit[1];
   const range = value.match(/^range:[0-9a-f]{40,64}\.\.([0-9a-f]{40}|[0-9a-f]{64})$/);
   return range?.[1] ?? null;
+}
+
+/**
+ * Refuse an implementation-artifact product head that current Git does not
+ * support, or return `null` when it does.
+ *
+ * Three conditions, each of which the field run violated or was forced to
+ * violate:
+ *
+ *   1. the head is a real commit reachable from the current HEAD,
+ *   2. no product path changed between it and HEAD - so it really is the
+ *      product head and not merely some earlier commit,
+ *   3. it introduces product work at all - so `implementation_artifact` can
+ *      never name a role-start or receipt commit.
+ */
+function evaluateProductHeadEvidence(runGit, productHead) {
+  const refusal = (message, code = 'task.evidence.product_head') => new PublicCommandError(message, {
+    code, evidenceState: 'changed', disposition: 'blocked',
+    safeRepair:
+      'Pass the exact commit that introduced this task\'s product work; it must be reachable from HEAD ' +
+      'and no product path may have changed after it.',
+  });
+  if (!isGitObjectId(productHead)) {
+    return refusal('implementation artifact evidence requires --product-head as a full lowercase 40- or 64-character Git identity');
+  }
+  const observedHead = String(runGit(['rev-parse', '--verify', 'HEAD']).stdout ?? '').trim();
+  if (!isGitObjectId(observedHead)) {
+    return refusal('implementation artifact evidence requires a readable current repository HEAD');
+  }
+  if (productHead !== observedHead) {
+    if (runGit(['merge-base', '--is-ancestor', productHead, observedHead]).status !== 0) {
+      return refusal(
+        'implementation artifact evidence requires --product-head to be the current repository HEAD or an ancestor of it'
+      );
+    }
+    const later = String(runGit(['diff', '--name-only', '--no-renames', `${productHead}..${observedHead}`]).stdout ?? '')
+      .split(/\r?\n/).filter(Boolean);
+    const productPaths = later.filter(path => !isWorkflowPath(path));
+    if (productPaths.length > 0) {
+      return refusal(
+        'implementation artifact evidence requires --product-head to be the last commit carrying product work; ' +
+        `product path(s) changed after it: ${[...new Set(productPaths)].sort().slice(0, 5).join(', ')}`
+      );
+    }
+  }
+  const carries = commitCarriesProductPaths(runGit, productHead);
+  if (!carries.ok) return refusal(`implementation artifact evidence could not read the product head: ${carries.reason}`);
+  if (!carries.carries) {
+    return refusal(
+      'implementation artifact evidence requires a --product-head commit that introduces at least one non-workflow path; ' +
+      'a workflow-only commit is not an implementation artifact'
+    );
+  }
+  return null;
 }
 
 function taskLintCommandRunner(command, args, options = {}) {
@@ -317,6 +379,10 @@ const TASK_SUBCOMMAND_BACKENDS = Object.freeze({
   // rather than a partial cross-carrier orchestration.
   'readiness-apply': Object.freeze(['files']),
   'attempt-status': Object.freeze(['files']),
+  // A commit message is Git-carrier work, not task-carrier work: both backends
+  // require the same canonical Task/Agent trailer block on the commits they
+  // attribute, so both get the same producer.
+  'commit-message': Object.freeze(['files', 'github']),
   'authorize-correction': Object.freeze(['files']),
   'prepare-decomposition': Object.freeze(['files', 'github']),
   'prepare-dispatch': Object.freeze(['files', 'github']),
@@ -516,6 +582,21 @@ function lintTaskFile(filePath, target, projectConfig, verificationContext) {
     }),
   ];
   const frontmatter = parseFrontmatter(content)[0] ?? {};
+  // A durable data-integrity check, not a transient refusal: while the product
+  // head was pinned to HEAD, `implementation_artifact` was routinely rebound to
+  // a role-start workflow commit, and every later audit, closeout, or
+  // historical adoption that trusted the field bound the wrong object. Lint
+  // reads the named commit and refuses one that introduces no product work.
+  const artifactHead = implementationArtifactHead(content);
+  if (artifactHead) {
+    const carries = commitCarriesProductPaths(targetGitRunner(target), artifactHead);
+    if (carries.ok && !carries.carries) {
+      errors.push(
+        `implementation_artifact commit ${artifactHead} introduces no non-workflow path; ` +
+        'it names workflow state rather than the implementation'
+      );
+    }
+  }
   const status = frontmatterString(frontmatter.status);
   if (status && status !== 'draft') {
     const history = loadFilesTaskContractRecords(target, frontmatterString(frontmatter.task_id));
@@ -947,7 +1028,10 @@ function dispatchAssignmentFromCurrentFacts({ taskId, host, repository, backend,
     attribution: { taskTrailer: `Task: ${taskId}`, agentTrailer: 'Agent: engineer' },
     liveness: {
       cadence: 'return after each check',
-      expiry: new Date(Date.now() + 3_600_000).toISOString(),
+      // Derived, not hand-sized: see DISPATCH_LIVENESS_WINDOW_SECONDS. A packet
+      // that expires while the toolkit's own mandated repairs are running was
+      // never measuring staleness - it was measuring how long the repairs took.
+      expiry: new Date(Date.now() + DISPATCH_LIVENESS_WINDOW_SECONDS * 1000).toISOString(),
       stopCondition: 'return on blocker',
     },
     cancellationBoundary: 'return_on_cancellation',
@@ -2442,6 +2526,12 @@ export async function cmdTask(args, io = createIo()) {
         }
         io.out(`  status: ${result.ok ? 'READY' : 'BLOCKED'}`);
         io.out(`  disposition owner: ${result.dispositionOwner ?? '(none)'}`);
+        // A green preflight is a claim about a sequence, not about an instant.
+        // Printing the sequence - with the commits each step forces - is what
+        // keeps it from being a green that its own next action invalidates.
+        if (result.nextSequence?.steps?.length) {
+          for (const line of renderHandoffSequence(result.nextSequence)) io.out(line);
+        }
         if (opts.output) io.out(`  output: ${relative(target, resolve(target, opts.output)).replace(/\\/g, '/')}`);
         if (refreshPlanPath) io.out(`  refresh plan: ${relative(target, refreshPlanPath).replace(/\\/g, '/')}`);
         if (refreshPlanRefusal) {
@@ -2808,6 +2898,7 @@ export async function cmdTask(args, io = createIo()) {
           worktree: evidence.worktree,
           branch: evidence.branch,
           productBaseHead: evidence.productBaseHead,
+          productLineage: evidence.productLineage,
           productHead: evidence.productHead,
           workflowHead: evidence.workflowHead,
           candidateHead: null,
@@ -3249,13 +3340,21 @@ export async function cmdTask(args, io = createIo()) {
       let ownedFields;
       if (mutationClass === 'implementation_artifact_evidence') {
         const productHead = String(opts.productHead ?? '');
-        const observedHead = String(targetGitRunner(target)(['rev-parse', '--verify', 'HEAD']).stdout ?? '').trim();
-        if (!isGitObjectId(productHead) || productHead !== observedHead) {
-          return printGateResult('task evidence', commandFailure('task evidence', new PublicCommandError(
-            'implementation artifact evidence requires --product-head equal to the exact current repository HEAD before workflow evidence is committed', {
-              code: 'task.evidence.product_head', evidenceState: 'changed', disposition: 'blocked',
-            }
-          ), 'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);
+        const runGit = targetGitRunner(target);
+        // The implementation artifact is the product head, and the product head
+        // is not "whatever HEAD happens to be". Pinning it to HEAD forced every
+        // resumed attempt to rebind the field to a role-start workflow commit -
+        // which then derived an empty product range, made the return
+        // impossible, and left the task record naming the wrong artifact.
+        //
+        // What the field must actually satisfy is stated directly: it is a
+        // commit that introduces product work, it is reachable from HEAD, and
+        // nothing after it changed product paths. HEAD itself still satisfies
+        // all three in the ordinary case.
+        const refused = evaluateProductHeadEvidence(runGit, productHead);
+        if (refused) {
+          return printGateResult('task evidence', commandFailure('task evidence', refused,
+            'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);
         }
         candidate = replaceFrontmatterField(candidate, 'implementation_artifact', `commit:${productHead}`);
         ownedFields = ['implementation_artifact'];
@@ -3588,6 +3687,79 @@ export async function cmdTask(args, io = createIo()) {
       if (asJson) io.out(JSON.stringify(result, null, 2));
       else io.out(`Prepared files review entry for ${taskId}: ${reviewPath}`);
       return 0;
+    }
+
+    if (sub === 'commit-message') {
+      const taskId = positional[0];
+      const asJson = Boolean(opts.json);
+      const commitClass = String(opts.class ?? '');
+      // The one artifact Agentic Loop is strictest about had no producer, so
+      // every role hand-authored it - and `git commit -m … -m …`, the natural
+      // way to write a multi-line message, inserts a blank line between each
+      // `-m` and strands `Task:` outside the final contiguous trailer block.
+      // That single mechanical fact was the largest failure code of the field
+      // run: fourteen refusals, three rejected commits, and one history reset.
+      if (!taskId || !commitClass || typeof opts.subject !== 'string' || !opts.subject.trim() || !opts.output) {
+        const error = new CliUsageError(
+          'task commit-message requires <id>, --class <commit-class>, --subject <text>, and --output <path>',
+          { hint: `Accepted --class values: ${COMMIT_MESSAGE_CLASS_LIST.join(', ')}.` }
+        );
+        return printGateResult('task commit-message', commandFailure('task commit-message', error, 'usage', {}, target), asJson, io, EXIT_USAGE);
+      }
+      if (!Object.hasOwn(COMMIT_MESSAGE_CLASSES, commitClass)) {
+        const error = new CliUsageError(
+          `task commit-message --class '${commitClass}' is not a canonical commit class; ` +
+          `accepted values: ${COMMIT_MESSAGE_CLASS_LIST.join(', ')}`
+        );
+        return printGateResult('task commit-message', commandFailure('task commit-message', error, 'usage', {}, target), asJson, io, EXIT_USAGE);
+      }
+      try {
+        const role = COMMIT_MESSAGE_CLASSES[commitClass];
+        const body = typeof opts.bodyFile === 'string' && opts.bodyFile.trim()
+          ? readTargetText(target, opts.bodyFile, 'commit message body')
+          : typeof opts.body === 'string' ? opts.body : null;
+        const rendered = renderCommitMessage({ taskId, role, subject: opts.subject, body });
+        if (!rendered.ok) {
+          throw new VerificationContextMalformedError(
+            `commit message could not be rendered: ${rendered.errors.join('; ')}`
+          );
+        }
+        // The producer proves its own output against the validator every
+        // refusal is issued by, so the two can never drift apart.
+        const checked = evaluateCommitAttribution({ message: rendered.message, taskId, role });
+        if (!checked.ok) {
+          throw new VerificationContextMalformedError(
+            `rendered commit message does not satisfy canonical commit attribution: ${checked.errors.join('; ')}`
+          );
+        }
+        const destination = publicTargetRelativePath(target, opts.output, 'output path');
+        const applied = executeMutationBatch(target, [{
+          type: 'write', path: destination.relPath, content: rendered.message,
+        }]);
+        if (!applied.ok) {
+          throw new VerificationContextMalformedError(
+            `commit message could not be written atomically: ${[...applied.errors, ...applied.rollbackErrors].join('; ')}`
+          );
+        }
+        const result = {
+          ok: true,
+          command: 'task commit-message',
+          task_id: taskId,
+          commitClass,
+          role,
+          output: destination.relPath,
+          message: rendered.message,
+          commitCommand: `git commit -F ${destination.relPath}`,
+        };
+        if (asJson) io.out(JSON.stringify(result, null, 2));
+        else {
+          io.out(`Wrote ${destination.relPath} for ${taskId} (${commitClass}, Agent: ${role}).`);
+          io.out(`Commit it with: git commit -F ${destination.relPath}`);
+        }
+        return 0;
+      } catch (error) {
+        return printGateResult('task commit-message', commandFailure('task commit-message', error, 'operational_error', { task_id: taskId }, target), asJson, io);
+      }
     }
 
     if (sub === 'attempt-status') {

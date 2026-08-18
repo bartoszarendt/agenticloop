@@ -55,8 +55,8 @@ describe('documented envelope identity contract', () => {
     const doc = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf8');
     assert.match(doc, /agenticloop\.role-preparation`, schema version\s*\n?`8`/);
     assert.match(doc, /sha256:agenticloop\.role-preparation\.v8:<64-lowercase-hex>/);
-    assert.match(doc, /agenticloop\.role-return`, schema version\s*\n?`4`/);
-    assert.match(doc, /sha256:agenticloop\.role-return\.v4:<64-lowercase-hex>/);
+    assert.match(doc, /agenticloop\.role-return`, schema version\s*\n?`5`/);
+    assert.match(doc, /sha256:agenticloop\.role-return\.v5:<64-lowercase-hex>/);
     assert.match(doc, /agenticloop\.decomposition-provenance`, schema\s*\n?version `2`/);
     assert.match(doc, /agenticloop\.decomposition-binding`,\s*\n?schema version `1`/);
     assert.doesNotMatch(doc, /agenticloop\.role-preparation\.v1/);
@@ -68,13 +68,13 @@ describe('documented envelope identity contract', () => {
     assert.equal(LEGACY_DISPATCH_PREPARATION_SCHEMA_VERSION, 3);
     assert.equal(DECOMPOSITION_SCHEMA_VERSION, 2);
     assert.equal(DECOMPOSITION_BINDING_SCHEMA_VERSION, 1);
-    assert.equal(ROLE_RETURN_SCHEMA_VERSION, 4);
+    assert.equal(ROLE_RETURN_SCHEMA_VERSION, 5);
     const fixture = await sharedFilesTask();
     const prepared = prepare(fixture);
     assert.equal(prepared.ok, true, prepared.validation.errors?.join('\n'));
     assert.ok(prepared.packet.digest.startsWith('sha256:agenticloop.role-preparation.v8:'));
     const roleReturn = readyReturn(prepared.packet, repositoryEvidence(prepared.packet));
-    assert.ok(roleReturn.digest.startsWith('sha256:agenticloop.role-return.v4:'));
+    assert.ok(roleReturn.digest.startsWith('sha256:agenticloop.role-return.v5:'));
   });
 
   it('classifies the shipped schemaVersion 2 baseline as typed stale without accepting it', async () => {

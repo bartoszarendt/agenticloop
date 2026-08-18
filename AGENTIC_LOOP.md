@@ -404,10 +404,23 @@ Before assembling that packet, `task handoff-preflight <task-id> --json` is the
 single read-only prerequisite report. It keeps carrier and protected-contract
 digests distinct, resolves current activation authorization without prompting,
 reports dispatch-bound decomposition and active/sibling worktree evidence, and
-names one safe repair owner and command. A derived-only refresh plan may be
+names one safe repair owner and command. It also reports `nextSequence`: the
+complete ordered sequence it is predicting, with what each step writes and which
+of those writes must be committed before the next step's gate can pass. A
+preflight verdict is a claim about that sequence, not about an instant, and a
+green that does not survive its own prescribed next action is a false green. A
+derived-only refresh plan may be
 applied explicitly through `task refresh-handoff-evidence`; it cannot alter
 protected task fields, human decisions, review dispositions, acceptance,
 closeout, or product files.
+
+Every commit the sequence forces is authored by `task commit-message <task-id>
+--class <commit-class> --subject <text> --output <file>` and committed with `git
+commit -F <file>`. The commit class decides the attributed role, and the
+producer shares one renderer with the attribution validator. Repeated `-m`
+arguments are not a supported way to author a workflow commit: Git inserts a
+blank line between each one, which strands `Task:` outside the final contiguous
+trailer block the grammar requires.
 Schema versions 2, 3, 4, and 5 are recognized as authentic prior evidence and
 rejected as `dispatch.packet.stale`; regenerate the packet as version 7 rather
 than reinterpreting or repairing an earlier version in place. Version 4 is not
@@ -457,11 +470,16 @@ committed source cannot hide an omitted or newly authored task behind its own
 `complete` field.
 
 The single-role execution result is `agenticloop.role-return`, schema version
-`4`, with digest `sha256:agenticloop.role-return.v4:<64-lowercase-hex>`. It
+`5`, with digest `sha256:agenticloop.role-return.v5:<64-lowercase-hex>`. It
 binds a unique return ID, immutable producer, exact packet ID/digest, backend and
 task digest, exact branch/worktree and full 40- or 64-character base/head, changed paths,
 structured checks, actual contiguous commit-range attribution, PR state,
-blocker/resumption facts, and freshness invalidators. Its transition disposition
+blocker/resumption facts, and freshness invalidators. `productLineage` is `null`
+for an ordinary attempt and otherwise names the explicitly abandoned execution
+attempts whose committed product work this return carries, together with the
+carried base it therefore binds instead of the packet's own base; the claim is
+re-derived from durable dispatch-consumption and abandonment records and reproved
+against Git at every verification boundary. Its transition disposition
 uses the canonical vocabulary: a successful Engineer result is
 `disposition: proceed` plus the separate non-authoritative
 `implementation_ready_for_review` outcome with `completion: false`; it is never
@@ -1133,7 +1151,7 @@ plan is an artifact of that relation, not a new `managed_join_plan` synonym. Use
 `cancellation_boundary`, `review_no_mutation_window`, and
 `digest_guarded_rollback` precisely. None is a lock or authority transfer.
 
-A blocked role return has kind `agenticloop.role-return`, schema version `4`,
+A blocked role return has kind `agenticloop.role-return`, schema version `5`,
 and separately declares required fields plus constant `disposition: blocked`.
 Its fields include return ID, producing role, consumed transition ID/digest,
 blocker category/evidence, resume owner/transition, and resume preconditions. An exceptional-verification return has kind

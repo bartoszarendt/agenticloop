@@ -36,6 +36,7 @@ import { readFileSync } from 'node:fs';
 import { CliUsageError } from './cli-io.js';
 import { DEFAULT_AUDIT_BUDGET } from './layout.js';
 import { WORKFLOW_ROLE_IDS } from './workflow-roles.js';
+import { COMMIT_MESSAGE_CLASS_LIST } from './commit-attribution.js';
 
 const ADAPTER_HOSTS = ['opencode', 'codex', 'claude-code', 'copilot', 'cursor'];
 const ADAPTER_TARGETS = [...ADAPTER_HOSTS, 'all'];
@@ -523,7 +524,7 @@ export const COMMAND_REGISTRY = {
   },
   task: {
     summary: 'Manage files-backed task records and canonical handoff preparation.',
-    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|handoff-preflight|refresh-handoff-evidence|attempt-status|abandon-attempt|adopt-historical|readiness-plan|readiness-apply|measure|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|status> [options]',
+    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|handoff-preflight|refresh-handoff-evidence|commit-message|attempt-status|abandon-attempt|adopt-historical|readiness-plan|readiness-apply|measure|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|status> [options]',
     subcommands: {
       list: {
         summary: 'List task records.',
@@ -622,6 +623,26 @@ export const COMMAND_REGISTRY = {
           opt('attempt', 'string', 'Exact live execution attempt identity reported by the conservation refusal. Required.'),
           opt('reason', 'string', 'Why the attempt cannot reach a canonical return. Required and recorded verbatim.'),
           opt('authority', 'string', 'Durable authorization reference in <kind>:<reference> form. Required.'),
+          jsonOption,
+        ],
+      },
+      'commit-message': {
+        summary: 'Write a canonically trailered commit message file for one workflow commit class. Never commits.',
+        usage: 'agenticloop task commit-message <id> --class <commit-class> --subject <text> --output <path> [--body <text> | --body-file <path>] [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only',
+        positionals: [{ name: 'id', required: true }],
+        details: [
+          'The commit class decides the attributed role; the emitted file always ends with one final contiguous',
+          'Task/Agent trailer block. Commit it with git commit -F <path>: repeated -m arguments insert a blank line',
+          'between every paragraph and produce a message the attribution grammar rejects.',
+        ],
+        options: [
+          targetOption(),
+          opt('class', 'string', 'Canonical workflow commit class. Required; it decides the attributed role.', { enum: [...COMMIT_MESSAGE_CLASS_LIST] }),
+          opt('subject', 'string', 'Single-line commit subject. Required.'),
+          opt('body', 'string', 'Optional commit body paragraph.'),
+          opt('body-file', 'string', 'Optional target-relative file whose contents become the commit body.'),
+          opt('output', 'string', 'Target-relative message file to write atomically. Required.'),
           jsonOption,
         ],
       },
@@ -1269,7 +1290,7 @@ function enforcePositionalShape(label, spec, positionals) {
     const missing = declared[positionals.length];
     throw new CliUsageError(
       `${label}: missing required <${missing.name}>.`,
-      { hint: helpHint(label) }
+      { hint: shapeHint(label, spec) }
     );
   }
   if (positionals.length > maxCount) {
@@ -1335,6 +1356,28 @@ function helpHint(label) {
   return `Run "agenticloop help ${label}" for usage.`;
 }
 
+/**
+ * Carry the command's own shape into the refusal that reports it broken.
+ *
+ * Two usage mistakes recurred in the field across separate role sessions - a
+ * missing positional `<id>`, and an option that does not exist - and both
+ * refusals answered with a pointer to another command instead of the shape the
+ * caller had just got wrong. A refusal that names the accepted operands and
+ * options at the point of use costs one line and removes the round trip.
+ */
+function shapeHint(label, spec) {
+  const parts = [];
+  const declared = spec.positionals ?? [];
+  parts.push(declared.length === 0
+    ? 'Accepts no operands.'
+    : `Operands: ${declared.map(item => `<${item.name}>${item.required ? '' : ' (optional)'}${item.variadic ? '...' : ''}`).join(' ')}.`);
+  const options = (spec.options ?? []).map(option => `--${option.name}`);
+  if (options.length > 0) parts.push(`Options: ${options.join(', ')}.`);
+  if (spec.usage) parts.push(`Usage: ${spec.usage}`);
+  parts.push(helpHint(label));
+  return parts.join(' ');
+}
+
 function usageErrorFromParseFailure(label, spec, error) {
   const message = String(error.message ?? error);
   const unknownMatch = message.match(/Unknown option '(-[^']+)'/);
@@ -1350,9 +1393,9 @@ function usageErrorFromParseFailure(label, spec, error) {
     const text = suggestion
       ? `${label}: unknown option '${token}'. Did you mean '--${suggestion}'?`
       : `${label}: unknown option '${token}'.`;
-    return new CliUsageError(text, { hint: helpHint(label) });
+    return new CliUsageError(text, { hint: shapeHint(label, spec) });
   }
-  return new CliUsageError(`${label}: ${message}`, { hint: helpHint(label) });
+  return new CliUsageError(`${label}: ${message}`, { hint: shapeHint(label, spec) });
 }
 
 /** True when argv requests help at any level (before an explicit `--`). */

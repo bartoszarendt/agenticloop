@@ -269,6 +269,7 @@ const EXPECTED_DOMAIN_KEYS = [
   'hostRoleCapability',
   'kind',
   'lifecycle',
+  'nextSequence',
   'ok',
   'operatorAuthorization',
   'readiness',

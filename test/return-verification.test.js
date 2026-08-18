@@ -74,7 +74,7 @@ describe('observed return verification storage', () => {
     };
     packet.backend = backend;
     const roleReturn = {
-      returnId, producerRole: 'engineer', digest: `sha256:agenticloop.role-return.v4:${'b'.repeat(64)}`,
+      returnId, producerRole: 'engineer', digest: `sha256:agenticloop.role-return.v5:${'b'.repeat(64)}`,
       requiredCheckEvidenceContract: 2, disposition: 'proceed',
       checks: options.checks ?? [{
         id: 'RC-1', kind: 'command', command: 'node --version', outcome: 'passed',

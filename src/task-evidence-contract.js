@@ -26,6 +26,7 @@ import { canonicalJson, canonicalSha256 } from './canonical-json.js';
 import { isReceiptRevalidationArgv } from './cli-registry.js';
 import { GIT_OBJECT_ID_RE, GIT_TREE_IDENTITY_RE } from './git-oid.js';
 import { TRANSITION_BACKENDS } from './transition-contract.js';
+import { PARALLEL_SCAN_MAX_FRESHNESS_SECONDS } from './parallel-scan.js';
 
 export const TASK_EVIDENCE_CONTEXT_KIND = 'agenticloop.task-evidence-context';
 export const TASK_EVIDENCE_CONTEXT_SCHEMA_VERSION = 1;
@@ -55,6 +56,27 @@ export const LIFECYCLE_CARRIER_MUTATION_CLASSES = Object.freeze([
 ]);
 export const DEPENDENCY_SNAPSHOT_KIND = 'agenticloop.dependency-snapshot';
 export const DEPENDENCY_SNAPSHOT_SCHEMA_VERSION = 1;
+
+/**
+ * The wall-clock window a dependency snapshot gets when it does not declare
+ * one, chosen by the same question the decomposition's default asks: can a
+ * dependency status change without producing an observable repository event?
+ *
+ * - **files**: no. Each status is a task record inside the repository, and the
+ *   scan binds inventory membership, carrier digests, the protected contract,
+ *   and the base tree; a real change breaks one of those and is refused
+ *   semantically. The clock is a backstop at the trusted maximum.
+ * - **github**: yes. Issue state lives outside the repository, so the clock is
+ *   the only mechanism and stays short.
+ *
+ * The decomposition already had this. The snapshot did not, so a hand-authored
+ * `{"maxAgeSeconds": 3600}` left over from a past session expired mid-cycle -
+ * "observed 3758s ago, policy allows 3600s" - and cost the field run two
+ * Maintainer-committed refresh cycles that changed no dependency at all.
+ */
+export function defaultDependencyFreshnessSeconds(backend) {
+  return backend === 'github' ? 3600 : PARALLEL_SCAN_MAX_FRESHNESS_SECONDS;
+}
 
 /** Base evidence is either a resolved Git tree or an explicit path inventory. */
 export const BASE_EVIDENCE_KINDS = Object.freeze(['git_tree', 'path_inventory']);
@@ -207,7 +229,9 @@ function evaluateDependencyStatuses(statuses) {
  * @param {{sourceRef: string, now?: number, digest?: string, provenance?: object|null}} options
  * @returns {{ok: boolean, errors: string[], evidence: object|null}}
  */
-export function parseDependencySnapshot(source, { sourceRef, now = Date.now(), digest = null, provenance = null } = {}) {
+export function parseDependencySnapshot(source, {
+  sourceRef, now = Date.now(), digest = null, provenance = null, backend = 'files',
+} = {}) {
   const text = String(source ?? '');
   let document;
   try {
@@ -235,11 +259,20 @@ export function parseDependencySnapshot(source, { sourceRef, now = Date.now(), d
   if (!nonEmptyString(document.observedAt) || !ISO_INSTANT_PATTERN.test(document.observedAt)) {
     errors.push("dependency snapshot observedAt must be an ISO-8601 UTC instant such as '2026-07-29T10:00:00.000Z'");
   }
-  const maxAgeSeconds = document.freshnessPolicy?.maxAgeSeconds;
-  if (!isPlainObject(document.freshnessPolicy) || !Number.isSafeInteger(maxAgeSeconds) || maxAgeSeconds <= 0) {
-    errors.push('dependency snapshot freshnessPolicy must be { maxAgeSeconds: <positive integer> }');
-  } else if (Object.keys(document.freshnessPolicy).some(key => key !== 'maxAgeSeconds')) {
-    errors.push('dependency snapshot freshnessPolicy contains unknown fields');
+  // An absent policy is derived from the backend rather than refused. The field
+  // is a wall-clock backstop, and a snapshot that does not choose one should get
+  // the defensible default instead of forcing a hand-authored number that
+  // nothing produces and nothing bounds.
+  const declaredPolicy = Object.hasOwn(document, 'freshnessPolicy');
+  const maxAgeSeconds = declaredPolicy
+    ? document.freshnessPolicy?.maxAgeSeconds
+    : defaultDependencyFreshnessSeconds(backend);
+  if (declaredPolicy) {
+    if (!isPlainObject(document.freshnessPolicy) || !Number.isSafeInteger(maxAgeSeconds) || maxAgeSeconds <= 0) {
+      errors.push('dependency snapshot freshnessPolicy must be { maxAgeSeconds: <positive integer> }');
+    } else if (Object.keys(document.freshnessPolicy).some(key => key !== 'maxAgeSeconds')) {
+      errors.push('dependency snapshot freshnessPolicy contains unknown fields');
+    }
   }
   if (!isPlainObject(document.statuses) ||
       Object.entries(document.statuses).some(([id, status]) => !nonEmptyString(id) || !nonEmptyString(status))) {

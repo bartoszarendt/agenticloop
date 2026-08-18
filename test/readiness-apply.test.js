@@ -313,7 +313,13 @@ describe('plan integrity fails closed', () => {
   const cases = [
     ['unknown fields', plan => { plan.extra = true; }, /closed schema/],
     ['unsupported schema version', plan => { plan.schemaVersion = 99; }, /unsupported readiness plan schemaVersion/],
-    ['a tampered digest', plan => { plan.planDigest = plan.planDigest.replace(/.$/, '0'); }, /digest does not recompute/],
+    // Flip the final hex digit to a value it cannot already hold. Replacing it
+    // with a fixed '0' silently tampered with nothing whenever the digest
+    // already ended in '0', and the case then asserted a refusal against an
+    // untouched plan that correctly applied.
+    ['a tampered digest', plan => {
+      plan.planDigest = plan.planDigest.replace(/.$/, last => (last === '0' ? '1' : '0'));
+    }, /digest does not recompute/],
     ['a wrong task', plan => { plan.taskId = 'T-999'; }, /names task 'T-999'/],
     ['a wrong backend', plan => { plan.backend = 'github'; }, /backend must be 'files'/],
     ['a wrong repository identity', plan => {

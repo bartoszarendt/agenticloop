@@ -16,6 +16,7 @@ import {
   normalizeEvidenceState,
 } from './result-envelope.js';
 import { OPERATIONAL_FAILURE_MESSAGE } from './public-error.js';
+import { debugReferenceFor, emitDebugTrace } from './debug-trace.js';
 import { createDiagnostic, repairPolicyFor } from './repair-policy.js';
 import { presentDiagnostic } from './diagnostic-presentation.js';
 import { getProjectRoleCapabilities } from './role-capabilities.js';
@@ -113,6 +114,11 @@ export function commandFailure(command, error, category = 'operational_error', d
       : OPERATIONAL_FAILURE_MESSAGE;
   const evidenceState = error?.evidenceState ?? (usage ? 'negative' : 'missing');
   const disposition = error?.disposition ?? dispositionForEvidenceState(evidenceState);
+  // A command that catches its own failure never reaches the top-level handler,
+  // so this boundary owns both halves of diagnosability: the stable public
+  // handle, and the opt-in stack behind `--debug` / AGENTICLOOP_DEBUG=1.
+  const reference = debugReferenceFor(command, error);
+  emitDebugTrace(reference, error);
   const diagnostic = presentDiagnostic(createDiagnostic({
     code,
     message,
@@ -129,7 +135,7 @@ export function commandFailure(command, error, category = 'operational_error', d
     disposition,
     diagnostics: [diagnostic],
     firstSafeRepair: error?.safeRepair ?? error?.hint ?? diagnostic.nextAction,
-    debugReference: null,
+    debugReference: reference,
     requiredContext: Array.isArray(error?.requiredContext) ? error.requiredContext : [],
     ...domainFields,
   });

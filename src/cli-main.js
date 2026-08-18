@@ -30,7 +30,7 @@ import {
 } from './cli-io.js';
 import { dispatch } from './cli.js';
 import { COMMAND_REGISTRY } from './cli-registry.js';
-import { createHash } from 'node:crypto';
+import { debugReferenceFor, runWithDebugTrace } from './debug-trace.js';
 import { createDiagnostic, repairPolicyFor } from './repair-policy.js';
 import { minimalUnexpectedFailureResult, presentDiagnostic } from './diagnostic-presentation.js';
 import { getProjectRoleCapabilities } from './role-capabilities.js';
@@ -102,15 +102,7 @@ function extractGlobalDebug(argv) {
 }
 
 function debugReference(argv, error, boundaryError = null) {
-  const command = argv.join(' ');
-  const material = [
-    command,
-    error?.name ?? 'Error',
-    error instanceof Error ? error.message : String(error),
-    boundaryError?.name ?? '',
-    boundaryError instanceof Error ? boundaryError.message : boundaryError ? String(boundaryError) : '',
-  ].join('\0');
-  return `debug:sha256:${createHash('sha256').update(material, 'utf8').digest('hex')}`;
+  return debugReferenceFor(argv.join(' '), error, boundaryError);
 }
 
 /**
@@ -210,7 +202,9 @@ export async function runCli(argv, options = {}) {
   const publicArgv = extracted.publicArgv;
   try {
     io.throwIfAborted();
-    return await dispatch(publicArgv, io);
+    // Commands that catch their own failures never reach this handler, so the
+    // debug switch is bound to the whole execution rather than to this catch.
+    return await runWithDebugTrace({ debug, io }, () => dispatch(publicArgv, io));
   } catch (error) {
     if (error instanceof CliAbortError || error?.name === 'AbortError') {
       io.err('Interrupted.');

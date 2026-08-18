@@ -279,3 +279,39 @@ function existsInTarget(fixture, relPath) {
     return false;
   }
 }
+
+describe('the attempt ledger notices rewritten execution provenance', () => {
+  it('refuses a new packet after the attempt range is reset, with a Maintainer-owned repair', async () => {
+    // The field run's Engineer performed history repair - it reset commits -
+    // and the Orchestrator's first recovery act an hour later was to check
+    // whether any `git replace` refs had survived. Nothing mechanically
+    // prevented or noticed it; the reset was discovered after the fact.
+    const fixture = await createDispatchFixture(temp, 'attempt-history-reset');
+    const { consumption } = consumeOnePacket(fixture);
+    recordEngineerMutation(fixture, consumption);
+    fixtureGit(fixture.root, ['commit', '--allow-empty', '-m', 'work\n\nTask: T-001\nAgent: engineer']);
+
+    // Exactly what "repairing history" does to the base an attempt is evidence
+    // about: the recorded commit stops being reachable from the current head.
+    fixtureGit(fixture.root, ['checkout', '-q', '--orphan', 'rewritten']);
+    fixtureGit(fixture.root, ['commit', '--allow-empty', '-m', 'rewritten history\n\nTask: T-001\nAgent: engineer']);
+
+    const status = await cli(fixture, ['task', 'attempt-status', 'T-001', '--json']);
+    assert.equal(status.status, 1);
+    const report = JSON.parse(status.stdout);
+    assert.equal(report.newPacketPermitted, false);
+    assert.match(report.reason, /rewritten or replaced/);
+    assert.match(report.reason, /no longer an ancestor of the current head|no longer a reachable commit object/);
+    // The repair is Maintainer-owned: the role that rewrote the history is
+    // exactly the role that cannot authorize the rewrite.
+    assert.match(report.safeRepair, /Maintainer-owned repair/);
+    assert.match(report.safeRepair, /commit-attribution repair-record-render/);
+  });
+
+  it('reports history as unevaluated rather than rewritten when there are no attempts', async () => {
+    const fixture = await createDispatchFixture(temp, 'attempt-history-none');
+    const status = await cli(fixture, ['task', 'attempt-status', 'T-001', '--json']);
+    assert.equal(status.status, 0, status.stderr);
+    assert.equal(JSON.parse(status.stdout).newPacketPermitted, true);
+  });
+});

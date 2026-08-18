@@ -36,7 +36,10 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+
+import { GIT_MAX_BUFFER } from './git-runner.js';
 
 import { canonicalSha256 } from './canonical-json.js';
 import { classifyLifecycleCompatibility, compatibilityMessage } from './lifecycle-compatibility.js';
@@ -51,6 +54,9 @@ export const EXECUTION_ATTEMPT_ROOT = '.agenticloop/handoffs/attempts';
 
 /** The one diagnostic code a conservation refusal reports under. */
 export const PACKET_CONSERVATION_DIAGNOSTIC_CODE = 'dispatch.packet.conserved';
+
+/** The one diagnostic code a rewritten attempt range reports under. */
+export const ATTEMPT_HISTORY_DIAGNOSTIC_CODE = 'dispatch.attempt.history_rewritten';
 
 const ISO_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const ATTEMPT_ID_RE = /^attempt:[a-f0-9]{32}$/;
@@ -250,7 +256,7 @@ export function evaluatePacketConservation({
  * The read-side companion to `evaluatePacketConservation`: unreadable evidence
  * fails closed rather than being treated as an absence of attempts.
  */
-export function evaluateTaskPacketConservation(target, taskId, { backend = 'files' } = {}) {
+export function evaluateTaskPacketConservation(target, taskId, { backend = 'files', runGit = defaultRunGit(target) } = {}) {
   const consumed = listDispatchConsumptions(target, taskId, { backend });
   if (!consumed.ok) {
     return {
@@ -299,10 +305,89 @@ export function evaluateTaskPacketConservation(target, taskId, { backend = 'file
       receipt?.dispatchCarrierDigest === liveConsumption.dispatchCarrierDigest &&
       receipt?.producer?.invocationId === liveConsumption.invocationId).length
     : 0;
-  return evaluatePacketConservation({
+  const verdict = evaluatePacketConservation({
     consumptions: consumed.records,
     abandonments: abandoned.records,
     engineerMutationCount,
     taskId,
   });
+  // Rewritten provenance is detected here, where the ledger is read, rather
+  // than discovered after the fact. The field run's Engineer reset commits, and
+  // the Orchestrator's first recovery act an hour later was to check whether
+  // any `git replace` refs had survived. Nothing mechanically noticed.
+  const history = evaluateAttemptHistoryIntegrity(target, verdict.attempts, { runGit });
+  if (history.ok) return { ...verdict, historyIntegrity: history };
+  return {
+    ...verdict,
+    ok: false,
+    code: ATTEMPT_HISTORY_DIAGNOSTIC_CODE,
+    reason: history.reason,
+    repair: history.repair,
+    historyIntegrity: history,
+  };
+}
+
+function defaultRunGit(target) {
+  return args => spawnSync('git', args, { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
+}
+
+/**
+ * Check that every recorded attempt still describes reachable, unreplaced
+ * history.
+ *
+ * Unevaluable is not a finding: a target that is not a Git checkout, or a Git
+ * that cannot be run, reports `evaluated: false` rather than manufacturing a
+ * rewrite. Only a base that Git can no longer reach, a base that is no longer
+ * an ancestor of the current head, or a live `git replace` mapping is reported
+ * - each of those is a rewrite of the exact history an attempt is evidence
+ * about.
+ *
+ * @param {string} target
+ * @param {object[]} attempts  grouped attempts from `groupExecutionAttempts`
+ * @param {{ runGit?: (args: string[]) => { status: number, stdout?: string } }} [options]
+ */
+export function evaluateAttemptHistoryIntegrity(target, attempts = [], { runGit = defaultRunGit(target) } = {}) {
+  const unevaluated = { ok: true, evaluated: false, findings: [], reason: null, repair: null };
+  if (attempts.length === 0) return unevaluated;
+  let head;
+  try {
+    head = runGit(['rev-parse', '--verify', 'HEAD']);
+  } catch {
+    return unevaluated;
+  }
+  if (!head || head.status !== 0) return unevaluated;
+  const findings = [];
+  const replaced = runGit(['replace', '-l']);
+  if (replaced?.status === 0 && String(replaced.stdout ?? '').trim()) {
+    findings.push(
+      'the repository carries live git replace refs, so the commits this attempt names are not the commits Git reports'
+    );
+  }
+  for (const attempt of attempts) {
+    const base = attempt?.productBaseHead;
+    if (!base) continue;
+    if (runGit(['cat-file', '-e', `${base}^{commit}`])?.status !== 0) {
+      findings.push(
+        `attempt ${attempt.attemptId} recorded product base ${base}, which is no longer a reachable commit object`
+      );
+      continue;
+    }
+    if (runGit(['merge-base', '--is-ancestor', base, 'HEAD'])?.status !== 0) {
+      findings.push(
+        `attempt ${attempt.attemptId} recorded product base ${base}, which is no longer an ancestor of the current head`
+      );
+    }
+  }
+  if (findings.length === 0) return { ok: true, evaluated: true, findings: [], reason: null, repair: null };
+  return {
+    ok: false,
+    evaluated: true,
+    findings,
+    reason: `durable history in a recorded execution attempt range was rewritten or replaced: ${findings.join('; ')}`,
+    repair:
+      'Stop. Rewriting execution provenance is Maintainer-owned repair, never role work: restore the recorded ' +
+      'history from Git (reflog, remote, or replace-ref removal), or record the rewrite explicitly with ' +
+      "'npx agenticloop commit-attribution repair-record-render' and a durable human authority before any " +
+      'further dispatch.',
+  };
 }

@@ -272,10 +272,12 @@ task-record obligation.
   legacy issue without `task_id`, use `#<issue-number>`. End the PR body with
   the matching final `[[agent: engineer]]` trailer and the commit with
   `Task: <resolved task id>` plus `Agent: engineer`.
-- Write GitHub commit messages to `.agenticloop/tmp/<task>-commit-message.txt`.
-  End with contiguous `Task:`/`Agent:`, check `--message-file`, commit with
-  `git commit -F`, then recheck HEAD before push. Never split trailers across
-  `-m` paragraphs; `Agent:` is content ownership, not a repair operator.
+- Produce every commit message with `task commit-message <id> --class
+  <commit-class> --subject <text> --output .agenticloop/tmp/<task>-commit-message.txt`,
+  check it with `--message-file`, commit with `git commit -F`, then recheck HEAD
+  before push. Never split trailers across `-m` paragraphs: Git inserts a blank
+  line between every `-m`, which strands `Task:` outside the final contiguous
+  trailer block. `Agent:` is content ownership, not a repair operator.
 - For a pushed malformed trailer, follow the GitHub backend exception; never
   automate it.
 - Honor any delegation lease from the orchestrator, including observable-step

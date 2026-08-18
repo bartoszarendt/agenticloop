@@ -21,7 +21,7 @@ import { createDispatchFixture, prepare } from './helpers/dispatch-fixture.js';
 import { recognizeHandoff } from '../src/handoff-recognition.js';
 import { createDispatchConsumption, dispatchConsumptionRelativePath } from '../src/handoff-consumption.js';
 import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
-import { parseDependencySnapshot } from '../src/task-evidence-contract.js';
+import { defaultDependencyFreshnessSeconds, parseDependencySnapshot } from '../src/task-evidence-contract.js';
 import { validateDecomposition, findingSet } from '../src/dispatch-envelope.js';
 import { validateParallelScanReadinessBinding } from '../src/parallel-scan.js';
 
@@ -239,7 +239,10 @@ describe('handoff derived-evidence refresh', () => {
     const writtenSnapshot = JSON.parse(depWrite.content);
     assert.equal(writtenSnapshot.observedAt > staleObservedAt, true, 'observedAt must be fresh');
     assert.deepEqual(writtenSnapshot.statuses, {}, 'empty statuses preserved');
-    assert.equal(writtenSnapshot.freshnessPolicy.maxAgeSeconds, 3600);
+    // The refresh is the producer, so it emits the backend-derived policy rather
+    // than carrying the hand-authored one-hour window forward into a window that
+    // expires again inside the same delegation cycle.
+    assert.equal(writtenSnapshot.freshnessPolicy.maxAgeSeconds, defaultDependencyFreshnessSeconds('files'));
 
     const applied = applyHandoffEvidenceRefresh({ target: value, plan, preflight: stalePreflight });
     assert.equal(applied.ok, true, applied.errors?.join('; '));

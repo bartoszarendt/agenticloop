@@ -64,6 +64,7 @@ function blockedRuntimeReturn(packet) {
     worktree: packet.assignment.worktree,
     branch: packet.assignment.branch,
     productBaseHead: packet.repository.head,
+    productLineage: null,
     productHead: packet.repository.head,
     workflowHead: packet.repository.head,
     candidateHead: null,

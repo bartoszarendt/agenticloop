@@ -13,7 +13,7 @@ import { currentDispatchConsumption } from './handoff-consumption.js';
 import { evaluateParallelScan, normalizeFilesTaskInventory, createTaskInventoryEnumeration } from './parallel-scan.js';
 import { createDecompositionProvenance, DECOMPOSITION_SCHEMA_VERSION } from './dispatch-envelope.js';
 import { parseTaskReadinessDeclaration } from './task-readiness.js';
-import { parseDependencySnapshot, dependencyStatusMap } from './task-evidence-contract.js';
+import { defaultDependencyFreshnessSeconds, parseDependencySnapshot, dependencyStatusMap } from './task-evidence-contract.js';
 import { GIT_MAX_BUFFER } from './git-runner.js';
 
 export const HANDOFF_REFRESH_PLAN_KIND = 'agenticloop.handoff-evidence-refresh-plan';
@@ -380,7 +380,7 @@ export function validateHandoffRefreshPlan(value, { target = null, taskId = null
 // Category 2 — Dependency-status observation refresh
 // ---------------------------------------------------------------------------
 
-function attemptDependencySnapshotRefresh({ target, preflight }) {
+function attemptDependencySnapshotRefresh({ target, preflight, backend = 'files' }) {
   const decompositionRef = preflight?.decomposition?.sourceRef;
   if (!decompositionRef) {
     return { ok: false, skipped: true, reason: 'no decomposition sourceRef in preflight', expectedDigest: null, content: null, path: null, snapshot: null };
@@ -448,12 +448,17 @@ function attemptDependencySnapshotRefresh({ target, preflight }) {
   // above); the Maintainer remains responsible for those statuses still being
   // currently true. Re-observing dependency status is recorded follow-up work.
   const freshObservedAt = new Date().toISOString();
+  // The refresh is the producer, so it emits the backend-derived policy rather
+  // than carrying forward whatever a past session happened to write. Re-stamping
+  // `observedAt` while preserving a one-hour window authored by hand is what
+  // made this refresh cycle repeat: it renewed the observation and left it
+  // expiring again inside the same multi-delegation cycle.
   const freshSnapshot = {
     kind: 'agenticloop.dependency-snapshot',
     schemaVersion: 1,
     source: snapshot.source,
     observedAt: freshObservedAt,
-    freshnessPolicy: snapshot.freshnessPolicy,
+    freshnessPolicy: { maxAgeSeconds: defaultDependencyFreshnessSeconds(backend) },
     statuses: existingStatuses,
   };
   const freshContent = `${canonicalJson(freshSnapshot)}\n`;
@@ -723,7 +728,7 @@ export function createHandoffEvidenceRefreshPlan({ target, preflight }) {
   const depAgeState = preflight?.dependencyAge?.state;
   let depResult = { ok: false, skipped: true, reason: 'dependency refresh not triggered', expectedDigest: null, content: null, path: null, snapshot: null, statusMap: null };
   if (depAgeState !== 'observed') {
-    depResult = attemptDependencySnapshotRefresh({ target, preflight });
+    depResult = attemptDependencySnapshotRefresh({ target, preflight, backend: preflight?.backend ?? 'files' });
   }
 
   // Category 3: Decomposition provenance regeneration

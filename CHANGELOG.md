@@ -2,6 +2,76 @@
 
 ## Unreleased
 
+### Highlights
+- **A resumed attempt can return.** Product work committed under an attempt that
+  is later abandoned is no longer stranded. The product head is derived from Git
+  rather than pinned to `HEAD`, and a return whose task carries prior abandoned
+  attempts binds the earliest carried base and states that claim explicitly in
+  `productLineage`, re-derived from durable records and reproved against Git at
+  every verification boundary.
+- **Public failures are diagnosable again.** Every command-boundary envelope
+  carries a real `debugReference`, `--debug` and `AGENTICLOOP_DEBUG=1` reach
+  failures a command catches internally, and role-return construction throws a
+  typed public error that names its own cause instead of being generalized to
+  "required operational context is unavailable".
+- **A producer for the commit grammar.** `task commit-message` emits a
+  canonically trailered message file, so no role has to hand-author the one
+  artifact the toolkit is strictest about.
+
+### Added
+- Added `task commit-message <id> --class <commit-class> --subject <text>
+  --output <file>`, which writes a commit message whose final contiguous block
+  is exactly one `Task:`/`Agent:` pair. The commit class decides the attributed
+  role, the producer and the `commit-attribution check` validator share one
+  renderer, and every refusal that reports a trailer defect now names this
+  command as its repair. `git commit -m … -m …` inserts a blank line between each
+  `-m` and therefore strands `Task:` outside the final block; commit the emitted
+  file with `git commit -F <file>` instead.
+- Added `productLineage` to the role return and its repository evidence (role
+  return schema version 5). It is `null` for an ordinary attempt and otherwise
+  names the explicitly abandoned execution attempts whose committed product work
+  the return carries, together with the carried base it therefore binds. The
+  verification boundary re-derives the lineage from the same dispatch-consumption
+  and abandonment records and refuses a return whose claim does not match, or
+  whose carried base is not an ancestor of the packet base.
+- Added `nextSequence` to the `task handoff-preflight` result: the complete
+  ordered sequence the verdict is predicting, with what each step writes and
+  which of those writes must be committed before the next step's gate can pass.
+- Added rewritten-history detection to the execution-attempt ledger. A recorded
+  product base Git can no longer reach, a base that is no longer an ancestor of
+  the current head, or a live `git replace` mapping now refuses a new packet with
+  the Maintainer-owned `dispatch.attempt.history_rewritten` diagnostic instead of
+  being discovered after the fact.
+
+### Changed
+- `task evidence --class implementation_artifact_evidence` now accepts a
+  `--product-head` that is `HEAD` **or** an ancestor of it, provided no product
+  path changed after that commit, and requires the named commit to introduce at
+  least one non-workflow path. Pinning the field to `HEAD` forced every resumed
+  attempt to rebind `implementation_artifact` to a role-start workflow commit,
+  which then derived an empty product range and made the return unreachable.
+- `task lint` now refuses an `implementation_artifact` whose commit introduces no
+  non-workflow path, so the field cannot durably name workflow state while the
+  implementation sits earlier in history.
+- The dependency snapshot's `freshnessPolicy` is now optional and derives the
+  same backend-based default as the decomposition (`86400` for files, `3600` for
+  GitHub), and `task refresh-handoff-evidence` emits that derived policy rather
+  than carrying a hand-authored window forward into one that expires again inside
+  the same delegation cycle. A declared policy is still honoured as authored.
+- The dispatch liveness window is derived rather than hand-sized: a packet now
+  stays consumable for the same window a default activation grant covers, instead
+  of one hour. Every fact a packet binds is revalidated at consumption, so the
+  clock is a backstop, not a timer on the operator.
+- Usage refusals now carry the command's own shape — accepted operands, accepted
+  options, and the usage line — at the point of use, rather than pointing at a
+  separate help command.
+
+### Fixed
+- Fixed the `debugReference: null` and message erasure at the command-failure
+  boundary. A command that caught its own error produced an envelope with no root
+  cause and no reference by which to request one, and `--debug` printed nothing
+  because the failure never reached the top-level handler.
+
 ## 0.4.3 - 2026-08-18
 
 ### Highlights

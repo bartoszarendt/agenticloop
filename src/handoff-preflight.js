@@ -48,6 +48,8 @@ import {
   createTaskInventoryEnumeration,
   normalizeFilesTaskInventory,
 } from './parallel-scan.js';
+import { deriveHandoffSequence } from './handoff-sequence.js';
+import { ATTEMPT_HISTORY_DIAGNOSTIC_CODE, evaluateTaskPacketConservation } from './execution-attempt.js';
 import { renderActivationRepair } from './activation-repair.js';
 import { fileMatchesScopePattern } from './scope-matcher.js';
 // The canonical dispatch-eligibility evaluator. Preflight resolves facts and
@@ -1139,6 +1141,32 @@ export function evaluateHandoffPreflight(input) {
     usability: activationUsability,
   } : null;
 
+  // What preflight is about to require, in order, including the commits each
+  // step forces. A point-in-time green that does not survive its own prescribed
+  // next action is a false green; reporting the sequence is what makes it a
+  // prediction rather than a snapshot.
+  const conservation = backend === 'files'
+    ? evaluateTaskPacketConservation(resolvedTarget, taskId, { backend })
+    : { ok: true, liveAttempt: null };
+  // Rewritten execution provenance is a pre-dispatch refusal, not an
+  // after-the-fact discovery. Preflight is where a role would next mint a
+  // packet, so it is where a reset attempt range has to stop.
+  if (conservation.historyIntegrity && conservation.historyIntegrity.ok === false) {
+    findings.error(
+      ATTEMPT_HISTORY_DIAGNOSTIC_CODE,
+      conservation.historyIntegrity.reason,
+      conservation.historyIntegrity.repair,
+      'changed'
+    );
+  }
+  const nextSequence = deriveHandoffSequence({
+    taskId,
+    backend,
+    host: hostRoleCapability?.host ?? requestedHost ?? null,
+    liveAttempt: conservation.liveAttempt,
+    newPacketPermitted: conservation.ok,
+  });
+
   const domain = {
     kind: HANDOFF_PREFLIGHT_KIND,
     schemaVersion: HANDOFF_PREFLIGHT_SCHEMA_VERSION,
@@ -1162,6 +1190,7 @@ export function evaluateHandoffPreflight(input) {
       declaration: hostRoleCapability.declaration,
     } : null,
     returnAdapter: returnAdapterResolution,
+    nextSequence,
     siblingCollisions,
     siblingWorktrees,
     degradedEnforcementReports: degradedEnforcementReports.map(r => ({

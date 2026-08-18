@@ -433,6 +433,15 @@ function verdict({ transition, requirement, diagnostics, observations, identity,
  * Compare one bound identity field, appending a mismatch diagnostic when the
  * caller supplied an expectation the evidence does not satisfy.
  */
+/**
+ * The base a role return binds when it carries an abandoned attempt's product
+ * work, and only when the return states that claim self-consistently.
+ */
+function carriedProductBase(roleReturn) {
+  const carried = roleReturn?.productLineage?.carriedBaseHead ?? null;
+  return carried !== null && carried === roleReturn?.productBaseHead ? carried : null;
+}
+
 function bind(field, expected, actual, diagnostics, label) {
   if (expected === null || expected === undefined) return actual ?? null;
   if (expected !== actual) {
@@ -848,7 +857,20 @@ function recognizeVerifiedReturn({
     packetId: bind('packetId', expectation.packetId, verification.packetId, diagnostics, 'verified return packet'),
     packetDigest: bind('packetDigest', expectation.packetDigest, verification.packetDigest, diagnostics, 'verified return packet digest'),
     workUnitIdentity: bind('workUnitIdentity', expectation.workUnitIdentity, verification.workUnitIdentity, diagnostics, 'verified return work unit'),
-    productBaseHead: bind('productBaseHead', expectation.productBaseHead, roleReturn?.productBaseHead, diagnostics, 'verified return product base head'),
+    // A return that carries the product work of a previous, explicitly
+    // abandoned attempt binds that attempt's base rather than the packet base a
+    // caller derives from the dispatch consumption. The claim is re-derived
+    // from durable attempt records and reproved against Git at every
+    // verification boundary, including the replay each protected transition
+    // runs; this seam only has to stop expecting the packet base from a return
+    // that explicitly and self-consistently declares another one.
+    productBaseHead: bind(
+      'productBaseHead',
+      carriedProductBase(roleReturn) ?? expectation.productBaseHead,
+      roleReturn?.productBaseHead,
+      diagnostics,
+      'verified return product base head'
+    ),
     productHead: bind('productHead', expectation.productHead, roleReturn?.productHead, diagnostics, 'verified return product head'),
     workflowHead: bind('workflowHead', expectation.workflowHead, roleReturn?.workflowHead, diagnostics, 'verified return workflow head'),
     candidateHead: bind('candidateHead', expectation.candidateHead, roleReturn?.candidateHead, diagnostics, 'verified return candidate head'),

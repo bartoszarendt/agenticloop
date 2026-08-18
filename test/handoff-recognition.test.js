@@ -642,7 +642,7 @@ describe('verified return recognition', () => {
       resumePreconditions: { items: ['Restore the execution environment.'], justification: null },
     };
     const { digest, ...unsigned } = blockedReturn;
-    blockedReturn.digest = `sha256:agenticloop.role-return.v4:${canonicalSha256(unsigned)}`;
+    blockedReturn.digest = `sha256:agenticloop.role-return.v5:${canonicalSha256(unsigned)}`;
     const blocked = createReturnVerification({
       target: dispatch.root, packet: fixture.packet, roleReturn: blockedReturn,
       repositoryEvidence: fixture.repositoryEvidence,

@@ -11,6 +11,70 @@ const NAMED_TRAILER_RE = /^(Task|Agent)\s*:\s*(.+?)\s*$/i;
 
 export const ATTRIBUTION_REPAIR_RECORD_KIND = 'agenticloop.attribution-repair';
 
+/**
+ * The workflow commit classes Agentic Loop asks a role to author, and the role
+ * each one is attributed to.
+ *
+ * The class decides the role because that is the fact a role kept getting wrong
+ * while hand-authoring the one artifact the toolkit is strictest about. It is a
+ * closed registry: a commit Agentic Loop does not name here is not a commit it
+ * requires, and a missing entry is a gap to add rather than a free-text field.
+ */
+export const COMMIT_MESSAGE_CLASSES = Object.freeze({
+  product_implementation: 'engineer',
+  role_start_status: 'engineer',
+  implementation_artifact_evidence: 'engineer',
+  implementation_summary_evidence: 'engineer',
+  implementation_outcome_evidence: 'engineer',
+  attempt_abandonment: 'maintainer',
+  handoff_evidence_refresh: 'maintainer',
+  readiness_settlement: 'maintainer',
+  review_record: 'maintainer',
+  acceptance_transition: 'maintainer',
+  audit_record: 'auditor',
+});
+
+export const COMMIT_MESSAGE_CLASS_LIST = Object.freeze(Object.keys(COMMIT_MESSAGE_CLASSES));
+
+/**
+ * Render one canonically trailered commit message.
+ *
+ * This is the single renderer the producer writes with and the repair plan
+ * quotes, so a message the toolkit hands out can never be one the toolkit
+ * rejects. The trailer pair is the final contiguous block with exactly one
+ * blank line before it - which is what `git commit -m … -m …` cannot produce,
+ * because it inserts a blank line between *every* `-m` and so leaves `Task:`
+ * stranded in its own paragraph outside the final block.
+ *
+ * @param {{ taskId: string, role: string, subject: string, body?: string|null }} input
+ * @returns {{ ok: boolean, errors: string[], message: string|null }}
+ */
+export function renderCommitMessage({ taskId, role, subject, body = null } = {}) {
+  const errors = [];
+  const task = String(taskId ?? '').trim();
+  const workflowRole = String(role ?? '').trim();
+  const subjectLine = String(subject ?? '').trim();
+  const bodyText = body === null || body === undefined ? '' : String(body).replace(/\r\n/g, '\n').trim();
+  if (!task) errors.push('a commit message requires the task id it is attributed to');
+  if (!subjectLine) errors.push('a commit message requires a non-empty subject');
+  if (subjectLine.includes('\n')) errors.push('a commit message subject must be a single line');
+  if (workflowRole !== workflowRole.toLowerCase()) errors.push(`workflow role identity must be lowercase; received '${workflowRole}'`);
+  try {
+    getWorkflowRole(workflowRole.toLowerCase());
+  } catch {
+    errors.push(`unknown workflow role '${workflowRole}'; expected a role from the canonical workflow-role registry`);
+  }
+  // A Task/Agent line inside the prose becomes a misplaced trailer the moment
+  // the canonical block is appended, so it is refused at authoring time rather
+  // than reported as a defect after the commit exists.
+  if (bodyText.split('\n').some(line => NAMED_TRAILER_RE.test(line.trim()))) {
+    errors.push('a commit message body cannot contain its own Task or Agent trailer lines');
+  }
+  if (errors.length > 0) return { ok: false, errors, message: null };
+  const paragraphs = [subjectLine, ...(bodyText ? [bodyText] : []), `Task: ${task}\nAgent: ${workflowRole}`];
+  return { ok: true, errors: [], message: `${paragraphs.join('\n\n')}\n` };
+}
+
 /** Validate the durable record required after an exceptional metadata rewrite. */
 export function validateAttributionRepairRecord(record) {
   const errors = [];
@@ -160,6 +224,23 @@ export function evaluateCommitAttribution({ message, taskId, role = 'engineer' }
         : 'attribution.trailer',
       message,
     })),
-    repairPlan: errors.length ? `Replace the final contiguous trailer block with one final pair:\n${repair}\nThen create or amend the commit explicitly as ${expectedRole}. This command never amends or publishes.` : null,
+    repairPlan: errors.length
+      ? `Replace the final contiguous trailer block with one final pair:\n${repair}\n` +
+        `Or author the whole message with the producer: ${commitMessageProducerHint(task)}\n` +
+        `Then create or amend the commit explicitly as ${expectedRole}. This command never amends or publishes.`
+      : null,
   };
+}
+
+/**
+ * The one safe next action for any trailer defect: stop hand-authoring the
+ * message.
+ *
+ * Every refusal that reports a trailer defect quotes this, because the defect
+ * is almost never a role's mistake about the grammar - it is `git commit -m …
+ * -m …` producing a message the grammar rejects.
+ */
+export function commitMessageProducerHint(taskId = '<task-id>') {
+  return `npx agenticloop task commit-message ${taskId} --class <commit-class> --subject <text> ` +
+    '--output <message-file>, then commit with git commit -F <message-file>.';
 }

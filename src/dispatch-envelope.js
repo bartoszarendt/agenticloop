@@ -212,7 +212,7 @@ export const REQUIRED_CHECK_EVIDENCE_UNBOUND_DISPATCH_PREPARATION_SCHEMA_VERSION
 export const DISPATCH_PREPARATION_SCHEMA_VERSION = 8;
 export const ROLE_RETURN_KIND = 'agenticloop.role-return';
 export const CANCELLATION_BLOCKER_CATEGORY = 'cancellation_requested';
-export const ROLE_RETURN_SCHEMA_VERSION = 4;
+export const ROLE_RETURN_SCHEMA_VERSION = 5;
 
 const CHECK_OUTCOMES = new Set(['passed', 'failed', 'blocked', 'not_run']);
 const RETURN_DISPOSITIONS = new Set(['proceed', 'blocked']);
@@ -1268,6 +1268,54 @@ function validateChecks(checks, findings, label = 'role return', contractVersion
   for (const error of checked.errors) findings.malformed(error);
 }
 
+const ATTEMPT_IDENTITY_RE = /^attempt:[a-f0-9]{32}$/;
+
+/**
+ * Validate the explicit claim "this return's product work was committed under
+ * previous attempts on this task, which were then explicitly abandoned".
+ *
+ * `null` is the ordinary answer and the only one an ordinary attempt may give.
+ * A stated lineage must name the attempts it carries and must agree with the
+ * base the return binds, so the claim is checkable on its own before anything
+ * re-derives it from durable records.
+ *
+ * @returns {string[]} the identities this lineage contributes to the range's
+ *   single-object-format proof
+ */
+function validateProductLineage(value, findings, label) {
+  if (value === null || value === undefined) return [];
+  if (!exactKeys(value, ['carriedBaseHead', 'attempts'], `${label} productLineage`, findings)) return [];
+  const identities = [];
+  if (!isGitObjectId(value.carriedBaseHead)) {
+    findings.malformed(`${label} productLineage carriedBaseHead must be a full lowercase 40- or 64-character Git identity`);
+  } else identities.push(value.carriedBaseHead);
+  const attempts = Array.isArray(value.attempts) ? value.attempts : null;
+  if (!attempts || attempts.length === 0) {
+    findings.malformed(`${label} productLineage must name at least one carried execution attempt`);
+    return identities;
+  }
+  for (const attempt of attempts) {
+    if (!exactKeys(attempt, ['attemptId', 'packetId', 'productBaseHead'], `${label} productLineage attempt`, findings)) continue;
+    if (!ATTEMPT_IDENTITY_RE.test(String(attempt.attemptId ?? ''))) {
+      findings.malformed(`${label} productLineage attemptId must be a derived execution-attempt identity`);
+    }
+    if (typeof attempt.packetId !== 'string' || !attempt.packetId) {
+      findings.malformed(`${label} productLineage attempt packetId is required`);
+    }
+    if (!isGitObjectId(attempt.productBaseHead)) {
+      findings.malformed(`${label} productLineage attempt productBaseHead must be a full Git identity`);
+    } else identities.push(attempt.productBaseHead);
+  }
+  // The carried base is the base of the earliest attempt being carried, not a
+  // separately chosen commit: a lineage that names attempts but binds some
+  // other base would widen the product range without evidence for the widening.
+  if (isGitObjectId(value.carriedBaseHead) && isGitObjectId(attempts[0]?.productBaseHead) &&
+      value.carriedBaseHead !== attempts[0].productBaseHead) {
+    findings.malformed(`${label} productLineage carriedBaseHead must equal the earliest carried attempt's product base`);
+  }
+  return identities;
+}
+
 /** Total validator for one role-return wire value. */
 export function validateRoleReturn(value) {
   const findings = findingSet('role return receive');
@@ -1275,7 +1323,7 @@ export function validateRoleReturn(value) {
     const has = key => isObject(value) && Object.prototype.hasOwnProperty.call(value, key);
     const shapeOk = exactKeys(value, [
       'kind', 'schemaVersion', 'returnId', 'producerRole', 'packet', 'task', 'worktree', 'branch',
-      'productBaseHead', 'productHead', 'workflowHead', 'candidateHead',
+      'productBaseHead', 'productLineage', 'productHead', 'workflowHead', 'candidateHead',
       'productChangedPaths', 'workflowChangedPaths', 'requiredCheckEvidenceContract', 'checks', 'productAttribution', 'pr', 'carrierLineage',
       'outcome', 'disposition', 'blocker', 'freshness', 'digest',
     ], 'role return', findings);
@@ -1307,6 +1355,13 @@ export function validateRoleReturn(value) {
     }
     if (has('candidateHead') && value.candidateHead !== null && !isGitObjectId(value.candidateHead)) {
       findings.malformed('role return candidateHead must be null or a full lowercase 40- or 64-character Git identity');
+    }
+    const lineageIdentities = has('productLineage')
+      ? validateProductLineage(value.productLineage, findings, 'role return')
+      : [];
+    if (value?.productLineage && isGitObjectId(value.productLineage.carriedBaseHead) &&
+        value.productLineage.carriedBaseHead !== value?.productBaseHead) {
+      findings.malformed('role return productBaseHead must equal the carried product lineage base it claims');
     }
     const productChangedPaths = has('productChangedPaths') && Array.isArray(value.productChangedPaths) ? value.productChangedPaths : null;
     const workflowChangedPaths = has('workflowChangedPaths') && Array.isArray(value.workflowChangedPaths) ? value.workflowChangedPaths : null;
@@ -1352,6 +1407,7 @@ export function validateRoleReturn(value) {
     const returnIdentities = [
       value?.productBaseHead, value?.productHead, value?.workflowHead,
       value?.productAttribution?.range?.base, value?.productAttribution?.range?.head,
+      ...lineageIdentities,
       ...(Array.isArray(value?.productAttribution?.commits) ? value.productAttribution.commits : []),
     ].filter(identity => identity !== null && identity !== undefined);
     if (returnIdentities.every(isGitObjectId) && !sameGitObjectFormat(returnIdentities)) {
@@ -1436,6 +1492,9 @@ export function createRoleReturn(input = {}) {
     kind: ROLE_RETURN_KIND,
     schemaVersion: ROLE_RETURN_SCHEMA_VERSION,
     returnId: input.returnId ?? `return:${randomUUID()}`,
+    // Ordinary attempts carry nothing: the field is explicit and always present
+    // so a return can never be silently missing the claim it did not make.
+    productLineage: input.productLineage ?? null,
     requiredCheckEvidenceContract: input.requiredCheckEvidenceContract ?? REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION,
     checks: Array.isArray(input.checks)
       ? input.checks.map(check => check && typeof check === 'object' && !Array.isArray(check)
@@ -1445,7 +1504,25 @@ export function createRoleReturn(input = {}) {
   };
   value.digest = semanticDigest(`agenticloop.role-return.v${ROLE_RETURN_SCHEMA_VERSION}`, projection(value));
   const checked = validateRoleReturn(value);
-  if (!checked.ok) throw new TypeError(`invalid role return: ${checked.errors.join('; ')}`);
+  // A construction refusal is a fact about the caller's own evidence, not an
+  // internal accident, so it is typed at the origin. Thrown as a bare
+  // `TypeError` it reached the command boundary as an untyped error, whose
+  // message that boundary is obliged to erase: the field run spent thirteen
+  // `prepare-return` invocations reading "required operational context is
+  // unavailable" for a refusal that names its own cause precisely.
+  if (!checked.ok) {
+    const message = `invalid role return: ${checked.errors.join('; ')}`;
+    throw new PublicCommandError(message, {
+      code: 'role_return.invalid',
+      evidenceState: 'malformed',
+      disposition: 'rejected',
+      publicMessage: message,
+      committedStateEvaluated: true,
+      safeRepair:
+        'Repair the reported role-return facts at their producer and rerun the return preparation; ' +
+        'never hand-edit the role return itself.',
+    });
+  }
   return deepFreeze(value);
 }
 
@@ -1467,7 +1544,7 @@ export function reconstructCommitAttribution(input = {}) {
 
 function validateRepositoryEvidence(value, findings) {
   const shapeOk = exactKeys(value, [
-    'backend', 'task', 'worktree', 'branch', 'productBaseHead', 'productHead', 'workflowHead', 'candidateHead',
+    'backend', 'task', 'worktree', 'branch', 'productBaseHead', 'productLineage', 'productHead', 'workflowHead', 'candidateHead',
     'productChangedPaths', 'workflowChangedPaths', 'productAttribution', 'checks', 'pr', 'carrierLineage',
   ], 'repository evidence', findings);
   if (!shapeOk) return;
@@ -1484,6 +1561,11 @@ function validateRepositoryEvidence(value, findings) {
     if (!isGitObjectId(value?.[key])) findings.malformed(`repository evidence ${key} must be full Git identity`);
   }
   if (value?.candidateHead !== null && !isGitObjectId(value?.candidateHead)) findings.malformed('repository evidence candidateHead must be null or a full Git identity');
+  const evidenceLineageIdentities = validateProductLineage(value?.productLineage, findings, 'repository evidence');
+  if (value?.productLineage && isGitObjectId(value.productLineage.carriedBaseHead) &&
+      value.productLineage.carriedBaseHead !== value?.productBaseHead) {
+    findings.malformed('repository evidence productBaseHead must equal the carried product lineage base it claims');
+  }
   for (const key of ['productChangedPaths', 'workflowChangedPaths']) {
     if (!Array.isArray(value?.[key]) || !sameCanonical(value[key], [...value[key]].sort())) {
       findings.malformed(`repository evidence ${key} must be canonical sorted paths`);
@@ -1503,6 +1585,7 @@ function validateRepositoryEvidence(value, findings) {
   const evidenceIdentities = [
     value?.productBaseHead, value?.productHead, value?.workflowHead,
     value?.productAttribution?.range?.base, value?.productAttribution?.range?.head,
+    ...evidenceLineageIdentities,
     ...(Array.isArray(value?.productAttribution?.commits) ? value.productAttribution.commits : []),
   ].filter(identity => identity !== null && identity !== undefined);
   if (evidenceIdentities.every(isGitObjectId) && !sameGitObjectFormat(evidenceIdentities)) {
@@ -1574,13 +1657,29 @@ function validateReturnAgainstCurrent({
   }
   if (wire.worktree !== packet.assignment.worktree || wire.worktree !== repositoryEvidence?.worktree) findings.changed('role return worktree does not match dispatched/current worktree');
   if (wire.branch !== packet.assignment.branch || wire.branch !== repositoryEvidence?.branch) findings.changed('role return branch does not match dispatched/current branch');
-  if (wire.productBaseHead !== packet.repository.head || wire.productBaseHead !== repositoryEvidence?.productBaseHead) {
-    findings.changed('role return productBaseHead does not equal the packet-bound base');
+  // An ordinary return binds exactly the packet's own base. A return that
+  // explicitly carries an abandoned attempt's product work binds that attempt's
+  // base instead - and only after the refetched evidence, rederived from the
+  // same durable attempt records, states the identical lineage (compared with
+  // every other evidence field below) and Git confirms the carried base is
+  // behind the packet base.
+  const boundProductBase = wire.productLineage ? wire.productLineage.carriedBaseHead : packet.repository.head;
+  if (wire.productBaseHead !== boundProductBase || wire.productBaseHead !== repositoryEvidence?.productBaseHead) {
+    findings.changed(wire.productLineage
+      ? 'role return productBaseHead does not equal the carried-attempt base it claims'
+      : 'role return productBaseHead does not equal the packet-bound base');
+  }
+  if (wire.productLineage && typeof runGit === 'function' &&
+      isGitObjectId(wire.productLineage.carriedBaseHead) && isGitObjectId(packet.repository.head)) {
+    const behind = runGit(['merge-base', '--is-ancestor', wire.productLineage.carriedBaseHead, packet.repository.head]);
+    if (behind?.status !== 0) {
+      findings.changed('role return carried product base is not an ancestor of the packet-bound base');
+    }
   }
   if (wire.productHead !== repositoryEvidence?.productHead || wire.workflowHead !== repositoryEvidence?.workflowHead) {
     findings.changed('role return productHead or workflowHead does not equal repository evidence');
   }
-  for (const key of ['productChangedPaths', 'workflowChangedPaths', 'productAttribution', 'pr', 'carrierLineage']) {
+  for (const key of ['productLineage', 'productChangedPaths', 'workflowChangedPaths', 'productAttribution', 'pr', 'carrierLineage']) {
     if (!sameCanonical(wire[key], repositoryEvidence?.[key])) findings.changed(`role return ${key} does not match refetched repository evidence`);
   }
   // Repository evidence carries the baseline observation projection only. The

@@ -398,6 +398,26 @@ export function semanticDigest(prefix, value) {
   }
 }
 
+/**
+ * How long a minted dispatch packet stays consumable.
+ *
+ * The window was hand-sized at one hour, and that is not a window - it is a
+ * timer on the operator. In the field, two of six attempts were abandoned for
+ * expiry rather than for any semantic reason: the packet lost its liveness
+ * while the Orchestrator was performing the repairs the toolkit itself had
+ * demanded, and a later attempt expired mid-cycle again forty minutes on. The
+ * orchestrator's own read was that each multi-delegation cycle exceeds the
+ * window, so the packet "keeps dying".
+ *
+ * The clock is a backstop, not the mechanism. Every fact a packet binds - the
+ * carrier digest, the repository head, readiness, the decomposition, the clean
+ * state, the activation authority - is revalidated at consumption, and a real
+ * change fails there semantically whatever the clock says. So the window is
+ * derived from the one bound it genuinely must respect: a packet may not
+ * outlive the operator authorization that a default activation grant carries.
+ */
+export const DISPATCH_LIVENESS_WINDOW_SECONDS = 43_200;
+
 export function projection(value) {
   if (!isObject(value)) return null;
   const { digest, ...result } = value;

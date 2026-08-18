@@ -1,0 +1,4 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]
+  - main [ref=e8]:
+    - status "Loading" [ref=e10]

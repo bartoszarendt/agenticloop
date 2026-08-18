@@ -936,6 +936,64 @@ Unreadable consumption, abandonment, or carrier-mutation evidence fails closed.
 "I cannot read this abandonment" is never treated as "there is no abandonment",
 because that direction silently re-enables the reminting the rule prevents.
 
+The ledger also checks that the history each attempt names still exists. A
+recorded product base that Git can no longer reach, a base that is no longer an
+ancestor of the current head, or a live `git replace` mapping means the attempt
+range was rewritten, and `attempt-status` refuses with a **Maintainer-owned**
+repair rather than letting the rewrite be discovered after the fact. The role
+that rewrote the history is exactly the role that cannot authorize the rewrite.
+
+### Resuming an attempt whose product work is already committed
+
+When a task's product work was committed under an attempt that was then
+explicitly abandoned, the protocol's own recovery steps — the abandonment
+receipt, the regenerated decomposition, the fresh packet, the role-start carrier
+mutation — each add a workflow commit on top of that work. Two rules used to
+make the resumed return impossible: the implementation artifact had to be
+exactly `HEAD`, and an implementation-ready return needed a non-empty product
+range derived from Git.
+
+Both are now derived facts rather than positions:
+
+- **The product head is derived.** `task evidence --class
+  implementation_artifact_evidence --product-head <commit>` accepts `HEAD` or
+  any ancestor of it, provided no product path changed after that commit and the
+  commit itself introduces at least one non-workflow path. `task lint` refuses
+  an `implementation_artifact` that names a workflow-only commit, so the field
+  can never point at a role-start receipt while the implementation sits earlier.
+- **The product base is carried, explicitly.** A return whose task has prior
+  explicitly abandoned attempts binds the earliest carried attempt's base and
+  states the claim in `productLineage`, naming each attempt it carries. The claim
+  is derived from durable dispatch-consumption and abandonment records, and the
+  verification boundary re-derives it from the same records and reproves the
+  ancestry against Git before accepting the return. An ordinary attempt carries
+  nothing and `productLineage` is `null`.
+
+### `agenticloop task commit-message`
+
+```text
+npx agenticloop task commit-message <task-id> --class <implementation_artifact_evidence|attempt_abandonment|...> --subject <text> [--body <text> | --body-file <path>] --output <message-file> [--json]
+```
+
+Agentic Loop requires `Task:` and `Agent:` in the final contiguous trailer block
+of a commit message. `git commit -m … -m …` — the most natural way to write a
+multi-line message — inserts a blank line between every `-m`, which strands
+`Task:` in its own paragraph and produces a message the toolkit rejects. This is
+the producer that emits a compliant message file; commit it with `git commit -F
+<message-file>`, never with repeated `-m` arguments.
+
+The **commit class decides the attributed role**, so no role has to guess it:
+
+| Class | Agent |
+| --- | --- |
+| `product_implementation`, `role_start_status`, `implementation_artifact_evidence`, `implementation_summary_evidence`, `implementation_outcome_evidence` | `engineer` |
+| `attempt_abandonment`, `handoff_evidence_refresh`, `readiness_settlement`, `review_record`, `acceptance_transition` | `maintainer` |
+| `audit_record` | `auditor` |
+
+The producer and the `commit-attribution check` validator share one renderer, so
+a message this command emits can never be one the validator rejects, and every
+refusal that reports a trailer defect names this command as its repair.
+
 ### `agenticloop activation`
 
 ```text

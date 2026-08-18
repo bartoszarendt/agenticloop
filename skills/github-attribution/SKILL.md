@@ -57,17 +57,21 @@ the exact lowercase canonical `roleId`; a capitalized spelling such as
 
 ## Prospective commit flow
 
-Write the complete message to `.agenticloop/tmp/<task>-commit-message.txt`. End
-it with one contiguous final trailer block, then run:
+Do not hand-author the message. `task commit-message` writes it, with the
+canonical trailer block already in place and the role derived from the commit
+class:
 
 ```text
+npx agenticloop task commit-message <task-id> --class <commit-class> --subject <text> --output .agenticloop/tmp/<task>-commit-message.txt
 npx agenticloop commit-attribution check --task <task-id> --message-file .agenticloop/tmp/<task>-commit-message.txt
 git commit -F .agenticloop/tmp/<task>-commit-message.txt
 npx agenticloop commit-attribution check --task <task-id>
 ```
 
 Push only after both checks pass. `Task:` and `Agent:` must not be separate
-`git commit -m` paragraphs. `Agent:` identifies the role responsible for the
+`git commit -m` paragraphs: Git inserts a blank line between every `-m`, which
+strands `Task:` outside the final contiguous trailer block and produces a
+message the grammar rejects. `Agent:` identifies the role responsible for the
 content; a different role does not mechanically amend when the owning role can
 be re-delegated.
 

@@ -15,6 +15,7 @@ import {
 } from './task-evidence-contract.js';
 import { validateAuditRecord } from './audit-record.js';
 import { VerificationContextMalformedError, VerificationContextStaleError } from './public-error.js';
+import { isCarriedWorkflowPath, isWorkflowPath, resolveCarriedProductLineage } from './product-lineage.js';
 import { pathIdentity } from './path-identity.js';
 
 const SCRATCH_PREFIX = '.agenticloop/tmp/';
@@ -93,6 +94,24 @@ function workflowRecordAtHead(runGit, workflowHead, path, expected) {
   }
 }
 
+/**
+ * Classify a path that changed only in the carried region: history committed
+ * before this attempt's packet was minted, under a previous attempt that was
+ * then explicitly abandoned.
+ *
+ * The exact-record rule cannot apply there and should not: those records belong
+ * to a generation that is over, and dispatch preparation already validated that
+ * history at mint time through the clean gate and the decomposition binding.
+ * What still holds is the boundary this whole classification exists to draw -
+ * product work versus Agentic Loop's own state - and that scratch never becomes
+ * either.
+ */
+function classifyCarriedPath(path) {
+  if (path === '.agenticloop/tmp' || path.startsWith(SCRATCH_PREFIX)) return 'scratch';
+  if (!isWorkflowPath(path)) return 'product';
+  return isCarriedWorkflowPath(path) ? 'workflow_evidence' : 'unknown';
+}
+
 function classifyPath(path, { packet, workflow, runGit, workflowHead }) {
   if (path === '.agenticloop/tmp' || path.startsWith(SCRATCH_PREFIX)) return 'scratch';
   if (path === packet?.task?.carrier) {
@@ -131,7 +150,25 @@ export function deriveReturnTopology(target, packet, signedEvidence, {
   const runGit = args => spawnSync('git', args, { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   const branch = readGit(runGit, ['symbolic-ref', '--quiet', '--short', 'HEAD'], 'current return branch');
   const currentHead = readGit(runGit, ['rev-parse', '--verify', 'HEAD'], 'current return workflow head');
-  const productBaseHead = String(packet?.repository?.head ?? '').trim();
+  const packetBaseHead = String(packet?.repository?.head ?? '').trim();
+  // A resumed attempt whose product work was committed under a previous,
+  // explicitly abandoned attempt binds that attempt's base as its own. The
+  // claim is derived here from durable attempt records and re-derived
+  // identically at the verification boundary, so it is checked rather than
+  // asserted; without it the product range of every recovery is workflow-only
+  // and no correct role behaviour can produce a return.
+  const carried = resolveCarriedProductLineage(target, packet?.task?.id, {
+    backend,
+    packetBaseHead,
+    runGit,
+  });
+  if (!carried.ok) {
+    throw new VerificationContextMalformedError(
+      `carried product lineage could not be resolved: ${carried.errors.join('; ')}`
+    );
+  }
+  const productLineage = carried.lineage;
+  const productBaseHead = productLineage ? productLineage.carriedBaseHead : packetBaseHead;
   const productHead = String(signedEvidence?.productHead ?? '').trim();
   const workflowHead = historicalCloseout
     ? String(signedEvidence?.workflowHead ?? '').trim()
@@ -177,9 +214,20 @@ export function deriveReturnTopology(target, packet, signedEvidence, {
     ['diff', '--name-only', '--no-renames', `${productHead}..${workflowHead}`],
     'post-product changed-path inventory'
   ));
+  // Paths that changed only before this attempt's own base are carried
+  // history, not this attempt's work, and are classified as such.
+  const currentPaths = new Set(productLineage
+    ? sortedPaths(readGit(
+        runGit,
+        ['diff', '--name-only', '--no-renames', `${packetBaseHead}..${workflowHead}`],
+        'current-attempt changed-path inventory'
+      ))
+    : allPaths);
   const classified = new Map();
   for (const path of allPaths) {
-    const category = classifyPath(path, { packet, workflow, runGit, workflowHead });
+    const category = currentPaths.has(path)
+      ? classifyPath(path, { packet, workflow, runGit, workflowHead })
+      : classifyCarriedPath(path);
     classified.set(path, category);
     if (category === 'scratch') {
       throw new VerificationContextMalformedError(`scratch path '${path}' cannot appear in return evidence`);
@@ -189,7 +237,9 @@ export function deriveReturnTopology(target, packet, signedEvidence, {
     }
   }
   for (const path of laterPaths) {
-    if (classifyPath(path, { packet, workflow, runGit, workflowHead }) === 'product') {
+    if ((currentPaths.has(path)
+      ? classifyPath(path, { packet, workflow, runGit, workflowHead })
+      : classifyCarriedPath(path)) === 'product') {
       throw new VerificationContextStaleError(
         `product path '${path}' changed after the declared productHead before workflowHead`
       );
@@ -198,6 +248,7 @@ export function deriveReturnTopology(target, packet, signedEvidence, {
   return {
     branch,
     productBaseHead,
+    productLineage,
     productHead,
     workflowHead,
     productChangedPaths: allPaths.filter(path => classified.get(path) === 'product'),
@@ -237,6 +288,7 @@ export function refetchFilesReturnEvidence(target, packet, signedEvidence, optio
     worktree: pathIdentity(target).authorityPath,
     branch: derived.branch,
     productBaseHead: derived.productBaseHead,
+    productLineage: derived.productLineage,
     productHead: derived.productHead,
     workflowHead: derived.workflowHead,
     candidateHead: null,

@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { defaultDecompositionFreshnessSeconds } from '../src/task-cli.js';
+import { defaultDependencyFreshnessSeconds, parseDependencySnapshot } from '../src/task-evidence-contract.js';
 import { PARALLEL_SCAN_MAX_FRESHNESS_SECONDS } from '../src/parallel-scan.js';
 import { createDispatchFixture, git as fixtureGit } from './helpers/dispatch-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
@@ -56,6 +57,54 @@ describe('the freshness default follows the backend, not a constant', () => {
       assert.ok(Number.isSafeInteger(seconds) && seconds > 0);
       assert.ok(seconds <= PARALLEL_SCAN_MAX_FRESHNESS_SECONDS, `${backend} exceeds the trusted maximum`);
     }
+  });
+});
+
+describe('the dependency snapshot gets the same backend-derived default', () => {
+  it('derives the window when the snapshot declares none', () => {
+    // The field run failed on a hand-authored `{"maxAgeSeconds": 3600}` that no
+    // producer had chosen: "observed 3758s ago, policy allows 3600s". A snapshot
+    // that declares no window now gets the defensible one instead of being
+    // refused for lacking a number nothing produces.
+    const observedAt = new Date().toISOString();
+    const document = {
+      kind: 'agenticloop.dependency-snapshot', schemaVersion: 1,
+      source: 'files:.agenticloop/tasks', observedAt, statuses: {},
+    };
+    const parsed = parseDependencySnapshot(JSON.stringify(document), { sourceRef: 'dependencies.json' });
+    assert.equal(parsed.ok, true, parsed.errors.join('; '));
+    assert.equal(parsed.evidence.freshnessPolicy.maxAgeSeconds, defaultDependencyFreshnessSeconds('files'));
+    assert.equal(
+      parseDependencySnapshot(JSON.stringify(document), { sourceRef: 'dependencies.json', backend: 'github' })
+        .evidence.freshnessPolicy.maxAgeSeconds,
+      defaultDependencyFreshnessSeconds('github')
+    );
+  });
+
+  it('outlasts the multi-delegation cycle the old default expired inside', () => {
+    assert.equal(defaultDependencyFreshnessSeconds('files'), defaultDecompositionFreshnessSeconds('files'));
+    assert.ok(defaultDependencyFreshnessSeconds('files') > 3758,
+      'the field observation was refused at 3758 seconds under the authored 3600');
+  });
+
+  it('still honours a declared window as evidence rather than a setting', () => {
+    const parsed = parseDependencySnapshot(JSON.stringify({
+      kind: 'agenticloop.dependency-snapshot', schemaVersion: 1,
+      source: 'files:.agenticloop/tasks', observedAt: new Date().toISOString(),
+      freshnessPolicy: { maxAgeSeconds: 600 }, statuses: {},
+    }), { sourceRef: 'dependencies.json' });
+    assert.equal(parsed.ok, true, parsed.errors.join('; '));
+    assert.equal(parsed.evidence.freshnessPolicy.maxAgeSeconds, 600);
+  });
+
+  it('still refuses a malformed declared window', () => {
+    const parsed = parseDependencySnapshot(JSON.stringify({
+      kind: 'agenticloop.dependency-snapshot', schemaVersion: 1,
+      source: 'files:.agenticloop/tasks', observedAt: new Date().toISOString(),
+      freshnessPolicy: { maxAgeSeconds: 0 }, statuses: {},
+    }), { sourceRef: 'dependencies.json' });
+    assert.equal(parsed.ok, false);
+    assert.match(parsed.errors.join('; '), /freshnessPolicy must be/);
   });
 });
 
