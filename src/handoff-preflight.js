@@ -24,7 +24,6 @@ import {
   createDegradedEnforcementReports,
   validateHostRoleCapabilityDeclaration,
 } from './host-role-capabilities.js';
-import { evaluateDispatchCleanState } from './repository-state.js';
 import {
   resolveEffectiveActivationPolicy,
   resolveCurrentTaskAuthorization,
@@ -34,8 +33,6 @@ import { taskContractDigest } from './task-contract-baseline.js';
 import { loadFilesTaskContractRecords } from './files-task-contract.js';
 import { evaluateTaskReadiness } from './task-readiness.js';
 import {
-  DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE,
-  dispatchableLifecycleRepair,
   evaluateDispatchableLifecycle,
   taskStatusFromBody,
 } from './dispatchability.js';
@@ -50,14 +47,18 @@ import { createDecompositionEligibilityProjection } from './decomposition-eligib
 import {
   createTaskInventoryEnumeration,
   normalizeFilesTaskInventory,
-  validateParallelScanInventoryBinding,
 } from './parallel-scan.js';
 import { renderActivationRepair } from './activation-repair.js';
 import { fileMatchesScopePattern } from './scope-matcher.js';
+// The canonical dispatch-eligibility evaluator. Preflight resolves facts and
+// presents results; every shared prerequisite is decided in this one module,
+// the same one packet preparation and role start consume.
 import {
-  FindingSet,
-  validateDecomposition,
-} from './dispatch-envelope.js';
+  observeDispatchInitialState,
+  evaluateDispatchEligibility,
+  liveReadinessCandidate,
+} from './dispatch-eligibility.js';
+
 
 export const HANDOFF_PREFLIGHT_KIND = 'agenticloop.handoff-preflight';
 export const HANDOFF_PREFLIGHT_SCHEMA_VERSION = 1;
@@ -149,6 +150,52 @@ function cleanStateRepair(state) {
   }
   if (parts.length === 0) return 'Restore a clean checkout before requesting a packet.';
   return `${parts.join('; ')}, then rerun this preflight.`;
+}
+
+/**
+ * Present one canonical finding as this command's owning repair.
+ *
+ * This is presentation, not decision: the code, message, evidence state, and
+ * disposition all arrive already decided from `dispatch-eligibility.js`. What
+ * belongs to `task handoff-preflight` is the exact next command an operator or
+ * role should run, which is command-specific and therefore resolved here.
+ */
+function preflightRepairHint(finding, context) {
+  const { taskId, cleanState, decompositionRepair, decompositionSource, returnCapabilityFact } = context;
+  if (finding.repairHint) return finding.repairHint;
+  const code = String(finding.code ?? '');
+  if (code === 'worktree.clean_gate.failed') return cleanStateRepair(cleanState?.state);
+  if (code.startsWith('parallel_scan.')) {
+    return typeof decompositionRepair === 'function' ? decompositionRepair() : null;
+  }
+  if (code.startsWith('activation.')) {
+    // Preflight already knows the bound work unit and the ready set from the
+    // committed decomposition, so the refusal offers the batch and work-unit
+    // options instead of one task at a time.
+    return renderActivationRepair({
+      taskId,
+      workUnitId: decompositionSource?.scan?.workUnit?.id ?? null,
+      readyTaskIds: (decompositionSource?.scan?.inventory?.members ?? [])
+        .filter(member => member?.eligibility?.eligible !== false)
+        .map(member => member?.taskId),
+    });
+  }
+  if (code.startsWith('return.')) {
+    const matched = (returnCapabilityFact?.errors ?? []).find(item => item.message === finding.message);
+    return matched?.repairHint ?? null;
+  }
+  if (code === 'contract.baseline.invalid' || code === 'contract.baseline.missing') {
+    return `Restore the committed append-only contract history for ${taskId} from Git history, or ` +
+      `authorize a correction with 'npx agenticloop task authorize-correction ${taskId}'. ` +
+      'The history is append-only, so it is repaired by restoring the committed chain, never by rewriting it.';
+  }
+  if (code === 'capability.declaration.invalid') {
+    return 'Repair or reinstall the host adapter so its engineer role declaration is complete, then rerun.';
+  }
+  if (code.startsWith('task.contract.') || code.startsWith('task.record.') || code.startsWith('task.body.')) {
+    return 'Repair the task record frontmatter, then rerun.';
+  }
+  return `npx agenticloop task readiness ${taskId}`;
 }
 
 /**
@@ -308,26 +355,12 @@ export function evaluateHandoffPreflight(input) {
               const history = loadFilesTaskContractRecords(resolvedTarget, taskId);
               snapshot.trustedRecords = history.trustedRecords;
               snapshot.trustedRecordErrors = history.errors;
-              for (const message of history.errors ?? []) {
-                findings.error(
-                  'contract.baseline.invalid',
-                  message,
-                  `Restore the committed append-only contract history for ${taskId} from Git history, or ` +
-                  `authorize a correction with 'npx agenticloop task authorize-correction ${taskId}'. ` +
-                  'The history is append-only, so it is repaired by restoring the committed chain, never by rewriting it.',
-                  'malformed'
-                );
-              }
             } catch (error) {
               // An unreadable history is unevaluable state, not proof of
-              // absence: dispatch would refuse it, so preflight refuses too.
-              snapshot.trustedRecordErrors = [`task-contract history is unreadable: ${error.message}`];
-              findings.error(
-                'contract.baseline.invalid',
-                `task-contract history for ${taskId} is unreadable: ${error.message}`,
-                `Ensure '.agenticloop/task-contract-history/${taskId}.jsonl' is readable and committed, then rerun.`,
-                'malformed'
-              );
+              // absence. It is recorded on the snapshot as the fact it is; the
+              // canonical evaluator decides that it blocks, with the same code
+              // and evidence classification packet preparation uses.
+              snapshot.trustedRecordErrors = [`task-contract history for ${taskId} is unreadable: ${error.message}`];
             }
           }
         }
@@ -457,16 +490,10 @@ export function evaluateHandoffPreflight(input) {
   let lifecycle = null;
 
   if (snapshot) {
+    // Reported, not decided: the canonical evaluator asks the same gate and
+    // owns the refusal, so preflight cannot pass a status role start refuses.
     const evaluated = evaluateDispatchableLifecycle(taskStatusFromBody(snapshot.body));
     lifecycle = { status: evaluated.status, dispatchable: evaluated.ok };
-    if (!evaluated.ok) {
-      findings.error(
-        DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE,
-        evaluated.reason,
-        dispatchableLifecycleRepair(taskId, evaluated.status),
-        evaluated.evidenceState
-      );
-    }
   }
 
   // ── 1c. Decomposition source ──────────────────────────────────────────
@@ -494,19 +521,8 @@ export function evaluateHandoffPreflight(input) {
   let effectivePolicy = null;
   let operatorAuthorization = 'unknown';
   let activationUsability = 'unknown';
-
-  function activationDiagnosticForAuthorization(state) {
-    switch (state) {
-      case 'missing': return 'activation.capture.missing';
-      case 'expired': return 'activation.grant.expired';
-      case 'revoked': return 'activation.grant.revoked';
-      case 'stale': return 'activation.binding.stale_contract';
-      case 'mismatched': return 'activation.binding.mismatch';
-      case 'unauthenticated': return 'activation.assurance.insufficient';
-      case 'malformed': return 'activation.grant.malformed';
-      default: return 'activation.capture.missing';
-    }
-  }
+  /** The resolved activation authority, handed to the canonical evaluator to grade. */
+  let authorizationFact = null;
 
   function formatDecompositionRepairCommand({ taskId, sourceRef, baseTree, head, decompositionSource }) {
     const workUnit = decompositionSource?.scan?.workUnit?.id ?? `work-unit:${taskId}`;
@@ -537,6 +553,7 @@ export function evaluateHandoffPreflight(input) {
           activationAssurance = 'host_signed';
           operatorAuthorization = 'authorized';
           activationUsability = 'usable';
+          authorizationFact = { state: 'present', assurance: 'host_signed', errors: [] };
         } else {
           const auth = resolveCurrentTaskAuthorization(resolvedTarget, io, {
             backend: snapshot.backend,
@@ -554,29 +571,11 @@ export function evaluateHandoffPreflight(input) {
             activationAssurance = auth.assurance;
             operatorAuthorization = 'authorized';
             activationUsability = 'usable';
+            authorizationFact = { state: 'present', assurance: auth.assurance, errors: [] };
           } else {
             operatorAuthorization = auth.state;
             activationUsability = 'blocked';
-            const code = activationDiagnosticForAuthorization(auth.state);
-            const evidenceState = auth.state === 'missing' ? 'missing' : (auth.state === 'malformed' ? 'malformed' : 'negative');
-            const messages = Array.isArray(auth.errors) && auth.errors.length
-              ? auth.errors
-              : [`task '${taskId}' activation authorization is '${auth.state}'`];
-            // Preflight already knows the bound work unit and the ready set
-            // from the committed decomposition, so the refusal offers the
-            // batch and work-unit options instead of one task at a time.
-            findings.error(
-              code,
-              messages.join('; '),
-              renderActivationRepair({
-                taskId,
-                workUnitId: decompositionSource?.scan?.workUnit?.id ?? null,
-                readyTaskIds: (decompositionSource?.scan?.inventory?.members ?? [])
-                  .filter(member => member?.eligibility?.eligible !== false)
-                  .map(member => member?.taskId),
-              }),
-              evidenceState
-            );
+            authorizationFact = { state: auth.state, assurance: null, errors: auth.errors ?? [] };
           }
         }
       }
@@ -589,11 +588,14 @@ export function evaluateHandoffPreflight(input) {
       );
       operatorAuthorization = 'malformed';
       activationUsability = 'blocked';
+      authorizationFact = { state: 'malformed', assurance: null, errors: [`activation resolution failed: ${error.message}`] };
     }
   }
 
   // ── 4. Readiness ──────────────────────────────────────────────────────
   let readinessResult = null;
+  /** The live authoring readiness observation the canonical evaluator grades. */
+  let readinessObservation = null;
   let dependencyAge = { state: 'missing', evaluatedAt: null, maxAgeSeconds: null };
 
   if (snapshot) {
@@ -648,22 +650,13 @@ export function evaluateHandoffPreflight(input) {
             dependencies: evaluated.dependencies ?? null,
             evaluatedAt: now,
           };
-          for (const diag of evaluated.diagnostics) {
-            if (diag.level === 'error') {
-              findings.error(
-                diag.code,
-                diag.message,
-                `npx agenticloop task readiness ${taskId}`,
-                diag.evidence?.state ?? 'negative'
-              );
-            } else if (diag.level === 'warning') {
-              findings.warning(
-                diag.code,
-                diag.message,
-                diag.evidence?.state ?? 'current'
-              );
-            }
-          }
+          // Handed to the canonical evaluator rather than graded here: an
+          // authoring readiness error blocks, and is never downgraded into
+          // advice at one boundary and enforced at another.
+          readinessObservation = {
+            diagnostics: evaluated.diagnostics ?? [],
+            base: { identity: `git-tree:${baseTree}` },
+          };
           if (parsedDepSnapshot?.ok) {
             const observedAt = parsedDepSnapshot.evidence.observedAt;
             const maxAgeSeconds = parsedDepSnapshot.evidence.freshnessPolicy.maxAgeSeconds;
@@ -692,6 +685,11 @@ export function evaluateHandoffPreflight(input) {
 
   // ── 5. Decomposition ──────────────────────────────────────────────────
   let decompositionDispatchable = null;
+  /** Resolved work-unit inputs the canonical evaluator decides over. */
+  let currentTaskInventory = null;
+  let inventoryRecheck = null;
+  let decompositionRepair = null;
+  let decompositionResolutionReported = false;
 
   if (snapshot) {
     const sourceRef = `.agenticloop/decompositions/${taskId}.json`;
@@ -699,22 +697,19 @@ export function evaluateHandoffPreflight(input) {
     const head = gitText(resolvedTarget, ['rev-parse', '--verify', 'HEAD']);
     const baseTree = gitText(resolvedTarget, ['rev-parse', 'HEAD^{tree}']);
     const repairCommand = () => formatDecompositionRepairCommand({ taskId, sourceRef, baseTree, head, decompositionSource });
+    decompositionRepair = repairCommand;
     if (!decompositionSource) {
-      if (!existsSync(fullPath)) {
-        findings.error(
-          'parallel_scan.decomposition.invalid',
-          `decomposition source not found: ${sourceRef}`,
-          repairCommand(),
-          'missing'
-        );
-      } else {
-        findings.error(
-          'parallel_scan.decomposition.invalid',
-          `decomposition source is unreadable: ${sourceRef}`,
-          repairCommand(),
-          'malformed'
-        );
-      }
+      // Resolution reports what it could not read; the canonical evaluator
+      // decides that an unresolvable source authorizes no dispatch.
+      findings.error(
+        'parallel_scan.decomposition.invalid',
+        existsSync(fullPath)
+          ? `decomposition source is unreadable: ${sourceRef}`
+          : `decomposition source not found: ${sourceRef}`,
+        repairCommand(),
+        existsSync(fullPath) ? 'malformed' : 'missing'
+      );
+      decompositionResolutionReported = true;
     } else {
       try {
         const schemaVersion = decompositionSource?.schemaVersion;
@@ -734,56 +729,27 @@ export function evaluateHandoffPreflight(input) {
           },
         });
 
-        const dispatchFindings = new FindingSet('parallel_scan.decomposition.invalid');
-        validateDecomposition(decompositionSource, taskId, dispatchFindings, {
-          now: Date.parse(now) || undefined,
-        });
-
-        // The bound scan is only as current as the inventory it was taken over.
-        // `validateDecomposition` checks the record's own shape; it does not
-        // re-enumerate the backend, so adding or removing a task carrier left
-        // the decomposition looking valid here while `prepare-dispatch` refused
-        // it as stale over the same committed facts (C12R-R2-F7).
-        //
-        // This is the same authority dispatch uses, given the same
-        // `eligibilityRecheck`, so prose-only carrier drift stays accepted at
-        // both boundaries and material membership drift fails at both. Running
-        // it here is what makes "work-unit membership" a dimension one preflight
-        // actually answers for.
-        //
-        // Only asked when the record itself is well formed: a malformed scan is
-        // the root cause, and reporting membership staleness derived from it
-        // would name a symptom beside the cause.
-        if (dispatchFindings.length === 0 && backend === 'files' && isObject(decompositionSource?.scan?.workUnit)) {
-          const currentInventory = enumerateFilesTaskInventory(resolvedTarget, projectConfig);
-          if (currentInventory) {
-            const eligibilityRecheck = taskContract?.ok
-              ? {
-                taskId,
-                backend: decompositionSource.scan.workUnit.backend,
-                currentContractDigest: taskContractDigestValue,
-                runGit: args => runGit(resolvedTarget, args),
-                baseEvidence: decompositionSource?.scan?.readinessContext?.base ?? null,
-                dependencyEvidence: decompositionSource?.scan?.readinessContext?.dependencies ?? null,
-              }
-              : undefined;
-            const binding = validateParallelScanInventoryBinding(
-              decompositionSource.scan, currentInventory, { eligibilityRecheck },
-            );
-            for (const message of binding.errors) {
-              findings.error('parallel_scan.decomposition.invalid', message, repairCommand(), 'stale');
-            }
+        // Both the decomposition verdict and the work-unit membership recheck
+        // are the canonical evaluator's. Preflight resolves the inputs - the
+        // committed source above, the freshly enumerated backend inventory and
+        // the eligibility recheck below - and projects the result. It used to
+        // run `validateDecomposition` itself and re-enumerate membership beside
+        // packet preparation doing the same; that duplication is what made
+        // C12R-R2-F7 possible and is now removed.
+        if (backend === 'files' && isObject(decompositionSource?.scan?.workUnit)) {
+          currentTaskInventory = enumerateFilesTaskInventory(resolvedTarget, projectConfig);
+          if (taskContract?.ok) {
+            inventoryRecheck = {
+              taskId,
+              backend: decompositionSource.scan.workUnit.backend,
+              currentContractDigest: taskContractDigestValue,
+              runGit: args => runGit(resolvedTarget, args),
+              baseEvidence: decompositionSource?.scan?.readinessContext?.base ?? null,
+              dependencyEvidence: decompositionSource?.scan?.readinessContext?.dependencies ?? null,
+            };
           }
         }
-
-        for (const item of dispatchFindings.items) {
-          findings.error(
-            item.code ?? 'parallel_scan.decomposition.invalid',
-            item.message,
-            repairCommand(),
-            item.evidenceState ?? 'negative'
-          );
-        }
+        decompositionRepair = repairCommand;
 
         decompositionDispatchable = {
           schemaVersion,
@@ -800,7 +766,8 @@ export function evaluateHandoffPreflight(input) {
           eligibility,
           eligibilityDigest: eligibilityProjection.digest,
           eligibilityProjection,
-          dispatchCompatible: dispatchFindings.length === 0,
+          // Filled in from the canonical decision once it is taken.
+          dispatchCompatible: null,
         };
       } catch (error) {
         findings.error(
@@ -816,6 +783,8 @@ export function evaluateHandoffPreflight(input) {
   // ── 6. Repository state ───────────────────────────────────────────────
   let repositoryState = null;
   let cleanStateClassification = 'unknown';
+  /** The observed initial repository state the canonical evaluator grades. */
+  let cleanStateObservation = null;
 
   {
     const head = gitText(resolvedTarget, ['rev-parse', '--verify', 'HEAD']);
@@ -841,38 +810,21 @@ export function evaluateHandoffPreflight(input) {
         productBase: baseTree && isGitObjectId(baseTree) ? baseTree : null,
       };
 
-      // Clean state
+      // One evaluator, one verdict. Preflight and `prepare-dispatch` always
+      // called the same `evaluateDispatchCleanState`, but preflight downgraded
+      // its findings to warnings and told the caller the gate "may" refuse
+      // later - so a dirty checkout produced a green preflight and a blocked
+      // dispatch over identical facts (C12R-R2-F5). Preflight now only observes;
+      // the classification is the canonical evaluator's, so the two boundaries
+      // are structurally unable to disagree about it again.
       try {
         const scopeContract = snapshot ? (taskContract ?? taskContractDigest(snapshot.body)) : null;
-        const cleanState = evaluateDispatchCleanState({
+        cleanStateObservation = observeDispatchInitialState({
           runGit: args => runGit(resolvedTarget, args),
           scopePatterns: scopeContract?.ok ? scopeContract.projection.allowed_paths ?? [] : [],
           intendedCreations: scopeContract?.ok ? scopeContract.projection.intended_creations ?? [] : [],
         });
-        cleanStateClassification = cleanState.ok ? 'clean' : 'dirty';
-        if (!cleanState.ok) {
-          // One evaluator, one verdict. Preflight and `prepare-dispatch` have
-          // always called the same `evaluateDispatchCleanState`, but preflight
-          // downgraded its findings to warnings and told the caller the gate
-          // "may" refuse later - so a dirty checkout produced a green preflight
-          // and a blocked dispatch over identical facts (C12R-R2-F5). That is
-          // the C12-F1 defect in a second dimension, and it is what the field
-          // session hit when generated workflow state failed the clean gate
-          // after preflight had passed.
-          //
-          // Scratch and operator-state prefixes are already excluded by the
-          // shared evaluator, so what remains here is genuinely relevant state
-          // that dispatch will refuse. Reporting it as an error is what makes
-          // one preflight the complete list of blockers.
-          for (const finding of cleanState.findings) {
-            findings.error(
-              'worktree.clean_gate.failed',
-              finding.message,
-              cleanStateRepair(cleanState.state),
-              'negative'
-            );
-          }
-        }
+        cleanStateClassification = cleanStateObservation.clean?.ok === true ? 'clean' : 'dirty';
       } catch (error) {
         cleanStateClassification = 'unknown';
         findings.warning('cli.operational', `clean state evaluation failed: ${error.message}`, 'malformed');
@@ -883,6 +835,8 @@ export function evaluateHandoffPreflight(input) {
   // ── 7. Host-role capability ───────────────────────────────────────────
   let hostRoleCapability = null;
   let degradedEnforcementReports = [];
+  /** The resolved host-role declaration the canonical evaluator grades. */
+  let hostRoleCapabilityFact = null;
 
   try {
     const config = {};
@@ -943,12 +897,12 @@ export function evaluateHandoffPreflight(input) {
         if (checked.ok) {
           hostRoleCapability = { host, roleId: 'engineer', declaration };
           degradedEnforcementReports = createDegradedEnforcementReports(declaration);
+          hostRoleCapabilityFact = { host, roleId: 'engineer', declaration, errors: [] };
         } else {
-          findings.warning(
-            'capability.declaration.invalid',
-            `host-role capability declaration is invalid: ${checked.errors.join('; ')}`,
-            'malformed'
-          );
+          // Packet preparation refuses an invalid declaration outright. Preflight
+          // used to report it as advice, which is the same false-green shape as
+          // C12R-R2-F5; the canonical evaluator now decides it for both.
+          hostRoleCapabilityFact = { host, roleId: 'engineer', declaration: null, errors: checked.errors };
         }
       }
     }
@@ -958,6 +912,8 @@ export function evaluateHandoffPreflight(input) {
 
   // ── 8. Return-adapter resolution ──────────────────────────────────────
   let returnAdapterResolution = null;
+  /** Resolved return-capability facts the canonical evaluator grades. */
+  const returnCapabilityFact = { errors: [], warnings: [] };
 
   try {
     const store = loadHostTrustStore(resolvedTarget, {
@@ -978,14 +934,13 @@ export function evaluateHandoffPreflight(input) {
         // never reached.
         const chosen = eligibleAdapters.find(a => a.adapterId === returnAdapter) ?? null;
         if (!chosen) {
-          findings.error(
-            'return.assurance.insufficient',
-            `requested return adapter '${returnAdapter}' is not an eligible protected-boundary adapter with returnReceipt support; eligible: ${eligibleIds.join(', ') || '(none)'}`,
-            eligibleIds.length
+          returnCapabilityFact.errors.push({
+            code: 'return.assurance.insufficient',
+            message: `requested return adapter '${returnAdapter}' is not an eligible protected-boundary adapter with returnReceipt support; eligible: ${eligibleIds.join(', ') || '(none)'}`,
+            repairHint: eligibleIds.length
               ? `Use --return-adapter with one of: ${eligibleIds.join(', ')}.`
               : registerHint,
-            'negative'
-          );
+          });
           returnAdapterResolution = { state: 'unmatched', requested: returnAdapter, adapters: eligibleIds };
         } else {
           returnAdapterResolution = {
@@ -995,29 +950,27 @@ export function evaluateHandoffPreflight(input) {
           };
         }
       } else if (effectivePolicy?.mode === 'hardened' && eligibleAdapters.length === 0) {
-        findings.error(
-          'return.assurance.insufficient',
-          'hardened mode requires a protected-boundary return adapter with returnReceipt support',
-          registerHint,
-          'negative'
-        );
+        returnCapabilityFact.errors.push({
+          code: 'return.assurance.insufficient',
+          message: 'hardened mode requires a protected-boundary return adapter with returnReceipt support',
+          repairHint: registerHint,
+        });
         returnAdapterResolution = { state: 'missing', adapters: [] };
       } else if (effectivePolicy?.mode === 'hardened' && eligibleAdapters.length > 1) {
-        findings.error(
-          'return.assurance.insufficient',
-          'multiple return adapters are available; select one with --return-adapter',
-          `Use --return-adapter with one of: ${eligibleIds.join(', ')}.`,
-          'negative'
-        );
+        returnCapabilityFact.errors.push({
+          code: 'return.assurance.insufficient',
+          message: 'multiple return adapters are available; select one with --return-adapter',
+          repairHint: `Use --return-adapter with one of: ${eligibleIds.join(', ')}.`,
+        });
         returnAdapterResolution = { state: 'ambiguous', adapters: eligibleIds };
       } else {
         const selected = eligibleAdapters[0] ?? null;
         if (eligibleAdapters.length > 1 && effectivePolicy?.mode !== 'hardened') {
-          findings.warning(
-            'return.assurance.ambiguous',
-            `multiple return adapters are available (${eligibleIds.join(', ')}); selected '${selected?.adapterId}'; use --return-adapter to select a specific adapter`,
-            'current'
-          );
+          returnCapabilityFact.warnings.push({
+            code: 'return.assurance.ambiguous',
+            evidenceState: 'current',
+            message: `multiple return adapters are available (${eligibleIds.join(', ')}); selected '${selected?.adapterId}'; use --return-adapter to select a specific adapter`,
+          });
         }
         returnAdapterResolution = {
           state: selected ? 'resolved' : 'none_required',
@@ -1099,6 +1052,69 @@ export function evaluateHandoffPreflight(input) {
       }
     } catch {
       // Sibling detection is advisory; failures don't block the preflight.
+    }
+  }
+
+  // ── 9b. The one canonical semantic decision ───────────────────────────
+  //
+  // Everything above resolves facts: task retrieval, backend inventory
+  // enumeration, Git and filesystem observation, host selection, trust-store
+  // loading, and sibling-worktree advisory analysis. Not one shared dispatch
+  // prerequisite is decided there any more. Lifecycle, task contract, trusted
+  // baseline, required checks, activation and its assurance, readiness,
+  // dependency evidence, decomposition, Maintainer attribution, task
+  // eligibility, work-unit membership, repository identity, base identity,
+  // clean state, host-role capability, and return capability are all decided
+  // once here, by the same evaluator packet preparation and role start use.
+  //
+  // Preflight keeps only its presentation: the owning repair for each canonical
+  // finding, its command-specific domain fields, and boundary-only advisories.
+  let eligibility = null;
+  if (snapshot) {
+    eligibility = evaluateDispatchEligibility(liveReadinessCandidate({
+      snapshot,
+      authorization: authorizationFact,
+      readinessObservation,
+      dependencyObservation: dependencyAge,
+      repository: repositoryState,
+      decomposition: decompositionSource,
+      parallelScanInventory: currentTaskInventory,
+      hostRoleCapability: hostRoleCapabilityFact,
+      policy: effectivePolicy
+        ? { mode: effectivePolicy.mode, minimumActivation: effectivePolicy.minimumActivation }
+        : null,
+      returnCapability: returnCapabilityFact,
+      cleanStateObservation,
+      inventoryRecheck,
+      authority: {},
+      now: Date.parse(now) || undefined,
+    }));
+
+    for (const finding of eligibility.findings) {
+      // The boundary already named the exact unreadable path and its repair;
+      // the canonical decision still refuses, it simply does not restate it.
+      if (decompositionResolutionReported &&
+          finding.code === 'parallel_scan.decomposition.invalid' &&
+          /absent or could not be read/.test(finding.message)) continue;
+      findings.error(
+        finding.code,
+        finding.message,
+        preflightRepairHint(finding, {
+          taskId,
+          cleanState: cleanStateObservation?.clean ?? null,
+          decompositionRepair,
+          decompositionSource,
+          returnCapabilityFact,
+        }),
+        finding.evidenceState
+      );
+    }
+    for (const warning of eligibility.warnings) {
+      findings.warning(warning.code, warning.message, warning.evidenceState);
+    }
+    if (decompositionDispatchable) {
+      decompositionDispatchable.dispatchCompatible =
+        eligibility.dimensions.decomposition.state === 'satisfied';
     }
   }
 

@@ -12,7 +12,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -26,6 +26,7 @@ import { createDispatchFixture } from './helpers/dispatch-fixture.js';
 import { createTestHostTrust, protectedHostBoundary, writeHostTrustStore } from './helpers/host-trust-fixture.js';
 import { signHostPayload, hostTrustBoundarySignaturePayload, HOST_TRUST_BOUNDARY_RESPONSE_KIND, HOST_TRUST_BOUNDARY_SCHEMA_VERSION } from '../src/host-trust.js';
 import { createDecompositionProvenance } from '../src/dispatch-envelope.js';
+import { createTaskContractBaselineRecord, taskContractDigest } from '../src/task-contract-baseline.js';
 import { createTaskInventoryEnumeration, evaluateParallelScan, normalizeFilesTaskInventory } from '../src/parallel-scan.js';
 import { parseDependencySnapshot, dependencyStatusMap } from '../src/task-evidence-contract.js';
 
@@ -196,6 +197,39 @@ function makeDecompositionSource(target, taskId, { depSnapshot: depSnapshotOverr
   return sourceRef;
 }
 
+/**
+ * Make a fixture task dispatch-grade by committing its trusted task-contract
+ * baseline record, exactly as `task establish-baseline` does.
+ *
+ * Before C12R.2 these fixtures carried no baseline record and still asserted a
+ * green preflight, while `prepare-dispatch` refused them with "missing
+ * task-contract baseline record" over identical facts. Consolidating the four
+ * boundaries onto one evaluator surfaced that false green, so the fixtures now
+ * describe tasks that can actually be dispatched.
+ */
+function establishBaseline(target, taskId) {
+  const carrier = taskPath(target, taskId);
+  if (!existsSync(carrier)) return;
+  const body = readFileSync(carrier, "utf8");
+  const contract = taskContractDigest(body);
+  if (!contract.ok) return;
+  const dir = join(target, ".agenticloop", "task-contract-history");
+  mkdirSync(dir, { recursive: true });
+  const record = createTaskContractBaselineRecord({
+    recordId: `task-contract-record:${randomUUID()}`,
+    taskId,
+    digest: contract.digest,
+    projection: contract.projection,
+    authority: `task:${taskId}`,
+    actor: "Agentic Loop Test",
+    timestamp: new Date().toISOString(),
+    affectedArtifact: `.agenticloop/tasks/${taskId}.md`,
+  });
+  writeFileSync(join(dir, `${taskId}.jsonl`), `${JSON.stringify(record)}\n`, "utf8");
+  git(target, ["add", ".agenticloop/task-contract-history"]);
+  git(target, ["commit", "-m", `baseline ${taskId}\n\nTask: ${taskId}\nAgent: maintainer`]);
+}
+
 function spawnSyncOutput(target, args) {
   return String(spawnSync('git', args, { cwd: target, encoding: 'utf8' }).stdout ?? '').trim();
 }
@@ -255,6 +289,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-001');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-001\n\nTask: T-001\nAgent: maintainer']);
+    establishBaseline(target, 'T-001');
     const now = new Date().toISOString();
 
     const result = evaluateHandoffPreflight({
@@ -290,6 +325,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-002', { withActivation: true });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-002\n\nTask: T-002\nAgent: maintainer']);
+    establishBaseline(target, 'T-002');
     makeDecompositionSource(target, 'T-002');
     git(target, ['add', '.agenticloop/decompositions']);
     git(target, ['commit', '-m', 'decomposition T-002\n\nTask: T-002\nAgent: maintainer']);
@@ -340,6 +376,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-003');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-003\n\nTask: T-003\nAgent: maintainer']);
+    establishBaseline(target, 'T-003');
     makeDecompositionSource(target, 'T-003');
     git(target, ['add', '.agenticloop/decompositions']);
     git(target, ['commit', '-m', 'decomposition T-003\n\nTask: T-003\nAgent: maintainer']);
@@ -405,6 +442,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-005', { withActivation: true });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-005\n\nTask: T-005\nAgent: maintainer']);
+    establishBaseline(target, 'T-005');
 
     const result = evaluateHandoffPreflight({
       target, taskId: 'T-005', backend: 'files',
@@ -430,6 +468,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-006', { withActivation: true });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-006\n\nTask: T-006\nAgent: maintainer']);
+    establishBaseline(target, 'T-006');
     mkdirSync(join(target, '.agenticloop', 'decompositions'), { recursive: true });
     writeFileSync(join(target, '.agenticloop', 'decompositions', 'T-006.json'), 'not valid json', 'utf8');
     // Committed, so this case isolates the malformed decomposition. Left
@@ -455,6 +494,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-007', { withActivation: true });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-007\n\nTask: T-007\nAgent: maintainer']);
+    establishBaseline(target, 'T-007');
     makeDecompositionSource(target, 'T-007');
     // Rewrite decomposition to be stale/incomplete by removing authority and members
     const path = join(target, '.agenticloop', 'decompositions', 'T-007.json');
@@ -486,6 +526,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-008');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-008\n\nTask: T-008\nAgent: maintainer']);
+    establishBaseline(target, 'T-008');
 
     const result = evaluateHandoffPreflight({
       target, taskId: 'T-008', backend: 'unknown',
@@ -507,6 +548,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-009');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-009\n\nTask: T-009\nAgent: maintainer']);
+    establishBaseline(target, 'T-009');
 
     const result = evaluateHandoffPreflight({
       target, taskId: 'T-009', backend: 'github',
@@ -528,6 +570,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-010');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-010\n\nTask: T-010\nAgent: maintainer']);
+    establishBaseline(target, 'T-010');
 
     const result = evaluateHandoffPreflight({
       target, taskId: 'T-010', backend: 'files',
@@ -548,6 +591,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-011');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-011\n\nTask: T-011\nAgent: maintainer']);
+    establishBaseline(target, 'T-011');
 
     const result = evaluateHandoffPreflight({
       target, taskId: 'T-011', backend: 'files',
@@ -564,6 +608,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-012');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-012\n\nTask: T-012\nAgent: maintainer']);
+    establishBaseline(target, 'T-012');
     mkdirSync(join(target, 'src'), { recursive: true });
     writeFileSync(join(target, 'src', 'dirty.txt'), 'dirty', 'utf8');
 
@@ -582,6 +627,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-013');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-013\n\nTask: T-013\nAgent: maintainer']);
+    establishBaseline(target, 'T-013');
 
     const result = evaluateHandoffPreflight({
       target, taskId: 'T-013', backend: 'files',
@@ -599,6 +645,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-050');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-050\n\nTask: T-050\nAgent: maintainer']);
+    establishBaseline(target, 'T-050');
 
     const trustA = createTestHostTrust({ target, adapterId: 'test.adapter.alpha.v1', keyId: 'alpha-key' });
     const trustB = createTestHostTrust({ target, adapterId: 'test.adapter.beta.v1', keyId: 'beta-key' });
@@ -747,6 +794,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-014');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-014\n\nTask: T-014\nAgent: maintainer']);
+    establishBaseline(target, 'T-014');
 
     const result = evaluateHandoffPreflight({
       target, taskId: 'T-014', backend: 'files',
@@ -771,6 +819,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-014b');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-014b\n\nTask: T-014b\nAgent: maintainer']);
+    establishBaseline(target, 'T-014b');
 
     const result = evaluateHandoffPreflight({
       target, taskId: 'T-014b', backend: 'files',
@@ -793,6 +842,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-014c');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-014c\n\nTask: T-014c\nAgent: maintainer']);
+    establishBaseline(target, 'T-014c');
 
     const result = evaluateHandoffPreflight({
       target, taskId: 'T-014c', backend: 'files',
@@ -813,6 +863,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-015');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-015\n\nTask: T-015\nAgent: maintainer']);
+    establishBaseline(target, 'T-015');
 
     // Create a sibling worktree with a dirty file outside task scope
     git(target, ['branch', 'other-task']);
@@ -853,6 +904,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-060', { emptyScope: true });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-060\n\nTask: T-060\nAgent: maintainer']);
+    establishBaseline(target, 'T-060');
 
     const now = new Date().toISOString();
     const result = evaluateHandoffPreflight({
@@ -895,6 +947,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-016');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-016\n\nTask: T-016\nAgent: maintainer']);
+    establishBaseline(target, 'T-016');
 
     const headBefore = spawnSyncOutput(target, ['rev-parse', 'HEAD']);
     const statusBefore = spawnSyncOutput(target, ['status', '--porcelain', '--untracked-files=all']);
@@ -917,6 +970,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-017', { withActivation: true });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-017\n\nTask: T-017\nAgent: maintainer']);
+    establishBaseline(target, 'T-017');
     makeDecompositionSource(target, 'T-017');
     git(target, ['add', '.agenticloop/decompositions']);
     git(target, ['commit', '-m', 'decomposition T-017\n\nTask: T-017\nAgent: maintainer']);
@@ -952,6 +1006,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-020');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-020\n\nTask: T-020\nAgent: maintainer']);
+    establishBaseline(target, 'T-020');
     mkdirSync(join(target, '.agenticloop', 'decompositions'), { recursive: true });
     writeFileSync(join(target, '.agenticloop', 'decompositions', 'T-020.json'), 'not valid json', 'utf8');
     // Committed, so the two failures this case is about - activation and
@@ -976,6 +1031,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-021', { withActivation: true });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-021\n\nTask: T-021\nAgent: maintainer']);
+    establishBaseline(target, 'T-021');
     const head = spawnSyncOutput(target, ['rev-parse', 'HEAD']);
     const baseTree = spawnSyncOutput(target, ['rev-parse', 'HEAD^{tree}']);
 
@@ -1001,6 +1057,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-022', { withActivation: true });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-022\n\nTask: T-022\nAgent: maintainer']);
+    establishBaseline(target, 'T-022');
     makeDecompositionSource(target, 'T-022');
     git(target, ['add', '.agenticloop/decompositions']);
     git(target, ['commit', '-m', 'decomposition T-022\n\nTask: T-022\nAgent: maintainer']);
@@ -1031,6 +1088,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-030', { withActivation: true, depends_on: ['T-029'] });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-030\n\nTask: T-030\nAgent: maintainer']);
+    establishBaseline(target, 'T-030');
 
     const observedAt = new Date().toISOString();
     const depSnapshot = {
@@ -1064,6 +1122,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-032', { withActivation: true, depends_on: ['T-031'] });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-032\n\nTask: T-032\nAgent: maintainer']);
+    establishBaseline(target, 'T-032');
 
     const validObservedAt = new Date().toISOString();
     const validSnapshot = {
@@ -1102,6 +1161,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-034', { withActivation: true, depends_on: ['T-033'] });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-034\n\nTask: T-034\nAgent: maintainer']);
+    establishBaseline(target, 'T-034');
 
     const validObservedAt = new Date().toISOString();
     const validSnapshot = {
@@ -1177,6 +1237,7 @@ describe('handoff-preflight', () => {
     }), 'utf8');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-040\n\nTask: T-040\nAgent: maintainer']);
+    establishBaseline(target, 'T-040');
 
     const result = evaluateHandoffPreflight({
       target, taskId: 'T-040', backend: 'files',
@@ -1194,6 +1255,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-050', { withActivation: true });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-050\n\nTask: T-050\nAgent: maintainer']);
+    establishBaseline(target, 'T-050');
     makeDecompositionSource(target, 'T-050');
     git(target, ['add', '.agenticloop/decompositions']);
     git(target, ['commit', '-m', 'decomposition T-050\n\nTask: T-050\nAgent: maintainer']);
@@ -1214,6 +1276,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-051', { withActivation: true });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-051\n\nTask: T-051\nAgent: maintainer']);
+    establishBaseline(target, 'T-051');
     makeDecompositionSource(target, 'T-051');
     git(target, ['add', '.agenticloop/decompositions']);
     git(target, ['commit', '-m', 'decomposition T-051\n\nTask: T-051\nAgent: maintainer']);
@@ -1239,6 +1302,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-052', { withActivation: true });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-052\n\nTask: T-052\nAgent: maintainer']);
+    establishBaseline(target, 'T-052');
 
     const run = await runCliInProcess(['task', 'handoff-preflight', 'T-052', '--output', '../escape.json'], { cwd: target });
     assert.equal(run.status, 1, 'escaping --output path should fail');
@@ -1251,6 +1315,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-003');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-003\n\nTask: T-003\nAgent: maintainer']);
+    establishBaseline(target, 'T-003');
 
     const run = await runCliInProcess(['task', 'handoff-preflight', 'T-003', '--repair-plan', 'repair.json', '--json'], { cwd: target });
     assert.equal(run.status, 1, 'blocked preflight should exit non-zero');
@@ -1275,6 +1340,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-060', { withActivation: true });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-060\n\nTask: T-060\nAgent: maintainer']);
+    establishBaseline(target, 'T-060');
     makeDecompositionSource(target, 'T-060');
     git(target, ['add', '.agenticloop/decompositions']);
     git(target, ['commit', '-m', 'decomposition T-060\n\nTask: T-060\nAgent: maintainer']);
@@ -1301,6 +1367,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-061', { withActivation: true });
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-061\n\nTask: T-061\nAgent: maintainer']);
+    establishBaseline(target, 'T-061');
     makeDecompositionSource(target, 'T-061');
     git(target, ['add', '.agenticloop/decompositions']);
     git(target, ['commit', '-m', 'decomposition T-061\n\nTask: T-061\nAgent: maintainer']);
@@ -1328,6 +1395,7 @@ describe('handoff-preflight', () => {
     writeTask(target, 'T-062');
     git(target, ['add', '.']);
     git(target, ['commit', '-m', 'task T-062\n\nTask: T-062\nAgent: maintainer']);
+    establishBaseline(target, 'T-062');
 
     const run = await runCliInProcess(['task', 'handoff-preflight', 'T-062', '--repair-plan', 'repair.json'], { cwd: target });
     assert.equal(run.status, 1, 'blocked task should exit non-zero');

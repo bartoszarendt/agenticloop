@@ -22,6 +22,24 @@
  */
 
 import { canonicalSha256 } from './canonical-json.js';
+// Role start authenticates the exact retained packet through the same closed
+// sealed-decision contract prepared-packet validation produces, defined one
+// layer below both so neither boundary owns a second copy of it.
+import {
+  PREPARED_DISPATCH_VALIDATION_KIND,
+  PREPARED_DISPATCH_VALIDATION_SCHEMA_VERSION,
+  createPreparedDispatchValidation,
+  preparedDispatchValidationDigest,
+  validatePreparedDispatchValidation,
+} from './dispatch-eligibility.js';
+
+export {
+  PREPARED_DISPATCH_VALIDATION_KIND,
+  PREPARED_DISPATCH_VALIDATION_SCHEMA_VERSION,
+  createPreparedDispatchValidation,
+  preparedDispatchValidationDigest,
+  validatePreparedDispatchValidation,
+};
 import { createDiagnostic } from './repair-policy.js';
 import { deriveEvidenceState, dispositionForEvidenceState } from './result-envelope.js';
 import {
@@ -45,8 +63,6 @@ import {
 
 export const HANDOFF_RECOGNITION_KIND = 'agenticloop.handoff-recognition';
 export const HANDOFF_RECOGNITION_SCHEMA_VERSION = 2;
-export const PREPARED_DISPATCH_VALIDATION_KIND = 'agenticloop.prepared-dispatch-validation';
-export const PREPARED_DISPATCH_VALIDATION_SCHEMA_VERSION = 1;
 /** Maximum age of a return that may authorize a new protected transition. */
 /** @deprecated Use RETURN_USE_FRESHNESS_POLICY; retained as a source-compatible value. */
 export const HANDOFF_RETURN_MAX_AGE_SECONDS = RETURN_USE_FRESHNESS_POLICY.maxAgeSeconds;
@@ -283,52 +299,6 @@ export function handoffRecognitionDigest(record) {
   const projection = { ...record };
   delete projection.digest;
   return `sha256:${HANDOFF_RECOGNITION_DIGEST_DOMAIN}:${canonicalSha256(projection)}`;
-}
-
-export function preparedDispatchValidationDigest(record) {
-  const projection = { ...record };
-  delete projection.digest;
-  return `sha256:${PREPARED_DISPATCH_VALIDATION_KIND}.v${PREPARED_DISPATCH_VALIDATION_SCHEMA_VERSION}:${canonicalSha256(projection)}`;
-}
-
-/**
- * Create an unkeyed digest-bound integrity record for one packet/result pair.
- * The digest detects alteration and packet substitution. It does not
- * authenticate who ran the validator or independently prove canonical origin.
- */
-export function createPreparedDispatchValidation(packet, checked) {
-  const record = {
-    kind: PREPARED_DISPATCH_VALIDATION_KIND,
-    schemaVersion: PREPARED_DISPATCH_VALIDATION_SCHEMA_VERSION,
-    packetId: typeof packet?.packetId === 'string' ? packet.packetId : null,
-    packetDigest: typeof packet?.digest === 'string' ? packet.digest : null,
-    ok: checked?.ok === true,
-    errors: Array.isArray(checked?.errors) ? checked.errors.map(String) : [],
-    digest: null,
-  };
-  record.digest = preparedDispatchValidationDigest(record);
-  return Object.freeze(record);
-}
-
-export function validatePreparedDispatchValidation(record, packet) {
-  const fields = ['kind', 'schemaVersion', 'packetId', 'packetDigest', 'ok', 'errors', 'digest'];
-  const errors = [];
-  if (!exactKeys(record, fields)) return { ok: false, errors: ['canonical dispatch validation receipt fields must equal the closed schema'] };
-  if (record.kind !== PREPARED_DISPATCH_VALIDATION_KIND ||
-      record.schemaVersion !== PREPARED_DISPATCH_VALIDATION_SCHEMA_VERSION) {
-    errors.push('canonical dispatch validation receipt identity is invalid');
-  }
-  if (record.packetId !== packet?.packetId || record.packetDigest !== packet?.digest) {
-    errors.push('canonical dispatch validation receipt does not bind the exact packet');
-  }
-  if (typeof record.ok !== 'boolean' || !Array.isArray(record.errors) ||
-      record.errors.some(error => typeof error !== 'string' || !error)) {
-    errors.push('canonical dispatch validation receipt result is malformed');
-  }
-  if (record.ok === true && record.errors.length > 0) errors.push('successful canonical dispatch validation cannot carry errors');
-  if (record.ok === false && record.errors.length === 0) errors.push('failed canonical dispatch validation must carry errors');
-  if (record.digest !== preparedDispatchValidationDigest(record)) errors.push('canonical dispatch validation receipt digest is invalid');
-  return { ok: errors.length === 0, errors };
 }
 
 /**
