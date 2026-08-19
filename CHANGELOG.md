@@ -3,6 +3,15 @@
 ## Unreleased
 
 ### Fixed
+- `task evidence --class implementation_artifact_evidence` now accepts
+  re-passing the head the record already binds, reporting that the binding was
+  already current instead of refusing with "changes protected task contract or
+  makes no bounded evidence change". A no-op is not a contract mutation. While
+  the product-head conditions were whole-repository questions this refusal left
+  the engineer with no legal move at all - it could neither keep the binding nor
+  change it. Genuine protected-contract mutations are still refused, and a
+  re-affirmation of a head that no longer satisfies the evidence conditions is
+  still refused on those conditions.
 - Return production no longer refuses a finished implementation because the
   repository moved on around it. Whether the declared `productHead` is still the
   end of this task's work is decided against the task's `allowed_paths`; a later

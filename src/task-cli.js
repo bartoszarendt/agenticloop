@@ -3440,7 +3440,26 @@ export async function cmdTask(args, io = createIo()) {
           return printGateResult('task evidence', commandFailure('task evidence', refused,
             'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);
         }
-        candidate = replaceFrontmatterField(candidate, 'implementation_artifact', `commit:${productHead}`);
+        const rebound = replaceFrontmatterField(candidate, 'implementation_artifact', `commit:${productHead}`);
+        // Re-affirming the binding the record already carries is a no-op, and a
+        // no-op is not a contract mutation. It used to be reported as one -
+        // "changes protected task contract or makes no bounded evidence change"
+        // - which, while the product-head conditions were whole-repository
+        // questions, left the engineer with no legal move at all: it could
+        // neither keep the binding nor change it. The evidence conditions above
+        // still decide whether the named head is bindable now, so a
+        // re-affirmation of a head that no longer holds is still refused.
+        if (rebound === current) {
+          const result = {
+            ok: true, task_id: taskId, mutationClass, taskContractDigest: contract.digest,
+            dispatchCarrierDigest: lineage.dispatchCarrierDigest, currentCarrierDigest: priorCarrierDigest,
+            bindingAlreadyCurrent: true, receipt: null, receiptPath: null, productHead,
+          };
+          if (asJson) io.out(JSON.stringify(result, null, 2));
+          else io.out(`${taskId} already binds implementation_artifact to ${productHead}; nothing was written`);
+          return 0;
+        }
+        candidate = rebound;
         ownedFields = ['implementation_artifact'];
       } else if (mutationClass === 'implementation_summary_evidence') {
         if (typeof opts.summary !== 'string' || !opts.summary.trim() || typeof opts.checkEvidence !== 'string' || !opts.checkEvidence.trim()) {
@@ -3514,6 +3533,7 @@ export async function cmdTask(args, io = createIo()) {
       const result = {
         ok: true, task_id: taskId, mutationClass, taskContractDigest: contract.digest,
         dispatchCarrierDigest: lineage.dispatchCarrierDigest, currentCarrierDigest,
+        bindingAlreadyCurrent: false,
         receipt, receiptPath, productHead: mutationClass === 'implementation_artifact_evidence' ? opts.productHead : null,
       };
       if (asJson) io.out(JSON.stringify(result, null, 2));
