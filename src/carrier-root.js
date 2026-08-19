@@ -25,6 +25,7 @@ import { existsSync, lstatSync, readdirSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { GIT_MAX_BUFFER } from './git-runner.js';
+import { samePathAuthority } from './path-identity.js';
 
 /**
  * Resolved carrier roots, keyed by resolved target path.
@@ -90,7 +91,13 @@ function deriveCarrierRoot(key) {
   // of the project-root bare coordinator layout this toolkit supports.
   if (basename(common) !== '.git') return Object.freeze({ ...unevaluated, evaluated: true });
   const carrierRoot = dirname(common);
-  const isLinkedWorktree = resolve(toplevel) === key && carrierRoot !== key;
+  // Compared through the shared path authority rather than by string equality.
+  // A target reaches this resolution spelled several ways - a packet stores a
+  // normalized lowercase authority path, an operator types the checkout's real
+  // case - and on a case-insensitive filesystem those are the same directory.
+  // String equality made a lane look like an ordinary checkout, which put the
+  // half-visible world straight back.
+  const isLinkedWorktree = samePathAuthority(toplevel, key) && !samePathAuthority(carrierRoot, key);
   return Object.freeze({
     target: key,
     carrierRoot: isLinkedWorktree ? carrierRoot : key,

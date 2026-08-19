@@ -226,3 +226,81 @@ describe('a return lane that has not re-applied the implementation cannot return
     assert.match(result.firstSafeRepair, /Re-apply this task's product commits/);
   });
 });
+
+describe('a worktree lane that re-applies the implementation reaches a verified return', () => {
+  it('drives mint, role start, re-application, evidence, checks, and return in the lane', async () => {
+    // The load-bearing case. Both field cohorts show that component-level
+    // correctness does not imply a workflow with an executable path, and only a
+    // completed return proves otherwise. This is the lane the field operator
+    // chose, driven end to end through the real commands with `--target` set to
+    // the worktree for every one of them.
+    const fixture = await createDispatchFixture(temp, 'lane-return', {
+      requiredChecksText: '- [RC-1] command: `node --version`\n- [RC-2] command: `node --version`',
+    });
+    const root = fixture.root;
+    const options = {
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      hostAuthority: protectedHostBoundary(fixture.trust),
+    };
+    const worktree = createAgenticLoopWorktree({
+      target: root, taskId: 'T-001', branch: 'task/T-001-return', from: 'HEAD',
+    });
+    const lane = worktree.path;
+    const cli = args => runCliInProcess([...args, '--target', lane], options);
+    mkdirSync(join(lane, '.agenticloop', 'tmp'), { recursive: true });
+
+    const packetPath = '.agenticloop/tmp/packet.json';
+    assertOk(await cli([
+      'task', 'prepare-dispatch', 'T-001', '--host', 'opencode', '--role', 'engineer',
+      '--output', packetPath, '--json',
+    ]), 'mint a packet in the lane');
+    assertOk(await cli([
+      'task', 'status', 'T-001', 'in-progress', '--expect-digest', carrierDigest(lane),
+      '--dispatch-packet', packetPath, '--json',
+    ]), 'role start in the lane');
+    git(lane, ['add', '.agenticloop/tasks', '.agenticloop/handoffs']);
+    git(lane, ['commit', '-m', `start the engineer role${ENGINEER_TRAILER}`]);
+
+    // The re-application the lane exists for.
+    writeFileSync(join(lane, 'src', 'existing.js'), 'export const current = "implemented";\n', 'utf8');
+    git(lane, ['add', 'src/existing.js']);
+    git(lane, ['commit', '-m', `re-apply the implementation${ENGINEER_TRAILER}`]);
+    const productHead = git(lane, ['rev-parse', 'HEAD']);
+
+    assertOk(await cli([
+      'task', 'evidence', 'T-001', '--class', 'implementation_artifact_evidence',
+      '--expect-digest', carrierDigest(lane), '--product-head', productHead, '--json',
+    ]), 'implementation artifact evidence in the lane');
+    git(lane, ['add', '.agenticloop/tasks']);
+    git(lane, ['commit', '-m', `record the implementation artifact${ENGINEER_TRAILER}`]);
+
+    const checksPath = '.agenticloop/tmp/checks.json';
+    assertOk(await cli([
+      'task', 'check-evidence-init', 'T-001', '--packet', packetPath, '--output', checksPath, '--json',
+    ]), 'check evidence init in the lane');
+    for (const check of JSON.parse(readFileSync(join(lane, checksPath), 'utf8'))) {
+      assertOk(await cli([
+        'task', 'check-evidence-update', 'T-001', '--packet', packetPath,
+        '--input', checksPath, '--output', checksPath, '--check', check.id,
+        '--outcome', 'passed', '--evidence', `${check.id} passed`,
+        '--execution-output', `.agenticloop/tmp/${check.id}.execution.json`, '--json',
+      ]), `check evidence update ${check.id}`);
+    }
+
+    const returnPath = '.agenticloop/tmp/return.json';
+    assertOk(await cli([
+      'task', 'prepare-return', 'T-001', '--packet', packetPath, '--check-evidence', checksPath,
+      '--outcome', 'implementation_ready_for_review', '--output', returnPath, '--json',
+    ]), 'prepare-return from the lane');
+
+    const roleReturn = JSON.parse(readFileSync(join(lane, returnPath), 'utf8'));
+    assert.equal(roleReturn.branch, 'task/T-001-return');
+    assert.equal(roleReturn.productHead, productHead);
+    assert.deepEqual(roleReturn.productChangedPaths, ['src/existing.js']);
+
+    assertOk(await cli([
+      'task', 'verify-return', 'T-001', '--packet', packetPath, '--return', returnPath,
+      '--from-current-repository', '--json',
+    ]), 'verify-return from the lane');
+  });
+});

@@ -219,6 +219,12 @@
   separate help command.
 
 ### Fixed
+- Carrier-root resolution now compares paths through the shared path authority
+  rather than by string equality, so a lane addressed by a packet's normalized
+  lowercase authority path resolves the same way as one addressed by the
+  checkout's real case. String equality made a worktree look like an ordinary
+  checkout on a case-insensitive filesystem, which restored the half-visible
+  world the resolution exists to close.
 - Fixed the `debugReference: null` and message erasure at the command-failure
   boundary. A command that caught its own error produced an envelope with no root
   cause and no reference by which to request one, and `--debug` printed nothing
