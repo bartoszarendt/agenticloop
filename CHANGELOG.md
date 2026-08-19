@@ -3,6 +3,15 @@
 ## Unreleased
 
 ### Fixed
+- Return production no longer refuses a finished implementation because the
+  repository moved on around it. Whether the declared `productHead` is still the
+  end of this task's work is decided against the task's `allowed_paths`; a later
+  change outside that surface cannot be the return's product work - it lands
+  after the head the return binds - and is recorded in the non-product half of
+  the path inventory, as toolkit-generated output already was. A path the
+  engineer also changed inside the product range keeps its product
+  classification, so an out-of-scope edit still meets the scope-deviation gate
+  at verification.
 - Range attribution now requires canonical `Task:`/`Agent:` trailers on the
   commits that touch the task's `allowed_paths`, instead of on every commit in
   the range. Trailers stay binding where they mean something - the loop's own

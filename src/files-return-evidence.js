@@ -21,6 +21,7 @@ import {
   resolveCarriedProductLineage,
 } from './product-lineage.js';
 import { pathIdentity } from './path-identity.js';
+import { fileMatchesScopePattern } from './scope-matcher.js';
 
 const SCRATCH_PREFIX = '.agenticloop/tmp/';
 
@@ -160,6 +161,12 @@ export function deriveReturnTopology(target, packet, signedEvidence, {
 } = {}) {
   const runGit = args => spawnSync('git', args, { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
   const classifier = createPathClassifier(target);
+  // The task's own declared surface. Where a task declares none, every path
+  // stays in surface and the post-product rule below is the one it always was.
+  const scopePatterns = (Array.isArray(packet?.task?.allowedPaths) ? packet.task.allowedPaths : [])
+    .filter(pattern => typeof pattern === 'string' && pattern);
+  const inTaskSurface = path => scopePatterns.length === 0 ||
+    scopePatterns.some(pattern => fileMatchesScopePattern(path, pattern));
   const branch = readGit(runGit, ['symbolic-ref', '--quiet', '--short', 'HEAD'], 'current return branch');
   const currentHead = readGit(runGit, ['rev-parse', '--verify', 'HEAD'], 'current return workflow head');
   const packetBaseHead = String(packet?.repository?.head ?? '').trim();
@@ -249,14 +256,36 @@ export function deriveReturnTopology(target, packet, signedEvidence, {
       throw new VerificationContextMalformedError(`unknown workflow path '${path}' cannot appear in return evidence`);
     }
   }
+  // What "the declared productHead" claims is that this task's work ends there.
+  // The claim is tested against the surface the task declares, because that is
+  // the only surface it ever claimed anything about. A repository anyone else
+  // also commits to keeps moving after the implementation lands - a lockfile
+  // refresh, a config edit, a coworker's commit - and asking whether *anything*
+  // changed after the product head made a finished implementation unreturnable
+  // for as long as its repository stayed alive.
+  //
+  // A later change outside the task surface is therefore not a refusal; it is
+  // simply not this return's product work, and it cannot be: it lands after the
+  // head the return binds. It is recorded in the non-product half of the path
+  // inventory, exactly as toolkit-generated output already is. A path the
+  // engineer also changed inside the product range keeps its product
+  // classification, so an out-of-scope edit still meets the scope-deviation
+  // gate at verification.
+  const productRangePaths = new Set(product.changedPaths);
   for (const path of laterPaths) {
-    if ((currentPaths.has(path)
+    // A path can change after the product head and be restored to its base
+    // content, which keeps it out of the range inventory above; classify it
+    // here rather than letting it fall through unexamined.
+    const category = classified.get(path) ?? (currentPaths.has(path)
       ? classifyPath(path, { packet, workflow, runGit, workflowHead, classifier })
-      : classifyCarriedPath(path, classifier)) === 'product') {
+      : classifyCarriedPath(path, classifier));
+    if (category !== 'product') continue;
+    if (inTaskSurface(path)) {
       throw new VerificationContextStaleError(
-        `product path '${path}' changed after the declared productHead before workflowHead`
+        `path '${path}' inside this task's allowed_paths changed after the declared productHead before workflowHead`
       );
     }
+    if (!productRangePaths.has(path)) classified.set(path, 'outside_task_surface');
   }
   return {
     branch,
