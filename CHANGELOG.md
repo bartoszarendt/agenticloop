@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Added characterization coverage for the return-production deadlock's fourth
+  shape: a finished implementation with an untrailered toolkit-update commit
+  inside its return range, and a commit touching only `agenticloop.json` and
+  `package-lock.json` after it. Neither path can be declared toolkit-owned,
+  because neither is - which is why three consecutive fixes to the
+  whole-repository classifier each bought exactly one field run.
+
 ## 0.4.4 - 2026-08-19
 
 ### Highlights

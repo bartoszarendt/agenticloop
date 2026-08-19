@@ -188,6 +188,7 @@ const MANIFEST = {
     'test/committed-identity-portability.test.js',
     'test/plan-executability.test.js',
     'test/toolkit-generated-lineage.test.js',
+    'test/task-surface-return-gates.test.js',
     'test/worktree-execution-context.test.js',
     'test/cli-main.test.js',
     'test/command-failure-diagnosability.test.js',
