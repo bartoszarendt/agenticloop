@@ -19,6 +19,14 @@
   artifact the toolkit is strictest about.
 
 ### Added
+- Added characterization coverage for the second field cohort's three blocking
+  control-plane defects, built from privacy-clean fixtures: an implementation
+  commit buried under toolkit-generated commits that `task evidence` refuses to
+  bind, an activation grant held in the carrier root that a worktree-target
+  preflight reports as `missing` with a repair hint naming a different carrier,
+  and a task whose live attempts are invisible to a worktree-target
+  `task attempt-status`. Each fails against the toolkit as it stands and is kept
+  afterwards as a positive guard.
 - Added `task commit-message <id> --class <commit-class> --subject <text>
   --output <file>`, which writes a commit message whose final contiguous block
   is exactly one `Task:`/`Agent:` pair. The commit class decides the attributed
