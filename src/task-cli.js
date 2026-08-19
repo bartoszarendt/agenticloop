@@ -102,6 +102,7 @@ import { createExecutionReceiptReplayAuthority, loadHostTrustStore, targetReposi
 import { CommitRangeError, deriveCommitRange } from './commit-range.js';
 import { gitTreeObjectId, isGitObjectId } from './git-oid.js';
 import { DISPATCH_LIVENESS_WINDOW_SECONDS } from './dispatch-eligibility.js';
+import { isLinkedWorktreeTarget } from './carrier-root.js';
 import { commitCarriesProductPaths, createPathClassifier, isWorkflowPath } from './product-lineage.js';
 import { renderHandoffSequence } from './handoff-sequence.js';
 import { GIT_MAX_BUFFER } from './git-runner.js';
@@ -255,6 +256,43 @@ function evaluateProductHeadEvidence(runGit, productHead, classifier) {
     );
   }
   return null;
+}
+
+/**
+ * A worktree return lane carries the implementation, or it returns nothing.
+ *
+ * The lane is a deliberate flow: cut a branch before the implementation, and
+ * re-apply the task's product commits on it in a clean room. Nothing enforced
+ * the second half. A lane that skipped re-application would still assemble a
+ * well-formed return - one whose product range is empty - and the refusal it
+ * eventually produced named an ancestry mismatch rather than the omission that
+ * caused it.
+ *
+ * The check applies only to a linked worktree. From the carrier root the same
+ * condition is the ordinary ancestry rule and is already reported as one.
+ */
+function evaluateReturnLaneContainment(target, taskId, productHead) {
+  if (!isLinkedWorktreeTarget(target) || !isGitObjectId(productHead)) return null;
+  const runGit = targetGitRunner(target);
+  const text = args => String(runGit(args).stdout ?? '').trim();
+  const head = text(['rev-parse', '--verify', 'HEAD']);
+  if (!isGitObjectId(head) || runGit(['merge-base', '--is-ancestor', productHead, head]).status === 0) return null;
+  const branch = text(['symbolic-ref', '--quiet', '--short', 'HEAD']) || '(detached)';
+  const mergeBase = text(['merge-base', productHead, head]) || '(no common ancestor)';
+  return new PublicCommandError(
+    `return lane branch '${branch}' does not contain this task's implementation_artifact ${productHead}; ` +
+    `branch head ${head}, merge-base ${mergeBase}`,
+    {
+      code: 'return.lane.implementation_absent',
+      evidenceState: 'missing',
+      disposition: 'blocked',
+      committedStateEvaluated: true,
+      safeRepair:
+        `Re-apply this task's product commits onto '${branch}' - the lane is cut before them by design - ` +
+        `then rerun 'npx agenticloop task prepare-return ${taskId}'.`,
+      requiredContext: ["the task's product commits, re-applied on the return lane branch"],
+    }
+  );
 }
 
 function taskLintCommandRunner(command, args, options = {}) {
@@ -2850,6 +2888,10 @@ export async function cmdTask(args, io = createIo()) {
         const productHead = implementationArtifactHead(body);
         if (!contract.ok || (!cancellationClaim && !isGitObjectId(productHead))) {
           throw new VerificationContextMalformedError('current task facts lack a valid committed implementation_artifact product head');
+        }
+        if (!cancellationClaim) {
+          const laneRefusal = evaluateReturnLaneContainment(target, taskId, productHead);
+          if (laneRefusal) throw laneRefusal;
         }
         // A cancellation claim is only ever an Agentic Loop-controlled
         // observation bound to the exact consumed invocation. Host idle,

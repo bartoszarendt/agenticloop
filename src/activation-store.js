@@ -24,6 +24,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
+import { carrierRootOf } from './carrier-root.js';
 import { executeMutationBatch, fingerprintTargetPath, resolveTargetPath } from './fs-mutation-kernel.js';
 import {
   validateActivationGrantShape,
@@ -57,6 +58,19 @@ function idSuffix(prefixed, prefix) {
   const suffix = value.slice(prefix.length + 1);
   if (!UUID_RE.test(suffix)) throw new Error(`activation record id must be ${prefix}:<uuid-v4>`);
   return suffix;
+}
+
+/**
+ * The directory that owns one target's activation records.
+ *
+ * The store is gitignored operator state addressed per repository, so a linked
+ * worktree never owns one of its own: it resolves its carrier root's. That is
+ * what makes a single operator confirmation cover the carrier root and every
+ * lane cut out of it, instead of each lane reporting the same authority as
+ * `missing` and sending the operator to authorize a different carrier.
+ */
+function storeRoot(target) {
+  return carrierRootOf(target);
 }
 
 export function grantRecordPath(grantId) {
@@ -135,6 +149,7 @@ export function createActivationMutationReceipt({
  * @param {{ grant: object, bindings: object[], expectedBindingDigests?: Record<string, string|null> }} input
  */
 export function writeActivationRecords(target, { grant, bindings = [], expectedBindingDigests = null } = {}) {
+  target = storeRoot(target);
   const grantCheck = validateActivationGrantShape(grant);
   if (!grantCheck.ok) {
     return {
@@ -228,6 +243,7 @@ export function writeActivationRecords(target, { grant, bindings = [], expectedB
 
 /** Persist one revocation record. Revocation is deny-side and create-only. */
 export function writeActivationRevocation(target, revocation) {
+  target = storeRoot(target);
   const checked = validateActivationRevocation(revocation);
   if (!checked.ok) {
     return {
@@ -298,6 +314,7 @@ export function writeActivationRevocation(target, revocation) {
 
 /** Read one grant record by id. Never throws for a malformed document. */
 export function readActivationGrant(target, grantId) {
+  target = storeRoot(target);
   try {
     return readRecord(target, grantRecordPath(grantId));
   } catch (error) {
@@ -307,6 +324,7 @@ export function readActivationGrant(target, grantId) {
 
 /** Read the current binding for one (backend, task) pair. */
 export function readTaskActivationBinding(target, backend, taskId) {
+  target = storeRoot(target);
   try {
     return readRecord(target, bindingRecordPath(backend, taskId));
   } catch (error) {
@@ -322,6 +340,7 @@ export function readTaskActivationBinding(target, backend, taskId) {
  * attacker cannot re-enable a grant by corrupting the record that revoked it.
  */
 export function readActivationRevocations(target) {
+  target = storeRoot(target);
   const directory = `${ACTIVATION_STORE_ROOT}/revocations`;
   let absolute;
   try {
@@ -350,6 +369,7 @@ export function readActivationRevocations(target) {
 
 /** Enumerate every stored binding, newest activation state first by task id. */
 export function listTaskActivationBindings(target) {
+  target = storeRoot(target);
   const directory = `${ACTIVATION_STORE_ROOT}/bindings`;
   let absolute;
   try {
@@ -385,5 +405,6 @@ export function activationScopeSummaryDigest(summaryText) {
 
 /** Absolute path of the durable activation root, for diagnostics only. */
 export function activationStoreDirectory(target) {
+  target = storeRoot(target);
   return join(target, ...ACTIVATION_STORE_ROOT.split('/'));
 }

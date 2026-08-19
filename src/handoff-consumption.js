@@ -3,6 +3,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { canonicalSha256 } from './canonical-json.js';
+import { listWorkflowEvidenceFiles } from './carrier-root.js';
 import { GIT_OBJECT_ID_RE } from './git-oid.js';
 import { validateHandoffRecognition } from './handoff-recognition.js';
 import { executeMutationBatch } from './fs-mutation-kernel.js';
@@ -154,14 +155,23 @@ export function validateDispatchConsumption(record, {
   return { ok: errors.length === 0, errors };
 }
 
+/**
+ * Every dispatch consumption recorded against one task.
+ *
+ * Read across the carrier root and the target, because an attempt is a fact
+ * about the task rather than about the checkout that asks. A lane cut before an
+ * earlier attempt's records were committed does not contain them, and reporting
+ * that absence as "no attempts" is what let a worktree mint packets blind to six
+ * outstanding ones.
+ */
 export function listDispatchConsumptions(target, taskId, options = {}) {
-  const directory = join(target, '.agenticloop', 'handoffs', 'dispatch', safeSegment(taskId));
-  if (!existsSync(directory)) return { ok: true, records: [], errors: [] };
   const records = [];
   const errors = [];
-  for (const name of readdirSync(directory).filter(value => value.endsWith('.json')).sort()) {
+  for (const { name, path } of listWorkflowEvidenceFiles(
+    target, ['.agenticloop', 'handoffs', 'dispatch', safeSegment(taskId)]
+  )) {
     try {
-      const record = JSON.parse(readFileSync(join(directory, name), 'utf8'));
+      const record = JSON.parse(readFileSync(path, 'utf8'));
       const compatibility = classifyLifecycleCompatibility(record, DISPATCH_CONSUMPTION_KIND);
       if (compatibility.state !== 'current') {
         errors.push(`${name}: ${compatibilityMessage(compatibility, 'dispatch consumption')}`);
@@ -205,13 +215,13 @@ export function writeCarrierMutationReceipt(target, receipt) {
 }
 
 export function listCarrierMutationReceipts(target, taskId, { backend = null } = {}) {
-  const directory = join(target, TASK_CARRIER_MUTATION_ROOT, safeSegment(taskId));
-  if (!existsSync(directory)) return { ok: true, records: [], errors: [] };
   const records = [];
   const errors = [];
-  for (const name of readdirSync(directory).filter(value => value.endsWith('.json')).sort()) {
+  for (const { name, path } of listWorkflowEvidenceFiles(
+    target, [...TASK_CARRIER_MUTATION_ROOT.split('/'), safeSegment(taskId)]
+  )) {
     try {
-      const record = JSON.parse(readFileSync(join(directory, name), 'utf8'));
+      const record = JSON.parse(readFileSync(path, 'utf8'));
       const compatibility = classifyLifecycleCompatibility(record, 'agenticloop.task-mutation-receipt');
       if (compatibility.state !== 'current') {
         errors.push(`${name}: ${compatibilityMessage(compatibility, 'carrier mutation receipt')}`);

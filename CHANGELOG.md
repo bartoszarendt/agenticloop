@@ -52,6 +52,25 @@
   being discovered after the fact.
 
 ### Changed
+- A worktree target is now a complete execution context. Repository-level
+  operator state - activation grants and bindings, the host trust store, the
+  operator confirmation key, effective activation policy - resolves from the
+  carrier root, so one operator confirmation covers the carrier root and every
+  lane cut out of it instead of each lane reporting the same authority as
+  `missing`. Attempt evidence (dispatch consumptions, abandonments, and carrier
+  mutation receipts) is read across the carrier root and the target, so
+  `task attempt-status` and every gate that reads attempt state report the same
+  attempts from either checkout; a lane whose branch was cut before those records
+  were committed no longer reports an empty attempt list and permits a new packet.
+- Every activation repair evaluated against a worktree now carries the
+  `--target` it was evaluated against. A bare `activate <task-id>` printed by a
+  refusal raised in a lane names a different carrier than the one just evaluated.
+- `task prepare-return` from a worktree now refuses when the lane branch does not
+  contain the task's `implementation_artifact`, naming the artifact, the branch
+  head, and the merge-base. The lane is cut before the implementation by design
+  and the product commits are re-applied on it; nothing enforced the second half,
+  so a lane that skipped it would produce a well-formed return carrying no
+  product work.
 - Product lineage now derives workflow paths from `manifest.json` rather than
   from the single `.agenticloop` prefix, so the installed toolkit source under
   `agenticloop/`, every generated host shim, and the provisioned `.gitattributes`

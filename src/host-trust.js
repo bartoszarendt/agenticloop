@@ -19,6 +19,7 @@ import { isAbsolute, join, relative } from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 import { canonicalJson } from './canonical-json.js';
+import { carrierRootOf } from './carrier-root.js';
 import { displayPath, filePathIdentity, isPathOutside, samePathAuthority } from './path-identity.js';
 
 export const HOST_TRUST_KIND = 'agenticloop.host-trust';
@@ -347,7 +348,12 @@ function authenticatedBoundaryAdapters(parsed, supported, options, context) {
 }
 
 export function targetRepositoryIdentity(target) {
-  return filePathIdentity(String(target ?? '.'));
+  // Repository-level operator state - grants, trust, policy, keys - belongs to
+  // the repository, not to a checkout of it. A linked worktree therefore
+  // resolves its carrier root's identity, so one operator confirmation covers
+  // the carrier root and every lane cut out of it rather than each lane
+  // reporting the same authority as missing.
+  return filePathIdentity(carrierRootOf(String(target ?? '.')));
 }
 
 /** Fixed per-user trust root used by the public CLI. */

@@ -25,8 +25,28 @@
  * reduce what a human has to see.
  */
 
+import { isLinkedWorktreeTarget } from './carrier-root.js';
+
 /** The canonical activation command family. */
 const ACTIVATE = 'npx agenticloop activate';
+
+/**
+ * The `--target` an activation command needs to address the carrier that was
+ * actually evaluated.
+ *
+ * A refusal raised against a worktree lane and repaired by a bare
+ * `activate <task-id>` is a hint that names a different carrier than the one it
+ * just evaluated. That is a defect independent of where the grant ends up being
+ * stored, so the evaluated carrier is spelled out whenever it is not the
+ * repository's own root. The operator runs this command in their own shell,
+ * from wherever they happen to be standing; the command has to say what it
+ * covers.
+ */
+function evaluatedTargetSuffix(target) {
+  const value = typeof target === 'string' ? target.trim() : '';
+  if (!value || !isLinkedWorktreeTarget(value)) return '';
+  return / /.test(value) ? ` --target "${value}"` : ` --target ${value}`;
+}
 
 /** The lifetime facts an operator should see before confirming. */
 export const ACTIVATION_LIFETIME_NOTE =
@@ -41,6 +61,7 @@ export const ACTIVATION_LIFETIME_NOTE =
  *   taskId?: string|null,
  *   readyTaskIds?: string[]|null,
  *   workUnitId?: string|null,
+ *   target?: string|null,
  *   detail?: string|null,
  * }} facts
  */
@@ -53,11 +74,12 @@ export function activationRepairPlan(facts = {}) {
     ? [...new Set(facts.readyTaskIds.filter(id => typeof id === 'string' && id.trim()).map(id => id.trim()))].sort()
     : [];
 
+  const suffix = evaluatedTargetSuffix(facts.target);
   const options = [];
   options.push({
     scope: 'exact_task',
     when: 'authorizing only this task',
-    command: `${ACTIVATE} ${taskId ?? '<task-id>'}`,
+    command: `${ACTIVATE} ${taskId ?? '<task-id>'}${suffix}`,
   });
   // A list is only worth offering when there is genuinely more than one ready
   // task to name. Suggesting a "batch" of one is noise.
@@ -65,7 +87,7 @@ export function activationRepairPlan(facts = {}) {
     options.push({
       scope: 'task_list',
       when: 'authorizing the current ready set in one confirmation',
-      command: `${ACTIVATE} ${readyTaskIds.join(' ')}`,
+      command: `${ACTIVATE} ${readyTaskIds.join(' ')}${suffix}`,
     });
   }
   // A durable grouping identity is offered only when one exists. A synthesized
@@ -75,7 +97,7 @@ export function activationRepairPlan(facts = {}) {
     options.push({
       scope: 'canonical_work_unit',
       when: 'authorizing the whole work unit as it is currently bound',
-      command: `${ACTIVATE} --work-unit ${workUnitId}`,
+      command: `${ACTIVATE} --work-unit ${workUnitId}${suffix}`,
     });
   }
 

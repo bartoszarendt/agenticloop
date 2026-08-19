@@ -176,6 +176,7 @@ function preflightRepairHint(finding, context) {
     // options instead of one task at a time.
     return renderActivationRepair({
       taskId,
+      target: context.target ?? null,
       workUnitId: decompositionSource?.scan?.workUnit?.id ?? null,
       readyTaskIds: (decompositionSource?.scan?.inventory?.members ?? [])
         .filter(member => member?.eligibility?.eligible !== false)
@@ -1103,6 +1104,7 @@ export function evaluateHandoffPreflight(input) {
         finding.message,
         preflightRepairHint(finding, {
           taskId,
+          target,
           cleanState: cleanStateObservation?.clean ?? null,
           decompositionRepair,
           decompositionSource,

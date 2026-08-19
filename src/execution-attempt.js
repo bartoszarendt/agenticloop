@@ -42,6 +42,7 @@ import { join } from 'node:path';
 import { GIT_MAX_BUFFER } from './git-runner.js';
 
 import { canonicalSha256 } from './canonical-json.js';
+import { listWorkflowEvidenceFiles } from './carrier-root.js';
 import { classifyLifecycleCompatibility, compatibilityMessage } from './lifecycle-compatibility.js';
 import {
   listCarrierMutationReceipts,
@@ -149,13 +150,13 @@ export function executionAttemptAbandonmentRelativePath(record) {
  * this module refuses.
  */
 export function listExecutionAttemptAbandonments(target, taskId, options = {}) {
-  const directory = join(target, ...EXECUTION_ATTEMPT_ROOT.split('/'), safeSegment(taskId));
-  if (!existsSync(directory)) return { ok: true, records: [], errors: [] };
   const records = [];
   const errors = [];
-  for (const name of readdirSync(directory).filter(value => value.endsWith('.json')).sort()) {
+  for (const { name, path } of listWorkflowEvidenceFiles(
+    target, [...EXECUTION_ATTEMPT_ROOT.split('/'), safeSegment(taskId)]
+  )) {
     try {
-      const record = JSON.parse(readFileSync(join(directory, name), 'utf8'));
+      const record = JSON.parse(readFileSync(path, 'utf8'));
       const compatibility = classifyLifecycleCompatibility(record, EXECUTION_ATTEMPT_ABANDONMENT_KIND);
       if (compatibility.state !== 'current') {
         errors.push(`${name}: ${compatibilityMessage(compatibility, 'execution attempt abandonment')}`);
