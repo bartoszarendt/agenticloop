@@ -19,6 +19,12 @@
   artifact the toolkit is strictest about.
 
 ### Added
+- Added the plan-executability invariant to the suite: one mechanical check over
+  every plan-emitting command asserting that no emitted step is named among the
+  plan's own blockers, and that no argument value an emitted command passes
+  appears in a blocker as a rejected value. The two readiness defects this cohort
+  found are one class, and per-command assertions would have caught neither -
+  each command was individually correct about every fact it reported.
 - Added characterization coverage for the second field cohort's three blocking
   control-plane defects, built from privacy-clean fixtures: an implementation
   commit buried under toolkit-generated commits that `task evidence` refuses to
