@@ -11,6 +11,8 @@ const EXCLUDED_DIRECTORIES = new Set([
   '.dev',
   '.git',
   'node_modules',
+  // Host runtime output (browser session snapshots), not repository source.
+  '.playwright-mcp',
   'tmp',
 ]);
 const TEXT_EXTENSIONS = new Set([

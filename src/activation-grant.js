@@ -36,6 +36,7 @@ import { randomUUID } from 'node:crypto';
 import { canonicalSha256 } from './canonical-json.js';
 import { deepFreeze } from './immutable.js';
 import { HOST_SIGNATURE_ALGORITHM } from './host-trust.js';
+import { producerRefusal } from './public-error.js';
 
 export const ACTIVATION_GRANT_KIND = 'agenticloop.activation-grant';
 export const ACTIVATION_GRANT_SCHEMA_VERSION = 1;
@@ -76,6 +77,24 @@ export const CLI_OPERATOR_PRODUCER_ID = 'agenticloop.cli.operator-confirmation.v
 
 /** The exact phrase an operator types to confirm an activation. */
 export const OPERATOR_CONFIRMATION_PHRASE = 'activate';
+
+/**
+ * Every activation-record producer below refuses caller-supplied evidence
+ * through one typed public refusal rather than a bare `TypeError`.
+ *
+ * `agenticloop activate` and `agenticloop activation revoke` call these
+ * producers directly and hand whatever they throw to the command-failure
+ * boundary. An untyped throw there is erased to "required operational context
+ * is unavailable", so the operator learns nothing about the record the CLI
+ * itself just built. `activation.grant.malformed` is the existing evidence fact
+ * for exactly this - no new repair capability is introduced.
+ */
+const refuse = producerRefusal({
+  code: 'activation.grant.malformed',
+  safeRepair:
+    'Repair the reported activation facts at their source and rerun the activation command; ' +
+    'never hand-edit an activation grant, binding, or revocation record.',
+});
 
 /** Default grant lifetime: long enough for one working session, not open-ended. */
 export const DEFAULT_GRANT_TTL_SECONDS = 43_200;
@@ -300,17 +319,17 @@ export function createActivationGrant(input = {}) {
     'expiresAt', 'ttlSeconds', 'operatorIntentDigest', 'evidence', 'grantId', 'revocationId',
   ];
   const unknown = Object.keys(input).filter(key => !known.includes(key));
-  if (unknown.length) throw new TypeError(`invalid activation grant: unknown input field(s): ${unknown.join(', ')}`);
+  if (unknown.length) throw refuse(`invalid activation grant: unknown input field(s): ${unknown.join(', ')}`);
   if (!ACTIVATION_ASSURANCE_VALUES.has(input.assurance)) {
-    throw new TypeError('activation grant assurance must be operator_confirmed or host_signed');
+    throw refuse('activation grant assurance must be operator_confirmed or host_signed');
   }
   const issuedAt = input.issuedAt ?? new Date().toISOString();
   const issued = instantMs(issuedAt);
-  if (issued === null) throw new TypeError('activation grant issuedAt must be an ISO-8601 UTC instant');
+  if (issued === null) throw refuse('activation grant issuedAt must be an ISO-8601 UTC instant');
   const ttlSeconds = input.ttlSeconds ?? DEFAULT_GRANT_TTL_SECONDS;
   if (input.expiresAt === undefined &&
       (!Number.isSafeInteger(ttlSeconds) || ttlSeconds <= 0 || ttlSeconds > MAX_GRANT_TTL_SECONDS)) {
-    throw new TypeError(`activation grant ttlSeconds must be an integer between 1 and ${MAX_GRANT_TTL_SECONDS}`);
+    throw refuse(`activation grant ttlSeconds must be an integer between 1 and ${MAX_GRANT_TTL_SECONDS}`);
   }
   const expiresAt = input.expiresAt ?? new Date(issued + ttlSeconds * 1000).toISOString();
   const scope = normalizeScope(input.scope);
@@ -340,30 +359,30 @@ export function createActivationGrant(input = {}) {
   };
   grant.digest = activationGrantDigest(grant);
   const checked = validateActivationGrantShape(grant);
-  if (!checked.ok) throw new TypeError(`invalid activation grant: ${checked.errors[0].message}`);
+  if (!checked.ok) throw refuse(`invalid activation grant: ${checked.errors[0].message}`);
   return deepFreeze(grant);
 }
 
 function normalizeScope(scope) {
-  if (!isObject(scope)) throw new TypeError('activation grant scope must be an object');
+  if (!isObject(scope)) throw refuse('activation grant scope must be an object');
   if (!ACTIVATION_SCOPE_TYPES.includes(scope.type)) {
-    throw new TypeError(`activation grant scope type must be one of: ${ACTIVATION_SCOPE_TYPES.join(', ')}`);
+    throw refuse(`activation grant scope type must be one of: ${ACTIVATION_SCOPE_TYPES.join(', ')}`);
   }
   if (scope.type === 'exact_tasks') {
     const taskIds = Array.isArray(scope.taskIds) ? [...new Set(scope.taskIds.map(String))].sort() : null;
     if (!taskIds || taskIds.length === 0 || taskIds.some(id => !TASK_ID_RE.test(id))) {
-      throw new TypeError('an exact_tasks activation scope requires a non-empty set of canonical task ids');
+      throw refuse('an exact_tasks activation scope requires a non-empty set of canonical task ids');
     }
     return { type: 'exact_tasks', taskIds, workUnitId: null, operatorIntentDigest: null };
   }
   if (scope.type === 'work_unit') {
     if (typeof scope.workUnitId !== 'string' || !WORK_UNIT_ID_RE.test(scope.workUnitId)) {
-      throw new TypeError('a work_unit activation scope requires a canonical work-unit id');
+      throw refuse('a work_unit activation scope requires a canonical work-unit id');
     }
     return { type: 'work_unit', taskIds: null, workUnitId: scope.workUnitId, operatorIntentDigest: null };
   }
   if (typeof scope.operatorIntentDigest !== 'string' || !SHA256_RE.test(scope.operatorIntentDigest)) {
-    throw new TypeError('a captured_request activation scope requires an operator-intent SHA-256 digest');
+    throw refuse('a captured_request activation scope requires an operator-intent SHA-256 digest');
   }
   return {
     type: 'captured_request',
@@ -374,38 +393,38 @@ function normalizeScope(scope) {
 }
 
 function normalizeEvidence(assurance, evidence) {
-  if (!isObject(evidence)) throw new TypeError('activation grant evidence must be an object');
+  if (!isObject(evidence)) throw refuse('activation grant evidence must be an object');
   if (assurance === 'operator_confirmed') {
     const { confirmedAt, confirmationPhrase, channel, operatorKeyId, scopeSummaryDigest } = evidence;
     if (channel !== 'cli_interactive_confirmation') {
-      throw new TypeError("operator-confirmed activation evidence channel must be 'cli_interactive_confirmation'");
+      throw refuse("operator-confirmed activation evidence channel must be 'cli_interactive_confirmation'");
     }
     if (confirmationPhrase !== OPERATOR_CONFIRMATION_PHRASE) {
-      throw new TypeError(`operator-confirmed activation evidence must record the exact confirmation phrase '${OPERATOR_CONFIRMATION_PHRASE}'`);
+      throw refuse(`operator-confirmed activation evidence must record the exact confirmation phrase '${OPERATOR_CONFIRMATION_PHRASE}'`);
     }
     if (instantMs(confirmedAt) === null) {
-      throw new TypeError('operator-confirmed activation evidence requires an ISO-8601 UTC confirmedAt');
+      throw refuse('operator-confirmed activation evidence requires an ISO-8601 UTC confirmedAt');
     }
     if (typeof operatorKeyId !== 'string' || !KEY_ID_RE.test(operatorKeyId)) {
-      throw new TypeError('operator-confirmed activation evidence requires the local operator confirmation key id');
+      throw refuse('operator-confirmed activation evidence requires the local operator confirmation key id');
     }
     if (typeof scopeSummaryDigest !== 'string' || !SHA256_RE.test(scopeSummaryDigest)) {
-      throw new TypeError('operator-confirmed activation evidence requires the digest of the exact scope summary shown to the operator');
+      throw refuse('operator-confirmed activation evidence requires the digest of the exact scope summary shown to the operator');
     }
     return { confirmedAt, confirmationPhrase, channel, operatorKeyId, scopeSummaryDigest };
   }
   const { adapterId, keyId, captureId, channel } = evidence;
   if (channel !== 'protected_host_boundary') {
-    throw new TypeError("host-signed activation evidence channel must be 'protected_host_boundary'");
+    throw refuse("host-signed activation evidence channel must be 'protected_host_boundary'");
   }
   if (typeof adapterId !== 'string' || !adapterId.trim()) {
-    throw new TypeError('host-signed activation evidence requires the pinned adapter id');
+    throw refuse('host-signed activation evidence requires the pinned adapter id');
   }
   if (typeof keyId !== 'string' || !KEY_ID_RE.test(keyId)) {
-    throw new TypeError('host-signed activation evidence requires the pinned host key id');
+    throw refuse('host-signed activation evidence requires the pinned host key id');
   }
   if (captureId !== null && (typeof captureId !== 'string' || !captureId.trim())) {
-    throw new TypeError('host-signed activation evidence captureId must be null or the exact capture identity');
+    throw refuse('host-signed activation evidence captureId must be null or the exact capture identity');
   }
   return { adapterId, keyId, captureId, channel };
 }
@@ -432,9 +451,9 @@ export function createTaskActivationBinding(input = {}) {
     'decompositionSource', 'bindingId', 'issuedAt', 'expiresAt',
   ];
   const unknown = Object.keys(input).filter(key => !known.includes(key));
-  if (unknown.length) throw new TypeError(`invalid task activation binding: unknown input field(s): ${unknown.join(', ')}`);
+  if (unknown.length) throw refuse(`invalid task activation binding: unknown input field(s): ${unknown.join(', ')}`);
   const grant = input.grant;
-  if (!isObject(grant)) throw new TypeError('a task activation binding requires its authorizing grant');
+  if (!isObject(grant)) throw refuse('a task activation binding requires its authorizing grant');
   const binding = {
     kind: TASK_ACTIVATION_BINDING_KIND,
     schemaVersion: TASK_ACTIVATION_BINDING_SCHEMA_VERSION,
@@ -465,7 +484,7 @@ export function createTaskActivationBinding(input = {}) {
   };
   binding.digest = taskActivationBindingDigest(binding);
   const checked = validateTaskActivationBindingShape(binding);
-  if (!checked.ok) throw new TypeError(`invalid task activation binding: ${checked.errors[0].message}`);
+  if (!checked.ok) throw refuse(`invalid task activation binding: ${checked.errors[0].message}`);
   return deepFreeze(binding);
 }
 
@@ -473,9 +492,9 @@ export function createTaskActivationBinding(input = {}) {
 export function createActivationRevocation(input = {}) {
   const known = ['grant', 'reason', 'revokedAt', 'revocationId'];
   const unknown = Object.keys(input).filter(key => !known.includes(key));
-  if (unknown.length) throw new TypeError(`invalid activation revocation: unknown input field(s): ${unknown.join(', ')}`);
+  if (unknown.length) throw refuse(`invalid activation revocation: unknown input field(s): ${unknown.join(', ')}`);
   const grant = input.grant;
-  if (!isObject(grant)) throw new TypeError('an activation revocation requires the grant it revokes');
+  if (!isObject(grant)) throw refuse('an activation revocation requires the grant it revokes');
   const record = {
     kind: ACTIVATION_REVOCATION_KIND,
     schemaVersion: ACTIVATION_REVOCATION_SCHEMA_VERSION,
@@ -488,7 +507,7 @@ export function createActivationRevocation(input = {}) {
   };
   const errors = [];
   validateActivationRevocationInto(record, errors);
-  if (errors.length) throw new TypeError(`invalid activation revocation: ${errors[0].message}`);
+  if (errors.length) throw refuse(`invalid activation revocation: ${errors[0].message}`);
   return deepFreeze(record);
 }
 

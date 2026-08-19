@@ -374,6 +374,7 @@ describe('emitted command consistency', () => {
     name: 'owner/repo', 'owner/name': 'owner/repo',
     'audit-id': 'A-1', 'work-unit': 'work-unit:x', 'task-id|path': 'T-001',
     'audit-id|work-unit': 'A-1', command: 'init', subcommand: 'add',
+    'commit-class': 'product_implementation',
   };
 
   function normalizeToken(token) {

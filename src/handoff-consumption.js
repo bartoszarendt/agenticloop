@@ -8,6 +8,7 @@ import { validateHandoffRecognition } from './handoff-recognition.js';
 import { executeMutationBatch } from './fs-mutation-kernel.js';
 import { ENGINEER_CARRIER_MUTATION_CLASSES, validateCarrierMutationReceipt } from './task-evidence-contract.js';
 import { classifyLifecycleCompatibility, compatibilityMessage } from './lifecycle-compatibility.js';
+import { producerRefusal } from './public-error.js';
 
 export const DISPATCH_CONSUMPTION_KIND = 'agenticloop.dispatch-consumption';
 export const DISPATCH_CONSUMPTION_SCHEMA_VERSION = 3;
@@ -19,6 +20,19 @@ const PACKET_ID_RE = /^dispatch:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][
 const SEMANTIC_DIGEST_RE = /^sha256:agenticloop\.[a-z-]+\.v[1-9]\d*:[a-f0-9]{64}$/;
 const TASK_DIGEST_RE = /^sha256:[a-f0-9]{64}$/;
 const CONTRACT_DIGEST_RE = /^sha256:v1:[a-f0-9]{64}$/;
+
+/**
+ * `task status` and `task-body` mint the consumption record inline at role
+ * start, so a refusal here reaches the command boundary directly. Typed, it
+ * names the recognition verdict or record field that failed; untyped it was
+ * erased to the generic operational sentence.
+ */
+const refuse = producerRefusal({
+  code: 'handoff.evidence.malformed',
+  safeRepair:
+    'Repair the reported role-start recognition evidence and rerun the transition; ' +
+    'never hand-edit a dispatch consumption record.',
+});
 
 function safeSegment(value) {
   return String(value).replace(/[^A-Za-z0-9._-]/g, '_');
@@ -36,7 +50,7 @@ export function createDispatchConsumption({
   const checked = validateHandoffRecognition(recognition);
   if (!checked.ok || recognition?.recognized !== true || recognition.transition !== 'role_start' ||
       recognition.requirement !== 'prepared_dispatch') {
-    throw new TypeError('dispatch consumption requires a valid recognized prepared-dispatch role-start verdict');
+    throw refuse('dispatch consumption requires a valid recognized prepared-dispatch role-start verdict');
   }
   const identity = recognition.boundIdentity;
   const record = {
@@ -66,7 +80,7 @@ export function createDispatchConsumption({
   };
   record.digest = dispatchConsumptionDigest(record);
   const validation = validateDispatchConsumption(record, { backend, taskId });
-  if (!validation.ok) throw new TypeError(`invalid dispatch consumption: ${validation.errors.join('; ')}`);
+  if (!validation.ok) throw refuse(`invalid dispatch consumption: ${validation.errors.join('; ')}`);
   return Object.freeze(record);
 }
 

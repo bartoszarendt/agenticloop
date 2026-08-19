@@ -481,7 +481,20 @@ function attemptDependencySnapshotRefresh({ target, preflight, backend = 'files'
 // Category 3 — Decomposition provenance regeneration
 // ---------------------------------------------------------------------------
 
-function attemptDecompositionRegeneration({ target, preflight, taskId, refreshedSnapshotContent, refreshedSnapshotPath }) {
+function attemptDecompositionRegeneration({
+  target, preflight, taskId, refreshedSnapshotContent, refreshedSnapshotPath, backend = 'files',
+}) {
+  // The regeneration is a new observation by a new producer, so its freshness
+  // window is re-derived from the backend exactly as the dependency snapshot's
+  // is - never carried forward from whatever a past session wrote into the
+  // decomposition on disk, and never a hand-written hour. Carrying the old
+  // policy forward is what made this refresh repeat: the regenerated
+  // decomposition was re-observed at `now` and still expired inside the same
+  // multi-delegation cycle, because the window it inherited was the one that
+  // had just expired. An operator's explicit `--max-age-seconds` belongs to the
+  // `task prepare-decomposition` observation it was authored for; it does not
+  // survive into a later, independent observation.
+  const derivedMaxAgeSeconds = defaultDependencyFreshnessSeconds(backend);
   const decompositionRef = preflight?.decomposition?.sourceRef;
   if (!decompositionRef) {
     return { ok: false, skipped: true, reason: 'no decomposition sourceRef in preflight', expectedDigest: null, content: null, path: null };
@@ -532,13 +545,12 @@ function attemptDecompositionRegeneration({ target, preflight, taskId, refreshed
     }
   } else {
     const now = Date.now();
-    const maxAgeSeconds = decompositionSource.freshnessPolicy?.maxAgeSeconds ?? 3600;
     depEvidence = {
       source: 'files:.agenticloop/tasks',
       digest: `sha256:${createHash('sha256').update('').digest('hex')}`,
       observedAt: new Date(now).toISOString(),
       evaluatedAt: new Date(now).toISOString(),
-      freshnessPolicy: { maxAgeSeconds },
+      freshnessPolicy: { maxAgeSeconds: derivedMaxAgeSeconds },
       freshnessState: 'current',
       evaluatedState: 'satisfied',
       statuses: [],
@@ -612,7 +624,7 @@ function attemptDecompositionRegeneration({ target, preflight, taskId, refreshed
         attribution: scan.decomposition?.attribution ?? 'maintainer',
       },
       observedAt,
-      freshnessPolicy: decompositionSource.freshnessPolicy ?? { maxAgeSeconds: 3600 },
+      freshnessPolicy: { maxAgeSeconds: derivedMaxAgeSeconds },
       basePaths,
       dependencies: depStatusMapValue,
       readinessContext,
@@ -740,7 +752,10 @@ export function createHandoffEvidenceRefreshPlan({ target, preflight }) {
   const refreshedSnapshotPath = depResult.ok ? depResult.path : null;
   let decompResult = { ok: false, skipped: true, reason: 'decomposition regeneration not triggered', expectedDigest: null, content: null, path: null };
   if (!decompCompatible || depResult.ok) {
-    decompResult = attemptDecompositionRegeneration({ target, preflight, taskId, refreshedSnapshotContent, refreshedSnapshotPath });
+    decompResult = attemptDecompositionRegeneration({
+      target, preflight, taskId, refreshedSnapshotContent, refreshedSnapshotPath,
+      backend: preflight?.backend ?? 'files',
+    });
   }
   if (depResult.ok && !decompResult.ok) {
     depResult = {

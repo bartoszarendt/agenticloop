@@ -61,7 +61,7 @@ import {
   evaluateDispatchCleanState,
   evaluatePriorGateReceipts,
 } from './repository-state.js';
-import { PublicCommandError } from './public-error.js';
+import { PublicCommandError, producerRefusal } from './public-error.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
 import {
   DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE,
@@ -1484,6 +1484,25 @@ export function validateRoleReturn(value) {
   return { ok: findings.length === 0, errors: findings.messages, findings: findings.items };
 }
 
+/**
+ * A construction refusal is a fact about the caller's own evidence, not an
+ * internal accident, so it is typed at the origin. Thrown as a bare
+ * `TypeError` it reached the command boundary as an untyped error, whose
+ * message that boundary is obliged to erase: the field run spent thirteen
+ * `prepare-return` invocations reading "required operational context is
+ * unavailable" for a refusal that names its own cause precisely.
+ *
+ * `committedStateEvaluated` is true here: the producer read the current task,
+ * packet, and check evidence to reach this conclusion.
+ */
+const refuseRoleReturn = producerRefusal({
+  code: 'role_return.invalid',
+  committedStateEvaluated: true,
+  safeRepair:
+    'Repair the reported role-return facts at their producer and rerun the return preparation; ' +
+    'never hand-edit the role return itself.',
+});
+
 /** @param {any} input */
 export function createRoleReturn(input = {}) {
   /** @type {any} */
@@ -1504,25 +1523,7 @@ export function createRoleReturn(input = {}) {
   };
   value.digest = semanticDigest(`agenticloop.role-return.v${ROLE_RETURN_SCHEMA_VERSION}`, projection(value));
   const checked = validateRoleReturn(value);
-  // A construction refusal is a fact about the caller's own evidence, not an
-  // internal accident, so it is typed at the origin. Thrown as a bare
-  // `TypeError` it reached the command boundary as an untyped error, whose
-  // message that boundary is obliged to erase: the field run spent thirteen
-  // `prepare-return` invocations reading "required operational context is
-  // unavailable" for a refusal that names its own cause precisely.
-  if (!checked.ok) {
-    const message = `invalid role return: ${checked.errors.join('; ')}`;
-    throw new PublicCommandError(message, {
-      code: 'role_return.invalid',
-      evidenceState: 'malformed',
-      disposition: 'rejected',
-      publicMessage: message,
-      committedStateEvaluated: true,
-      safeRepair:
-        'Repair the reported role-return facts at their producer and rerun the return preparation; ' +
-        'never hand-edit the role return itself.',
-    });
-  }
+  if (!checked.ok) throw refuseRoleReturn(`invalid role return: ${checked.errors.join('; ')}`);
   return deepFreeze(value);
 }
 

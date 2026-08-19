@@ -167,3 +167,53 @@ export function publicErrorFromFindings(findings, {
     committedStateEvaluated: false,
   });
 }
+
+/**
+ * One typed refusal for a producer that rejects the evidence its caller handed
+ * it.
+ *
+ * A construction refusal is a fact about the caller's own evidence, not an
+ * internal accident. Thrown as a bare `TypeError` it reaches a command boundary
+ * obliged to erase its message: `commandFailure` replaces it with
+ * `OPERATIONAL_FAILURE_MESSAGE`, and an uncaught one is rendered as
+ * `cli.unexpected` - "validation or evaluation did not complete" - which reads
+ * as a toolkit bug for what is in fact a precise, actionable refusal.
+ *
+ * Every producer whose refusal can reach a public command surface raises this
+ * instead, so the sentence the producer already wrote is the sentence the
+ * operator reads.
+ */
+export class ProducerRefusalError extends PublicCommandError {
+  constructor(message, {
+    code,
+    safeRepair,
+    evidenceState = 'malformed',
+    disposition = 'rejected',
+    committedStateEvaluated = false,
+    ...rest
+  } = {}) {
+    const sentence = String(message);
+    super(sentence, {
+      code,
+      evidenceState,
+      disposition,
+      publicMessage: sentence,
+      safeRepair,
+      committedStateEvaluated,
+      ...rest,
+    });
+    this.name = 'ProducerRefusalError';
+  }
+}
+
+/**
+ * Bind one producer family's diagnostic code and safe repair once, and return
+ * the thrower its refusal sites use.
+ *
+ * The code must already exist in the repair policy: a producer refusal names an
+ * existing evidence fact, it does not introduce a new repair capability that
+ * role declarations would have to own.
+ */
+export function producerRefusal({ code, safeRepair, committedStateEvaluated = false }) {
+  return message => new ProducerRefusalError(message, { code, safeRepair, committedStateEvaluated });
+}

@@ -35,3 +35,5 @@ Thumbs.db
 # Internal working docs are local-only and never tracked.
 .dev/
 .mcp.json
+# Playwright MCP session snapshots are host runtime output, never repo source.
+.playwright-mcp/

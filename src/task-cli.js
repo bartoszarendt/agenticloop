@@ -62,6 +62,7 @@ import {
   createTaskEvidenceContext,
   createTaskMutationReceipt,
   createCarrierMutationReceipt,
+  defaultDependencyFreshnessSeconds,
   dependencyStatusMap,
   parseDependencySnapshot,
   shellQuoteArgument,
@@ -106,7 +107,6 @@ import { renderHandoffSequence } from './handoff-sequence.js';
 import { GIT_MAX_BUFFER } from './git-runner.js';
 import { validateCommittedSourcePath, verifyCommittedAttributedSource } from './committed-source.js';
 import {
-  PARALLEL_SCAN_MAX_FRESHNESS_SECONDS,
   createTaskInventoryEnumeration,
   normalizeFilesTaskInventory,
   normalizeGitHubTaskInventory,
@@ -1437,24 +1437,17 @@ function refetchDispatchParallelScanInventory(backend, enumerateInventory, decom
 /**
  * The default wall-clock freshness window for a decomposition observation.
  *
- * The window is chosen by asking one question of the backend: can a dependency
- * status change without producing an observable repository event?
+ * The decomposition and the dependency snapshot it binds are one observation
+ * answering one question of the backend - can this evidence change without
+ * producing an observable repository event? - so they share one derivation,
+ * `defaultDependencyFreshnessSeconds`, rather than two identical copies that can
+ * drift apart. This name is kept because the command surface and its docs speak
+ * of the decomposition's window.
  *
- * - **files**: no. Dependency statuses are task records inside the repository,
- *   and the scan already binds inventory membership, each carrier digest, the
- *   protected contract, the base tree, and the dependency snapshot's own
- *   provenance. Any real change breaks one of those bindings and is refused
- *   semantically, at both preflight and dispatch. The clock adds nothing a
- *   binding does not already catch, so it is set to the trusted maximum and
- *   acts only as a backstop against an observation left lying around for a day.
- * - **github**: yes. Issue state lives outside the repository and can change
- *   with no local event at all, so nothing local would notice. There the clock
- *   is the only mechanism, and it stays short.
- *
- * `--max-age-seconds` still overrides either default explicitly.
+ * `--max-age-seconds` still overrides the default explicitly.
  */
 export function defaultDecompositionFreshnessSeconds(backend) {
-  return backend === 'github' ? 3600 : PARALLEL_SCAN_MAX_FRESHNESS_SECONDS;
+  return defaultDependencyFreshnessSeconds(backend);
 }
 
 /**

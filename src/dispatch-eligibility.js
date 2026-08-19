@@ -101,6 +101,7 @@ import {
   ACTIVATION_ASSURANCE_VALUES,
   ACTIVATION_CHANNELS,
   ACTIVATION_DERIVATIONS,
+  DEFAULT_GRANT_TTL_SECONDS,
   RETURN_ASSURANCE_LIMITATIONS,
   RETURN_ASSURANCE_VALUES,
   activationAssuranceMeets,
@@ -416,7 +417,7 @@ export function semanticDigest(prefix, value) {
  * derived from the one bound it genuinely must respect: a packet may not
  * outlive the operator authorization that a default activation grant carries.
  */
-export const DISPATCH_LIVENESS_WINDOW_SECONDS = 43_200;
+export const DISPATCH_LIVENESS_WINDOW_SECONDS = DEFAULT_GRANT_TTL_SECONDS;
 
 export function projection(value) {
   if (!isObject(value)) return null;
@@ -1091,7 +1092,7 @@ export function validateRepositoryBinding(value, findings, label = 'dispatch rep
 
 export function validateAssignment(
   value,
-  { backend, taskId, repository, hostRoleCapabilities = HOST_ROLE_CAPABILITIES },
+  { backend, taskId, repository, hostRoleCapabilities = HOST_ROLE_CAPABILITIES, now = Date.now() },
   findings
 ) {
   exactKeys(value, [
@@ -1181,8 +1182,15 @@ export function validateAssignment(
   if (value?.attribution?.agentTrailer !== `Agent: ${value?.roleId}`) findings.malformed('dispatch attribution Agent trailer does not match the role');
   exactKeys(value?.liveness, ['cadence', 'expiry', 'stopCondition'], 'dispatch liveness', findings);
   if (typeof value?.liveness?.cadence !== 'string' || !value.liveness.cadence.trim()) findings.malformed('dispatch liveness cadence is required');
-  if (!isoTimestamp(value?.liveness?.expiry, { futureAllowed: true })) findings.malformed('dispatch liveness expiry must be an ISO-8601 UTC instant');
-  else if (Date.parse(value.liveness.expiry) <= Date.now()) findings.stale('dispatch liveness window has expired');
+  if (!isoTimestamp(value?.liveness?.expiry, { futureAllowed: true, now })) findings.malformed('dispatch liveness expiry must be an ISO-8601 UTC instant');
+  // Judged at the evaluation instant, not the wall clock. Expiry is not
+  // retroactive: a boundary revalidating an already-consumed attempt pins this
+  // to the consumption instant, exactly as it already pins the activation
+  // authority, so repairs, review, and closeout that run long do not retire a
+  // packet that was live when the work it authorized began. A boundary
+  // authorizing *new* work supplies no instant and gets the current clock,
+  // which is what makes the window a gate on consumption at all.
+  else if (Date.parse(value.liveness.expiry) <= now) findings.stale('dispatch liveness window has expired');
   if (typeof value?.liveness?.stopCondition !== 'string' || !value.liveness.stopCondition.trim()) findings.malformed('dispatch liveness stopCondition is required');
   if (value?.cancellationBoundary !== 'return_on_cancellation') findings.malformed("dispatch cancellationBoundary must be 'return_on_cancellation'");
 }
@@ -1816,6 +1824,7 @@ function evaluateLiveDispatch(candidate) {
     taskId: snapshot?.taskId,
     repository: boundRepository,
     hostRoleCapabilities: authority?.hostRoleCapabilities,
+    ...(Number.isFinite(now) ? { now } : {}),
   }, assignmentSink);
   const capabilityItems = assignmentSink.items.filter(item => String(item.code ?? '').startsWith('capability.'));
   ledger.record('host_role_capability', capabilityItems.length ? 'refused' : 'satisfied',
@@ -2266,6 +2275,7 @@ function evaluateSealedPacket(candidate) {
     taskId: packet?.task?.id,
     repository: packet?.repository,
     hostRoleCapabilities: options.hostRoleCapabilities,
+    ...(Number.isFinite(now) ? { now } : {}),
   }, assignmentSink);
   const capabilityItems = assignmentSink.items.filter(item => String(item.code ?? '').startsWith('capability.'));
   ledger.record('host_role_capability', capabilityItems.length ? 'refused' : 'satisfied',

@@ -296,6 +296,20 @@ describe('handoff derived-evidence refresh', () => {
     assert.equal(decompCatPlan.action, 'refreshed', `decompCatPlan reason: ${decompCatPlan.reason}`);
     assert.ok(plan.additionalWrites.some(w => w.path === '.agenticloop/decompositions/T-001.json'));
     assert.ok(plan.changedFiles.includes('.agenticloop/decompositions/T-001.json'));
+
+    // The regeneration is a new observation by a new producer, so its window is
+    // re-derived from the backend - not the hand-authored hour the decomposition
+    // on disk declared. Carrying that hour forward re-stamped `observedAt` and
+    // left the regenerated decomposition expiring again inside the same
+    // multi-delegation cycle, which is the loop this refresh exists to end.
+    const decompWrite = plan.additionalWrites.find(w => w.path === '.agenticloop/decompositions/T-001.json');
+    const regenerated = JSON.parse(decompWrite.content);
+    assert.equal(decompositionSource.freshnessPolicy.maxAgeSeconds, 3600,
+      'the fixture must still carry the hand-authored hour this asserts is not inherited');
+    assert.equal(regenerated.freshnessPolicy.maxAgeSeconds, defaultDependencyFreshnessSeconds('files'));
+    assert.equal(regenerated.scan.freshnessPolicy.maxAgeSeconds, defaultDependencyFreshnessSeconds('files'));
+    assert.equal(regenerated.observedAt > decompositionSource.observedAt, true,
+      'the regenerated decomposition is a new observation, not a re-stamped old one');
   });
 
   it('category 4: dispatch fields populated from consumption record', async () => {

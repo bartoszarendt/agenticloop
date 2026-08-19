@@ -39,6 +39,7 @@ const MANIFEST = {
     'test/model-catalog.test.js',
     'test/model-picker.test.js',
     'test/path-identity.test.js',
+    'test/producer-refusal-typing.test.js',
     'test/resolution-matrix.test.js',
     'test/review-checkpoint.test.js',
     'test/review-lenses.test.js',

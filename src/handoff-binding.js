@@ -76,21 +76,27 @@ function packetCapabilities(target, io, assertedPath) {
  */
 export function canonicalDispatchValidator({
   target, io, hostTrustStore = undefined,
-  // Optional: the instant this packet's activation authority is judged at. A
-  // boundary revalidating an already-consumed attempt supplies the consumption
-  // instant, because expiry is not retroactive for work it already authorized.
-  // Boundaries that authorize *new* work leave it absent and get the
-  // current clock.
+  // Optional: the instant this packet is judged at. A boundary revalidating an
+  // already-consumed attempt supplies the consumption instant, because expiry is
+  // not retroactive for work it already authorized. Boundaries that authorize
+  // *new* work leave it absent and get the current clock.
   activationInstantFor = null,
 }) {
   return packet => {
     try {
       const now = typeof activationInstantFor === 'function' ? activationInstantFor(packet) : null;
+      const pinned = typeof now === 'number' && Number.isFinite(now) ? { now } : {};
       const checked = validateDispatchPreparation(packet, {
         capabilities: packetCapabilities(target, io, hostTrustStore),
+        // The pin governs the whole packet, not only its activation authority.
+        // The packet's own liveness window is the same kind of clock: leaving it
+        // on the wall clock retired an attempt mid-lifecycle for elapsed time
+        // alone, while every fact the packet binds still held - which is exactly
+        // what the window was widened to stop.
+        ...pinned,
         resolveActivationBinding: value => resolvePacketActivationBinding(target, io, value, {
           hostTrustStorePath: hostTrustStore,
-          ...(typeof now === 'number' && Number.isFinite(now) ? { now } : {}),
+          ...pinned,
         }),
       });
       return createPreparedDispatchValidation(packet, { ok: checked.ok, errors: checked.errors });

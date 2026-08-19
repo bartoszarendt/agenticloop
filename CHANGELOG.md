@@ -62,6 +62,29 @@
   stays consumable for the same window a default activation grant covers, instead
   of one hour. Every fact a packet binds is revalidated at consumption, so the
   clock is a backstop, not a timer on the operator.
+- The dispatch liveness window now gates consumption only. A boundary
+  revalidating an already-consumed attempt - return verification, review entry,
+  acceptance, integration, closeout - judges the packet's window at the instant
+  the attempt was consumed, exactly as it already judges that attempt's
+  activation authority. Widening the window only postponed the failure: an
+  attempt whose repairs, review, or closeout ran past it was retired for elapsed
+  time alone while every fact the packet bound still held. Nothing extends a
+  minted packet; the window simply stops being a gate once the packet has been
+  consumed, and a packet that has *not* been consumed is still refused on the
+  current clock.
+- `task refresh-handoff-evidence` now emits the backend-derived freshness window
+  for the decomposition it regenerates, not just for the dependency snapshot. The
+  regeneration is a new observation by a new producer, so carrying the old
+  policy forward - or falling back to a hand-written hour - re-stamped
+  `observedAt` and left the regenerated decomposition expiring again inside the
+  same delegation cycle. The decomposition and dependency-snapshot defaults are
+  now one derivation rather than two identical copies.
+- Every producer a command calls directly now refuses caller-supplied evidence
+  with a typed public error that keeps its own sentence: activation grants,
+  task activation bindings, activation revocations, and dispatch consumption
+  records join role returns. Untyped, those refusals reached the failure
+  boundary as bare `TypeError`s and were erased to "required operational context
+  is unavailable" - or, uncaught, rendered as an unexpected internal failure.
 - Usage refusals now carry the command's own shape — accepted operands, accepted
   options, and the usage line — at the point of use, rather than pointing at a
   separate help command.
@@ -71,6 +94,17 @@
   boundary. A command that caught its own error produced an envelope with no root
   cause and no reference by which to request one, and `--debug` printed nothing
   because the failure never reached the top-level handler.
+
+### Migration and compatibility
+- The role return schema version moved from 4 to 5 with `productLineage`. A role
+  return record minted before this upgrade (schema version 4) is refused after it
+  ("role return schemaVersion must be 5"), and its digest is bound to the v5
+  projection. Both `task verify-return` and the later acceptance/closeout
+  lifecycle step validate the retained role return against the current schema, so
+  an in-flight v4 return must be re-minted with `task prepare-return` against the
+  current packet and check evidence before either boundary is retried. Tasks whose
+  returns were verified and terminally closed out before the upgrade are
+  unaffected; retain the v4 records as history.
 
 ## 0.4.3 - 2026-08-18
 
