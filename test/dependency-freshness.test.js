@@ -28,6 +28,9 @@ import { PARALLEL_SCAN_MAX_FRESHNESS_SECONDS } from '../src/parallel-scan.js';
 import { createDispatchFixture, git as fixtureGit } from './helpers/dispatch-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 import { evaluateHandoffPreflight } from '../src/handoff-preflight.js';
+import { createTaskProjectFixture } from './helpers/task-fixture.js';
+import { git } from './helpers/git-fixture.js';
+import { makeDecomposition, makePreflightTask } from './helpers/preflight-fixture.js';
 
 let temp;
 before(() => { temp = mkdtempSync(join(tmpdir(), 'al-freshness-')); });
@@ -36,8 +39,14 @@ after(() => { rmSync(temp, { recursive: true, force: true }); });
 describe('the freshness default follows the backend, not a constant', () => {
   it('keeps a short window only where state changes without a repository event', () => {
     // GitHub issue state can change with no local event at all, so the clock is
-    // the only mechanism there and stays short.
-    assert.equal(defaultDecompositionFreshnessSeconds('github'), 3600);
+    // the only mechanism there and stays short - but not shorter than the work
+    // it has to survive. One hour expired between a role returning and the
+    // operator deciding what to do about it, which is ordinary decision time.
+    assert.equal(defaultDecompositionFreshnessSeconds('github'), 14400);
+    assert.ok(
+      defaultDecompositionFreshnessSeconds('github') < defaultDecompositionFreshnessSeconds('files'),
+      'the GitHub window stays materially shorter than the files backstop'
+    );
   });
 
   it('lets the semantic bindings carry the files backend', () => {
@@ -87,14 +96,45 @@ describe('the dependency snapshot gets the same backend-derived default', () => 
       'the field observation was refused at 3758 seconds under the authored 3600');
   });
 
-  it('still honours a declared window as evidence rather than a setting', () => {
+  it('still honours a declared window wider than the current default', () => {
+    const wider = defaultDependencyFreshnessSeconds('files') + 600;
     const parsed = parseDependencySnapshot(JSON.stringify({
       kind: 'agenticloop.dependency-snapshot', schemaVersion: 1,
       source: 'files:.agenticloop/tasks', observedAt: new Date().toISOString(),
-      freshnessPolicy: { maxAgeSeconds: 600 }, statuses: {},
+      freshnessPolicy: { maxAgeSeconds: wider }, statuses: {},
     }), { sourceRef: 'dependencies.json' });
     assert.equal(parsed.ok, true, parsed.errors.join('; '));
-    assert.equal(parsed.evidence.freshnessPolicy.maxAgeSeconds, 600);
+    assert.equal(parsed.evidence.freshnessPolicy.maxAgeSeconds, wider);
+  });
+
+  it('re-derives a declared window the current toolkit would not have written', () => {
+    // Every snapshot committed before the backend default existed carries
+    // `{"maxAgeSeconds": 3600}`. Honouring it verbatim expired a snapshot
+    // observed at 09:04 by 10:04 the same morning, for a dependency it recorded
+    // as accepted. Reading it stays accepted; the window it names does not.
+    const parsed = parseDependencySnapshot(JSON.stringify({
+      kind: 'agenticloop.dependency-snapshot', schemaVersion: 1,
+      source: 'files:.agenticloop/tasks',
+      observedAt: new Date(Date.now() - 7200_000).toISOString(),
+      freshnessPolicy: { maxAgeSeconds: 3600 }, statuses: { 'T-002': 'accepted' },
+    }), { sourceRef: 'dependencies.json' });
+    assert.equal(parsed.ok, true, parsed.errors.join('; '));
+    assert.equal(parsed.evidence.freshnessPolicy.maxAgeSeconds, defaultDependencyFreshnessSeconds('files'));
+  });
+
+  it('names the snapshot, its age, its policy, and what it records when it is genuinely stale', () => {
+    const observedAt = new Date(Date.now() - (defaultDependencyFreshnessSeconds('files') + 3600) * 1000).toISOString();
+    const parsed = parseDependencySnapshot(JSON.stringify({
+      kind: 'agenticloop.dependency-snapshot', schemaVersion: 1,
+      source: 'files:.agenticloop/tasks', observedAt, statuses: { 'T-002': 'accepted' },
+    }), { sourceRef: 'dependencies.json' });
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.evidenceState, 'stale');
+    assert.deepEqual(parsed.staleness.statuses.map(entry => `${entry.id}=${entry.status}`), ['T-002=accepted']);
+    assert.equal(parsed.staleness.maxAgeSeconds, defaultDependencyFreshnessSeconds('files'));
+    assert.match(parsed.errors[0], /is stale: observed \d+s ago, policy allows \d+s/);
+    assert.match(parsed.errors[0], /It records T-002=accepted/);
+    assert.match(parsed.errors[0], /rather than treating them as unresolved/);
   });
 
   it('still refuses a malformed declared window', () => {
@@ -206,5 +246,54 @@ describe('semantic bindings still carry the weight', () => {
       projectConfig: {}, io: {}, now: past,
     });
     assert.equal(result.ok, false, 'a declared window is still enforced past its end');
+  });
+});
+
+describe('a stale snapshot is stale evidence, not an unresolved dependency', () => {
+  it('names the snapshot, its age, its policy, and the statuses it records', () => {
+    // The field run met `ERROR: A declared dependency is unresolved.` while the
+    // snapshot the refusal was derived from recorded that dependency as
+    // `accepted` and the dependency's own task record carried
+    // `status: accepted`. The refusal was not merely unhelpful; staleness was
+    // being projected as unresolvedness, which is untrue.
+    const target = mkdtempSync(join(temp, 'stale-vocabulary-'));
+    createTaskProjectFixture(target);
+    makePreflightTask(target, 'T-001', { status: 'agent-ready', dependsOn: ['T-002'] });
+    makePreflightTask(target, 'T-002', { status: 'accepted' });
+    mkdirSync(join(target, 'src'), { recursive: true });
+    mkdirSync(join(target, 'docs'), { recursive: true });
+    writeFileSync(join(target, 'src', 'existing.txt'), 'x\n', 'utf8');
+    writeFileSync(join(target, 'docs', 'existing.md'), '# d\n', 'utf8');
+    git(target, ['add', '-A']);
+    git(target, ['commit', '-m', 'tasks\n\nTask: T-001\nAgent: maintainer']);
+
+    const aged = new Date(Date.now() - (defaultDependencyFreshnessSeconds('files') + 3600) * 1000).toISOString();
+    makeDecomposition(target, 'T-001', {
+      workUnitId: 'milestone:M2',
+      dependencyStatuses: { 'T-002': 'accepted' },
+      dependencyObservedAt: aged,
+      inventoryTaskIds: ['T-002', 'T-001'],
+    });
+    git(target, ['add', '-A']);
+    git(target, ['commit', '-m', 'decomposition\n\nTask: T-001\nAgent: maintainer']);
+
+    const result = evaluateHandoffPreflight({
+      target, taskId: 'T-001', backend: 'files',
+      projectConfig: { task_file_template: '.agenticloop/tasks/{taskId}.md' },
+      io: {},
+    });
+
+    assert.equal(result.ok, false, 'stale evidence still refuses');
+    assert.equal(result.dependencyAge.state, 'stale');
+    const codes = result.diagnostics.map(item => item.code);
+    assert.ok(codes.includes('dependency.evidence.stale'), `expected a staleness code, got ${codes.join(', ')}`);
+    assert.equal(
+      codes.includes('dependency.unresolved'),
+      false,
+      'a dependency the snapshot records as accepted is not reported as unresolved'
+    );
+    const stale = result.diagnostics.find(item => item.code === 'dependency.evidence.stale');
+    assert.match(stale.message, /is stale: observed \d+s ago, policy allows \d+s/);
+    assert.match(stale.message, /It records T-002=accepted/);
   });
 });

@@ -27,6 +27,11 @@ export const REPAIR_POLICY = Object.freeze({
   'scope.deviation.missing': policy('scope_deviations', 'declare_exact_deviation', 'contract_reconciliation', 'Changed path is not authorized by task scope or a declared deviation.'),
   'scope.deviation.malformed': policy('scope_deviations', 'repair_deviation', 'contract_reconciliation', 'A scope deviation declaration is malformed or stale.'),
   'dependency.unresolved': policy('dependencies', 'resolve_dependency', 'dependency_escalation', 'A declared dependency is unresolved.'),
+  // Distinct from `dependency.unresolved` on purpose. A snapshot that records a
+  // dependency as accepted and has merely aged past its window says nothing
+  // about whether the dependency is satisfied; reporting the two as one fact
+  // sent the field run to escalate a dependency that was already accepted.
+  'dependency.evidence.stale': policy('dependencies', 'regenerate_decomposition', 'contract_reconciliation', 'The dependency snapshot has aged past its freshness window.'),
   'contract.baseline.missing': policy('task_contract', 'establish_baseline', 'contract_reconciliation', 'Task-contract baseline is missing.'),
   'contract.baseline.invalid': policy('task_contract', 'repair_baseline_record', 'human_authority_review', 'Task-contract baseline or correction record is invalid.'),
   'contract.baseline.stale': policy('task_contract', 'authorize_contract_correction', 'contract_reconciliation', 'Current task contract differs from the trusted baseline chain.'),

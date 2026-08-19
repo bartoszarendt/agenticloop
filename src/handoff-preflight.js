@@ -630,6 +630,14 @@ export function evaluateHandoffPreflight(input) {
                 parsedDepSnapshot = parseDependencySnapshot(depContent, { sourceRef: depSourceRef, now: Date.parse(now) });
                 if (parsedDepSnapshot.ok) {
                   depStatuses = dependencyStatusMap(parsedDepSnapshot.evidence);
+                } else if (parsedDepSnapshot.staleness) {
+                  // A stale snapshot is stale evidence about whatever it
+                  // records, not evidence that the dependency is unresolved.
+                  // Its statuses are handed to readiness so the refusal below
+                  // is the only one raised, and it says the true thing.
+                  depStatuses = Object.fromEntries(
+                    parsedDepSnapshot.staleness.statuses.map(entry => [entry.id, entry.status])
+                  );
                 }
               } catch {
                 depStatuses = {};
@@ -666,6 +674,15 @@ export function evaluateHandoffPreflight(input) {
             const ageSeconds = (Date.parse(now) - Date.parse(observedAt)) / 1000;
             const state = ageSeconds > maxAgeSeconds ? 'stale' : 'observed';
             dependencyAge = { state, evaluatedAt: now, maxAgeSeconds, observedAt };
+          } else if (parsedDepSnapshot?.staleness) {
+            const { observedAt, maxAgeSeconds } = parsedDepSnapshot.staleness;
+            dependencyAge = { state: 'stale', evaluatedAt: now, maxAgeSeconds, observedAt };
+            findings.error(
+              'dependency.evidence.stale',
+              parsedDepSnapshot.errors[0],
+              `npx agenticloop task refresh-handoff-evidence ${taskId} --json`,
+              'stale'
+            );
           } else if (decompositionSource) {
             if (!depSourceRef) {
               dependencyAge = { state: 'observed', evaluatedAt: now, maxAgeSeconds: null };

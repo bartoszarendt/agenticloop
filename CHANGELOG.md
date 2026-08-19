@@ -52,6 +52,26 @@
   being discovered after the fact.
 
 ### Changed
+- A dependency snapshot declaring a freshness window shorter than the current
+  backend default is now treated as legacy and re-derived. Every snapshot
+  committed before the default existed carries `{"maxAgeSeconds": 3600}`, and
+  honouring it verbatim expired a snapshot observed at 09:04 by 10:04 the same
+  morning for a dependency it recorded as `accepted`. Reading such a snapshot
+  stays accepted; no committed snapshot keeps a window the current toolkit would
+  not have written. A declared window wider than the default is still honoured
+  as authored.
+- The GitHub dependency and decomposition freshness default moves from one hour
+  to four. The finding that one hour is shorter than ordinary work was never
+  backend-specific: the second cohort saw a snapshot expire between a role
+  returning and the operator deciding what to do about it. The window stays
+  materially shorter than the files backstop, because GitHub issue state can
+  change with no observable repository event.
+- Staleness and unresolvedness are now separate facts. A snapshot that records a
+  dependency as `accepted` and has merely aged past its window refuses with the
+  new `dependency.evidence.stale` diagnostic, naming the snapshot, its age, its
+  policy, and the statuses it actually records, instead of reporting
+  `A declared dependency is unresolved.` about a dependency the same file records
+  as satisfied.
 - A worktree target is now a complete execution context. Repository-level
   operator state - activation grants and bindings, the host trust store, the
   operator confirmation key, effective activation policy - resolves from the

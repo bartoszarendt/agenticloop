@@ -67,7 +67,14 @@ export const DEPENDENCY_SNAPSHOT_SCHEMA_VERSION = 1;
  *   and the base tree; a real change breaks one of those and is refused
  *   semantically. The clock is a backstop at the trusted maximum.
  * - **github**: yes. Issue state lives outside the repository, so the clock is
- *   the only mechanism and stays short.
+ *   the only mechanism and stays short - but not shorter than the work it is
+ *   supposed to survive. One hour was, and the finding that established that
+ *   was never backend-specific: the second cohort observed a snapshot expire
+ *   between a role returning and the operator deciding what to do about it, a
+ *   gap of 2h13m that was ordinary human decision time rather than a stall.
+ *   Four hours outlasts a delegation cycle including that decision time and
+ *   still forces several re-observations across a working day, which is what
+ *   the clock is actually for.
  *
  * The decomposition already had this. The snapshot did not, so a hand-authored
  * `{"maxAgeSeconds": 3600}` left over from a past session expired mid-cycle -
@@ -75,8 +82,11 @@ export const DEPENDENCY_SNAPSHOT_SCHEMA_VERSION = 1;
  * Maintainer-committed refresh cycles that changed no dependency at all.
  */
 export function defaultDependencyFreshnessSeconds(backend) {
-  return backend === 'github' ? 3600 : PARALLEL_SCAN_MAX_FRESHNESS_SECONDS;
+  return backend === 'github' ? GITHUB_DEPENDENCY_FRESHNESS_SECONDS : PARALLEL_SCAN_MAX_FRESHNESS_SECONDS;
 }
+
+/** The GitHub-backend dependency window. See `defaultDependencyFreshnessSeconds`. */
+export const GITHUB_DEPENDENCY_FRESHNESS_SECONDS = 14400;
 
 /** Base evidence is either a resolved Git tree or an explicit path inventory. */
 export const BASE_EVIDENCE_KINDS = Object.freeze(['git_tree', 'path_inventory']);
@@ -263,15 +273,28 @@ export function parseDependencySnapshot(source, {
   // is a wall-clock backstop, and a snapshot that does not choose one should get
   // the defensible default instead of forcing a hand-authored number that
   // nothing produces and nothing bounds.
+  //
+  // A *declared* window shorter than the current backend default is treated as
+  // legacy and re-derived. Every snapshot committed before the default existed
+  // carries `{"maxAgeSeconds": 3600}`, and honouring it verbatim meant a
+  // snapshot observed at 09:04 expired at 10:04 the same morning - for a
+  // dependency it recorded as accepted, in a repository where nothing had
+  // changed. Reading such a snapshot stays accepted; no snapshot keeps a window
+  // the current toolkit would not have written. A longer declared window is
+  // still an author's deliberate choice and is honoured as authored.
+  const backendDefault = defaultDependencyFreshnessSeconds(backend);
   const declaredPolicy = Object.hasOwn(document, 'freshnessPolicy');
-  const maxAgeSeconds = declaredPolicy
-    ? document.freshnessPolicy?.maxAgeSeconds
-    : defaultDependencyFreshnessSeconds(backend);
+  const declaredMaxAge = declaredPolicy ? document.freshnessPolicy?.maxAgeSeconds : null;
+  let policySource = declaredPolicy ? 'declared' : 'derived';
+  let maxAgeSeconds = declaredPolicy ? declaredMaxAge : backendDefault;
   if (declaredPolicy) {
     if (!isPlainObject(document.freshnessPolicy) || !Number.isSafeInteger(maxAgeSeconds) || maxAgeSeconds <= 0) {
       errors.push('dependency snapshot freshnessPolicy must be { maxAgeSeconds: <positive integer> }');
     } else if (Object.keys(document.freshnessPolicy).some(key => key !== 'maxAgeSeconds')) {
       errors.push('dependency snapshot freshnessPolicy contains unknown fields');
+    } else if (maxAgeSeconds < backendDefault) {
+      maxAgeSeconds = backendDefault;
+      policySource = 'migrated';
     }
   }
   if (!isPlainObject(document.statuses) ||
@@ -289,17 +312,39 @@ export function parseDependencySnapshot(source, {
       evidence: null,
     };
   }
+  const statuses = Object.entries(document.statuses)
+    .map(([id, status]) => ({ id, status }))
+    .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+
+  // Staleness and unresolvedness are different facts about different things.
+  // A snapshot recording `accepted` that has aged past its window is stale
+  // evidence about a satisfied dependency; the field run reported it as
+  // "A declared dependency is unresolved" while the same file recorded the
+  // dependency as accepted, which is not merely unhelpful but untrue. The
+  // refusal therefore carries the snapshot, its age, its policy, and the
+  // statuses it actually records, so a caller can say which of the two it met.
   if (ageSeconds > maxAgeSeconds) {
     return {
       ok: false,
-      errors: [`dependency snapshot '${sourceRef}' is stale: observed ${Math.floor(ageSeconds)}s ago, policy allows ${maxAgeSeconds}s`],
+      evidenceState: 'stale',
+      staleness: Object.freeze({
+        sourceRef,
+        observedAt: document.observedAt,
+        ageSeconds: Math.floor(ageSeconds),
+        maxAgeSeconds,
+        policySource,
+        statuses: Object.freeze(statuses.map(entry => Object.freeze({ ...entry }))),
+      }),
+      errors: [
+        `dependency snapshot '${sourceRef}' is stale: observed ${Math.floor(ageSeconds)}s ago, ` +
+        `policy allows ${maxAgeSeconds}s. It records ` +
+        `${statuses.length === 0 ? 'no dependency statuses' : statuses.map(entry => `${entry.id}=${entry.status}`).join(', ')}; ` +
+        're-observe the dependencies rather than treating them as unresolved',
+      ],
       evidence: null,
     };
   }
 
-  const statuses = Object.entries(document.statuses)
-    .map(([id, status]) => ({ id, status }))
-    .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
   return {
     ok: true,
     errors: [],

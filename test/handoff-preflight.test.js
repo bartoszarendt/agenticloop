@@ -28,7 +28,7 @@ import { signHostPayload, hostTrustBoundarySignaturePayload, HOST_TRUST_BOUNDARY
 import { createDecompositionProvenance } from '../src/dispatch-envelope.js';
 import { createTaskContractBaselineRecord, taskContractDigest } from '../src/task-contract-baseline.js';
 import { createTaskInventoryEnumeration, evaluateParallelScan, normalizeFilesTaskInventory } from '../src/parallel-scan.js';
-import { parseDependencySnapshot, dependencyStatusMap } from '../src/task-evidence-contract.js';
+import { defaultDependencyFreshnessSeconds, parseDependencySnapshot, dependencyStatusMap } from '../src/task-evidence-contract.js';
 
 let tmpDir;
 
@@ -1115,7 +1115,11 @@ describe('handoff-preflight', () => {
     assertPreflight(result, { expectOk: true, expectErrors: 0 });
     assert.equal(result.dependencyAge.state, 'observed');
     assert.equal(result.dependencyAge.observedAt, observedAt);
-    assert.equal(result.dependencyAge.maxAgeSeconds, 3600);
+    // The snapshot declares the legacy one-hour window every pre-default
+    // snapshot carries. It is re-derived rather than honoured verbatim, so a
+    // committed snapshot cannot keep a window the current toolkit would not
+    // have written and expire inside a single delegation cycle.
+    assert.equal(result.dependencyAge.maxAgeSeconds, defaultDependencyFreshnessSeconds('files'));
   });
 
   it('reports dependencyAge stale for an expired dependency snapshot', () => {

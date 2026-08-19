@@ -34,13 +34,16 @@ export function taskPath(target, taskId) {
 }
 
 /** Write one canonical files-backed task record with the requested status. */
-export function makePreflightTask(target, taskId, { status = 'agent-ready' } = {}) {
+export function makePreflightTask(target, taskId, { status = 'agent-ready', dependsOn = [] } = {}) {
   mkdirSync(join(target, '.agenticloop', 'tasks'), { recursive: true });
+  const dependsOnBlock = dependsOn.length === 0
+    ? ''
+    : ['depends_on:', ...dependsOn.map(id => `  - ${id}`), ''].join('\n');
   writeFileSync(taskPath(target, taskId), `---
 task_id: ${taskId}
 status: ${status}
 backend: files
-allowed_paths:
+${dependsOnBlock}allowed_paths:
   - "src/**"
   - "docs/**"
 intended_creations:
@@ -87,24 +90,33 @@ Proceed incrementally.
 }
 
 /** Write a committed-shaped decomposition source and its dependency snapshot. */
-export function makeDecomposition(target, taskId, { workUnitId = `work-unit:${taskId}` } = {}) {
+export function makeDecomposition(target, taskId, {
+  workUnitId = `work-unit:${taskId}`,
+  dependencyStatuses = {},
+  dependencyObservedAt = null,
+  inventoryTaskIds = [taskId],
+} = {}) {
   const dir = join(target, '.agenticloop', 'decompositions');
   mkdirSync(dir, { recursive: true });
   const sourceRef = `.agenticloop/decompositions/${taskId}.json`;
   const depSourceRef = `.agenticloop/decompositions/${taskId}.dependencies.json`;
   const baseTree = gitOut(target, ['rev-parse', 'HEAD^{tree}']);
   const observedAt = new Date().toISOString();
+  // The snapshot's own observation instant may be pushed into the past so a
+  // caller can build a genuinely aged snapshot. The scan is still built at
+  // `observedAt`, so only the dependency evidence ages.
+  const depObservedAt = dependencyObservedAt ?? observedAt;
 
   const depSnapshotJson = canonicalJson({
     kind: 'agenticloop.dependency-snapshot',
     schemaVersion: 1,
     source: 'files:.agenticloop/tasks',
-    observedAt,
+    observedAt: depObservedAt,
     freshnessPolicy: { maxAgeSeconds: 3600 },
-    statuses: {},
+    statuses: dependencyStatuses,
   });
   writeFileSync(join(target, depSourceRef), `${depSnapshotJson}\n`, 'utf8');
-  const parsedDep = parseDependencySnapshot(depSnapshotJson, { sourceRef: depSourceRef, now: Date.parse(observedAt) });
+  const parsedDep = parseDependencySnapshot(depSnapshotJson, { sourceRef: depSourceRef, now: Date.parse(depObservedAt) });
   if (!parsedDep.ok) throw new Error(`dependency snapshot invalid: ${parsedDep.errors.join('; ')}`);
 
   const basePaths = gitOut(target, ['ls-tree', '-r', '--name-only', baseTree]).split(/\r?\n/).filter(Boolean);
@@ -112,18 +124,18 @@ export function makeDecomposition(target, taskId, { workUnitId = `work-unit:${ta
     workUnit: { id: workUnitId, backend: 'files' },
     inventory: normalizeFilesTaskInventory({
       inventoryId: 'files:.agenticloop/tasks',
-      entries: [{
-        carrier: `.agenticloop/tasks/${taskId}.md`,
-        content: readFileSync(taskPath(target, taskId), 'utf8'),
+      entries: inventoryTaskIds.map(id => ({
+        carrier: `.agenticloop/tasks/${id}.md`,
+        content: readFileSync(taskPath(target, id), 'utf8'),
         readError: null,
-      }],
+      })),
       complete: true,
       enumeration: createTaskInventoryEnumeration({
         backend: 'files',
         inventoryId: 'files:.agenticloop/tasks',
         observedAt,
-        discovered: 1,
-        returned: 1,
+        discovered: inventoryTaskIds.length,
+        returned: inventoryTaskIds.length,
       }),
     }),
     decomposition: {
