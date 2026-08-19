@@ -57,8 +57,8 @@ describe('generated-artifacts: schema and I/O', () => {
   it('createManifest produces a valid blank manifest with real package version', () => {
     const m = createManifest();
     assert.equal(m.schemaVersion, GENERATED_ARTIFACTS_SCHEMA_VERSION);
-    // Default version comes from package.json (0.4.3), not '0.0.0'
-    assert.equal(m.packageVersion, '0.4.3');
+    // Default version comes from package.json (0.4.4), not '0.0.0'
+    assert.equal(m.packageVersion, '0.4.4');
     assert.deepEqual(m.entries, []);
   });
 

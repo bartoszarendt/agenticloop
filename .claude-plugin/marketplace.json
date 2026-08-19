@@ -9,7 +9,7 @@
       "name": "agenticloop",
       "source": "./",
       "description": "Graph engineering overlay for AI coding agents -- guarded transitions, four supervised roles, evidence, audit, and closeout.",
-      "version": "0.4.3"
+      "version": "0.4.4"
     }
   ]
 }

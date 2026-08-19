@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.4 - 2026-08-19
 
 ### Highlights
 - **A resumed attempt can return.** Product work committed under an attempt that
@@ -175,6 +175,12 @@ it.
   policy, and the statuses it actually records, instead of reporting
   `A declared dependency is unresolved.` about a dependency the same file records
   as satisfied.
+- Repository identity no longer spawns Git in the common case. Nearly every
+  command asks whether a target is a linked worktree, and the answer is almost
+  always no. One `lstat` on the target's `.git` entry now settles it - a file
+  means linked worktree, a directory means ordinary checkout, neither means
+  subdirectory - instead of two process spawns per distinct path, and the same
+  pass distinguishes a submodule from a lane of the superproject.
 - A worktree target is now a complete execution context. Repository-level
   operator state - activation grants and bindings, the host trust store, the
   operator confirmation key, effective activation policy - resolves from the
