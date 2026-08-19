@@ -276,6 +276,20 @@ export function adapterDiscoverySummary(repoRoot) {
     nextSteps.push('No adapters configured. Run "agenticloop setup --adapter <host>" for guided host integration, or "agenticloop init --adapter <host>" for the direct scaffold.');
   }
 
+  // A run that cannot describe itself has to be reconstructed from a host
+  // session store, which is not workflow truth and is not durable. Logging
+  // stays opt-in - enabling it by default changes what an audit report must
+  // corroborate, which this remediation is scoped out of - so the absence is
+  // surfaced where an operator already looks instead.
+  try {
+    if (loadProjectMap(repoRoot)?.config?.event_logging === 'disabled') {
+      nextSteps.push(
+        'Event logging is disabled, so this project leaves no durable ordered record of its runs; ' +
+        'enable it with "agenticloop setup --event-logging enabled" or event_logging: enabled in .agenticloop/project.md.'
+      );
+    }
+  } catch { /* an unreadable project map is reported by its own validator */ }
+
   if (nextSteps.length === 0) {
     const hasRequired = adapters.some(a => a.required);
     const optionalAbsent = adapters.filter(a => !a.required && a.present.length === 0);

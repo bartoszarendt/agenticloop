@@ -74,13 +74,18 @@ describe('the inventory satisfies its own contract', () => {
     assert.match(checked.errors.join('; '), /visible to no role must state why/);
   });
 
-  it('records the one class that does not fully earn its place', () => {
-    // The inventory contract asks for redundant persisted values to be removed. This one is a
-    // cache that changes no gate outcome, and it is recorded as a
-    // reclassification candidate rather than quietly kept.
+  it('records the one class that does not fully earn its place, and how that was settled', () => {
+    // The inventory contract asks for redundant persisted values to be removed.
+    // This one is a cache that changes no gate outcome, and it was recorded as a
+    // reclassification candidate rather than quietly kept. The candidate is now
+    // resolved: retained, bound to the attempt it describes, and no longer able
+    // to hold a negative disposition derived from inputs the same refresh
+    // replaces - which is what made the field record harmful.
     const cache = EVIDENCE_INVENTORY.handoff_derived_evidence;
     assert.match(cache.decision, /none that is authoritative/);
-    assert.match(cache.reviewDisposition, /candidate for reclassification/);
+    assert.match(cache.reviewDisposition, /^resolved: /);
+    assert.match(cache.reviewDisposition, /bound to the dispatch invocation/);
+    assert.match(cache.reviewDisposition, /never carrying a disposition derived from inputs/);
   });
 
   it('names the two classes that are caches rather than authorities', () => {

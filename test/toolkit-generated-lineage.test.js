@@ -24,7 +24,7 @@ import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -161,9 +161,14 @@ describe('a toolkit update does not invalidate the implementation artifact', () 
       assertOk(await cli([
         'task', 'check-evidence-update', 'T-001', '--packet', packetPath,
         '--input', checksPath, '--output', checksPath, '--check', check.id,
-        '--outcome', 'passed', '--evidence', `${check.id} passed`,
-        '--execution-output', `.agenticloop/tmp/${check.id}.execution.json`, '--json',
+        '--outcome', 'passed', '--evidence', `${check.id} passed`, '--json',
       ]), `check evidence update ${check.id}`);
+      // No `--execution-output`: the artifact lands on a tracked path, so the
+      // proof a reviewer is pointed at survives the checkout that produced it.
+      assert.ok(
+        existsSync(join(root, '.agenticloop', 'checks', 'T-001', `${check.id}.execution.json`)),
+        `execution evidence for ${check.id} must land on a tracked path`
+      );
     }
 
     const returnPath = '.agenticloop/tmp/return.json';

@@ -168,7 +168,21 @@ function projectionFromPreflight(preflight, target = null) {
 
 const ELIGIBILITY_DIGEST_RE = /^sha256:agenticloop\.decomposition-eligibility\.v1:[a-f0-9]{64}$/;
 
-function createReceipt({ target, preflight }) {
+/**
+ * Build the durable receipt for one refresh.
+ *
+ * `inputsRenewed` says that this same plan is replacing the dependency snapshot
+ * or the decomposition. When it is, the readiness projection is *not* carried
+ * forward: it was derived from inputs the transaction is about to replace, so
+ * persisting it would record a verdict about facts that no longer exist.
+ *
+ * This is the whole of the defect the stale receipt records. It asserted
+ * `readiness.disposition: "blocked"` and one dependency entry marked unresolved
+ * for a full day, in a last-write slot, while later attempts never rewrote it -
+ * and its own refresh plan had proposed that blocked disposition rather than
+ * re-reading the dependency it was renewing in the same breath.
+ */
+function createReceipt({ target, preflight, inputsRenewed = false }) {
   const projection = projectionFromPreflight(preflight, target);
   const receipt = {
     kind: HANDOFF_REFRESH_RECEIPT_KIND,
@@ -180,10 +194,21 @@ function createReceipt({ target, preflight }) {
     carrierDigest: preflight?.carrierDigest ?? null,
     contractDigest: preflight?.contractDigest ?? null,
     repository: projection.repository,
-    readiness: {
-      ...projection.readiness,
-      dependencyAge: preflight?.dependencyAge ?? null,
-    },
+    readiness: inputsRenewed
+      ? {
+        // Deliberately unevaluated rather than negative. The inputs this
+        // verdict described are being replaced by this same transaction.
+        evidenceState: null,
+        disposition: null,
+        base: projection.readiness?.base ?? null,
+        dependencies: null,
+        dependencyAge: null,
+        supersededBy: 'inputs renewed by this refresh; re-run task handoff-preflight to evaluate readiness',
+      }
+      : {
+        ...projection.readiness,
+        dependencyAge: preflight?.dependencyAge ?? null,
+      },
     decomposition: {
       ...projection.decomposition,
       eligibilityDigest: preflight?.decomposition?.eligibilityDigest ?? null,
@@ -728,8 +753,10 @@ export function createHandoffEvidenceRefreshPlan({ target, preflight }) {
   if (preflight.backend !== 'files') throw new TypeError('handoff evidence refresh currently supports only the files backend');
   if (!preflight.carrierDigest || !preflight.contractDigest || !preflight.repository?.head) throw new TypeError('handoff refresh requires current carrier, protected contract, and repository identities');
 
-  // Category 1: Receipt (always)
-  const proposed = createReceipt({ target, preflight });
+  // Category 1: Receipt (always). Built after the input categories below, so
+  // it can say whether its own readiness verdict describes inputs this plan is
+  // replacing; the path and prior digest are resolved here because the plan's
+  // compare-before-write contract needs them either way.
   const receiptPath = handoffRefreshRelativePath(taskId);
   const receiptAbsolute = resolveTargetPath(target, receiptPath);
   const receiptExpected = existsSync(receiptAbsolute)
@@ -778,6 +805,12 @@ export function createHandoffEvidenceRefreshPlan({ target, preflight }) {
   } catch {
     // Non-fatal.
   }
+
+  const proposed = createReceipt({
+    target,
+    preflight,
+    inputsRenewed: depResult.ok || decompResult.ok,
+  });
 
   // Build categories
   const categories = [

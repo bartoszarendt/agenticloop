@@ -875,7 +875,7 @@ describe('task CLI', () => {
     assert.equal(existsSync(join(fixture.root, checksPath)), false);
   });
 
-  it('executes the exact required argv itself and refuses a passed claim without execution output', async () => {
+  it('executes the exact required argv itself and refuses a passed claim it cannot evidence', async () => {
     const fixture = await createDispatchFixture(tmpDir, 'fabricated-check-evidence');
     const packetPath = 'packet.json';
     const checksPath = 'checks.json';
@@ -894,8 +894,14 @@ describe('task CLI', () => {
       'task', 'check-evidence-update', 'T-001', '--packet', packetPath, '--input', checksPath, '--output', checksPath,
       '--check', 'RC-1', '--outcome', 'passed', '--evidence', 'fabricated pass', '--exit-code', '0', '--json', '--target', fixture.root,
     ], { operatorTrustRoot: fixture.operatorTrustRoot });
+    // Omitting `--execution-output` no longer refuses for want of a flag - the
+    // artifact defaults to a tracked path - but a passed claim the CLI cannot
+    // evidence itself is still refused, which is the property that matters.
     assert.notEqual(result.status, 0);
-    assert.match(JSON.parse(result.stdout).diagnostics[0].message, /execution-output/);
+    assert.match(
+      JSON.parse(result.stdout).diagnostics[0].message,
+      /execution evidence requires current task contract, carrier, repository, and product Git identities/
+    );
   });
 
   it('refuses unsafe check-evidence write destinations before running a required command', async () => {

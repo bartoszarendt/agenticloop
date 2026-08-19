@@ -133,8 +133,8 @@ const TASK_BACKEND_CHOICES = [
   { index: 2, label: 'GitHub - issues, labels, comments, and PR coordination', value: 'github' },
 ];
 const EVENT_LOGGING_CHOICES = [
-  { index: 1, label: 'Disabled - do not record workflow events', value: 'disabled' },
-  { index: 2, label: 'Enabled - write local task-scoped JSONL logs under .agenticloop/logs/ (default)', value: 'enabled' },
+  { index: 1, label: 'Disabled - do not record workflow events (default)', value: 'disabled' },
+  { index: 2, label: 'Enabled - write local task-scoped JSONL logs under .agenticloop/logs/', value: 'enabled' },
 ];
 const TASK_ID_PRESETS = [
   {
@@ -356,18 +356,15 @@ function resolveEventLoggingChoice(answer) {
 
 async function promptEventLogging(prompts, write, currentValue) {
   const hasCurrent = isValidEventLogging(currentValue);
-  // The numbering is stable - 1 is disabled, 2 is enabled - and only the
-  // default moves, so an operator's muscle memory and any scripted input keep
-  // meaning what they meant.
-  const defaultValue = PROJECT_MAP_DEFAULTS.event_logging;
-  const defaultChoice = EVENT_LOGGING_CHOICES
-    .find(choice => choice.value === (hasCurrent ? currentValue : defaultValue)).index;
+  const defaultChoice = hasCurrent
+    ? EVENT_LOGGING_CHOICES.find(choice => choice.value === currentValue).index
+    : 1;
   while (true) {
     const answer = (await prompts.ask(
       `  Event logging:\n${formatEventLoggingChoices()}\n  Choice [${defaultChoice}]: `
     )).trim();
     if (!answer) {
-      return hasCurrent ? currentValue : defaultValue;
+      return hasCurrent ? currentValue : 'disabled';
     }
     const selected = resolveEventLoggingChoice(answer);
     if (selected) return selected;

@@ -290,10 +290,24 @@ describe('handoff derived-evidence refresh', () => {
     git(value, ['commit', '-m', 'add stale decomposition']);
 
     const current = preflight(value);
-    const stalePreflight = { ...current, decomposition: { ...current.decomposition, dispatchCompatible: false } };
+    const stalePreflight = {
+      ...current,
+      decomposition: { ...current.decomposition, dispatchCompatible: false },
+      readiness: { evidenceState: 'stale', disposition: 'blocked', base: null, dependencies: [{ taskId: 'T-002', status: 'unresolved' }] },
+    };
     const plan = createHandoffEvidenceRefreshPlan({ target: value, preflight: stalePreflight });
     const decompCatPlan = plan.categories.find(c => c.category === 'decomposition_provenance');
     assert.equal(decompCatPlan.action, 'refreshed', `decompCatPlan reason: ${decompCatPlan.reason}`);
+
+    // A refresh never persists a negative disposition derived from inputs it is
+    // replacing in the same transaction. The field receipt asserted
+    // `readiness.disposition: "blocked"` and an unresolved dependency for a full
+    // day, in a last-write slot, while its own refresh plan had proposed that
+    // disposition rather than re-reading the dependency it was renewing.
+    assert.equal(plan.proposed.readiness.disposition, null);
+    assert.equal(plan.proposed.readiness.evidenceState, null);
+    assert.equal(plan.proposed.readiness.dependencies, null);
+    assert.match(plan.proposed.readiness.supersededBy, /re-run task handoff-preflight/);
     assert.ok(plan.additionalWrites.some(w => w.path === '.agenticloop/decompositions/T-001.json'));
     assert.ok(plan.changedFiles.includes('.agenticloop/decompositions/T-001.json'));
 

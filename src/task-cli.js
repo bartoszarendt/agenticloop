@@ -13,6 +13,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { parseFrontmatter, replaceFrontmatterField } from './frontmatter.js';
 import { markdownSection } from './markdown.js';
 import {
+  CHECK_EVIDENCE_DIRECTORY_RELATIVE_PATH,
   TASK_RECORD_TEMPLATE_RELATIVE_PATH,
   resolveToolkitAssetLayout,
   resolveToolkitAssetPath,
@@ -294,6 +295,21 @@ function evaluateReturnLaneContainment(target, taskId, productHead) {
       requiredContext: ["the task's product commits, re-applied on the return lane branch"],
     }
   );
+}
+
+/**
+ * Where a passed command check's execution evidence lands when the caller names
+ * no destination.
+ *
+ * A tracked path, deliberately. Every execution artifact in the field run went
+ * to `.agenticloop/tmp/`, which the target gitignores, so the proof a reviewer
+ * was pointed at lived on one machine and on no other checkout - and each later
+ * attempt rebuilt the identical proof it had no way to see.
+ */
+function defaultCheckExecutionOutput(taskId, checkId) {
+  if (!taskId || !checkId) return null;
+  const safe = value => String(value).replace(/[^A-Za-z0-9._-]/g, '_');
+  return `${CHECK_EVIDENCE_DIRECTORY_RELATIVE_PATH}/${safe(taskId)}/${safe(checkId)}.execution.json`;
 }
 
 /** The create actions that retire an attempt's predecessors alongside it. */
@@ -2670,7 +2686,9 @@ export async function cmdTask(args, io = createIo()) {
             opts.packet,
             sub === 'check-evidence-init' ? null : opts.input,
             opts.output ?? null,
-            sub === 'check-evidence-update' ? opts.executionOutput ?? null : null,
+            sub === 'check-evidence-update'
+              ? opts.executionOutput ?? defaultCheckExecutionOutput(taskId, opts.check)
+              : null,
           );
           const packet = readTargetJson(target, paths.packet.relPath, 'dispatch packet');
           const current = validateConsumedCheckEvidencePacket(
@@ -2745,8 +2763,12 @@ export async function cmdTask(args, io = createIo()) {
           let executionReference = null;
           let execution = null;
           if (required.kind === 'command' && opts.outcome === 'passed') {
-          if (!opts.executionOutput) {
-            throw new CliUsageError('a passed command check requires --execution-output <path>');
+          // Absent an explicit destination the artifact lands on a tracked
+          // path, not in gitignored scratch. This is the whole of the reason a
+          // reviewer could be pointed at proof that existed on one machine and
+          // on no other checkout.
+          if (!paths.execution) {
+            throw new CliUsageError('a passed command check requires a resolvable execution-evidence destination');
           }
           let parsed;
           try {

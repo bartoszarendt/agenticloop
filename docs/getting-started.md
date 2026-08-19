@@ -395,22 +395,21 @@ evidence (a GitHub remote, existing CI workflows, issue templates) is shown
 as informational evidence only and never selects the GitHub backend by itself;
 GitHub task coordination always requires the explicit `2` selection.
 
-Event logging is local and enabled by default (`event_logging: enabled`), so a
-run leaves a durable ordered record of itself rather than depending on a host
-session store. It is independent of the task backend: local event logging does
-not select the GitHub backend, and choosing the GitHub backend does not change
-event logging.
+Event logging is local, optional, and disabled by default
+(`event_logging: disabled`). It is independent of the task backend: enabling
+local event logging does not select the GitHub backend, and choosing the
+GitHub backend does not enable event logging.
 
 Interactive setup asks with a numbered choice:
 
 ```text
 Event logging:
-  1. Enabled - write local task-scoped JSONL logs under .agenticloop/logs/ (default)
-  2. Disabled - do not record workflow events
+  1. Disabled - do not record workflow events (default)
+  2. Enabled - write local task-scoped JSONL logs under .agenticloop/logs/
 Choice [1]:
 ```
 
-Blank input selects enabled for a new installation and retains the current
+Blank input selects disabled for a new installation and retains the current
 setting when setup is rerun. Automated setup can pass
 `--event-logging enabled` or `--event-logging disabled`; when the option is
 omitted in non-interactive mode, setup retains the current setting. This choice
@@ -800,8 +799,8 @@ decisions, or product files.
 
 ### Event logging
 
-Event logging is enabled by default. Turn it off in `.agenticloop/project.md`
-with `event_logging: disabled`. `event_logging_command` can stay blank; agents
+Event logging is disabled by default. Enable it in `.agenticloop/project.md`
+with `event_logging: enabled`. `event_logging_command` can stay blank; agents
 test `npx agenticloop --help` once when enabled and use `npx agenticloop` if
 that check succeeds.
 

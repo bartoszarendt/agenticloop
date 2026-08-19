@@ -77,6 +77,17 @@ export const AUDITS_DIRECTORY_RELATIVE_PATH = '.agenticloop/audits';
 export const IMPROVEMENTS_DIRECTORY_RELATIVE_PATH = '.agenticloop/improvements';
 export const LOGS_DIRECTORY_RELATIVE_PATH = '.agenticloop/logs';
 /**
+ * Committed execution evidence for required checks.
+ *
+ * Proof that a required check actually ran belongs to the repository, not to
+ * the machine that ran it. The field cohort wrote every execution artifact into
+ * `.agenticloop/tmp/`, which the target gitignores, so the artifact a reviewer
+ * was pointed at existed on exactly one laptop and on no other checkout - and
+ * every later attempt rebuilt identical proof it could not see. This root is
+ * tracked, so a check's evidence survives the checkout that produced it.
+ */
+export const CHECK_EVIDENCE_DIRECTORY_RELATIVE_PATH = '.agenticloop/checks';
+/**
  * Durable prior-gate receipt for the last lifecycle mutation (init, setup,
  * update). It lives in the existing target-owned workflow-state directory so
  * the next authoritative readiness edge can verify prior-gate state without a

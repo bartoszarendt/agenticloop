@@ -179,12 +179,23 @@ export const EVIDENCE_INVENTORY = Object.freeze({
     consumer: 'handoff preflight, as a cached observation only',
     // Honest accounting, and the one entry that does not fully earn its place.
     // It changes no gate outcome - it carries `authority: derived_only` - so
-    // by the governing principle it is a candidate for becoming transient.
-    // Recorded as such rather than quietly kept.
+    // by the governing principle it was a candidate for becoming transient.
+    //
+    // The candidate is resolved, and the answer is *retained and bound* rather
+    // than dropped. What made the field record harmful was not that it existed
+    // but that it was a last-write slot holding a negative disposition -
+    // `readiness.disposition: "blocked"`, a dependency recorded as unresolved -
+    // derived from inputs the same refresh was replacing, and that later
+    // attempts never rewrote. The refresh no longer persists a verdict about
+    // inputs it is renewing, and the receipt names the dispatch invocation it
+    // describes, so it cannot be read as current evidence for another attempt.
+    // Dropping the class outright would rewrite the refresh plan's
+    // compare-before-write contract - a transactional, security-relevant
+    // surface - for a record that is now truthful, which is the wrong trade.
     decision: 'none that is authoritative; it only spares preflight from recomputing observations it could derive itself',
     derivable: true,
     derivabilityNote: 'recomputable from the task record, decomposition, and Git state; kept as a bounded cache with no authority',
-    reviewDisposition: 'candidate for reclassification to transient_scratch; retained for now because the refresh command is a documented operator surface',
+    reviewDisposition: 'resolved: retained, bound to the dispatch invocation it describes, and never carrying a disposition derived from inputs the same refresh replaces',
     retention: 'until the next refresh; safe to delete, at the cost of recomputation',
     storageClass: 'durable_project_evidence',
     visibleTo: Object.freeze(['orchestrator', 'maintainer']),

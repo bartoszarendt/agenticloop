@@ -58,12 +58,54 @@
   being discovered after the fact.
 
 ### Changed
-- Event logging is now enabled by default for new projects
-  (`event_logging: enabled`). A 64-hour field run left `.agenticloop/logs/`
-  empty and had to reconstruct its own timeline from the host session store,
-  which is not workflow truth and is not durable. The interactive numbering is
-  unchanged - 1 is disabled, 2 is enabled - so only the default moved; existing
-  projects keep whatever they declared.
+- `task check-evidence-update` now writes a passed command check's execution
+  artifact to `.agenticloop/checks/<task-id>/<check-id>.execution.json` when no
+  `--execution-output` is supplied, instead of refusing for want of the flag.
+  The path is tracked: proof that a required check ran belongs to the
+  repository, not to the machine that ran it. The field run wrote every artifact
+  into gitignored scratch, so the artifact a reviewer was pointed at existed on
+  one laptop and on no other checkout.
+- `task refresh-handoff-evidence` no longer persists a readiness disposition
+  derived from inputs the same plan is replacing. When a refresh renews the
+  dependency snapshot or regenerates the decomposition, the receipt records
+  readiness as unevaluated and names what superseded it. The field receipt
+  asserted `readiness.disposition: "blocked"` and an unresolved dependency for a
+  full day in a last-write slot, while its own plan had proposed that
+  disposition rather than re-reading the dependency it was renewing.
+- `agenticloop status` now reports when a project has event logging disabled and
+  therefore leaves no durable ordered record of its runs.
+
+### Deferred, with reasons
+These are recorded rather than silently dropped. Each is a real finding from the
+second field cohort whose correction is out of this range's scope or larger than
+it.
+
+- **Event logging on by default.** Enabling it changes what an audit report must
+  corroborate: with logging enabled, `audit report` requires a matching Auditor
+  `role.invoked` event in the log, so the default would silently raise the bar
+  for every project's audit path. This range is explicitly scoped out of audit
+  contract changes, so the default stays opt-in and `agenticloop status` now
+  says what its absence costs instead.
+- **Contract history recording mutations.** The committed task-contract history
+  is an append-only, digest-chained structure verified against first-parent Git
+  history, and its trust properties come from carrying contract baselines and
+  corrections only. Adding mutation lines to that chain is a change to a
+  security-relevant record, not a projection change. The twelve receipts already
+  exist under `.agenticloop/handoffs/task-mutations/`; giving them one ordered
+  projection belongs beside that store rather than inside the trusted chain.
+- **Reuse of recorded verification evidence.** The tracked-artifact half is
+  implemented above. The other half - persisting per-check results into the task
+  record's `## Verification Attempts` section bound to the artifact *and* the
+  tree, and reusing them when neither changed - extends the record grammar, its
+  validators, its GitHub projection, and the required-check evidence contract.
+  It is the largest single recoverable cost in the field run (roughly 16 of one
+  attempt's 29 minutes rebuilding identical proof) and it deserves its own
+  characterized change rather than a corner of this one.
+- **Scratch retention.** `.agenticloop/tmp/` still grows without bound; the
+  observed run left 172 files. Reaping is a destructive operation over a
+  directory several roles write into concurrently, and defining when a task is
+  terminal enough to reap touches the closeout contract this range is scoped out
+  of.
 - `validate` now compares generated adapter bodies and the canonical role source
   over a canonical text projection rather than raw checkout bytes, so the same
   commit validates identically whether a checkout materialized it with LF or

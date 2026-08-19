@@ -1352,13 +1352,23 @@ future tunable policy requires a new policy version or a separately authorized
 contract change.
 
 All public artifact paths are relative to the selected target, must remain
-inside it, and must name regular files rather than links. A `passed` command
-check requires `--execution-output`: the CLI itself parses the exact required
-command as inert argv (no shell), runs it at the target root with a five-minute
-timeout, and writes target-confined schema-v3
+inside it, and must name regular files rather than links. For a `passed`
+command check the CLI itself parses the exact required command as inert argv
+(no shell), runs it at the target root with a five-minute timeout, and writes
+target-confined schema-v3
 `agenticloop.execution-evidence` JSON with the actual argv, child exit code,
 and output. A caller-supplied execution artifact or `--outcome passed
---exit-code 0` cannot prove execution. Manual, failed, blocked, and not-run
+--exit-code 0` cannot prove execution.
+
+Without `--execution-output` the artifact is written to
+`.agenticloop/checks/<task-id>/<check-id>.execution.json`, which is a tracked
+path. That is deliberate: proof that a required check ran belongs to the
+repository, not to the machine that ran it, and an artifact written into
+gitignored scratch is invisible on every other checkout - so a reviewer is
+pointed at a file that does not exist for them, and a later attempt rebuilds
+identical proof it cannot see. Commit that evidence with the rest of the
+workflow state after the return is produced; committing it beforehand moves the
+repository state the execution evidence is bound to. Manual, failed, blocked, and not-run
 observations retain their existing bounded observation form.
 
 On Windows, the runner resolves `.cmd` and `.bat` shims on `PATH` (preferring

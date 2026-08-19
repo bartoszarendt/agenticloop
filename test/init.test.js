@@ -185,14 +185,11 @@ describe('init - .agenticloop/project.md handling', () => {
     assert.ok(content.includes('task_backend: files'), 'project.md should set files as default backend');
   });
 
-  it('project.md contains event_logging: enabled', async () => {
-    // A run that leaves no ordered record of itself has to be reconstructed
-    // from a host session store, which is not workflow truth. Logging is on
-    // unless a project turns it off.
+  it('project.md contains event_logging: disabled', async () => {
     const d = makeEmptyTarget();
     await init({ target: d });
     const content = readFileSync(join(d, '.agenticloop', 'project.md'), 'utf-8');
-    assert.ok(content.includes('event_logging: enabled'), 'project.md should enable event logging by default');
+    assert.ok(content.includes('event_logging: disabled'), 'project.md should disable event logging by default');
   });
 
   it('project.md scaffolds work_unit_audit: enabled explicitly', async () => {
