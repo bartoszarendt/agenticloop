@@ -21,7 +21,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
 import { GIT_MAX_BUFFER } from './git-runner.js';
@@ -30,8 +30,8 @@ import { GIT_MAX_BUFFER } from './git-runner.js';
  * Resolved carrier roots, keyed by resolved target path.
  *
  * The mapping from a path to the repository that owns it does not change over
- * one process lifetime, and the resolution costs two `git rev-parse` calls that
- * would otherwise be repeated once per classified path.
+ * one process lifetime, and the resolution would otherwise be repeated once per
+ * classified path.
  */
 const resolved = new Map();
 
@@ -54,19 +54,42 @@ export function resolveCarrierRoot(target) {
   return answer;
 }
 
+/**
+ * A linked worktree root always holds `.git` as a *file* pointing at its
+ * administrative directory; an ordinary checkout root holds a `.git` directory,
+ * and a subdirectory holds neither.
+ *
+ * Only a target that *is* a linked worktree root redirects, so this one `lstat`
+ * answers the question for every other target without running Git at all. That
+ * matters: this resolution sits under repository identity, which is asked for
+ * on nearly every command, and paying two process spawns per distinct path
+ * would be a real cost for a question whose answer is almost always "no".
+ */
+function mayBeLinkedWorktreeRoot(key) {
+  try {
+    return lstatSync(join(key, '.git')).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function deriveCarrierRoot(key) {
   const unevaluated = { target: key, carrierRoot: key, isLinkedWorktree: false, evaluated: false };
+  if (!mayBeLinkedWorktreeRoot(key)) return Object.freeze(unevaluated);
+
   const toplevel = git(key, ['rev-parse', '--show-toplevel']);
   if (!toplevel) return Object.freeze(unevaluated);
   const commonDir = git(key, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   if (!commonDir) return Object.freeze(unevaluated);
 
   const common = resolve(commonDir);
-  const carrierRoot = basename(common) === '.git' ? dirname(common) : common;
-  // Only a target that *is* a linked worktree root redirects. A subdirectory of
-  // an ordinary checkout keeps the target it was given: rewriting it to the
-  // repository root would silently relocate state a caller addressed
-  // deliberately, which is a different defect from the one this closes.
+  // A submodule working directory also holds a `.git` file, and its common
+  // directory is `<super>/.git/modules/<name>` - a repository of its own, not a
+  // lane of the superproject. Requiring the common directory to be a plain
+  // `.git` keeps the redirect to linked worktrees of an ordinary checkout and
+  // of the project-root bare coordinator layout this toolkit supports.
+  if (basename(common) !== '.git') return Object.freeze({ ...unevaluated, evaluated: true });
+  const carrierRoot = dirname(common);
   const isLinkedWorktree = resolve(toplevel) === key && carrierRoot !== key;
   return Object.freeze({
     target: key,
