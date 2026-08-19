@@ -955,12 +955,19 @@ range derived from Git.
 
 Both are now derived facts rather than positions:
 
-- **The product head is derived.** `task evidence --class
-  implementation_artifact_evidence --product-head <commit>` accepts `HEAD` or
-  any ancestor of it, provided no product path changed after that commit and the
-  commit itself introduces at least one non-workflow path. `task lint` refuses
-  an `implementation_artifact` that names a workflow-only commit, so the field
-  can never point at a role-start receipt while the implementation sits earlier.
+- **The product head is derived, and scoped to the task.** `task evidence
+  --class implementation_artifact_evidence --product-head <commit>` accepts
+  `HEAD` or any ancestor of it, provided no path inside the task's
+  `allowed_paths` changed after that commit and the commit itself changes at
+  least one path inside them. Both questions are asked about the surface the
+  task declares, because a repository anyone else also commits to always
+  acquires one more shared path - a lockfile, a target config file, a
+  coworker's commit - and asking whether anything anywhere changed after the
+  artifact left a finished implementation permanently unbindable. Re-passing the
+  head the record already binds is accepted as a no-op and reported as already
+  current. `task lint` asks the same question of the same surface and refuses an
+  `implementation_artifact` that carries no work on it, so the field can never
+  point at a role-start receipt while the implementation sits earlier.
 - **The product base is carried, explicitly.** A return whose task has prior
   explicitly abandoned attempts binds the earliest carried attempt's base and
   states the claim in `productLineage`, naming each attempt it carries. The claim

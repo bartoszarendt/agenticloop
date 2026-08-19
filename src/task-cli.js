@@ -663,14 +663,30 @@ function lintTaskFile(filePath, target, projectConfig, verificationContext) {
   // head was pinned to HEAD, `implementation_artifact` was routinely rebound to
   // a role-start workflow commit, and every later audit, closeout, or
   // historical adoption that trusted the field bound the wrong object. Lint
-  // reads the named commit and refuses one that introduces no product work.
+  // reads the named commit and refuses one that carries no work on this task.
+  //
+  // It asks the same question the evidence gate that writes the field asks, and
+  // asks it of the same declared surface. Two validators of one field that ask
+  // different questions can disagree, and a record no command can satisfy is
+  // exactly what that disagreement produced last time. A record declaring no
+  // allowed_paths has no surface to ask about, so the repository-wide reading
+  // stands there and only there.
   const artifactHead = implementationArtifactHead(content);
   if (artifactHead) {
-    const carries = commitCarriesProductPaths(targetGitRunner(target), artifactHead, createPathClassifier(target));
+    const runGit = targetGitRunner(target);
+    const scopePatterns = (Array.isArray(frontmatter.allowed_paths) ? frontmatter.allowed_paths : [])
+      .filter(pattern => typeof pattern === 'string' && pattern);
+    const changed = scopePatterns.length > 0 ? commitChangedPaths(runGit, artifactHead) : null;
+    const carries = changed
+      ? { ok: changed.ok, carries: changed.paths.some(path => scopePatterns.some(pattern => fileMatchesScopePattern(path, pattern))) }
+      : commitCarriesProductPaths(runGit, artifactHead, createPathClassifier(target));
     if (carries.ok && !carries.carries) {
       errors.push(
-        `implementation_artifact commit ${artifactHead} introduces no non-workflow path; ` +
-        'it names workflow state rather than the implementation'
+        scopePatterns.length > 0
+          ? `implementation_artifact commit ${artifactHead} changes no path this task declares in allowed_paths; ` +
+            'it names workflow state rather than the implementation'
+          : `implementation_artifact commit ${artifactHead} introduces no non-workflow path; ` +
+            'it names workflow state rather than the implementation'
       );
     }
   }

@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### Fixed
+- `task lint` now validates `implementation_artifact` against the task's
+  declared `allowed_paths`, the same surface the evidence gate that writes the
+  field validates against. Two validators of one field that ask different
+  questions can disagree, and a record that no command can satisfy is what that
+  disagreement produced. A record declaring no `allowed_paths` keeps the
+  repository-wide reading, there and only there.
 - `task evidence --class implementation_artifact_evidence` now accepts
   re-passing the head the record already binds, reporting that the binding was
   already current instead of refusing with "changes protected task contract or
