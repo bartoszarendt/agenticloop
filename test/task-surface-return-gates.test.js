@@ -198,5 +198,22 @@ describe('return gates are scoped to the task surface', () => {
       'task', 'verify-return', 'T-001', '--packet', packetPath, '--return', returnPath,
       '--from-current-repository', '--json',
     ]), 'verify-return over a range holding an untrailered toolkit-update commit');
+
+    assertOk(await cli(['task', 'review-prepare', 'T-001', '--json']), 'review entry from the verified return');
+
+    // Proof that a required check ran is written to a tracked path by default,
+    // so committing it is the intended end state, and every later refetch reads
+    // that history. Until this family was recognized, the refetch aborted on the
+    // toolkit's own artifact. Committing still advances the workflow head, so a
+    // return produced before it is legitimately stale afterwards - that refusal
+    // is the honest one, and it is the only one left.
+    git(root, ['add', '.agenticloop/checks']);
+    git(root, ['commit', '-m', 'track the check execution artifacts\n\nTask: T-001\nAgent: engineer']);
+    const afterCommit = await cli(['task', 'review-prepare', 'T-001', '--json']);
+    assert.doesNotMatch(
+      `${afterCommit.stdout}${afterCommit.stderr}`,
+      /unknown workflow path/,
+      'committed check proof is workflow evidence, not an unknown path'
+    );
   });
 });

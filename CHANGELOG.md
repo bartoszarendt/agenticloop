@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Fixed
+- Committed check proof is now recognized as workflow evidence by return
+  classification. `check-evidence-update` has written execution artifacts to a
+  tracked path by default since 0.4.4, so committing them is the intended end
+  state - but the next evidence refetch aborted on the toolkit's own artifact
+  with "unknown workflow path", stopping the return one step short of review.
+  The family is validated like every other record here: it must parse as a
+  closed CLI execution artifact and belong to the task the packet names.
 - Carried return history is now classified from the manifest that declares the
   target state root, instead of from a list of record locations maintained
   beside it. That list was already missing three files the toolkit itself

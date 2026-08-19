@@ -14,6 +14,7 @@ import {
   validateCarrierMutationReceipt,
 } from './task-evidence-contract.js';
 import { validateAuditRecord } from './audit-record.js';
+import { validateExecutionEvidence } from './execution-evidence.js';
 import { VerificationContextMalformedError, VerificationContextStaleError } from './public-error.js';
 import {
   createPathClassifier,
@@ -146,6 +147,33 @@ function classifyPath(path, { packet, workflow, runGit, workflowHead, classifier
     if (errors.length > 0) {
       throw new VerificationContextMalformedError(
         `workflow audit '${path}' is not a validated canonical audit record: ${errors[0]}`
+      );
+    }
+    return 'workflow_evidence';
+  }
+  // Proof that a required check ran is written to a tracked path by default, so
+  // committing it is the intended end state rather than an anomaly - and until
+  // this family was recognized, committing it aborted the next evidence refetch
+  // on the toolkit's own artifact. It is validated like every other record here,
+  // and it must belong to the task the packet names.
+  const execution = path.match(/^\.agenticloop\/checks\/([A-Za-z0-9._-]+)\/[A-Za-z0-9._-]+\.execution\.json$/);
+  if (execution) {
+    if (execution[1] !== packet?.task?.id) {
+      throw new VerificationContextMalformedError(
+        `workflow check evidence '${path}' belongs to a different task than the packet names`
+      );
+    }
+    const text = readGit(runGit, ['show', `${workflowHead}:${path}`], `workflow check evidence '${path}'`);
+    let record;
+    try {
+      record = JSON.parse(text);
+    } catch {
+      throw new VerificationContextMalformedError(`workflow check evidence '${path}' is not valid JSON`);
+    }
+    const checked = validateExecutionEvidence(record);
+    if (!checked.ok) {
+      throw new VerificationContextMalformedError(
+        `workflow check evidence '${path}' is not a closed CLI execution artifact: ${checked.errors[0]}`
       );
     }
     return 'workflow_evidence';
