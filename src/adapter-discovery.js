@@ -120,6 +120,51 @@ function artifactsPresent(repoRoot, host) {
   return present;
 }
 
+/** Every adapter host this toolkit implements. */
+export const IMPLEMENTED_ADAPTER_HOSTS = Object.freeze(['opencode', 'codex', 'claude-code', 'copilot', 'cursor']);
+
+/**
+ * The hosts that actually have generated artifacts in this target.
+ *
+ * This is the same observation `agenticloop status` reports, exported so that
+ * host *resolution* can be one derivation rather than two. Preflight refused a
+ * target with `host is ambiguous; 5 adapter hosts are configured` while status
+ * reported exactly one host holding artifacts, because the two questions were
+ * answered by different code over the same repository: preflight counted
+ * configured adapters - the shipped defaults - and status counted what had been
+ * generated.
+ *
+ * @param {string} repoRoot
+ * @returns {string[]}
+ */
+export function hostsWithGeneratedArtifacts(repoRoot) {
+  return IMPLEMENTED_ADAPTER_HOSTS.filter(host => artifactsPresent(repoRoot, host).length > 0);
+}
+
+/**
+ * Resolve the one host a command should act for, or report the ambiguity.
+ *
+ * Generated artifacts are the operator's actual selection: configuration ships
+ * with several hosts, but a target only has artifacts for the ones it was set
+ * up with. When exactly one host holds artifacts, that is the answer. Otherwise
+ * the configured set decides, and only a genuine multi-host target is
+ * ambiguous.
+ *
+ * @param {string} repoRoot
+ * @param {string[]} configuredHosts
+ * @param {string} defaultHost
+ * @returns {{ host: string|null, hosts: string[], basis: 'generated_artifacts'|'configured'|'default' }}
+ */
+export function resolveAdapterHost(repoRoot, configuredHosts, defaultHost) {
+  const generated = hostsWithGeneratedArtifacts(repoRoot)
+    .filter(host => configuredHosts.length === 0 || configuredHosts.includes(host));
+  if (generated.length === 1) return { host: generated[0], hosts: generated, basis: 'generated_artifacts' };
+  if (generated.length > 1) return { host: null, hosts: generated, basis: 'generated_artifacts' };
+  if (configuredHosts.length === 1) return { host: configuredHosts[0], hosts: configuredHosts, basis: 'configured' };
+  if (configuredHosts.length > 1) return { host: null, hosts: configuredHosts, basis: 'configured' };
+  return { host: defaultHost, hosts: [defaultHost], basis: 'default' };
+}
+
 /**
  * Build an advisory summary of adapter configuration and generated artifacts.
  *
@@ -165,8 +210,7 @@ export function adapterDiscoverySummary(repoRoot) {
 
   // Build the relevant adapter set: target-selected + those with artifacts
   const relevantHosts = new Set(targetAdapterHosts);
-  const IMPLEMENTED = ['opencode', 'codex', 'claude-code', 'copilot', 'cursor'];
-  for (const host of IMPLEMENTED) {
+  for (const host of IMPLEMENTED_ADAPTER_HOSTS) {
     if (relevantHosts.has(host)) continue;
     if (artifactsPresent(repoRoot, host).length > 0) relevantHosts.add(host);
   }

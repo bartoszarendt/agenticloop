@@ -40,6 +40,7 @@ import { parseDependencySnapshot, dependencyStatusMap } from './task-evidence-co
 import { isGitObjectId } from './git-oid.js';
 import { GIT_MAX_BUFFER } from './git-runner.js';
 import { listAgenticLoopWorktrees, resolveGitRepositoryContext } from './worktree.js';
+import { resolveAdapterHost } from './adapter-discovery.js';
 import { loadAgenticLoopConfig } from './json.js';
 import { resolveGitHubTaskIdentityStrict } from './github-task-identity.js';
 import { defaultGhCommandRunner, runGhJson } from './gh-helpers.js';
@@ -824,10 +825,15 @@ export function evaluateHandoffPreflight(input) {
         branch: branch ?? null,
         head,
         baseTree: baseTree && isGitObjectId(baseTree) ? baseTree : null,
-        // Before an Engineer return exists, the current checkout tree is the
-        // only product base this read-only preflight can prove. Never label the
-        // current commit itself as a product artifact head.
-        productBase: baseTree && isGitObjectId(baseTree) ? baseTree : null,
+        // The product base a packet minted now would bind, rendered as the
+        // object kind the dispatch consumption records actually store: a
+        // commit. This field carried the base *tree* id, and it is exactly the
+        // field a role reads when diagnosing an ancestry refusal - where a tree
+        // cannot be checked for ancestry at all, so the diagnosis stalls on an
+        // object that could never have answered the question. The current
+        // commit is still never labelled a product artifact *head*; the base is
+        // where an attempt starts, not what it produced.
+        productBase: head,
       };
 
       // One evaluator, one verdict. Preflight and `prepare-dispatch` always
@@ -885,7 +891,6 @@ export function evaluateHandoffPreflight(input) {
     // applies. The ambiguity check runs against that selection set rather than
     // one-sidedly on `configured` while silently taking the first shippable host.
     const defaultHost = availableHosts.includes('opencode') ? 'opencode' : (availableHosts[0] ?? 'opencode');
-    const selectionHosts = configuredHosts.length > 0 ? configuredHosts : [defaultHost];
     let host;
     if (requestedHost) {
       if (!hostRoleCapabilities[requestedHost]) {
@@ -899,16 +904,24 @@ export function evaluateHandoffPreflight(input) {
       } else {
         host = requestedHost;
       }
-    } else if (selectionHosts.length > 1) {
-      findings.error(
-        'cli.operational',
-        `host is ambiguous; ${selectionHosts.length} adapter hosts are configured (${selectionHosts.join(', ')}); specify --host <id>`,
-        `Specify --host with one of: ${selectionHosts.join(', ')}.`,
-        'negative'
-      );
-      host = null;
     } else {
-      host = selectionHosts[0];
+      // One derivation, shared with `agenticloop status`. Configuration ships
+      // with several hosts and a target only holds generated artifacts for the
+      // ones it was actually set up with, so a target with exactly one such
+      // host is not ambiguous - it was reported as ambiguous only because this
+      // boundary counted configured adapters while status counted artifacts.
+      const resolution = resolveAdapterHost(resolvedTarget, configuredHosts, defaultHost);
+      host = resolution.host;
+      if (!host) {
+        findings.error(
+          'cli.operational',
+          `host is ambiguous; ${resolution.hosts.length} adapter hosts ` +
+          `${resolution.basis === 'generated_artifacts' ? 'hold generated artifacts' : 'are configured'} ` +
+          `(${resolution.hosts.join(', ')}); specify --host <id>`,
+          `Specify --host with one of: ${resolution.hosts.join(', ')}.`,
+          'negative'
+        );
+      }
     }
     if (host) {
       const declaration = hostRoleCapabilities[host]?.engineer;

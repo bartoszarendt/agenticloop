@@ -25,7 +25,7 @@
 
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -33,6 +33,7 @@ import { commandFailure } from '../src/public-result.js';
 import { debugReferenceFor, runWithDebugTrace } from '../src/debug-trace.js';
 import { PublicCommandError } from '../src/public-error.js';
 import { createRoleReturn } from '../src/dispatch-envelope.js';
+import { renderPackageVersion } from '../src/build-identity.js';
 import { createTaskProjectFixture } from './helpers/task-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
 
@@ -134,5 +135,74 @@ describe('producer paths carry typed errors rather than plain ones', () => {
       /required operational context is unavailable/,
       'this is the sentence the field run read thirteen times for a cause that names itself'
     );
+  });
+});
+
+describe('a usage error stays a usage error, and --debug adds something', () => {
+  // Corrected mid-run by `3b655a8` and kept as a guard, because the field met
+  // it: `task commit-message --class evidence` surfaced as
+  // `[cli.unexpected] Validation or evaluation did not complete` wrapping a
+  // `CliUsageError`, and rerunning with `--debug` returned the identical debug
+  // reference and no additional detail - contradicting its own repair hint.
+  async function refuseInvalidClass(root, options = {}) {
+    return runCliInProcess([
+      'task', 'commit-message', 'T-001', '--class', 'evidence',
+      '--subject', 'record the implementation artifact',
+      '--output', '.agenticloop/tmp/message.txt', '--json', '--target', root,
+    ], options);
+  }
+
+  it('types an invalid --class as usage rather than an internal failure', async () => {
+    const root = mkdtempSync(join(temp, 'usage-typing-'));
+    createTaskProjectFixture(root);
+    const result = await refuseInvalidClass(root);
+    assert.equal(result.status, 2, 'a rejected enum is a usage error, not a failed evaluation');
+    const envelope = JSON.parse(result.stdout);
+    assert.equal(envelope.diagnostics[0].code, 'cli.usage');
+    assert.doesNotMatch(
+      envelope.errors.join('\n'),
+      /Validation or evaluation did not complete/,
+      'this is the sentence a plain invalid-enum refusal was rendered as in the field'
+    );
+    assert.match(envelope.errors.join('\n'), /Invalid --class value 'evidence'/);
+    assert.match(envelope.errors.join('\n'), /Use: product_implementation, /,
+      'the refusal names the accepted values rather than a debug reference');
+  });
+
+  it('gives --debug something to add beyond the reference it already printed', async () => {
+    const root = mkdtempSync(join(temp, 'usage-debug-'));
+    createTaskProjectFixture(root);
+    const plain = await refuseInvalidClass(root);
+    const debugged = await refuseInvalidClass(root, { env: { ...process.env, AGENTICLOOP_DEBUG: '1' } });
+
+    assert.equal(
+      JSON.parse(debugged.stdout).debugReference,
+      JSON.parse(plain.stdout).debugReference,
+      'the reference is a stable handle for the same failure on the same command'
+    );
+    assert.ok(
+      debugged.stderr.length > plain.stderr.length,
+      'the repair hint says to rerun once with --debug; it must then print more than it did without it'
+    );
+    assert.match(debugged.stderr, /Invalid --class value 'evidence'/);
+  });
+});
+
+describe('a field record can name the build that produced it', () => {
+  it('carries a build marker beside the released version', async () => {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    const result = await runCliInProcess(['--version']);
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, new RegExp(`^agenticloop ${pkg.version.replaceAll('.', '\.')} `));
+    assert.match(
+      result.stdout,
+      /\(build (git:[0-9a-f]{12}(\+dirty)?|src:[0-9a-f]{12})\)/,
+      'the package installs from a Git ref, so the version string alone cannot name the code that ran'
+    );
+  });
+
+  it('changes with the source it describes', () => {
+    assert.notEqual(renderPackageVersion('0.4.3'), '0.4.3');
+    assert.match(renderPackageVersion('0.4.3'), /^0\.4\.3 \(build /);
   });
 });

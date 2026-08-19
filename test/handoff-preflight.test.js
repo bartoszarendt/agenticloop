@@ -1027,7 +1027,7 @@ describe('handoff-preflight', () => {
     assert.ok(codes.some(c => c.includes('decomposition')), `expected decomposition code, got ${codes.join(', ')}`);
   });
 
-  it('sets productBase to the current base tree and emits concrete decomposition repair commands', () => {
+  it('renders productBase as a commit, base tree separately, and concrete repair commands', () => {
     const target = makeTarget('product-base');
     writeTask(target, 'T-021', { withActivation: true });
     git(target, ['add', '.']);
@@ -1043,7 +1043,12 @@ describe('handoff-preflight', () => {
     });
 
     assert.equal(result.ok, false);
-    assert.equal(result.repository.productBase, baseTree);
+    // A dispatch consumption record stores `productBaseHead` as a commit, and
+    // this is the field a role reads when diagnosing an ancestry refusal. A tree
+    // id here cannot be checked for ancestry at all.
+    assert.equal(result.repository.productBase, head);
+    assert.equal(result.repository.baseTree, baseTree);
+    assert.notEqual(result.repository.productBase, result.repository.baseTree);
     assert.ok(result.firstSafeRepair.includes('prepare-decomposition'), result.firstSafeRepair);
     assert.ok(!result.firstSafeRepair.includes('<'), `firstSafeRepair should not contain placeholders: ${result.firstSafeRepair}`);
     assert.ok(result.firstSafeRepair.includes('--work-unit work-unit:T-021'), result.firstSafeRepair);

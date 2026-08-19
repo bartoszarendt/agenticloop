@@ -198,6 +198,7 @@ import { validateTaskStatusTransition } from './task-transition.js';
 import { parseFrontmatterStrict } from './frontmatter.js';
 import { evaluateCommitAttribution, lintAttributionRepairRecord, renderAttributionRepairRecord } from './commit-attribution.js';
 import { verifyCommittedAttributedSource } from './committed-source.js';
+import { renderPackageVersion } from './build-identity.js';
 import { planGitHubCheckpointRepair, renderGitHubCheckpoint } from './github-checkpoint.js';
 import { runGitHubReviewPrepare } from './github-review-prepare.js';
 import {
@@ -3551,7 +3552,7 @@ export async function dispatch(argv, io = createIo()) {
   }
 
   if (command === '--version' || command === 'version') {
-    io.out(`agenticloop ${packageVersion()}`);
+    io.out(`agenticloop ${renderPackageVersion(packageVersion())}`);
     return 0;
   }
 

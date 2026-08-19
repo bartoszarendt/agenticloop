@@ -2550,7 +2550,11 @@ export async function cmdTask(args, io = createIo()) {
           io.out(`  worktree: ${result.repository.worktree}`);
           io.out(`  branch: ${result.repository.branch ?? '(detached)'}`);
           io.out(`  HEAD: ${result.repository.head}`);
-          io.out(`  product base: ${result.repository.productBase ?? '(none)'}`);
+          // Both are rendered, each labelled by the object kind it is, so a role
+          // reading this block for an ancestry diagnosis cannot mistake one for
+          // the other.
+          io.out(`  product base (commit): ${result.repository.productBase ?? '(none)'}`);
+          io.out(`  base tree: ${result.repository.baseTree ?? '(none)'}`);
         }
         io.out(`  clean state: ${result.cleanState}`);
         if (result.hostRoleCapability) {

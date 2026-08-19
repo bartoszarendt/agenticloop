@@ -58,6 +58,21 @@
   being discovered after the fact.
 
 ### Changed
+- `task handoff-preflight` now renders `product base` as the object kind the
+  dispatch consumption records store - a commit - and reports the base tree on
+  its own line. It carried the base *tree* id in a commit-shaped field, which is
+  exactly the field a role reads when diagnosing an ancestry refusal, and a tree
+  cannot be checked for ancestry at all.
+- Host resolution is one derivation shared by `agenticloop status` and
+  `task handoff-preflight`. A target with exactly one host holding generated
+  artifacts now resolves to it instead of refusing with
+  `host is ambiguous; 5 adapter hosts are configured`, where the five were the
+  shipped configuration defaults and only one had ever been generated.
+- `--version` now carries a build marker beside the released version: the commit
+  and dirtiness of a Git checkout, or a digest of the installed source when there
+  is no commit to read. The package installs from a Git ref, so the version
+  string does not move between releases and a field record naming a version could
+  not identify the code that ran.
 - Consuming a dispatch packet now retires the live attempts it supersedes for the
   same task and role, in the same transaction that records the successor. The
   retirement names the superseding packet as both its reason and its authority
