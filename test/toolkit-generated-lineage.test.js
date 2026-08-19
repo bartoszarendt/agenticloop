@@ -136,9 +136,12 @@ describe('a toolkit update does not invalidate the implementation artifact', () 
       '--expect-digest', carrierDigest(root), '--product-head', updateHead, '--json',
     ]);
     assert.equal(refused.status, 1, 'a commit carrying only toolkit output is not an implementation');
+    // The guard is unchanged; the question it asks is narrower. A toolkit-update
+    // commit is refused because it touches nothing the task declared, not because
+    // a repository-wide classifier calls its paths workflow output.
     assert.match(
       JSON.parse(refused.stdout).errors.join('\n'),
-      /introduces at least one non-workflow path/
+      /changes at least one path this task declares in allowed_paths/
     );
   });
 

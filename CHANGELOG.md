@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Fixed
+- `task evidence --class implementation_artifact_evidence` now asks about the
+  task instead of about the repository. Whether a commit is this task's product
+  head, and whether it carries this task's work at all, are decided against the
+  `allowed_paths` the task itself declares - not against a repository-wide
+  product/workflow classification. The guard is unchanged in strength: a commit
+  touching nothing the task declared is still refused. What is gone is the
+  dependence on a path list that has to grow by one entry for every shared file
+  a real repository turns out to contain. `agenticloop.json` and
+  `package-lock.json` were the entries that ended the last field run; neither is
+  toolkit-owned, and there was always going to be a next one.
+
 ### Added
 - Added characterization coverage for the return-production deadlock's fourth
   shape: a finished implementation with an untrailered toolkit-update commit

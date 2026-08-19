@@ -104,7 +104,7 @@ import { CommitRangeError, deriveCommitRange } from './commit-range.js';
 import { gitTreeObjectId, isGitObjectId } from './git-oid.js';
 import { DISPATCH_LIVENESS_WINDOW_SECONDS } from './dispatch-eligibility.js';
 import { isLinkedWorktreeTarget } from './carrier-root.js';
-import { commitCarriesProductPaths, createPathClassifier, isWorkflowPath } from './product-lineage.js';
+import { commitCarriesProductPaths, commitChangedPaths, createPathClassifier } from './product-lineage.js';
 import { renderHandoffSequence } from './handoff-sequence.js';
 import { GIT_MAX_BUFFER } from './git-runner.js';
 import { validateCommittedSourcePath, verifyCommittedAttributedSource } from './committed-source.js';
@@ -210,21 +210,34 @@ function implementationArtifactHead(content) {
  * Refuse an implementation-artifact product head that current Git does not
  * support, or return `null` when it does.
  *
- * Three conditions, each of which the field run violated or was forced to
- * violate:
+ * Three conditions, every one of them asked about this task's declared surface:
  *
  *   1. the head is a real commit reachable from the current HEAD,
- *   2. no product path changed between it and HEAD - so it really is the
- *      product head and not merely some earlier commit,
- *   3. it introduces product work at all - so `implementation_artifact` can
- *      never name a role-start or receipt commit.
+ *   2. no path inside `allowed_paths` changed between it and HEAD - so it
+ *      really is this task's product head and not merely some earlier commit,
+ *   3. it changes a path inside `allowed_paths` at all - so
+ *      `implementation_artifact` can never name a role-start or receipt commit.
+ *
+ * Conditions 2 and 3 were whole-repository questions: "did anything anywhere
+ * change after this commit", and "does this commit touch any non-workflow
+ * path". That form cannot be satisfied in a repository anyone else also commits
+ * to. Three field cohorts proved it in sequence - generated host shims, then
+ * provisioned line-ending attributes, then the target's own `agenticloop.json`
+ * and a lockfile - and each fix could only declare one more path toolkit-owned.
+ * The set of shared paths a real repository carries is unbounded, a lockfile is
+ * genuinely not the toolkit's, and history is append-only, so a single such
+ * commit poisoned the binding permanently. The task already declares the only
+ * surface either question is entitled to ask about.
  */
-function evaluateProductHeadEvidence(runGit, productHead, classifier) {
+function evaluateProductHeadEvidence(runGit, productHead, allowedPaths) {
+  const patterns = (Array.isArray(allowedPaths) ? allowedPaths : [])
+    .filter(pattern => typeof pattern === 'string' && pattern);
+  const inTaskSurface = path => patterns.some(pattern => fileMatchesScopePattern(path, pattern));
   const refusal = (message, code = 'task.evidence.product_head') => new PublicCommandError(message, {
     code, evidenceState: 'changed', disposition: 'blocked',
     safeRepair:
       'Pass the exact commit that introduced this task\'s product work; it must be reachable from HEAD ' +
-      'and no product path may have changed after it.',
+      'and no path this task declares in allowed_paths may have changed after it.',
   });
   if (!isGitObjectId(productHead)) {
     return refusal('implementation artifact evidence requires --product-head as a full lowercase 40- or 64-character Git identity');
@@ -241,20 +254,20 @@ function evaluateProductHeadEvidence(runGit, productHead, classifier) {
     }
     const later = String(runGit(['diff', '--name-only', '--no-renames', `${productHead}..${observedHead}`]).stdout ?? '')
       .split(/\r?\n/).filter(Boolean);
-    const productPaths = later.filter(path => !isWorkflowPath(path, classifier));
-    if (productPaths.length > 0) {
+    const taskPaths = later.filter(inTaskSurface);
+    if (taskPaths.length > 0) {
       return refusal(
-        'implementation artifact evidence requires --product-head to be the last commit carrying product work; ' +
-        `product path(s) changed after it: ${[...new Set(productPaths)].sort().slice(0, 5).join(', ')}`
+        'implementation artifact evidence requires --product-head to be the last commit carrying work on this task; ' +
+        `path(s) inside allowed_paths changed after it: ${[...new Set(taskPaths)].sort().slice(0, 5).join(', ')}`
       );
     }
   }
-  const carries = commitCarriesProductPaths(runGit, productHead, classifier);
-  if (!carries.ok) return refusal(`implementation artifact evidence could not read the product head: ${carries.reason}`);
-  if (!carries.carries) {
+  const changed = commitChangedPaths(runGit, productHead);
+  if (!changed.ok) return refusal(`implementation artifact evidence could not read the product head: ${changed.reason}`);
+  if (!changed.paths.some(inTaskSurface)) {
     return refusal(
-      'implementation artifact evidence requires a --product-head commit that introduces at least one non-workflow path; ' +
-      'a workflow-only commit is not an implementation artifact'
+      'implementation artifact evidence requires a --product-head commit that changes at least one path this task ' +
+      'declares in allowed_paths; a commit outside this task surface is not an implementation artifact'
     );
   }
   return null;
@@ -3422,7 +3435,7 @@ export async function cmdTask(args, io = createIo()) {
         // commit that introduces product work, it is reachable from HEAD, and
         // nothing after it changed product paths. HEAD itself still satisfies
         // all three in the ordinary case.
-        const refused = evaluateProductHeadEvidence(runGit, productHead, createPathClassifier(target));
+        const refused = evaluateProductHeadEvidence(runGit, productHead, contract.projection.allowed_paths);
         if (refused) {
           return printGateResult('task evidence', commandFailure('task evidence', refused,
             'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);

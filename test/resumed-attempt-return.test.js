@@ -210,7 +210,7 @@ describe('a resumed attempt whose product work is already committed can return',
     assert.equal(refused.status, 1);
     assert.match(
       JSON.parse(refused.stdout).errors.join('\n'),
-      /introduces at least one non-workflow path/
+      /changes at least one path this task declares in allowed_paths/
     );
   });
 });
