@@ -1,6 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.4.5 - 2026-08-19
+
+### Highlights
+- **Whole-repository predicates replaced by task-scoped ones.** Artifact binding
+  and range attribution used to ask what the whole repository did: had anything
+  anywhere changed after the implementation commit, and did every commit in the
+  range carry canonical trailers. Neither question can be answered "no" in a
+  repository that other people, tools, and package managers also commit to, and
+  since history is append-only, one such commit closed the return permanently.
+  Three releases in a row moved that question rather than removing it - 0.4.2 out
+  of the head binding, 0.4.3 past generated host shims, 0.4.4 past
+  `.gitattributes` - and the next field run was ended by `agenticloop.json` and
+  `package-lock.json`, which no manifest can honestly claim. Both gates now ask
+  about the `allowed_paths` the task itself declares. Trailers stay binding on
+  the commits that carry the task's work, the scope-deviation gate still fires
+  on an out-of-scope edit, and a static assertion in the suite keeps artifact
+  binding from reaching for repository-wide classification again.
 
 ### Fixed
 - `task lint` now validates `implementation_artifact` against the task's
