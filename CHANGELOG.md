@@ -1,8 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.4.6 - 2026-08-19
 
 ### Fixed
+- Toolkit-written target state landing inside the current attempt is now
+  recognized rather than refused: the generator's own output manifest, the
+  derived-evidence receipt a refresh writes, and the project map. Running
+  `agenticloop update` or `task refresh-handoff-evidence` between minting a
+  packet and producing the return - both ordinary operator moves - aborted the
+  return with "unknown workflow path" on the toolkit's own output. Each family
+  is recognized only after it validates, so none is trusted for sitting at the
+  right path, and an unrecognized `.agenticloop/` record is still refused.
 - Committed check proof is now recognized as workflow evidence by return
   classification. `check-evidence-update` has written execution artifacts to a
   tracked path by default since 0.4.4, so committing them is the intended end
