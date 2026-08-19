@@ -42,6 +42,8 @@ import { join } from 'node:path';
 import { GIT_MAX_BUFFER } from './git-runner.js';
 
 import { canonicalSha256 } from './canonical-json.js';
+import { loadProjectMap } from './project-map.js';
+import { resolveTaskAttemptBudget } from './review-checkpoint.js';
 import { listWorkflowEvidenceFiles } from './carrier-root.js';
 import { classifyLifecycleCompatibility, compatibilityMessage } from './lifecycle-compatibility.js';
 import {
@@ -58,6 +60,25 @@ export const PACKET_CONSERVATION_DIAGNOSTIC_CODE = 'dispatch.packet.conserved';
 
 /** The one diagnostic code a rewritten attempt range reports under. */
 export const ATTEMPT_HISTORY_DIAGNOSTIC_CODE = 'dispatch.attempt.history_rewritten';
+
+/** The one diagnostic code an exhausted attempt budget reports under. */
+export const ATTEMPT_BUDGET_DIAGNOSTIC_CODE = 'dispatch.attempt.budget_exhausted';
+
+/**
+ * How an attempt stopped being live.
+ *
+ * `superseded_by_packet` is not an operator act. It is recorded automatically
+ * when a fresh packet is consumed for the same task and role, because the field
+ * cohort left nine attempts on record with six of them simultaneously live:
+ * `abandon-attempt` retires only the attempt an operator names, and consuming a
+ * successor retired nothing. An attempt with a successor has a truthful reason
+ * to be retired and does not need a human to type one.
+ */
+export const EXECUTION_ATTEMPT_ABANDONMENT_DISPOSITIONS = Object.freeze([
+  'abandoned',
+  'superseded_by_maintainer_repair',
+  'superseded_by_packet',
+]);
 
 const ISO_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const ATTEMPT_ID_RE = /^attempt:[a-f0-9]{32}$/;
@@ -119,8 +140,10 @@ export function validateExecutionAttemptAbandonment(record, { taskId = null, now
   if (typeof record.reason !== 'string' || record.reason.trim().length < 16) {
     errors.push('execution attempt abandonment reason must state why the attempt cannot reach a canonical return');
   }
-  if (!['abandoned', 'superseded_by_maintainer_repair'].includes(record.disposition)) {
-    errors.push("execution attempt abandonment disposition must be 'abandoned' or 'superseded_by_maintainer_repair'");
+  if (!EXECUTION_ATTEMPT_ABANDONMENT_DISPOSITIONS.includes(record.disposition)) {
+    errors.push(
+      `execution attempt abandonment disposition must be one of: ${EXECUTION_ATTEMPT_ABANDONMENT_DISPOSITIONS.join(', ')}`
+    );
   }
   // Abandoning a live attempt discards execution evidence, so it names the
   // durable authorization that permitted it rather than being self-authorizing.
@@ -201,10 +224,71 @@ export function groupExecutionAttempts({ consumptions = [], abandonments = [] } 
       // reason the original packet cannot be replaced by a later one.
       productBaseHead: consumption.productBaseHead,
       consumedAt: consumption.consumedAt,
+      // The role this attempt was consumed for. Supersession is per task *and*
+      // role: a fresh Engineer packet retires the previous Engineer attempt and
+      // says nothing about an Auditor attempt running beside it.
+      workflowRole: consumption.workflowRole ?? null,
       state: abandonment ? 'abandoned' : 'live',
       abandonment,
     });
   });
+}
+
+/**
+ * Retire every live attempt that this consumption supersedes.
+ *
+ * The field cohort left nine attempts on record, six of them live at once, and
+ * `attempt-status` still reported `new packet permitted: yes`. Nothing was
+ * wrong with any single decision: `abandon-attempt` retires only the attempt an
+ * operator names, and consuming a successor retired nothing at all. The gap is
+ * that an attempt with a successor is over, and saying so required a human.
+ *
+ * So consuming a packet for the same task and role writes the abandonment its
+ * predecessor had earned, naming the superseding packet as the reason and the
+ * authority. Explicit `abandon-attempt` stays exactly what it was: the exit for
+ * an attempt with no successor, where a human states why the work stops.
+ *
+ * @returns {{ ok: boolean, records: object[], errors: string[] }}
+ */
+export function deriveAttemptSupersessions(target, taskId, consumption, { backend = 'files' } = {}) {
+  const consumed = listDispatchConsumptions(target, taskId, { backend });
+  if (!consumed.ok) return { ok: false, records: [], errors: consumed.errors };
+  const abandoned = listExecutionAttemptAbandonments(target, taskId);
+  if (!abandoned.ok) return { ok: false, records: [], errors: abandoned.errors };
+
+  const successorId = executionAttemptIdentity(consumption);
+  const role = consumption.workflowRole ?? null;
+  const attempts = groupExecutionAttempts({
+    consumptions: consumed.records,
+    abandonments: abandoned.records,
+  });
+  const records = attempts
+    .filter(attempt =>
+      attempt.state === 'live' &&
+      attempt.attemptId !== successorId &&
+      attempt.workflowRole === role)
+    .map(attempt => Object.freeze({
+      kind: EXECUTION_ATTEMPT_ABANDONMENT_KIND,
+      schemaVersion: EXECUTION_ATTEMPT_ABANDONMENT_SCHEMA_VERSION,
+      backend,
+      taskId,
+      attemptId: attempt.attemptId,
+      packetId: attempt.packetId,
+      reason:
+        `superseded by dispatch packet ${consumption.packetId} consumed at ${consumption.consumedAt} ` +
+        `for role ${role ?? 'unknown'}; a task and role carry at most one live attempt`,
+      disposition: 'superseded_by_packet',
+      // The successor packet is the durable reference that permitted this
+      // retirement, so the record names it rather than an operator who was
+      // never asked.
+      authority: consumption.packetId,
+      abandonedAt: consumption.consumedAt,
+    }));
+  const errors = records.flatMap(record => {
+    const checked = validateExecutionAttemptAbandonment(record, { taskId });
+    return checked.ok ? [] : checked.errors.map(error => `attempt supersession is invalid: ${error}`);
+  });
+  return { ok: errors.length === 0, records: errors.length === 0 ? records : [], errors };
 }
 
 /**
@@ -257,7 +341,9 @@ export function evaluatePacketConservation({
  * The read-side companion to `evaluatePacketConservation`: unreadable evidence
  * fails closed rather than being treated as an absence of attempts.
  */
-export function evaluateTaskPacketConservation(target, taskId, { backend = 'files', runGit = defaultRunGit(target) } = {}) {
+export function evaluateTaskPacketConservation(target, taskId, {
+  backend = 'files', runGit = defaultRunGit(target), projectConfig = null,
+} = {}) {
   const consumed = listDispatchConsumptions(target, taskId, { backend });
   if (!consumed.ok) {
     return {
@@ -317,15 +403,69 @@ export function evaluateTaskPacketConservation(target, taskId, { backend = 'file
   // the Orchestrator's first recovery act an hour later was to check whether
   // any `git replace` refs had survived. Nothing mechanically noticed.
   const history = evaluateAttemptHistoryIntegrity(target, verdict.attempts, { runGit });
-  if (history.ok) return { ...verdict, historyIntegrity: history };
-  return {
-    ...verdict,
-    ok: false,
-    code: ATTEMPT_HISTORY_DIAGNOSTIC_CODE,
-    reason: history.reason,
-    repair: history.repair,
-    historyIntegrity: history,
-  };
+  if (!history.ok) {
+    return {
+      ...verdict,
+      ok: false,
+      code: ATTEMPT_HISTORY_DIAGNOSTIC_CODE,
+      reason: history.reason,
+      repair: history.repair,
+      historyIntegrity: history,
+      attemptBudget: null,
+    };
+  }
+  // `attempt_budget` bound nothing until now. The field run consumed nine
+  // packets against a declared budget of five - an 80 percent overrun that
+  // nothing mechanically noticed, while the Engineer reported its own effort as
+  // `near_budget` from reading the field by hand. A field that binds nothing is
+  // worse than absent, so it binds here, at the one read-side decision every
+  // gate shares.
+  const budget = resolveEffectiveAttemptBudget(target, taskId, { projectConfig });
+  const attemptBudget = Object.freeze({ ...budget, recorded: verdict.attempts.length });
+  if (budget.budget !== null && verdict.attempts.length >= budget.budget) {
+    return {
+      ...verdict,
+      ok: false,
+      code: ATTEMPT_BUDGET_DIAGNOSTIC_CODE,
+      reason:
+        `task ${taskId} has recorded ${verdict.attempts.length} execution attempt(s) against an ` +
+        `attempt_budget of ${budget.budget} (source: ${budget.source}); the budget is a hard stop, ` +
+        'not a guideline, and a further packet would repeat work that has produced no new evidence',
+      repair:
+        'Stop repeating the attempt and record the task as blocked or needs_context with what is actually unknown. ' +
+        `If the budget is genuinely too low for this task, raise attempt_budget in the task record through ` +
+        `'npx agenticloop task authorize-correction ${taskId}' before requesting another packet.`,
+      historyIntegrity: history,
+      attemptBudget,
+    };
+  }
+  return { ...verdict, historyIntegrity: history, attemptBudget };
+}
+
+/**
+ * The effective equivalent-attempt budget for one task: its own declared value,
+ * then project `default_attempt_budget`, then the built-in default.
+ *
+ * An unreadable task record yields `budget: null`, which does not bind. Failing
+ * open is right here and only here: the budget is a discipline bound, not an
+ * authorization boundary, and refusing every packet because a record could not
+ * be read would replace a real stop with an unrelated one.
+ */
+export function resolveEffectiveAttemptBudget(target, taskId, { projectConfig = null } = {}) {
+  let config = projectConfig;
+  if (!config) {
+    try { config = loadProjectMap(target)?.config ?? null; } catch { config = null; }
+  }
+  const template = typeof config?.task_file_template === 'string' && config.task_file_template
+    ? config.task_file_template
+    : '.agenticloop/tasks/{taskId}.md';
+  const carrier = join(target, ...template.replace(/\{taskId\}/g, String(taskId)).replace(/\\/g, '/').split('/'));
+  let content;
+  try { content = readFileSync(carrier, 'utf8'); } catch {
+    return { budget: null, source: 'unreadable', error: null };
+  }
+  const resolved = resolveTaskAttemptBudget(content, config);
+  return { budget: resolved.budget ?? null, source: resolved.source ?? 'task', error: resolved.error ?? null };
 }
 
 function defaultRunGit(target) {

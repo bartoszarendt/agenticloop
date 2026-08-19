@@ -58,6 +58,21 @@
   being discovered after the fact.
 
 ### Changed
+- Consuming a dispatch packet now retires the live attempts it supersedes for the
+  same task and role, in the same transaction that records the successor. The
+  retirement names the superseding packet as both its reason and its authority
+  under the new `superseded_by_packet` disposition. `abandon-attempt` is
+  unchanged and remains the exit for an attempt with no successor. The field run
+  left nine attempts on record with six simultaneously live, because retiring one
+  required a human to name it and nothing else ever did.
+- `attempt_budget` now binds. `task attempt-status` reports the effective budget
+  and how many attempts have been recorded against it, and a task at its budget
+  refuses a further packet with the typed `dispatch.attempt.budget_exhausted`
+  diagnostic, naming the count, the budget, and where the budget came from. The
+  repair is a task-contract decision - record the task blocked or needs_context,
+  or raise the budget through an authorized correction - not another attempt.
+  Until now the field was read by hand: the run exceeded a declared budget of
+  five by eighty percent with nothing mechanically noticing.
 - `task readiness-plan` is now status-aware. A task holding a consumed dispatch
   packet no longer requires a return to `agent-ready`: its lifecycle step is
   settled by that record. Where the transition is genuinely unreachable and no

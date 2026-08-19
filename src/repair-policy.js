@@ -32,6 +32,12 @@ export const REPAIR_POLICY = Object.freeze({
   // about whether the dependency is satisfied; reporting the two as one fact
   // sent the field run to escalate a dependency that was already accepted.
   'dependency.evidence.stale': policy('dependencies', 'regenerate_decomposition', 'contract_reconciliation', 'The dependency snapshot has aged past its freshness window.'),
+  // `attempt_budget` is a discipline bound, not an authorization boundary, and
+  // it now binds: nine attempts against a declared five went unnoticed until a
+  // role counted them by hand. The repair is a task-contract decision, so it is
+  // owned by the Maintainer and escalates to human authority rather than being
+  // cleared by another attempt.
+  'dispatch.attempt.budget_exhausted': policy('dispatch', 'repair_task_policy', 'human_authority_review', 'The task has recorded as many execution attempts as its attempt_budget allows.'),
   'contract.baseline.missing': policy('task_contract', 'establish_baseline', 'contract_reconciliation', 'Task-contract baseline is missing.'),
   'contract.baseline.invalid': policy('task_contract', 'repair_baseline_record', 'human_authority_review', 'Task-contract baseline or correction record is invalid.'),
   'contract.baseline.stale': policy('task_contract', 'authorize_contract_correction', 'contract_reconciliation', 'Current task contract differs from the trusted baseline chain.'),

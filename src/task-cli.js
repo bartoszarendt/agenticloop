@@ -180,6 +180,7 @@ import {
   EXECUTION_ATTEMPT_ABANDONMENT_KIND,
   EXECUTION_ATTEMPT_ABANDONMENT_SCHEMA_VERSION,
   PACKET_CONSERVATION_DIAGNOSTIC_CODE,
+  deriveAttemptSupersessions,
   evaluateTaskPacketConservation,
   executionAttemptAbandonmentRelativePath,
   validateExecutionAttemptAbandonment,
@@ -293,6 +294,15 @@ function evaluateReturnLaneContainment(target, taskId, productHead) {
       requiredContext: ["the task's product commits, re-applied on the return lane branch"],
     }
   );
+}
+
+/** The create actions that retire an attempt's predecessors alongside it. */
+function supersessionMutations(records) {
+  return records.map(record => ({
+    type: 'create',
+    path: executionAttemptAbandonmentRelativePath(record),
+    content: `${JSON.stringify(record, null, 2)}\n`,
+  }));
 }
 
 function taskLintCommandRunner(command, args, options = {}) {
@@ -3804,12 +3814,15 @@ export async function cmdTask(args, io = createIo()) {
         io.err('task attempt-status requires <id>');
         return EXIT_USAGE;
       }
-      const conservation = evaluateTaskPacketConservation(target, taskId, { backend: selectedBackend.backend });
+      const conservation = evaluateTaskPacketConservation(target, taskId, {
+        backend: selectedBackend.backend, projectConfig,
+      });
       const report = {
         command: 'task attempt-status',
         taskId,
         newPacketPermitted: conservation.ok,
         liveAttempt: conservation.liveAttempt,
+        attemptBudget: conservation.attemptBudget ?? null,
         attempts: conservation.attempts,
         ...(conservation.ok ? {} : { reason: conservation.reason, safeRepair: conservation.repair }),
       };
@@ -3827,6 +3840,9 @@ export async function cmdTask(args, io = createIo()) {
           }
         }
         if (conservation.attempts.length === 0) io.out('  (none)');
+        if (conservation.attemptBudget?.budget !== null && conservation.attemptBudget !== null) {
+          io.out(`  attempt budget:       ${conservation.attemptBudget.recorded}/${conservation.attemptBudget.budget} (${conservation.attemptBudget.source})`);
+        }
         io.out(`  new packet permitted: ${conservation.ok ? 'yes' : 'no'}`);
         if (!conservation.ok) {
           io.err(conservation.reason);
@@ -4396,6 +4412,7 @@ export async function cmdTask(args, io = createIo()) {
       // whether anything is written is the separate no-op decision below.
       let roleStartRecognition = null;
       let roleStartConsumption = null;
+      let attemptSupersessions = [];
       let lifecycleHandoffRecognition = null;
       if (nextStatus === 'in-progress') {
         const recordContract = taskContractDigest(currentContent);
@@ -4534,6 +4551,18 @@ export async function cmdTask(args, io = createIo()) {
           backend: 'files', taskId, recognition: roleStartRecognition,
           currentCarrierDigest: candidateDigest,
         });
+        // A task and role carry at most one live attempt. Consuming a fresh
+        // packet retires its predecessors in the same transaction that records
+        // the successor, so the ledger can never again report six live attempts
+        // and still permit a seventh.
+        const superseded = deriveAttemptSupersessions(target, taskId, roleStartConsumption, { backend: 'files' });
+        if (!superseded.ok) {
+          return printGateResult('task status', commandFailure('task status',
+            new VerificationContextMalformedError(
+              `prior execution attempts could not be retired: ${superseded.errors.join('; ')}`
+            ), 'evidence', { task_id: taskId }, target), asJson, io);
+        }
+        attemptSupersessions = superseded.records;
       }
       if (!built.ok) {
         return printGateResult('task status', {
@@ -4583,6 +4612,7 @@ export async function cmdTask(args, io = createIo()) {
               path: dispatchConsumptionRelativePath(roleStartConsumption),
               content: `${JSON.stringify(roleStartConsumption, null, 2)}\n`,
             },
+            ...supersessionMutations(attemptSupersessions),
           ]);
           if (!recorded.ok) {
             for (const error of recorded.errors) io.err(`task status failed: ${error}`);
@@ -4621,11 +4651,14 @@ export async function cmdTask(args, io = createIo()) {
         type: 'write', path: relPath, content: candidate,
         expectedDigest: currentDigest, expectedKind: 'file',
       }];
-      if (roleStartConsumption) mutationActions.push({
-        type: 'create',
-        path: dispatchConsumptionRelativePath(roleStartConsumption),
-        content: `${JSON.stringify(roleStartConsumption, null, 2)}\n`,
-      });
+      if (roleStartConsumption) {
+        mutationActions.push({
+          type: 'create',
+          path: dispatchConsumptionRelativePath(roleStartConsumption),
+          content: `${JSON.stringify(roleStartConsumption, null, 2)}\n`,
+        });
+        mutationActions.push(...supersessionMutations(attemptSupersessions));
+      }
       const committed = executeMutationBatch(target, mutationActions);
       if (!committed.ok) {
         const rolledBack = committed.rollbackErrors.length === 0;
