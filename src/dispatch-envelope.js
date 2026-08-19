@@ -1536,9 +1536,9 @@ export function createRoleReturn(input = {}) {
  * @param {any} input
  */
 export function reconstructCommitAttribution(input = {}) {
-  const { runGit, baseHead, head, taskId, roleId } = input;
+  const { runGit, baseHead, head, taskId, roleId, allowedPaths = null } = input;
   if (typeof runGit !== 'function') throw new TypeError('runGit is required to reconstruct attribution');
-  const derived = deriveCommitRange({ runGit, baseHead, head, taskId, roleId });
+  const derived = deriveCommitRange({ runGit, baseHead, head, taskId, roleId, allowedPaths });
   if (!derived.ok) throw new Error(derived.message);
   return { range: derived.range, commits: derived.commits, changedPaths: derived.changedPaths };
 }
@@ -1730,6 +1730,7 @@ function validateReturnAgainstCurrent({
         }
         const derived = deriveCommitRange({
           runGit, baseHead: wire.productBaseHead, head: wire.productHead, taskId: packet.task.id, roleId: packet.assignment.roleId,
+          allowedPaths: packet.task.allowedPaths,
         });
         if (!derived.ok) findings.add(derived.evidenceState, derived.message, { disposition: derived.disposition, code: derived.code });
         else {
@@ -1759,6 +1760,7 @@ function validateReturnAgainstCurrent({
       }
       const derived = deriveCommitRange({
           runGit, baseHead: wire.productBaseHead, head: wire.productHead, taskId: packet.task.id, roleId: packet.assignment.roleId,
+          allowedPaths: packet.task.allowedPaths,
       });
       if (!derived.ok) findings.add(derived.evidenceState, derived.message, { disposition: derived.disposition, code: derived.code });
       else {

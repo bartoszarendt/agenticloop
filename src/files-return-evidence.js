@@ -209,6 +209,7 @@ export function deriveReturnTopology(target, packet, signedEvidence, {
     head: productHead,
     taskId: packet?.task?.id,
     roleId: packet?.assignment?.roleId,
+    allowedPaths: packet?.task?.allowedPaths,
   });
   if (!product.ok) {
     throw product.evidenceState === 'malformed'

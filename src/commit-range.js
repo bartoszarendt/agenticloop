@@ -10,6 +10,7 @@
 
 import { commitMessageProducerHint, evaluateCommitAttribution } from './commit-attribution.js';
 import { isGitObjectId, sameGitObjectFormat } from './git-oid.js';
+import { fileMatchesScopePattern } from './scope-matcher.js';
 
 /**
  * A typed commit-range failure. `evidenceState` is classified at the origin of
@@ -60,12 +61,13 @@ function lines(result) {
  *   taskId?: string|null,
  *   roleId?: string|null,
  *   requireAttribution?: boolean,
+ *   allowedPaths?: string[]|null,
  * }} input
  * @returns {{ ok: true, range: { base: string, head: string }, commits: string[], changedPaths: string[] }
  *   | { ok: false, code: string, evidenceState: string, disposition: string, message: string }}
  */
 export function deriveCommitRange(input = {}) {
-  const { runGit, baseHead, head, taskId = null, roleId = null, requireAttribution = true } = input;
+  const { runGit, baseHead, head, taskId = null, roleId = null, requireAttribution = true, allowedPaths = null } = input;
   if (typeof runGit !== 'function') {
     throw new TypeError('deriveCommitRange requires a runGit function');
   }
@@ -110,7 +112,25 @@ export function deriveCommitRange(input = {}) {
   }
 
   if (requireAttribution) {
+    // Attribution binds the commits that carry the task's work. A range in a
+    // repository other people also commit to holds commits that are not the
+    // loop's and never claimed to be: a toolkit update the operator ran, a
+    // merge, a lockfile refresh. Requiring canonical trailers on those made one
+    // untrailered commit inside the window poison the range permanently - and
+    // in the field that same commit was the bound artifact, so `prepare-return`
+    // refused it while `task evidence` refused every move away from it. Where
+    // the task declares no surface the range is validated whole, exactly as
+    // before.
+    const patterns = (Array.isArray(allowedPaths) ? allowedPaths : [])
+      .filter(pattern => typeof pattern === 'string' && pattern);
+    const carriesTaskWork = commit => {
+      if (patterns.length === 0) return true;
+      const changed = runGit(['diff', '--name-only', '--no-renames', `${commit}^!`]);
+      if (!changed || changed.status !== 0) return true;
+      return lines(changed).some(path => patterns.some(pattern => fileMatchesScopePattern(path, pattern)));
+    };
     for (const commit of commits) {
+      if (!carriesTaskWork(commit)) continue;
       const shown = runGit(['show', '-s', '--format=%B', commit]);
       if (!shown || shown.status !== 0) {
         return stale(`unable to read durable commit message ${commit}`);

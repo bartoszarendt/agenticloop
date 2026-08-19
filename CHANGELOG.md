@@ -3,6 +3,15 @@
 ## Unreleased
 
 ### Fixed
+- Range attribution now requires canonical `Task:`/`Agent:` trailers on the
+  commits that touch the task's `allowed_paths`, instead of on every commit in
+  the range. Trailers stay binding where they mean something - the loop's own
+  commits - and a toolkit update, a merge, or a coworker's commit landing inside
+  the window no longer poisons the range for good. In the field the untrailered
+  commit was also the bound artifact, so `prepare-return` refused it while `task
+  evidence` refused every move away from it: two validators with no satisfiable
+  state between them. A task that declares no `allowed_paths` is validated
+  whole, exactly as before.
 - `task evidence --class implementation_artifact_evidence` now asks about the
   task instead of about the repository. Whether a commit is this task's product
   head, and whether it carries this task's work at all, are decided against the
