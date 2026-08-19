@@ -1838,9 +1838,31 @@ function validateJsoncConfig(config, rawConfig, cfgPath, repoRoot, forced, error
 // OpenCode adapter validation
 // ---------------------------------------------------------------------------
 
+/**
+ * Committed identity is what the bytes *mean*, not the bytes a checkout handed
+ * back.
+ *
+ * A generated adapter file and the canonical source it embeds are the same text
+ * whether Git materialized them with LF or CRLF, and whether an editor left a
+ * BOM in front. Comparing raw checkout bytes made `validate` fail on a fresh
+ * worktree with eight line-ending and canonical-body mismatches that needed
+ * manual repair - twice, in two field cohorts, on both sides of a
+ * `.gitattributes` mitigation. Line endings are a checkout property; the
+ * comparison is over a canonical projection instead, so the same commit
+ * validates identically on any platform.
+ */
+function canonicalComparisonText(value) {
+  return String(value ?? '').replace(/^﻿/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+/** Substring containment over the canonical projection of both sides. */
+function containsCanonical(haystack, needle) {
+  return canonicalComparisonText(haystack).includes(canonicalComparisonText(needle));
+}
+
 function validateRequiredSnippets(label, text, snippets, errors, description) {
   for (const snippet of snippets) {
-    if (!text.includes(snippet)) {
+    if (!containsCanonical(text, snippet)) {
       errors.push(`${label}: ${description}: ${snippet}`);
     }
   }
@@ -1984,7 +2006,7 @@ function validateOpencodeCommand(repoRoot, errors, warnings) {
   ];
 
   for (const snippet of requiredSnippets) {
-    if (!body.includes(snippet)) {
+    if (!containsCanonical(body, snippet)) {
       errors.push(`${displayPath}: command body is missing required activation text: ${snippet}`);
     }
   }
@@ -2065,7 +2087,7 @@ function validateOpencodeAgent(roleName, expectedAgent, config, repoRoot, errors
   }
 
   const skillsSrc = normalizeSkillsSourceDir(config.skills?.sourceDirectory);
-  if (expectedAgent?.promptBody && !body.includes(rewriteOpencodeSkillReferences(expectedAgent.promptBody, skillsSrc))) {
+  if (expectedAgent?.promptBody && !containsCanonical(body, rewriteOpencodeSkillReferences(expectedAgent.promptBody, skillsSrc))) {
     errors.push(`${displayPath}: prompt body must append the canonical role body from ${expectedAgent.sourceFile}`);
   }
 
@@ -2297,7 +2319,7 @@ function validateCodexPublicSkill(skillDir, errors, label = 'Codex adapter', age
   ];
 
   for (const snippet of requiredSnippets) {
-    if (!body.includes(snippet)) {
+    if (!containsCanonical(body, snippet)) {
       errors.push(`${skillPath.replace(/\\/g, '/')}: skill body is missing required activation text: ${snippet}`);
     }
   }
@@ -2401,7 +2423,7 @@ function validateCodexAgentToml(config, roleName, agentName, tomlPath, errors, a
   }
 
   for (const snippet of requiredSnippets) {
-    if (!developerInstructions.includes(snippet)) {
+    if (!containsCanonical(developerInstructions, snippet)) {
       errors.push(`${tomlPath.replace(/\\/g, '/')}: developer_instructions is missing required methodology text: ${snippet}`);
     }
   }
@@ -2599,7 +2621,7 @@ function validateClaudeCodePublicSkill(skillDir, errors, agentNames = {}) {
   }
 
   for (const snippet of requiredSnippets) {
-    if (!body.includes(snippet)) {
+    if (!containsCanonical(body, snippet)) {
       errors.push(`${skillPath.replace(/\\/g, '/')}: skill body is missing required activation text: ${snippet}`);
     }
   }
@@ -2656,7 +2678,7 @@ function validateClaudeCodeAgentReferences(config, roleName, mdPath, errors) {
     roleName,
     effectiveHostCapabilityInventory(config, 'claude-code')
   );
-  if (!body.includes(capabilityNotice)) {
+  if (!containsCanonical(body, capabilityNotice)) {
     errors.push(`${mdPath.replace(/\\/g, '/')}: generated agent is missing the canonical host-role capability declaration`);
   }
 
@@ -2798,7 +2820,7 @@ function validateCopilotPublicSkill(skillDir, errors, agentNames = {}) {
   ];
 
   for (const snippet of requiredSnippets) {
-    if (!body.includes(snippet)) {
+    if (!containsCanonical(body, snippet)) {
       errors.push(`${skillPath.replace(/\\/g, '/')}: skill body is missing required activation text: ${snippet}`);
     }
   }
@@ -2876,7 +2898,7 @@ function validateCopilotPromptFile(promptPath, orchestratorAgent, errors) {
   ];
 
   for (const snippet of requiredSnippets) {
-    if (!body.includes(snippet)) {
+    if (!containsCanonical(body, snippet)) {
       errors.push(`${promptPath.replace(/\\/g, '/')}: prompt body is missing required activation text: ${snippet}`);
     }
   }
@@ -3032,7 +3054,7 @@ function validateCopilotAgent(config, repoRoot, roleName, agentName, mdPath, err
   }
 
   for (const snippet of requiredSnippets) {
-    if (!body.includes(snippet)) {
+    if (!containsCanonical(body, snippet)) {
       errors.push(`${mdPath.replace(/\\/g, '/')}: agent body is missing required methodology text: ${snippet}`);
     }
   }
@@ -3147,7 +3169,7 @@ function validateCursorPublicSkill(skillDir, errors, agentNames = {}, options = 
   ];
 
   for (const snippet of requiredSnippets) {
-    if (!body.includes(snippet)) {
+    if (!containsCanonical(body, snippet)) {
       errors.push(`${skillPath.replace(/\\/g, '/')}: skill body is missing required activation text: ${snippet}`);
     }
   }
@@ -3275,7 +3297,7 @@ function validateCursorAgent(config, repoRoot, roleName, agentName, mdPath, erro
   }
 
   for (const snippet of requiredSnippets) {
-    if (!body.includes(snippet)) {
+    if (!containsCanonical(body, snippet)) {
       errors.push(`${mdPath.replace(/\\/g, '/')}: agent body is missing required methodology text: ${snippet}`);
     }
   }

@@ -185,6 +185,7 @@ const MANIFEST = {
     'test/real-order-lineage.test.js',
     'test/resumed-attempt-return.test.js',
     'test/attempt-supersession.test.js',
+    'test/committed-identity-portability.test.js',
     'test/plan-executability.test.js',
     'test/toolkit-generated-lineage.test.js',
     'test/worktree-execution-context.test.js',

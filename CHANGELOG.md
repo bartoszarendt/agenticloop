@@ -58,6 +58,13 @@
   being discovered after the fact.
 
 ### Changed
+- `validate` now compares generated adapter bodies and the canonical role source
+  over a canonical text projection rather than raw checkout bytes, so the same
+  commit validates identically whether a checkout materialized it with LF or
+  CRLF and whether an editor left a BOM in front. A fresh worktree previously
+  failed with eight line-ending and canonical-body mismatches that needed manual
+  repair - on both sides of the `.gitattributes` mitigation, which was only ever
+  a mitigation. A genuine content difference is still a failure.
 - `task handoff-preflight` now renders `product base` as the object kind the
   dispatch consumption records store - a commit - and reports the base tree on
   its own line. It carried the base *tree* id in a commit-shaped field, which is
