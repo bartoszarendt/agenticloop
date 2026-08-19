@@ -805,7 +805,7 @@ describe('setup event logging selection', () => {
     return fm;
   }
 
-  it('shows the numbered selector and keeps logging disabled on blank input for a fresh setup', () => {
+  it('shows the numbered selector and enables logging on blank input for a fresh setup', () => {
     const d = makeDocTarget();
 
     const result = run(['setup', '--target', d], {
@@ -813,11 +813,14 @@ describe('setup event logging selection', () => {
     });
 
     assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    // The numbering is stable - 1 is disabled, 2 is enabled - and only the
+    // default moved, so scripted input and an operator's muscle memory keep
+    // meaning what they meant.
     assert.match(
       result.stdout,
-      /Event logging:\n\s+1\. Disabled - do not record workflow events \(default\)\n\s+2\. Enabled - write local task-scoped JSONL logs under \.agenticloop\/logs\/\n\s+Choice \[1\]:/
+      /Event logging:\n\s+1\. Disabled - do not record workflow events\n\s+2\. Enabled - write local task-scoped JSONL logs under \.agenticloop\/logs\/ \(default\)\n\s+Choice \[2\]:/
     );
-    assert.equal(readProjectMap(d).event_logging, 'disabled');
+    assert.equal(readProjectMap(d).event_logging, 'enabled');
     assert.deepEqual(readdirSync(join(d, '.agenticloop', 'logs')), []);
   });
 

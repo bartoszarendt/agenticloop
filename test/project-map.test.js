@@ -53,7 +53,7 @@ describe('loadProjectMap', () => {
     const result = loadProjectMap(dir);
     assert.ok(result);
     assert.equal(result.config.task_backend, 'files');
-    assert.equal(result.config.event_logging, 'disabled');
+    assert.equal(result.config.event_logging, 'enabled');
     assert.equal(result.config.event_logging_command, '');
     // Work-unit audit resolves to enabled by default, including when omitted.
     assert.equal(result.config.work_unit_audit, 'enabled');

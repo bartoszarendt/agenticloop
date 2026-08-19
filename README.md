@@ -483,7 +483,7 @@ npx agenticloop remove --yes --include-state         Also remove target-owned `.
 
 Worktree `remove` and `cleanup` preserve task-specific lane-local `.agenticloop` state before removal. See [docs/worktrees.md](docs/worktrees.md) for what counts as lane-local state, when preservation conflicts block cleanup, and the `resolve-state` strategies.
 
-Event logging is **disabled by default** and stores only compact workflow-gate summaries, never raw transcripts. Enable it through the numbered choice in interactive setup, with `agenticloop setup --event-logging enabled`, or with `event_logging: enabled` in `.agenticloop/project.md`; see [docs/event-logging.md](docs/event-logging.md) for the event commands and audit workflow. Per-task completion summaries are always written inline into the task record's `## Scope Completed` section; there is no separate summaries directory.
+Event logging is **enabled by default** and stores only compact workflow-gate summaries, never raw transcripts. A run that cannot describe itself has to be reconstructed from a host session store, which is not workflow truth. Turn it off through the numbered choice in interactive setup, with `agenticloop setup --event-logging disabled`, or with `event_logging: disabled` in `.agenticloop/project.md`; see [docs/event-logging.md](docs/event-logging.md) for the event commands and audit workflow. Per-task completion summaries are always written inline into the task record's `## Scope Completed` section; there is no separate summaries directory.
 
 Normal downstream use does not require Python, PowerShell, Bash scripts, API keys, or framework setup for the toolkit itself.
 

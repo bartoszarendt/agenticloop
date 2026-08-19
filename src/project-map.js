@@ -38,7 +38,12 @@ export const PROJECT_MAP_DEFAULTS = {
   default_audit_budget: DEFAULT_AUDIT_BUDGET,
   max_parallel_implementation_lanes: 5,
   task_backend: 'files',
-  event_logging: 'disabled',
+  // On by default. The second field cohort left `.agenticloop/logs/` empty for
+  // a 64-hour run and had to reconstruct its own timeline from the host session
+  // store - which is not workflow truth and is not durable. Durable workflow
+  // evidence is what the model claims as truth, so a run describes itself
+  // unless a project deliberately turns that off.
+  event_logging: 'enabled',
   event_logging_command: '',
   // Work-unit audit is on by default, including when the key is absent, so an
   // existing project map does not need a destructive rewrite to be gated.

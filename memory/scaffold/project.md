@@ -5,7 +5,7 @@ default_review_budget: 5
 default_audit_budget: 3
 max_parallel_implementation_lanes: 5
 task_backend: files
-event_logging: disabled
+event_logging: enabled
 event_logging_command: ""
 work_unit_audit: enabled
 task_id_pattern: "T-<number>"

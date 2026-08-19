@@ -58,6 +58,12 @@
   being discovered after the fact.
 
 ### Changed
+- Event logging is now enabled by default for new projects
+  (`event_logging: enabled`). A 64-hour field run left `.agenticloop/logs/`
+  empty and had to reconstruct its own timeline from the host session store,
+  which is not workflow truth and is not durable. The interactive numbering is
+  unchanged - 1 is disabled, 2 is enabled - so only the default moved; existing
+  projects keep whatever they declared.
 - `validate` now compares generated adapter bodies and the canonical role source
   over a canonical text projection rather than raw checkout bytes, so the same
   commit validates identically whether a checkout materialized it with LF or

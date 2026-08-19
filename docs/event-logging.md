@@ -1,7 +1,8 @@
 # Event Logging
 
 Agentic Loop can record compact JSONL workflow-gate events for local audit and
-summary generation. Event logging is **disabled by default**.
+summary generation. Event logging is **enabled by default**, so a run leaves a durable ordered
+record of itself; set `event_logging: disabled` to turn it off.
 
 ## Enabling
 
