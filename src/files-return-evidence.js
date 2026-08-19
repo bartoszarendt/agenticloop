@@ -17,7 +17,6 @@ import { validateAuditRecord } from './audit-record.js';
 import { VerificationContextMalformedError, VerificationContextStaleError } from './public-error.js';
 import {
   createPathClassifier,
-  isCarriedWorkflowPath,
   resolveCarriedProductLineage,
 } from './product-lineage.js';
 import { pathIdentity } from './path-identity.js';
@@ -110,13 +109,20 @@ function workflowRecordAtHead(runGit, workflowHead, path, expected) {
  * What still holds is the boundary this whole classification exists to draw -
  * product work versus Agentic Loop's own state - and that scratch never becomes
  * either.
+ *
+ * Which state that is comes from the manifest that declares it, not from a list
+ * of record locations maintained beside it. The list was already missing the
+ * generator's own output manifest, the derived-evidence receipt added one
+ * release earlier, and the project map - so carried history that the toolkit
+ * itself wrote aborted the return as an unknown path. The declared state root
+ * is the whole answer, and it stays correct as the toolkit grows new records.
  */
 function classifyCarriedPath(path, classifier) {
   if (path === '.agenticloop/tmp' || path.startsWith(SCRATCH_PREFIX)) return 'scratch';
   const kind = classifier.classify(path);
   if (kind === 'product') return 'product';
   if (kind === 'toolkit_generated') return 'toolkit_generated';
-  return isCarriedWorkflowPath(path) ? 'workflow_evidence' : 'unknown';
+  return 'workflow_evidence';
 }
 
 function classifyPath(path, { packet, workflow, runGit, workflowHead, classifier }) {

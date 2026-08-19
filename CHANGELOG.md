@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Carried return history is now classified from the manifest that declares the
+  target state root, instead of from a list of record locations maintained
+  beside it. That list was already missing three files the toolkit itself
+  writes - the generator's own output manifest, the derived-evidence receipt
+  added one release earlier, and the project map - so a target that ran the
+  updater during a stalled attempt had those files land in carried history and
+  the return aborted on "unknown workflow path". The current attempt's own
+  region is unchanged: it is still classified against exact validated records,
+  never against a location pattern.
+
 ## 0.4.5 - 2026-08-19
 
 ### Highlights

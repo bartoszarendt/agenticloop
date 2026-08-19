@@ -142,27 +142,6 @@ export function createPathClassifier(target = null) {
 }
 
 /**
- * Canonical workflow record locations inside one target.
- *
- * Used only to classify the *carried* region of a return - history that was
- * already committed before the current attempt's packet was minted, and that
- * dispatch preparation validated at mint time through the clean gate and the
- * decomposition binding. The current attempt's own region is still classified
- * against exact validated records, never against a location pattern.
- */
-const CARRIED_WORKFLOW_LOCATIONS = Object.freeze([
-  /^\.agenticloop\/tasks\/[A-Za-z0-9._-]+\.md$/,
-  /^\.agenticloop\/handoffs\/dispatch\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\.json$/,
-  /^\.agenticloop\/handoffs\/task-mutations\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\.json$/,
-  /^\.agenticloop\/handoffs\/attempts\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\.json$/,
-  /^\.agenticloop\/decompositions\/[A-Za-z0-9._-]+\.json$/,
-  /^\.agenticloop\/audits\/[A-Za-z0-9._-]+\.md$/,
-  /^\.agenticloop\/returns\/[A-Za-z0-9._/-]+\.json$/,
-  /^\.agenticloop\/contracts\/[A-Za-z0-9._/-]+$/,
-  /^\.agenticloop\/logs\/[A-Za-z0-9._/-]+$/,
-]);
-
-/**
  * Is this path Agentic Loop's own output rather than product work?
  *
  * Derived from the manifest declaration, so a path the toolkit writes can never
@@ -171,12 +150,6 @@ const CARRIED_WORKFLOW_LOCATIONS = Object.freeze([
  */
 export function isWorkflowPath(path, classifier = null) {
   return classifier ? classifier.isWorkflowPath(path) : classifyRepositoryPath(path) !== 'product';
-}
-
-/** Is this a canonical workflow record location for the carried region? */
-export function isCarriedWorkflowPath(path) {
-  const value = String(path ?? '');
-  return CARRIED_WORKFLOW_LOCATIONS.some(pattern => pattern.test(value));
 }
 
 function text(result) {

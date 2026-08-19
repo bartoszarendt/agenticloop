@@ -94,6 +94,26 @@ describe('a resumed attempt whose product work is already committed can return',
     git(root, ['commit', '-m', 'implement the task\n\nTask: T-001\nAgent: engineer']);
     const productHead = git(root, ['rev-parse', 'HEAD']);
 
+    // The operator syncs the toolkit while the attempt is stalled. That rewrites
+    // target state the toolkit owns but that is not one of the loop's validated
+    // records - the generator's own output manifest, the derived-evidence
+    // receipt, the project map - and it lands in carried history, where the
+    // exact-record rule deliberately does not apply.
+    writeFileSync(
+      join(root, '.agenticloop', 'generated-artifacts.json'),
+      JSON.stringify({ schemaVersion: 4, entries: [] }, null, 2),
+      'utf8'
+    );
+    mkdirSync(join(root, '.agenticloop', 'handoffs', 'derived-evidence'), { recursive: true });
+    writeFileSync(
+      join(root, '.agenticloop', 'handoffs', 'derived-evidence', 'T-001.json'),
+      JSON.stringify({ taskId: 'T-001', readiness: 'unevaluated' }, null, 2),
+      'utf8'
+    );
+    writeFileSync(join(root, '.agenticloop', 'project.md'), '# Project', 'utf8');
+    git(root, ['add', '.agenticloop/generated-artifacts.json', '.agenticloop/handoffs', '.agenticloop/project.md']);
+    git(root, ['commit', '-m', 'Update Agentic Loop']);
+
     // ── attempt 1 dies. Its only legal exit writes a receipt that must itself
     //    be committed to pass the clean gate, moving HEAD past the product work.
     const attemptId = JSON.parse(assertOk(
@@ -171,6 +191,10 @@ describe('a resumed attempt whose product work is already committed can return',
     assert.equal(roleReturn.productHead, productHead);
     assert.deepEqual(roleReturn.productChangedPaths, ['src/existing.js'],
       'the carried product work is attributed as product work, not lost');
+    assert.ok(
+      roleReturn.workflowChangedPaths.includes('.agenticloop/generated-artifacts.json'),
+      'toolkit-written target state in carried history is workflow state, not an unknown path'
+    );
     assert.ok(roleReturn.productLineage, 'the return states the lineage it carries rather than widening silently');
     assert.deepEqual(roleReturn.productLineage.attempts.map(item => item.attemptId), [attemptId]);
     assert.equal(roleReturn.productBaseHead, roleReturn.productLineage.carriedBaseHead);
