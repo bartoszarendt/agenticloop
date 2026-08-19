@@ -63,6 +63,7 @@ import { taskContractDigest, trustedChainTerminal } from './task-contract-baseli
 import { taskStatusFromBody } from './dispatchability.js';
 import { fingerprintTargetPath } from './fs-mutation-kernel.js';
 import { readTaskActivationBinding } from './activation-store.js';
+import { listDispatchConsumptions } from './handoff-consumption.js';
 import {
   REPOSITORY_AUTHORITY_IDENTITY_VERSION,
   repositoryAuthorityIdentity,
@@ -123,6 +124,29 @@ function git(target, args) {
 function isTrackedAtHead(target, relPath) {
   return git(target, ['cat-file', '-e', `HEAD:${relPath}`]) !== null ||
     git(target, ['rev-parse', `HEAD:${relPath}`]) !== null;
+}
+
+/**
+ * The durable grouping a task record itself declares.
+ *
+ * A decomposition that found no grouping synthesizes `work-unit:<task-id>`, and
+ * readiness rejects that as a per-task fallback. The field run then met a repair
+ * that passed the rejected identity straight back, because readiness never read
+ * the one place the real grouping was written down: the record's own Concurrency
+ * Plan. Reading it makes the repair constructible from facts that would satisfy
+ * the blocker, which is the only kind of repair worth printing.
+ */
+export function declaredWorkUnitIdentity(body) {
+  const text = String(body ?? '');
+  const start = text.search(/^##\s+Concurrency Plan\s*$/m);
+  if (start < 0) return null;
+  const rest = text.slice(start + 1);
+  const end = rest.search(/^##\s+\S/m);
+  const section = end < 0 ? rest : rest.slice(0, end);
+  const match = section.match(/^[ \t]*-[ \t]*Work unit:[ \t]*(\S.*?)[ \t]*$/m);
+  if (!match) return null;
+  const value = match[1].replace(/^`+|`+$/g, '').trim();
+  return value || null;
 }
 
 function step(id, { settled, detail, owner, dependsOn = [], command = null, writes = [] }) {
@@ -301,9 +325,19 @@ export function buildReadinessPlan(target, taskId, options = {}) {
   const branch = git(target, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
   const suppliedWorkUnit = options.workUnitId ? String(options.workUnitId) : null;
   const baseArgument = options.base?.evidence?.revalidationArgs?.[1] ?? head ?? '<base-ref>';
+  // A synthesized `work-unit:<task-id>` is a fallback, not a durable grouping.
+  // Reporting it as settled would hide exactly the scope confusion where a
+  // per-task identity is mistaken for a milestone.
+  const isDurable = value => Boolean(value) && value !== `work-unit:${taskId}` && value !== taskId;
+  const declaredWorkUnit = taskExists ? declaredWorkUnitIdentity(body) : null;
+  // The one identity a repair may name. A command that passes back the value
+  // the blocker just rejected is not a repair; the record's own declaration is
+  // consulted before any placeholder is printed.
+  const durableWorkUnitId = [suppliedWorkUnit, decomposition?.scan?.workUnit?.id, declaredWorkUnit]
+    .find(isDurable) ?? null;
   const decompositionCommand =
     `npx agenticloop task prepare-decomposition ${taskId} ` +
-    `--work-unit ${suppliedWorkUnit ?? decomposition?.scan?.workUnit?.id ?? '<work-unit-id>'} ` +
+    `--work-unit ${durableWorkUnitId ?? '<work-unit-id>'} ` +
     `--source-ref ${decompositionRef} --source-revision git-commit:${head ?? '<head>'} ` +
     `--base ${baseArgument} --dependencies ${dependencyRef ?? '<dependencies.json>'}`;
 
@@ -323,19 +357,25 @@ export function buildReadinessPlan(target, taskId, options = {}) {
   }));
 
   const workUnitId = decomposition?.scan?.workUnit?.id ?? null;
-  // A synthesized `work-unit:<task-id>` is a fallback, not a durable grouping.
-  // Reporting it as settled would hide exactly the scope confusion where a
-  // per-task identity is mistaken for a milestone.
-  const isDurable = value => Boolean(value) && value !== `work-unit:${taskId}` && value !== taskId;
   const durableWorkUnit = isDurable(workUnitId);
+  const unconstructableWorkUnitRepair =
+    'declare the durable grouping in the task record under "## Concurrency Plan" -> "- Work unit:", ' +
+    'or supply --work-unit <kind:reference>; nothing currently on record can clear this step';
   steps.push(step('work_unit_identity', {
     settled: durableWorkUnit,
     detail: workUnitId
-      ? (durableWorkUnit ? workUnitId : `${workUnitId} is a per-task fallback, not a durable grouping`)
-      : 'no work-unit identity is bound',
+      ? (durableWorkUnit
+        ? workUnitId
+        : `${workUnitId} is a per-task fallback, not a durable grouping; ` +
+          (durableWorkUnitId ? `the record declares ${durableWorkUnitId}` : unconstructableWorkUnitRepair))
+      : (durableWorkUnitId
+        ? `no work-unit identity is bound; the record declares ${durableWorkUnitId}`
+        : `no work-unit identity is bound; ${unconstructableWorkUnitRepair}`),
     owner: 'maintainer',
     dependsOn: ['task_contract'],
-    command: durableWorkUnit ? null : decompositionCommand,
+    // An unconstructable repair is reported as an authoring task in `detail`
+    // rather than printed as a command the system would refuse.
+    command: durableWorkUnit || !durableWorkUnitId ? null : decompositionCommand,
   }));
 
   const decompositionCommitted = Boolean(decomposition) && isTrackedAtHead(target, decompositionRef);
@@ -355,7 +395,23 @@ export function buildReadinessPlan(target, taskId, options = {}) {
   //    show a single final commit instead of leaving it implicit.
   const attributionSettled = baselineSettled && decompositionCommitted && dependencyCommitted;
   const status = contractOk ? taskStatusFromBody(body) : null;
-  const lifecycleSettled = status === 'agent-ready';
+  // Readiness is status-aware, because the pair it used to emit could not both
+  // hold. For a task already `in-progress` the plan prescribed
+  // `task status <id> agent-ready` and then listed, among its own blockers, that
+  // the transition is forbidden - a sequence that cannot terminate. What the
+  // field run needed was to resume, not to restart, and a task holding a dispatch
+  // consumption record has already been authorized: its lifecycle question is
+  // settled by that record, not by a status round-trip the first cohort already
+  // found expensive.
+  const consumed = listDispatchConsumptions(target, taskId, { backend: 'files' });
+  const dispatched = consumed.ok && consumed.records.length > 0;
+  const lifecycleSettled = status === 'agent-ready' || dispatched;
+  // And where the transition is genuinely unreachable and no packet has been
+  // consumed, the plan says so rather than prescribing it anyway. An
+  // unconstructable repair is an owner-routed authoring decision, not a command.
+  const lifecycleTransitionError = contractOk && !lifecycleSettled
+    ? validateTaskStatusTransition(status, 'agent-ready', undefined)
+    : null;
   const currentTaskDigest = taskExists ? taskRecordDigest(body) : null;
   // The carrier bytes the readiness commit will contain.
   //
@@ -408,10 +464,19 @@ export function buildReadinessPlan(target, taskId, options = {}) {
   //    and explicit base evidence.
   steps.push(step('lifecycle_agent_ready', {
     settled: lifecycleSettled,
-    detail: status ? `current status is '${status}'` : 'the task declares no lifecycle status',
+    detail: status
+      ? (dispatched && status !== 'agent-ready'
+        ? `current status is '${status}'; ${consumed.records.length} consumed dispatch packet(s) already authorize this attempt, ` +
+          'so a return to agent-ready is not required'
+        : lifecycleTransitionError
+          ? `current status is '${status}' and cannot reach agent-ready: ${lifecycleTransitionError}. ` +
+            'Route the lifecycle to an owner rather than repeating this step; ' +
+            'a task already carrying a consumed dispatch packet does not need it at all'
+          : `current status is '${status}'`)
+      : 'the task declares no lifecycle status',
     owner: 'maintainer',
     dependsOn: ['trusted_contract_baseline', 'dependency_observation', 'committed_decomposition', 'maintainer_attribution'],
-    command: lifecycleSettled
+    command: lifecycleSettled || lifecycleTransitionError
       ? null
       : `npx agenticloop task status ${taskId} agent-ready --expect-digest ${currentTaskDigest ?? '<digest>'} ` +
         `--base ${baseArgument} --dependencies ${dependencyRef ?? '<dependencies.json>'}`,
@@ -428,11 +493,19 @@ export function buildReadinessPlan(target, taskId, options = {}) {
   // that apply could resolve differently from the reviewer.
   if (!options.actor) blockers.push('an explicit --actor is required; readiness never fabricates a committing identity');
   if (!options.authority) blockers.push('an explicit --authority <kind:reference> is required; readiness never fabricates a human authority');
-  const effectiveWorkUnit = suppliedWorkUnit ?? workUnitId;
+  // The record's own declaration is a supplied fact, not a synthesized one, so
+  // it binds here exactly as `--work-unit` would. Without it a task whose
+  // grouping is written down in its Concurrency Plan could still only be settled
+  // by re-typing that grouping on the command line.
+  const effectiveWorkUnit = suppliedWorkUnit ?? durableWorkUnitId ?? workUnitId;
   if (!effectiveWorkUnit) {
     blockers.push('a durable --work-unit <kind:reference> is required; readiness never synthesizes a work-unit identity');
   } else if (!isDurable(effectiveWorkUnit)) {
-    blockers.push(`work-unit identity '${effectiveWorkUnit}' is a per-task fallback, not a durable grouping`);
+    blockers.push(
+      `work-unit identity '${effectiveWorkUnit}' is a per-task fallback, not a durable grouping; ` +
+      'declare the durable grouping in the task record under "## Concurrency Plan" -> "- Work unit:", ' +
+      'or supply --work-unit <kind:reference>'
+    );
   }
   if (!options.base) blockers.push('exactly one of --base <ref> or --base-paths <path> is required to resolve exact base evidence');
   if (!options.dependencies) blockers.push('--dependencies <path> naming the exact committed Maintainer-attributed dependency snapshot is required');
@@ -440,10 +513,7 @@ export function buildReadinessPlan(target, taskId, options = {}) {
   else if (options.inventory.complete !== true) blockers.push('the authoritative task inventory is incomplete');
   if (!head) blockers.push('the target has no resolvable HEAD commit');
   if (!branch) blockers.push('readiness apply requires a named branch; HEAD is detached');
-  if (contractOk && !lifecycleSettled) {
-    const transitionError = validateTaskStatusTransition(status, 'agent-ready', undefined);
-    if (transitionError) blockers.push(transitionError);
-  }
+  if (lifecycleTransitionError) blockers.push(lifecycleTransitionError);
 
   const activationRead = readTaskActivationBinding(target, 'files', taskId);
   const activationPresent = activationRead.state === 'present';

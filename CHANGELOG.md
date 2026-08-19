@@ -52,6 +52,18 @@
   being discovered after the fact.
 
 ### Changed
+- `task readiness-plan` is now status-aware. A task holding a consumed dispatch
+  packet no longer requires a return to `agent-ready`: its lifecycle step is
+  settled by that record. Where the transition is genuinely unreachable and no
+  packet has been consumed, the step reports the legal transitions and routes the
+  decision to its owner instead of prescribing `task status <id> agent-ready` and
+  then listing, among its own blockers, that the transition is forbidden.
+- The `work_unit_identity` step now sources the durable grouping from the task
+  record's `## Concurrency Plan` -> `- Work unit:` declaration, so its repair is
+  constructed from a fact that would satisfy the blocker rather than passing back
+  the per-task fallback the blocker exists to reject. Where no durable grouping
+  exists anywhere, the step names the field to author instead of printing a
+  command the system would refuse.
 - A dependency snapshot declaring a freshness window shorter than the current
   backend default is now treated as legacy and re-derived. Every snapshot
   committed before the default existed carries `{"maxAgeSeconds": 3600}`, and
