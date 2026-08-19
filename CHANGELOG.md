@@ -42,6 +42,13 @@
   toolkit-owned, and there was always going to be a next one.
 
 ### Added
+- Added a static boundary assertion over artifact binding: the evidence gate
+  that binds `implementation_artifact` may not reach for repository-wide path
+  classification, and must decide against the task's declared `allowed_paths`
+  through the one shared scope matcher. Three consecutive fixes were each
+  locally correct and each left the same whole-repository question standing
+  somewhere adjacent; this is the assertion that makes a fourth relocation fail
+  in the suite rather than in the field.
 - Added characterization coverage for the return-production deadlock's fourth
   shape: a finished implementation with an untrailered toolkit-update commit
   inside its return range, and a commit touching only `agenticloop.json` and

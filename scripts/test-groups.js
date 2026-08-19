@@ -19,6 +19,7 @@ export const GROUPS = ['unit', 'integration', 'e2e'];
 const MANIFEST = {
   unit: [
     'test/activation-grant-contracts.test.js',
+    'test/artifact-binding-scope-boundary.test.js',
     'test/audit-report-schema.test.js',
     'test/blocked-result-authority.test.js',
     'test/cancellation-provenance.test.js',
