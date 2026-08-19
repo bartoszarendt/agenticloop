@@ -23,6 +23,7 @@
       ".agenticloop/audits",
       ".agenticloop/improvements",
       ".agenticloop/logs",
+      ".agenticloop/checks",
       ".agenticloop/tmp"
     ]
   },
