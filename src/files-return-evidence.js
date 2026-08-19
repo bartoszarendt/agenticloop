@@ -15,6 +15,9 @@ import {
 } from './task-evidence-contract.js';
 import { validateAuditRecord } from './audit-record.js';
 import { validateExecutionEvidence } from './execution-evidence.js';
+import { parseFrontmatterStrict } from './frontmatter.js';
+import { validateManifest } from './generated-artifacts.js';
+import { validateHandoffRefreshReceipt } from './handoff-evidence-refresh.js';
 import { VerificationContextMalformedError, VerificationContextStaleError } from './public-error.js';
 import {
   createPathClassifier,
@@ -174,6 +177,51 @@ function classifyPath(path, { packet, workflow, runGit, workflowHead, classifier
     if (!checked.ok) {
       throw new VerificationContextMalformedError(
         `workflow check evidence '${path}' is not a closed CLI execution artifact: ${checked.errors[0]}`
+      );
+    }
+    return 'workflow_evidence';
+  }
+  // Target state the toolkit writes during an attempt that is not one of the
+  // loop's records: the generator's own output manifest, the derived-evidence
+  // receipt a refresh writes, and the project map. Running `agenticloop update`
+  // or `task refresh-handoff-evidence` between minting a packet and producing
+  // the return - both ordinary operator moves - used to abort the return on the
+  // toolkit's own output. Each is recognized only after it validates, so none
+  // is trusted for sitting at the right path.
+  if (path === '.agenticloop/generated-artifacts.json') {
+    const text = readGit(runGit, ['show', `${workflowHead}:${path}`], `workflow state '${path}'`);
+    try {
+      validateManifest(JSON.parse(text));
+    } catch (error) {
+      throw new VerificationContextMalformedError(
+        `workflow state '${path}' is not a valid generated-artifacts manifest: ${error.message}`
+      );
+    }
+    return 'workflow_evidence';
+  }
+  const derivedEvidence = path.match(/^\.agenticloop\/handoffs\/derived-evidence\/([A-Za-z0-9._-]+)\.json$/);
+  if (derivedEvidence) {
+    const text = readGit(runGit, ['show', `${workflowHead}:${path}`], `workflow derived evidence '${path}'`);
+    let record;
+    try {
+      record = JSON.parse(text);
+    } catch {
+      throw new VerificationContextMalformedError(`workflow derived evidence '${path}' is not valid JSON`);
+    }
+    const checked = validateHandoffRefreshReceipt(record, { taskId: packet?.task?.id });
+    if (!checked.ok || derivedEvidence[1] !== packet?.task?.id) {
+      throw new VerificationContextMalformedError(
+        `workflow derived evidence '${path}' is not this task's validated derived-evidence receipt: ` +
+        `${checked.errors[0] ?? 'task identity mismatch'}`
+      );
+    }
+    return 'workflow_evidence';
+  }
+  if (path === '.agenticloop/project.md') {
+    const text = readGit(runGit, ['show', `${workflowHead}:${path}`], `workflow state '${path}'`);
+    if (parseFrontmatterStrict(text).state === 'malformed') {
+      throw new VerificationContextMalformedError(
+        `workflow state '${path}' does not carry a readable project map`
       );
     }
     return 'workflow_evidence';

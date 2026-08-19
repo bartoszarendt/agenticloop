@@ -169,6 +169,19 @@ describe('return gates are scoped to the task surface', () => {
     git(root, ['add', '.agenticloop/tasks']);
     git(root, ['commit', '-m', 'record the implementation artifact\n\nTask: T-001\nAgent: engineer']);
 
+    // The operator syncs the toolkit mid-attempt, inside this attempt's own
+    // region. That rewrites the generator's output manifest and the project
+    // map: toolkit-written target state, neither of which is one of the loop's
+    // records.
+    writeFileSync(
+      join(root, '.agenticloop', 'generated-artifacts.json'),
+      JSON.stringify({ schemaVersion: 4, packageVersion: '0.0.0-test', entries: [] }, null, 2),
+      'utf8'
+    );
+    writeFileSync(join(root, '.agenticloop', 'project.md'), '---\ntask_backend: files\n---\n\n# Project\n', 'utf8');
+    git(root, ['add', '.agenticloop/generated-artifacts.json', '.agenticloop/project.md']);
+    git(root, ['commit', '-m', 'Update Agentic Loop']);
+
     const checksPath = '.agenticloop/tmp/checks.json';
     assertOk(await cli([
       'task', 'check-evidence-init', 'T-001', '--packet', packetPath, '--output', checksPath, '--json',
@@ -193,6 +206,10 @@ describe('return gates are scoped to the task surface', () => {
       'only the task surface is attributed to the product');
     assert.ok(roleReturn.productAttribution.commits.includes(toolkitUpdate),
       'the untrailered commit stays in the durable range; it is simply not attributed work');
+    for (const path of ['.agenticloop/generated-artifacts.json', '.agenticloop/project.md']) {
+      assert.ok(roleReturn.workflowChangedPaths.includes(path),
+        `toolkit-written target state is workflow state, not an unknown path: ${path}`);
+    }
 
     assertOk(await cli([
       'task', 'verify-return', 'T-001', '--packet', packetPath, '--return', returnPath,
