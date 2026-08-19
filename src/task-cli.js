@@ -102,7 +102,7 @@ import { createExecutionReceiptReplayAuthority, loadHostTrustStore, targetReposi
 import { CommitRangeError, deriveCommitRange } from './commit-range.js';
 import { gitTreeObjectId, isGitObjectId } from './git-oid.js';
 import { DISPATCH_LIVENESS_WINDOW_SECONDS } from './dispatch-eligibility.js';
-import { commitCarriesProductPaths, isWorkflowPath } from './product-lineage.js';
+import { commitCarriesProductPaths, createPathClassifier, isWorkflowPath } from './product-lineage.js';
 import { renderHandoffSequence } from './handoff-sequence.js';
 import { GIT_MAX_BUFFER } from './git-runner.js';
 import { validateCommittedSourcePath, verifyCommittedAttributedSource } from './committed-source.js';
@@ -216,7 +216,7 @@ function implementationArtifactHead(content) {
  *   3. it introduces product work at all - so `implementation_artifact` can
  *      never name a role-start or receipt commit.
  */
-function evaluateProductHeadEvidence(runGit, productHead) {
+function evaluateProductHeadEvidence(runGit, productHead, classifier) {
   const refusal = (message, code = 'task.evidence.product_head') => new PublicCommandError(message, {
     code, evidenceState: 'changed', disposition: 'blocked',
     safeRepair:
@@ -238,7 +238,7 @@ function evaluateProductHeadEvidence(runGit, productHead) {
     }
     const later = String(runGit(['diff', '--name-only', '--no-renames', `${productHead}..${observedHead}`]).stdout ?? '')
       .split(/\r?\n/).filter(Boolean);
-    const productPaths = later.filter(path => !isWorkflowPath(path));
+    const productPaths = later.filter(path => !isWorkflowPath(path, classifier));
     if (productPaths.length > 0) {
       return refusal(
         'implementation artifact evidence requires --product-head to be the last commit carrying product work; ' +
@@ -246,7 +246,7 @@ function evaluateProductHeadEvidence(runGit, productHead) {
       );
     }
   }
-  const carries = commitCarriesProductPaths(runGit, productHead);
+  const carries = commitCarriesProductPaths(runGit, productHead, classifier);
   if (!carries.ok) return refusal(`implementation artifact evidence could not read the product head: ${carries.reason}`);
   if (!carries.carries) {
     return refusal(
@@ -589,7 +589,7 @@ function lintTaskFile(filePath, target, projectConfig, verificationContext) {
   // reads the named commit and refuses one that introduces no product work.
   const artifactHead = implementationArtifactHead(content);
   if (artifactHead) {
-    const carries = commitCarriesProductPaths(targetGitRunner(target), artifactHead);
+    const carries = commitCarriesProductPaths(targetGitRunner(target), artifactHead, createPathClassifier(target));
     if (carries.ok && !carries.carries) {
       errors.push(
         `implementation_artifact commit ${artifactHead} introduces no non-workflow path; ` +
@@ -3344,7 +3344,7 @@ export async function cmdTask(args, io = createIo()) {
         // commit that introduces product work, it is reachable from HEAD, and
         // nothing after it changed product paths. HEAD itself still satisfies
         // all three in the ordinary case.
-        const refused = evaluateProductHeadEvidence(runGit, productHead);
+        const refused = evaluateProductHeadEvidence(runGit, productHead, createPathClassifier(target));
         if (refused) {
           return printGateResult('task evidence', commandFailure('task evidence', refused,
             'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);

@@ -52,6 +52,27 @@
   being discovered after the fact.
 
 ### Changed
+- Product lineage now derives workflow paths from `manifest.json` rather than
+  from the single `.agenticloop` prefix, so the installed toolkit source under
+  `agenticloop/`, every generated host shim, and the provisioned `.gitattributes`
+  are all excluded from product work by the same declaration that generates them.
+  Until now `Update Agentic Loop` reclassified the toolkit's own output as
+  product work, which made `task evidence --class implementation_artifact_evidence`
+  unsatisfiable: the implementation commit stopped being the last commit carrying
+  product work, and every commit after it was workflow-only. A return whose range
+  contains toolkit output now attributes that output as workflow rather than
+  refusing it as an unknown path. Legacy root asset locations
+  (`agents/`, `skills/`, `commands/`, `backends/`, `AGENTIC_LOOP.md`) are
+  classified as toolkit-owned only in targets that are not on layout 3, so a
+  current-layout target keeps any product directory of the same name.
+- `manifest.json` now declares `.cursor` among `generatedShims` and adds
+  `provisionedSharedPaths` for `.gitattributes`, which the toolkit provisions but
+  does not exclusively own. The consequence is deliberate and recorded in
+  `src/product-lineage.js`: a commit changing only `.gitattributes` can never be
+  an implementation artifact.
+- The carried-region workflow record locations now name `.agenticloop/logs/`,
+  where event logs are actually written. The previous `.agenticloop/events/`
+  pattern matched nothing.
 - `task evidence --class implementation_artifact_evidence` now accepts a
   `--product-head` that is `HEAD` **or** an ancestor of it, provided no product
   path changed after that commit, and requires the named commit to introduce at

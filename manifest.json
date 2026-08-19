@@ -32,7 +32,11 @@
     ".agents",
     ".claude",
     ".github",
+    ".cursor",
     "plugins/agenticloop"
+  ],
+  "provisionedSharedPaths": [
+    ".gitattributes"
   ],
   "legacyRootPaths": [
     "AGENTIC_LOOP.md",

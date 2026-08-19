@@ -15,7 +15,11 @@ import {
 } from './task-evidence-contract.js';
 import { validateAuditRecord } from './audit-record.js';
 import { VerificationContextMalformedError, VerificationContextStaleError } from './public-error.js';
-import { isCarriedWorkflowPath, isWorkflowPath, resolveCarriedProductLineage } from './product-lineage.js';
+import {
+  createPathClassifier,
+  isCarriedWorkflowPath,
+  resolveCarriedProductLineage,
+} from './product-lineage.js';
 import { pathIdentity } from './path-identity.js';
 
 const SCRATCH_PREFIX = '.agenticloop/tmp/';
@@ -106,14 +110,21 @@ function workflowRecordAtHead(runGit, workflowHead, path, expected) {
  * product work versus Agentic Loop's own state - and that scratch never becomes
  * either.
  */
-function classifyCarriedPath(path) {
+function classifyCarriedPath(path, classifier) {
   if (path === '.agenticloop/tmp' || path.startsWith(SCRATCH_PREFIX)) return 'scratch';
-  if (!isWorkflowPath(path)) return 'product';
+  const kind = classifier.classify(path);
+  if (kind === 'product') return 'product';
+  if (kind === 'toolkit_generated') return 'toolkit_generated';
   return isCarriedWorkflowPath(path) ? 'workflow_evidence' : 'unknown';
 }
 
-function classifyPath(path, { packet, workflow, runGit, workflowHead }) {
+function classifyPath(path, { packet, workflow, runGit, workflowHead, classifier }) {
   if (path === '.agenticloop/tmp' || path.startsWith(SCRATCH_PREFIX)) return 'scratch';
+  // Agentic Loop's own output is never the product's work and is never a
+  // validated workflow record either. It is named for what it is, so a toolkit
+  // update landing inside a return range neither poisons product lineage nor
+  // aborts the return as an unknown path.
+  if (classifier.classify(path) === 'toolkit_generated') return 'toolkit_generated';
   if (path === packet?.task?.carrier) {
     return workflow?.lineage ? 'task_carrier' : 'unknown';
   }
@@ -148,6 +159,7 @@ export function deriveReturnTopology(target, packet, signedEvidence, {
   backend = 'files',
 } = {}) {
   const runGit = args => spawnSync('git', args, { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
+  const classifier = createPathClassifier(target);
   const branch = readGit(runGit, ['symbolic-ref', '--quiet', '--short', 'HEAD'], 'current return branch');
   const currentHead = readGit(runGit, ['rev-parse', '--verify', 'HEAD'], 'current return workflow head');
   const packetBaseHead = String(packet?.repository?.head ?? '').trim();
@@ -226,8 +238,8 @@ export function deriveReturnTopology(target, packet, signedEvidence, {
   const classified = new Map();
   for (const path of allPaths) {
     const category = currentPaths.has(path)
-      ? classifyPath(path, { packet, workflow, runGit, workflowHead })
-      : classifyCarriedPath(path);
+      ? classifyPath(path, { packet, workflow, runGit, workflowHead, classifier })
+      : classifyCarriedPath(path, classifier);
     classified.set(path, category);
     if (category === 'scratch') {
       throw new VerificationContextMalformedError(`scratch path '${path}' cannot appear in return evidence`);
@@ -238,8 +250,8 @@ export function deriveReturnTopology(target, packet, signedEvidence, {
   }
   for (const path of laterPaths) {
     if ((currentPaths.has(path)
-      ? classifyPath(path, { packet, workflow, runGit, workflowHead })
-      : classifyCarriedPath(path)) === 'product') {
+      ? classifyPath(path, { packet, workflow, runGit, workflowHead, classifier })
+      : classifyCarriedPath(path, classifier)) === 'product') {
       throw new VerificationContextStaleError(
         `product path '${path}' changed after the declared productHead before workflowHead`
       );

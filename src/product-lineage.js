@@ -36,9 +36,110 @@ import {
 } from './execution-attempt.js';
 import { listDispatchConsumptions } from './handoff-consumption.js';
 import { isGitObjectId, sameGitObjectFormat } from './git-oid.js';
+import { hasCurrentLayout, loadBundledLayoutManifest } from './layout.js';
 
-/** Everything Agentic Loop owns lives here; everything else is product. */
+/**
+ * The target-owned workflow state root. It is one of several roots Agentic Loop
+ * writes into, and it is named separately from the rest because the exact-record
+ * rules that classify a return's changed paths apply only inside it.
+ */
 export const WORKFLOW_PATH_ROOT = '.agenticloop';
+
+/**
+ * How one repository-relative path relates to Agentic Loop.
+ *
+ * - `product` - the target project's own work. Only this counts as product
+ *   lineage.
+ * - `target_state` - target-owned workflow state under `.agenticloop/`, where a
+ *   changed path must match an exact validated record to be trusted.
+ * - `toolkit_generated` - output Agentic Loop writes into the target: installed
+ *   toolkit source, generated host shims, provisioned shared files, and the
+ *   canonical asset locations of older layouts.
+ */
+export const REPOSITORY_PATH_KINDS = Object.freeze(['product', 'target_state', 'toolkit_generated']);
+
+function normalizePath(value) {
+  return String(value ?? '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+}
+
+function underRoot(path, root) {
+  return path === root || path.startsWith(`${root}/`);
+}
+
+/**
+ * The declared path ownership, read from the manifest that generates it.
+ *
+ * `manifest.json` is the one place that says which files Agentic Loop writes
+ * into a target: `toolkitOwned.sourceRoot` for the installed toolkit,
+ * `generatedShims` for host adapter output, `provisionedSharedPaths` for files
+ * the toolkit provisions but does not exclusively own, and `legacyRootPaths` /
+ * `v2ToolkitOwnedPaths` for the canonical asset locations of older layouts. It
+ * is loaded from the bundled copy rather than from the target, because the
+ * question being answered is which paths *this* toolkit writes.
+ *
+ * `.gitattributes` is a deliberate entry in `provisionedSharedPaths` rather
+ * than an implicit one. The toolkit provisions it to keep committed identity
+ * portable across checkouts, and the field cohort showed that treating that
+ * provisioning as product work is enough on its own to make artifact binding
+ * unsatisfiable. It is a shared file: a target may also author entries in it,
+ * and the cost of this decision is that a commit changing only `.gitattributes`
+ * can never be an implementation artifact. That is the right trade - a
+ * line-ending declaration is not a task's implementation - and it is recorded
+ * here rather than inferred, because the alternative reading is defensible.
+ */
+function declaredOwnership() {
+  if (ownership) return ownership;
+  const manifest = loadBundledLayoutManifest();
+  const list = value => (Array.isArray(value) ? value.map(normalizePath).filter(Boolean) : []);
+  ownership = Object.freeze({
+    stateRoot: normalizePath(manifest?.targetOwned?.stateRoot) || WORKFLOW_PATH_ROOT,
+    toolkitRoots: Object.freeze([
+      normalizePath(manifest?.toolkitOwned?.sourceRoot),
+      ...list(manifest?.toolkitOwned?.sourcePaths),
+      ...list(manifest?.generatedShims),
+      ...list(manifest?.v2ToolkitOwnedPaths),
+    ].filter(Boolean)),
+    provisionedSharedPaths: Object.freeze(list(manifest?.provisionedSharedPaths)),
+    legacyRoots: Object.freeze(list(manifest?.legacyRootPaths)),
+  });
+  return ownership;
+}
+
+let ownership = null;
+
+/**
+ * Classify one repository-relative path.
+ *
+ * `legacyLayout` widens the toolkit region to the canonical asset locations of
+ * layouts before `agenticloop/`. It is off by default and never guessed: a
+ * current-layout target may legitimately own a product directory named
+ * `agents/` or `commands/`, and misclassifying those would drop real product
+ * work from lineage - a worse defect than the one this replaces.
+ */
+export function classifyRepositoryPath(path, { legacyLayout = false } = {}) {
+  const value = normalizePath(path);
+  if (!value) return 'product';
+  const declared = declaredOwnership();
+  if (underRoot(value, declared.stateRoot)) return 'target_state';
+  if (declared.toolkitRoots.some(root => underRoot(value, root))) return 'toolkit_generated';
+  if (declared.provisionedSharedPaths.includes(value)) return 'toolkit_generated';
+  if (legacyLayout && declared.legacyRoots.some(root => underRoot(value, root))) return 'toolkit_generated';
+  return 'product';
+}
+
+/**
+ * One classifier bound to one target, so the layout question is asked once per
+ * operation rather than once per path.
+ */
+export function createPathClassifier(target = null) {
+  const legacyLayout = typeof target === 'string' && target ? !hasCurrentLayout(target) : false;
+  const classify = path => classifyRepositoryPath(path, { legacyLayout });
+  return Object.freeze({
+    legacyLayout,
+    classify,
+    isWorkflowPath: path => classify(path) !== 'product',
+  });
+}
 
 /**
  * Canonical workflow record locations inside one target.
@@ -58,13 +159,18 @@ const CARRIED_WORKFLOW_LOCATIONS = Object.freeze([
   /^\.agenticloop\/audits\/[A-Za-z0-9._-]+\.md$/,
   /^\.agenticloop\/returns\/[A-Za-z0-9._/-]+\.json$/,
   /^\.agenticloop\/contracts\/[A-Za-z0-9._/-]+$/,
-  /^\.agenticloop\/events\/[A-Za-z0-9._/-]+$/,
+  /^\.agenticloop\/logs\/[A-Za-z0-9._/-]+$/,
 ]);
 
-/** Is this path Agentic Loop's own workflow state rather than product work? */
-export function isWorkflowPath(path) {
-  const value = String(path ?? '');
-  return value === WORKFLOW_PATH_ROOT || value.startsWith(`${WORKFLOW_PATH_ROOT}/`);
+/**
+ * Is this path Agentic Loop's own output rather than product work?
+ *
+ * Derived from the manifest declaration, so a path the toolkit writes can never
+ * be counted as the product's work by a rule the generator does not share.
+ * Pass a classifier when the target's layout matters.
+ */
+export function isWorkflowPath(path, classifier = null) {
+  return classifier ? classifier.isWorkflowPath(path) : classifyRepositoryPath(path) !== 'product';
 }
 
 /** Is this a canonical workflow record location for the carried region? */
@@ -98,7 +204,7 @@ function isAncestor(runGit, ancestor, descendant) {
  *           baseHead: string, head: string }} input
  * @returns {{ ok: boolean, productHead: string|null, reason: string|null }}
  */
-export function deriveProductHead({ runGit, baseHead, head } = {}) {
+export function deriveProductHead({ runGit, baseHead, head, classifier = null } = {}) {
   if (typeof runGit !== 'function') throw new TypeError('deriveProductHead requires a runGit function');
   if (!isGitObjectId(baseHead) || !isGitObjectId(head) || !sameGitObjectFormat([baseHead, head])) {
     return { ok: false, productHead: null, reason: 'product head derivation requires two full Git identities of one object format' };
@@ -116,7 +222,7 @@ export function deriveProductHead({ runGit, baseHead, head } = {}) {
   for (const commit of lines(listed)) {
     const changed = commitChangedPaths(runGit, commit);
     if (!changed.ok) return { ok: false, productHead: null, reason: changed.reason };
-    if (changed.paths.some(path => !isWorkflowPath(path))) {
+    if (changed.paths.some(path => !isWorkflowPath(path, classifier))) {
       return { ok: true, productHead: commit, reason: null };
     }
   }
@@ -151,10 +257,10 @@ export function commitChangedPaths(runGit, commit) {
  * role-start workflow commit, with the implementation two commits earlier and
  * every later audit trusting the wrong object.
  */
-export function commitCarriesProductPaths(runGit, commit) {
+export function commitCarriesProductPaths(runGit, commit, classifier = null) {
   const changed = commitChangedPaths(runGit, commit);
   if (!changed.ok) return { ok: false, carries: false, reason: changed.reason };
-  return { ok: true, carries: changed.paths.some(path => !isWorkflowPath(path)), reason: null };
+  return { ok: true, carries: changed.paths.some(path => !isWorkflowPath(path, classifier)), reason: null };
 }
 
 /**

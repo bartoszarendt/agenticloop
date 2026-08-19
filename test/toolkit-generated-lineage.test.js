@@ -68,7 +68,9 @@ function assertOk(result, label) {
 function commitToolkitUpdate(root, subject) {
   for (const [path, content] of TOOLKIT_UPDATE_PATHS) {
     mkdirSync(dirname(join(root, path)), { recursive: true });
-    writeFileSync(join(root, path), content, 'utf8');
+    // Each sync rewrites the same paths with new bytes, so repeated updates are
+    // genuinely distinct commits rather than empty ones.
+    writeFileSync(join(root, path), `${content}<!-- ${subject} -->\n`, 'utf8');
   }
   git(root, ['add', ...TOOLKIT_UPDATE_PATHS.map(([path]) => path)]);
   git(root, ['commit', '-m', subject]);
