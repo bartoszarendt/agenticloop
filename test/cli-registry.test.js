@@ -32,6 +32,16 @@ import { runCliInProcess } from './helpers/run-cli.js';
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
 describe('command registry', () => {
+  it('characterizes the legacy update surface before clone-safe modes are introduced', () => {
+    for (const option of ['--repository-only', '--dry-run']) {
+      assert.throws(
+        () => parseCommandArgs('update', COMMAND_REGISTRY.update, [option]),
+        error => error instanceof CliUsageError && /unknown option/i.test(error.message)
+      );
+    }
+    assert.equal(COMMAND_REGISTRY.hydrate, undefined);
+  });
+
   it('resolves aliases to canonical commands', () => {
     assert.equal(resolveCommandName('upgrade'), 'update');
     assert.equal(resolveCommandName('event'), 'event-logging');

@@ -27,6 +27,38 @@ after(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
+describe('legacy clone-dependent update and generation coupling', () => {
+  it('plain update detects an adapter from ignored generated output and imports its model metadata', () => {
+    const d = makeTarget('opencode');
+    const configPath = join(d, 'agenticloop.json');
+    const agentPath = join(d, '.opencode', 'agents', 'engineer.md');
+    assert.equal(loadJsonFile(configPath).adapters.opencode.roleSettings.engineer.model, undefined);
+    writeAgent(agentPath, [
+      '---', 'description: "Engineer"', 'mode: "subagent"',
+      'model: "clone-local/model"', 'variant: "high"', '---', '', 'body',
+    ]);
+
+    const out = runAgenticLoop(['update', '--target', d, '--force-generated']);
+    assert.match(out, /preserved: adapters\.opencode\.roleSettings\.engineer\.model/);
+    assert.equal(loadJsonFile(configPath).adapters.opencode.roleSettings.engineer.model, 'clone-local/model');
+  });
+
+  it('generate can write agenticloop.json through model preservation', () => {
+    const d = makeTarget('opencode');
+    const configPath = join(d, 'agenticloop.json');
+    const agentPath = join(d, '.opencode', 'agents', 'engineer.md');
+    const before = readFileSync(configPath, 'utf-8');
+    writeAgent(agentPath, [
+      '---', 'description: "Engineer"', 'mode: "subagent"',
+      'model: "generated-authority/model"', '---', '', 'body',
+    ]);
+
+    runAgenticLoop(['generate', 'opencode', '--target', d, '--force-generated']);
+    assert.notEqual(readFileSync(configPath, 'utf-8'), before);
+    assert.equal(loadJsonFile(configPath).adapters.opencode.roleSettings.engineer.model, 'generated-authority/model');
+  });
+});
+
 function makeTarget(adapter) {
   const d = mkdtempSync(join(tmpDir, 'target-'));
   execFileSync(process.execPath, [BIN, 'init', '--target', d, '--adapter', adapter], {
