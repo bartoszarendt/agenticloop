@@ -19,6 +19,7 @@ import {
   createSharedConfigEntry,
   entryIdentity,
   GENERATED_ARTIFACTS_SCHEMA_VERSION,
+  hashContent,
   hashFile,
   loadManifest,
   loadPackageVersion,
@@ -26,6 +27,7 @@ import {
   resolveManagedPath,
   saveManifest,
   validateManifest,
+  DEFAULT_GENERATED_ARTIFACTS_PATH,
 } from './generated-artifacts.js';
 
 const SHARED_CONFIG_FILES = new Set(['.claude/settings.json', '.claude/settings.local.json', '.agents/plugins/marketplace.json']);
@@ -122,10 +124,10 @@ function staleFileEntries(manifest, outputRoot, actions) {
   };
 }
 
-export function preflightPlan(targetRoot, plan, forceGenerated = false) {
+export function preflightPlan(targetRoot, plan, forceGenerated = false, options = {}) {
   let outputRoot;
   let manifest = null;
-  try { outputRoot = normalizeOutputRoot(plan.outputRoot ?? '.'); manifest = loadManifest(targetRoot); } catch (error) {
+  try { outputRoot = normalizeOutputRoot(plan.outputRoot ?? '.'); manifest = loadManifest(targetRoot, options.manifestRelPath); } catch (error) {
     return { collisions: [{ relPath: '(manifest)', adapter: '(none)', status: 'unsupported-manifest', message: error.message, forceOverride: false }], blocked: [{ relPath: '(manifest)', adapter: '(none)', status: 'unsupported-manifest', message: error.message, forceOverride: false }], allClear: false };
   }
   plan.outputRoot = outputRoot;
@@ -406,9 +408,10 @@ export function executeGenerationPlan(targetRoot, plan, options = {}) {
     return { ok: false, errors: boundaryErrors, writtenFiles: [], adapters: plan.adapters };
   }
 
-  const preflight = preflightPlan(targetRoot, plan, Boolean(options.forceGenerated));
+  const manifestRelPath = options.manifestRelPath ?? DEFAULT_GENERATED_ARTIFACTS_PATH;
+  const preflight = preflightPlan(targetRoot, plan, Boolean(options.forceGenerated), { manifestRelPath });
   if (!preflight.allClear) return { ok: false, errors: preflight.blocked.map(item => `BLOCKED ${item.relPath}: ${item.message}`), writtenFiles: [], adapters: plan.adapters };
-  const previous = loadManifest(targetRoot);
+  const previous = loadManifest(targetRoot, manifestRelPath);
   const current = previous ?? createManifest(options.packageVersion ?? loadPackageVersion());
   const outputRoot = plan.outputRoot;
   const ordinary = plan.actions.filter(action => action.type === 'write-file');
@@ -468,7 +471,7 @@ export function executeGenerationPlan(targetRoot, plan, options = {}) {
     ...extraWrites.map(extra => resolveManagedPath(targetRoot, '.', extra.relPath)),
     ...removableStale.map(entry => resolveManagedPath(targetRoot, outputRoot, entry.relPath)),
   ]);
-  const manifestPath = resolveManagedPath(targetRoot, '.', '.agenticloop/generated-artifacts.json');
+  const manifestPath = resolveManagedPath(targetRoot, '.', manifestRelPath);
   const manifestSnapshot = existsSync(manifestPath) ? readFileSync(manifestPath) : null;
   const snapshots = snapshot(paths);
   const createdDirs = missingAncestorDirectories(resolve(targetRoot), [...paths, manifestPath]);
@@ -500,6 +503,24 @@ export function executeGenerationPlan(targetRoot, plan, options = {}) {
     const priorEntry = current.entries.find(e => e.kind === 'gitignore-line' && e.outputRoot === outputRoot && e.relPath === action.relPath && e.line === action.line.trim() && e.adapter === action.adapter);
     next.entries.push(createGitignoreEntry({ adapter: action.adapter, outputRoot, relPath: action.relPath, line: action.line, occurrence: result.occurrence, createdFile: result.createdFile, ambiguous: Boolean(result.ambiguous || priorEntry?.ambiguous) }));
   }
+  if (options.avoidUnchangedWrites && previous) {
+    for (const prior of previous.entries) {
+      const refreshedKey = entryKey(prior.adapter, prior.outputRoot, prior.relPath, prior.kind);
+      if (refreshed.has(refreshedKey) && !next.entries.some(entry => entryIdentity(entry) === entryIdentity(prior))) {
+        next.entries.push(prior);
+      }
+    }
+    next.entries = next.entries.map(entry => {
+      const prior = previous.entries.find(value => entryIdentity(value) === entryIdentity(entry));
+      if (!prior) return entry;
+      const withoutGeneratedAt = value => {
+        const { generatedAt, ...rest } = value;
+        return rest;
+      };
+      if (entry.kind === 'file' && prior.kind === 'file' && entry.hash === prior.hash) return prior;
+      return JSON.stringify(withoutGeneratedAt(prior)) === JSON.stringify(withoutGeneratedAt(entry)) ? prior : entry;
+    });
+  }
   try { validateManifest(next); } catch (error) {
     return { ok: false, errors: [error.message], writtenFiles: [], adapters: plan.adapters };
   }
@@ -509,11 +530,23 @@ export function executeGenerationPlan(targetRoot, plan, options = {}) {
       const path = resolveManagedPath(targetRoot, outputRoot, entry.relPath);
       if (existsSync(path)) rmSync(path);
     }
-    for (const action of ordinary) atomicWrite(outputPath(targetRoot, plan, action.relPath), action.content);
+    for (const action of ordinary) {
+      const path = outputPath(targetRoot, plan, action.relPath);
+      if (!options.avoidUnchangedWrites || !existsSync(path) || hashFile(path) !== hashContent(action.content)) {
+        atomicWrite(path, action.content);
+      }
+    }
     for (const { action, result } of computedMerges) if (result.changed) atomicWrite(outputPath(targetRoot, plan, action.relPath), result.content);
     for (const { action, result } of computedIgnores) if (result.lineAdded) atomicWrite(outputPath(targetRoot, plan, action.relPath), result.content);
     for (const extra of extraWrites) atomicWrite(resolveManagedPath(targetRoot, '.', extra.relPath), extra.content);
-    saveManifest(targetRoot, next);
+    const stableNext = options.avoidUnchangedWrites && previous
+      ? { ...next, generatedAt: previous.generatedAt }
+      : next;
+    const previousComparable = previous ? JSON.stringify(previous) : null;
+    const nextComparable = JSON.stringify(stableNext);
+    if (!options.avoidUnchangedWrites || previousComparable !== nextComparable) {
+      saveManifest(targetRoot, stableNext, manifestRelPath);
+    }
     emptyParents(resolve(targetRoot), removableStale.map(entry => resolveManagedPath(targetRoot, outputRoot, entry.relPath)));
     return { ok: true, errors: staleWarnings, writtenFiles: [...paths].map(path => relative(resolveManagedPath(targetRoot, outputRoot, '.'), path).replaceAll('\\', '/')), adapters: plan.adapters };
   } catch (error) {

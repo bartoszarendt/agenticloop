@@ -83,6 +83,7 @@ export function initExecHandler(action, target) {
  * @param {boolean} [options.json=false] Render the plan as one JSON document on stdout.
  * @param {boolean} [options.verbose=false] Print individual planned/applied paths.
  * @param {boolean} [options.agentsGuidance=true] Plan the AGENTS.md activation-guidance action.
+ * @param {boolean} [options.repositoryOnly=false] Refresh portable repository assets without adapter or workflow-state generation.
  * @returns {Promise<{ created: string[], skipped: string[], warnings: string[], errors: string[], migrated: string[], removed: string[], plan?: object }>}
  */
 export async function init(options = {}) {
@@ -96,6 +97,7 @@ export async function init(options = {}) {
     json = false,
     verbose = false,
     agentsGuidance = true,
+    repositoryOnly = false,
   } = options;
 
   let selectedAdapter = adapterOption;
@@ -109,7 +111,7 @@ export async function init(options = {}) {
     };
   }
 
-  const plan = planInit({ target, adapter: selectedAdapter ?? null, refreshAssets, agentsGuidance });
+  const plan = planInit({ target, adapter: selectedAdapter ?? null, refreshAssets, agentsGuidance, repositoryOnly });
 
   // --json is a machine-readable plan contract: it always implies dry-run so
   // stdout carries exactly one versioned document and nothing mutates.
@@ -162,7 +164,7 @@ export async function init(options = {}) {
     for (const entry of applied.merged) io.out(`  merged:   ${entry}`);
     for (const entry of result.skipped) io.out(`  skipped (exists): ${entry}`);
   } else {
-    io.out('Agentic Loop initialized');
+    io.out(repositoryOnly ? 'Agentic Loop repository update applied' : 'Agentic Loop initialized');
     io.out(`  Created  ${counts.create + counts.adapter}`);
     io.out(`  Updated  ${counts.update}`);
     io.out(`  Skipped  ${counts.skip}`);
@@ -187,8 +189,8 @@ export async function init(options = {}) {
   }
 
   if (result.errors.length === 0) {
-    const setupState = detectSetupState(target);
-    const steps = nextStepsFromState(setupState);
+    const setupState = repositoryOnly ? null : detectSetupState(target);
+    const steps = setupState ? nextStepsFromState(setupState) : [];
 
     if (!selectedAdapter && !refreshAssets && !json) {
       io.out();
@@ -204,7 +206,7 @@ export async function init(options = {}) {
     }
 
     if (!json) {
-      if (setupState.setupStatus !== 'confirmed') {
+      if (setupState && setupState.setupStatus !== 'confirmed') {
         io.out();
         io.out('  Project setup: needed.');
         io.out('  Next: npx agenticloop setup');

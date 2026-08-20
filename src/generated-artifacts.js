@@ -33,7 +33,8 @@ const KIND_OWNERS = {
   'marker-block': CORE_OWNERS,
 };
 const KINDS = new Set(['file', 'shared-config', 'gitignore-line', 'marker-block']);
-const MANIFEST_PATH = `${TARGET_STATE_DIRECTORY}/${GENERATED_ARTIFACTS_FILENAME}`;
+export const DEFAULT_GENERATED_ARTIFACTS_PATH = `${TARGET_STATE_DIRECTORY}/${GENERATED_ARTIFACTS_FILENAME}`;
+export const LOCAL_GENERATED_ARTIFACTS_PATH = `${TARGET_STATE_DIRECTORY}/local/${GENERATED_ARTIFACTS_FILENAME}`;
 const SHA256 = /^[a-f0-9]{64}$/;
 const PACKAGE_JSON_PATH = fileURLToPath(new URL('../package.json', import.meta.url));
 
@@ -293,14 +294,14 @@ export function validateManifest(manifest) {
   return { schemaVersion: 4, packageVersion: manifest.packageVersion, generatedAt: manifest.generatedAt, entries };
 }
 
-export function loadManifest(targetRoot) {
-  const manifestPath = resolveManagedPath(targetRoot, '.', MANIFEST_PATH);
+export function loadManifest(targetRoot, manifestRelPath = DEFAULT_GENERATED_ARTIFACTS_PATH) {
+  const manifestPath = resolveManagedPath(targetRoot, '.', manifestRelPath);
   if (!existsSync(manifestPath)) return null;
   let data;
   try {
     data = JSON.parse(readFileSync(manifestPath, 'utf8'));
   } catch (error) {
-    throw new Error(`Ownership manifest at ${MANIFEST_PATH} is malformed JSON: ${error.message}`);
+    throw new Error(`Ownership manifest at ${manifestRelPath} is malformed JSON: ${error.message}`);
   }
   return validateManifest(migrateManifest(data));
 }
@@ -321,9 +322,9 @@ export function entryIdentity(entry) {
   return [entry.adapter, entry.outputRoot, entry.relPath, entry.kind, mutation].join('\u0000');
 }
 
-export function saveManifest(targetRoot, manifest) {
+export function saveManifest(targetRoot, manifest, manifestRelPath = DEFAULT_GENERATED_ARTIFACTS_PATH) {
   const valid = validateManifest(manifest);
-  const manifestPath = resolveManagedPath(targetRoot, '.', MANIFEST_PATH);
+  const manifestPath = resolveManagedPath(targetRoot, '.', manifestRelPath);
   mkdirSync(dirname(manifestPath), { recursive: true });
   const temporary = `${manifestPath}.${randomUUID()}.tmp`;
   writeFileSync(temporary, JSON.stringify({ ...valid, generatedAt: new Date().toISOString() }, null, 2) + '\n', 'utf8');
@@ -336,7 +337,7 @@ export function saveManifest(targetRoot, manifest) {
 
 export function removeManifestIfEmpty(targetRoot) {
   const manifest = loadManifest(targetRoot);
-  if (manifest && manifest.entries.length === 0) rmSync(resolveManagedPath(targetRoot, '.', MANIFEST_PATH), { force: true });
+  if (manifest && manifest.entries.length === 0) rmSync(resolveManagedPath(targetRoot, '.', DEFAULT_GENERATED_ARTIFACTS_PATH), { force: true });
 }
 
 export function createFileEntry(params) {
@@ -427,7 +428,7 @@ export function removeEntry(targetRoot, relPath, outputRoot = '.', adapter) {
   manifest.entries = manifest.entries.filter(entry => !removed.includes(entry));
   if (manifest.entries.length) saveManifest(targetRoot, manifest);
   else {
-    const path = resolveManagedPath(targetRoot, '.', MANIFEST_PATH);
+    const path = resolveManagedPath(targetRoot, '.', DEFAULT_GENERATED_ARTIFACTS_PATH);
     if (existsSync(path)) rmSync(path, { force: true });
   }
   return removed;

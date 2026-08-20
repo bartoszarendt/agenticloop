@@ -35,6 +35,8 @@ import {
   WORKTREES_DIRECTORY_RELATIVE_PATH,
   WORKTREES_GITIGNORE_PATTERNS,
   TARGET_STATE_DIRECTORY,
+  LOCAL_CONFIG_DIRECTORY_RELATIVE_PATH,
+  LOCAL_CONFIG_GITIGNORE_PATTERNS,
   TARGET_CONFIG_TEMPLATE_RELATIVE_PATH,
   TOOLKIT_SOURCE_RELATIVE_PATHS,
   V2_BASE_CONFIG_RELATIVE_PATH,
@@ -56,11 +58,26 @@ const TARGET_CFG_TEMPLATE = bundledToolkitPath(TARGET_CONFIG_TEMPLATE_RELATIVE_P
 const MEMORY_SCAFFOLD = bundledToolkitPath(MEMORY_SCAFFOLD_RELATIVE_PATH);
 
 const MANAGED_GITIGNORE_ENTRIES = Object.freeze([
+  { dir: LOCAL_CONFIG_DIRECTORY_RELATIVE_PATH, patterns: LOCAL_CONFIG_GITIGNORE_PATTERNS },
   { dir: SCRATCH_DIRECTORY_RELATIVE_PATH, patterns: SCRATCH_GITIGNORE_PATTERNS },
   { dir: WORKTREES_DIRECTORY_RELATIVE_PATH, patterns: WORKTREES_GITIGNORE_PATTERNS },
   { dir: ACTIVATIONS_DIRECTORY_RELATIVE_PATH, patterns: ACTIVATIONS_GITIGNORE_PATTERNS },
   { dir: RETURN_VERIFICATIONS_DIRECTORY_RELATIVE_PATH, patterns: RETURN_VERIFICATIONS_GITIGNORE_PATTERNS },
   { dir: CLOSEOUT_WAIVERS_DIRECTORY_RELATIVE_PATH, patterns: CLOSEOUT_WAIVERS_GITIGNORE_PATTERNS },
+]);
+
+const CLONE_LOCAL_GENERATED_GITIGNORE_ENTRIES = Object.freeze([
+  '.agenticloop/host-role-capabilities/',
+  '.opencode/',
+  '.claude/',
+  '.codex/',
+  '.agents/skills/agenticloop/',
+  '.agents/plugins/marketplace.json',
+  '.cursor/',
+  '.github/agents/',
+  '.github/skills/agenticloop/',
+  '.github/prompts/agenticloop.prompt.md',
+  'plugins/agenticloop/',
 ]);
 
 function createPlan(command) {
@@ -332,7 +349,7 @@ function planToolkitSourceActions(target, refreshAssets, plan, legacyCoveredPref
         });
       } else if (refreshAssets) {
         const current = readFileSync(targetPath, 'utf-8');
-        if (current !== content) {
+        if (current.replaceAll('\r\n', '\n') !== content.replaceAll('\r\n', '\n')) {
           plan.actions.push({
             kind: 'update',
             path: relPath,
@@ -631,7 +648,7 @@ function planAdapterGroup(target, selectedAdapter, plan) {
   });
 }
 
-function planGitignoreActions(target, plan) {
+function planGitignoreActions(target, plan, { cloneLocalGenerated = false } = {}) {
   const gitignorePath = join(target, '.gitignore');
   const existed = existsSync(gitignorePath);
   let content = existed ? readFileSync(gitignorePath, 'utf-8') : '';
@@ -643,6 +660,15 @@ function planGitignoreActions(target, plan) {
     content += `${prefix}${dir}/\n`;
     added.push(`${dir}/`);
   }
+  if (cloneLocalGenerated) {
+    for (const pattern of CLONE_LOCAL_GENERATED_GITIGNORE_ENTRIES) {
+      const lines = content.split('\n').map(line => line.trim());
+      if (lines.includes(pattern) || lines.includes(`/${pattern}`)) continue;
+      const prefix = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
+      content += `${prefix}${pattern}\n`;
+      added.push(pattern);
+    }
+  }
   if (added.length === 0) return;
   const summary = added.join(', ');
   plan.actions.push({
@@ -650,7 +676,7 @@ function planGitignoreActions(target, plan) {
     path: '.gitignore',
     category: 'gitignore',
     ownership: 'shared',
-    reason: 'gitignore Agentic Loop scratch, worktree, and operator activation directories',
+    reason: 'gitignore Agentic Loop local state and generated host artifacts',
     content,
     baseHash: existed ? hashFileOrNull(gitignorePath) : null,
     display: existed ? `.gitignore (${summary} appended)` : `.gitignore (created with ${summary})`,
@@ -706,10 +732,11 @@ function planGuidanceActions(target, plan) {
  * @param {string|null} [options.adapter]
  * @param {boolean} [options.refreshAssets]
  * @param {boolean} [options.agentsGuidance]  Plan the activation-guidance action (default true).
+ * @param {boolean} [options.repositoryOnly] Refresh portable repository assets without adapter or workflow-state generation.
  * @returns {import('./lifecycle-plan.js').LifecyclePlan}
  */
-export function planInit({ target, adapter = null, refreshAssets = false, agentsGuidance = true }) {
-  const plan = createPlan('init');
+export function planInit({ target, adapter = null, refreshAssets = false, agentsGuidance = true, repositoryOnly = false }) {
+  const plan = createPlan(repositoryOnly ? 'update' : 'init');
 
   if (isPackageSourceRepositoryRoot(target)) {
     plan.blockers.push(
@@ -726,7 +753,7 @@ export function planInit({ target, adapter = null, refreshAssets = false, agents
   if (refreshAssets) {
     planV2ConfigMigration(target, plan);
   }
-  planMemoryScaffoldActions(target, plan);
+  if (!repositoryOnly) planMemoryScaffoldActions(target, plan);
 
   if (adapter) {
     planAdapterConfigActions(target, adapter, plan);
@@ -735,7 +762,7 @@ export function planInit({ target, adapter = null, refreshAssets = false, agents
     }
   }
 
-  planGitignoreActions(target, plan);
+  planGitignoreActions(target, plan, { cloneLocalGenerated: repositoryOnly });
   if (agentsGuidance) {
     planGuidanceActions(target, plan);
   }

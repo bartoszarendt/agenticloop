@@ -162,6 +162,7 @@ import { setup } from './setup.js';
 import { removeAgenticLoop } from './remove.js';
 import { applyGuidance, checkGuidance, removeGuidance } from './guidance.js';
 import { preserveExistingAdapterModelSettings } from './adapter-model-preservation.js';
+import { applyHydration, planHydration } from './hydration.js';
 import { reconcileTargetAdapterConfig } from './setup-generate.js';
 import { WORKFLOW_ROLE_IDS } from './workflow-roles.js';
 import {
@@ -603,6 +604,30 @@ async function cmdInit(args, io) {
 async function cmdUpdate(args, io) {
   const { opts } = parseCommandArgs('update', COMMAND_REGISTRY.update, args);
   const target = resolveCliTarget(io, opts.target);
+  const repositoryOnly = Boolean(opts.repositoryOnly);
+  if (!repositoryOnly && (opts.dryRun || opts.json || opts.verbose)) {
+    io.err('--dry-run, --json, and --verbose require --repository-only on update.');
+    return EXIT_USAGE;
+  }
+  if (repositoryOnly && (opts.adapter?.length || opts.forceGenerated)) {
+    io.err('--repository-only cannot be combined with --adapter or --force-generated.');
+    return EXIT_USAGE;
+  }
+  if (repositoryOnly) {
+    const { errors, plan } = await init({
+      target,
+      refreshAssets: true,
+      repositoryOnly: true,
+      agentsGuidance: true,
+      dryRun: Boolean(opts.dryRun),
+      json: Boolean(opts.json),
+      verbose: Boolean(opts.verbose),
+      io,
+    });
+    return errors.length > 0 || lifecyclePlanBlockers(plan ?? { blockers: ['update plan unavailable'], adapterGroups: [] }).length > 0 ? 1 : 0;
+  }
+
+  io.warn('  DEPRECATED: plain update combines tracked repository refresh with generated adapter regeneration. Use update --repository-only, then hydrate --adapter <host>.');
   const compatibility = diagnoseLifecycleCompatibility(target);
   if (compatibility.length > 0) {
     for (const finding of compatibility) io.err(`  ERROR: ${finding.path}: ${compatibilityMessage(finding)}`);
@@ -710,6 +735,44 @@ async function cmdUpdate(args, io) {
   if (generateCode !== 0) return generateCode;
 
   refreshOwnedGuidance(target, guidanceOwnedBeforeUpdate, alConfig, io);
+  return 0;
+}
+
+function publicHydrationPlan(plan) {
+  const { generationPlan, effectiveConfig, ...publicPlan } = plan;
+  return publicPlan;
+}
+
+async function cmdHydrate(args, io) {
+  const { opts } = parseCommandArgs('hydrate', COMMAND_REGISTRY.hydrate, args);
+  const target = resolveCliTarget(io, opts.target);
+  const adapters = Array.isArray(opts.adapter) ? opts.adapter : (opts.adapter ? [opts.adapter] : []);
+  if (adapters.length !== 1) {
+    io.err('hydrate requires exactly one explicit --adapter: opencode, codex, claude-code, copilot, or cursor.');
+    return EXIT_USAGE;
+  }
+  const adapter = adapters[0];
+  const plan = planHydration({ target, adapter, forceGenerated: Boolean(opts.forceGenerated) });
+  const publicPlan = publicHydrationPlan(plan);
+  const dryRun = Boolean(opts.dryRun || opts.json);
+
+  if (opts.json) {
+    io.out(JSON.stringify(publicPlan, null, 2));
+  } else {
+    io.out(`agenticloop hydrate ${adapter}${dryRun ? ' (dry run)' : ''}`);
+    for (const action of plan.actions) io.out(`  ${action.kind}: ${action.path} [${action.status}]`);
+    for (const warning of plan.warnings) io.warn(`  WARN: ${warning}`);
+    for (const blocker of plan.blockers) io.err(`  ERROR: ${blocker}`);
+  }
+  if (plan.blockers.length > 0) return 1;
+  if (dryRun) return 0;
+
+  const result = applyHydration({ target, adapter, forceGenerated: Boolean(opts.forceGenerated), plan });
+  if (!result.ok) {
+    for (const error of result.errors) io.err(`  ERROR: ${error}`);
+    return 1;
+  }
+  io.out(`Hydrated ${result.files.length} clone-local artifact(s) for ${adapter}.`);
   return 0;
 }
 
@@ -3154,6 +3217,44 @@ async function cmdConfigureModels(args, io) {
   return errors.length > 0 ? 1 : 0;
 }
 
+async function cmdImportGeneratedModels(args, io) {
+  const spec = COMMAND_REGISTRY.configure.subcommands['import-generated-models'];
+  const { opts } = parseCommandArgs('configure import-generated-models', spec, args);
+  const target = resolveCliTarget(io, opts.target);
+  const adapters = Array.isArray(opts.adapter) ? opts.adapter : (opts.adapter ? [opts.adapter] : []);
+  if (adapters.length !== 1) {
+    io.err('configure import-generated-models requires exactly one explicit --adapter.');
+    return EXIT_USAGE;
+  }
+  if (opts.dryRun && opts.yes) {
+    io.err('Use either --dry-run or --yes, not both.');
+    return EXIT_USAGE;
+  }
+  if (!opts.dryRun && !opts.yes && !opts.json) {
+    io.err('Refusing to import generated settings without confirmation. Run with --dry-run first, then --yes.');
+    return EXIT_USAGE;
+  }
+  const dryRun = Boolean(opts.dryRun || opts.json);
+  const result = preserveExistingAdapterModelSettings(target, adapters, { write: !dryRun });
+  const output = {
+    command: 'configure import-generated-models',
+    adapter: adapters[0],
+    dryRun,
+    changed: result.imports ?? [],
+    warnings: result.warnings,
+    errors: result.errors,
+  };
+  if (opts.json) io.out(JSON.stringify(output, null, 2));
+  else {
+    io.out(`Generated model import for ${adapters[0]}${dryRun ? ' (dry run)' : ''}:`);
+    for (const item of output.changed) io.out(`  ${item.path} <- ${JSON.stringify(item.value)} from ${item.source}`);
+    if (output.changed.length === 0) io.out('  No missing tracked settings found.');
+    for (const warning of output.warnings) io.warn(`  WARN: ${warning}`);
+    for (const error of output.errors) io.err(`  ERROR: ${error}`);
+  }
+  return output.errors.length > 0 ? 1 : 0;
+}
+
 async function cmdSetup(args, io) {
   const { opts } = parseCommandArgs('setup', COMMAND_REGISTRY.setup, args);
   const target = resolveCliTarget(io, opts.target);
@@ -3494,6 +3595,7 @@ const COMMAND_HANDLERS = {
   init: cmdInit,
   setup: cmdSetup,
   update: cmdUpdate,
+  hydrate: cmdHydrate,
   remove: cmdRemove,
   guidance: cmdGuidance,
   validate: cmdValidate,
@@ -3617,10 +3719,13 @@ export async function dispatch(argv, io = createIo()) {
       if (rest[0] === 'models') {
         return await cmdConfigureModels(rest.slice(1), io);
       }
+      if (rest[0] === 'import-generated-models') {
+        return await cmdImportGeneratedModels(rest.slice(1), io);
+      }
       throw new CliUsageError(
         rest[0]
           ? `Unknown configure subcommand: ${rest[0]}`
-          : 'configure requires a subcommand: models',
+          : 'configure requires a subcommand: models | import-generated-models',
         { hint: 'Run "agenticloop help configure" for usage.' }
       );
     default:

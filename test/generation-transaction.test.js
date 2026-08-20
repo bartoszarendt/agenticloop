@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 
 import { executeGenerationPlan, replaceMutationIdentity } from '../src/generation-transaction.js';
 import { generateAdapterArtifacts } from '../src/adapter-generation.js';
-import { createManifest, loadManifest, saveManifest, createFileEntry } from '../src/generated-artifacts.js';
+import { createManifest, loadManifest, saveManifest, createFileEntry, LOCAL_GENERATED_ARTIFACTS_PATH } from '../src/generated-artifacts.js';
 import { executeRemovalPlan, removeAgenticLoop } from '../src/remove.js';
 
 const base = mkdtempSync(join(tmpdir(), 'agenticloop-generation-'));
@@ -71,6 +71,31 @@ describe('mutation identity delimiter', () => {
 });
 
 describe('generation transaction ownership regressions', () => {
+  it('supports a separately validated clone-local manifest and rolls it back on failure', () => {
+    const root = target();
+    const generated = '.opencode/agents/engineer.md';
+    const options = { manifestRelPath: LOCAL_GENERATED_ARTIFACTS_PATH };
+    assert.equal(executeGenerationPlan(root, plan([
+      { type: 'write-file', adapter: 'opencode', relPath: generated, content: 'before' },
+    ]), options).ok, true);
+    assert.equal(existsSync(join(root, '.agenticloop', 'generated-artifacts.json')), false);
+    const localManifest = join(root, ...LOCAL_GENERATED_ARTIFACTS_PATH.split('/'));
+    const manifestBefore = readFileSync(localManifest);
+
+    const failed = executeGenerationPlan(root, plan([
+      { type: 'write-file', adapter: 'opencode', relPath: generated, content: 'after' },
+      { type: 'write-file', adapter: 'opencode', relPath: '.opencode/agents/new.md', content: 'new' },
+    ]), { ...options, extraWrites: [{ relPath: 'late-failure.txt', content: {} }] });
+    assert.equal(failed.ok, false);
+    assert.equal(readFileSync(join(root, generated), 'utf8'), 'before');
+    assert.deepEqual(readFileSync(localManifest), manifestBefore);
+    assert.equal(existsSync(join(root, '.opencode', 'agents', 'new.md')), false);
+
+    const unsafe = executeGenerationPlan(root, plan([]), { manifestRelPath: '../outside.json' });
+    assert.equal(unsafe.ok, false);
+    assert.match(unsafe.errors.join('\n'), /Path traversal not allowed/);
+  });
+
   it('rejects writes whose resolved output root is under .github/workflows', () => {
     const root = target();
     const result = executeGenerationPlan(root, plan([

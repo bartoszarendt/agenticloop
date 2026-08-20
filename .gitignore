@@ -13,6 +13,13 @@ node_modules/
 .opencode/
 .claude/
 .codex/
+.agents/skills/agenticloop/
+.agents/plugins/marketplace.json
+.cursor/
+.github/agents/
+.github/skills/agenticloop/
+.github/prompts/agenticloop.prompt.md
+plugins/agenticloop/
 # Generated host adapter output for the toolkit itself.
 # Target projects generate their own adapter output under their chosen
 # output directory; for toolkit verification, generate under .agenticloop/tmp/
@@ -22,6 +29,8 @@ opencode.jsonc
 # Per-lane parallel worktrees live inside the repo root to stay within the
 # host's workspace sandbox; never report them as untracked.
 .agenticloop/worktrees/
+.agenticloop/local/
+.agenticloop/host-role-capabilities/
 tmp/
 !memory/scaffold/tmp/
 !memory/scaffold/tmp/.gitkeep

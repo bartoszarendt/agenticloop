@@ -215,7 +215,7 @@ export function validateLifecyclePlan(plan) {
   if (plan.schemaVersion !== LIFECYCLE_PLAN_SCHEMA_VERSION) {
     fail(`unsupported schemaVersion ${String(plan.schemaVersion)} (expected ${LIFECYCLE_PLAN_SCHEMA_VERSION})`);
   }
-  if (plan.command !== 'init' && plan.command !== 'setup') fail(`unknown command '${plan.command}'`);
+  if (!['init', 'setup', 'update'].includes(plan.command)) fail(`unknown command '${plan.command}'`);
   if (!Array.isArray(plan.actions)) fail('actions is not an array');
   plan.actions.forEach(validateAction);
   if (!Array.isArray(plan.adapterGroups)) fail('adapterGroups is not an array');

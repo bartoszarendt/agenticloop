@@ -34,6 +34,9 @@ const PLANNERS = {
  * @property {boolean} [forceGenerated]
  * @property {boolean} [runPluginChecks]
  * @property {Array<{relPath: string, content: string}>} [extraWrites]
+ * @property {string} [manifestRelPath]
+ * @property {boolean} [avoidUnchangedWrites]
+ * @property {boolean} [excludeGitignoreActions]
  */
 
 /**
@@ -83,8 +86,11 @@ export function planAdapterArtifacts(options) {
     }
     try {
       const plan = planner(alConfig, assetSourceRoot, outputDir);
-      allActions.push(...plan.actions);
-      allFiles.push(...plan.files);
+      const actions = options.excludeGitignoreActions
+        ? plan.actions.filter(action => action.type !== 'gitignore-append')
+        : plan.actions;
+      allActions.push(...actions);
+      allFiles.push(...plan.files.filter(file => actions.some(action => action.relPath === file)));
       adaptersWithPlans.push(adapterName);
     } catch (error) {
       return {
@@ -103,7 +109,7 @@ export function planAdapterArtifacts(options) {
     adapters: adaptersWithPlans,
   };
 
-  const preflight = preflightPlan(target, plan, forceGenerated);
+  const preflight = preflightPlan(target, plan, forceGenerated, { manifestRelPath: options.manifestRelPath });
   return { ok: true, errors: [], plan, preflight, adapters: adaptersWithPlans, outputDir };
 }
 
@@ -127,7 +133,12 @@ export function generateAdapterArtifacts(options) {
   // Execute transactionally. The transaction boundary validates fully resolved
   // action, stale-cleanup, and extra-write destinations so .github/workflows/
   // remains user-owned even when a custom output directory is requested.
-  const result = executeGenerationPlan(target, planned.plan, { forceGenerated, extraWrites });
+  const result = executeGenerationPlan(target, planned.plan, {
+    forceGenerated,
+    extraWrites,
+    manifestRelPath: options.manifestRelPath,
+    avoidUnchangedWrites: options.avoidUnchangedWrites,
+  });
 
   return {
     ok: result.ok,

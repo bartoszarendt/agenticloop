@@ -100,11 +100,26 @@ export const COMMAND_REGISTRY = {
   update: {
     summary: 'Refresh Agentic Loop-owned assets and existing adapter output.',
     aliases: ['upgrade'],
-    usage: 'agenticloop update [--target <dir>] [--adapter <host>] [--force-generated]',
+    usage: 'agenticloop update [--target <dir>] [--repository-only [--dry-run] [--json] | --adapter <host>] [--force-generated]',
     options: [
       targetOption(),
+      opt('repository-only', 'boolean', 'Refresh portable repository assets and deterministic migrations without inspecting or generating clone-local host artifacts.'),
       adapterOption("Generate or refresh one adapter. 'all' means every implemented adapter. Without this, existing generated artifacts are refreshed. Existing adapter model settings are backfilled into agenticloop.json when missing before regeneration."),
       opt('force-generated', 'boolean', 'Refresh only a modified artifact already proven owned by Agentic Loop.'),
+      dryRunOption,
+      jsonOption,
+      verboseOption,
+    ],
+  },
+  hydrate: {
+    summary: 'Generate one clone-local host integration without changing tracked repository files.',
+    usage: 'agenticloop hydrate --adapter <host> [--target <dir>] [--dry-run] [--json] [--force-generated]',
+    options: [
+      targetOption('Repository to hydrate (default: current directory).'),
+      adapterOption('One explicit host: opencode, codex, claude-code, copilot, or cursor.', { enum: ADAPTER_HOSTS }),
+      dryRunOption,
+      jsonOption,
+      opt('force-generated', 'boolean', 'Refresh only a modified artifact already proven owned by the clone-local ownership manifest.'),
     ],
   },
   remove: {
@@ -1182,6 +1197,17 @@ export const COMMAND_REGISTRY = {
           opt('model', 'string', 'Host-specific model identifier or alias.'),
           opt('reasoning-effort', 'string', 'Reasoning effort for hosts that support it (opencode, codex).'),
           opt('profile', 'string', 'Fill missing fields from the Codex recommended profile without replacing explicit settings.', { enum: ['recommended'] }),
+        ],
+      },
+      'import-generated-models': {
+        summary: 'Explicitly import missing model settings from one generated host into agenticloop.json.',
+        usage: 'agenticloop configure import-generated-models --adapter <host> [--target <dir>] (--dry-run|--yes) [--json]',
+        options: [
+          targetOption('Directory containing agenticloop.json (default: current).'),
+          adapterOption('One explicit generated host to inspect.', { enum: ADAPTER_HOSTS }),
+          dryRunOption,
+          yesOption,
+          jsonOption,
         ],
       },
     },

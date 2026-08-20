@@ -32,7 +32,7 @@ describe('legacy clone-dependent update and generation coupling', () => {
     const d = makeTarget('opencode');
     const configPath = join(d, 'agenticloop.json');
     const agentPath = join(d, '.opencode', 'agents', 'engineer.md');
-    assert.equal(loadJsonFile(configPath).adapters.opencode.roleSettings.engineer.model, undefined);
+    assert.equal(loadJsonFile(configPath).adapters.opencode.roleSettings.engineer?.model, undefined);
     writeAgent(agentPath, [
       '---', 'description: "Engineer"', 'mode: "subagent"',
       'model: "clone-local/model"', 'variant: "high"', '---', '', 'body',
@@ -56,6 +56,42 @@ describe('legacy clone-dependent update and generation coupling', () => {
     runAgenticLoop(['generate', 'opencode', '--target', d, '--force-generated']);
     assert.notEqual(readFileSync(configPath, 'utf-8'), before);
     assert.equal(loadJsonFile(configPath).adapters.opencode.roleSettings.engineer.model, 'generated-authority/model');
+  });
+});
+
+describe('explicit generated-model import', () => {
+  it('shows source/value in dry-run, preserves explicit settings, and requires --yes to write', () => {
+    const d = makeTarget('opencode');
+    const configPath = join(d, 'agenticloop.json');
+    const agentPath = join(d, '.opencode', 'agents', 'engineer.md');
+    const before = readFileSync(configPath, 'utf8');
+    writeAgent(agentPath, [
+      '---', 'description: "Engineer"', 'mode: "subagent"',
+      'model: "explicit-import/model"', 'variant: "xhigh"', '---', '', 'body',
+    ]);
+
+    const dryRun = runAgenticLoopResult([
+      'configure', 'import-generated-models', '--target', d, '--adapter', 'opencode', '--dry-run', '--json',
+    ]);
+    assert.equal(dryRun.status, 0, dryRun.stderr);
+    const preview = JSON.parse(dryRun.stdout);
+    assert.ok(preview.changed.some(item => item.value === 'explicit-import/model' && item.source === '.opencode/agents/engineer.md'));
+    assert.equal(readFileSync(configPath, 'utf8'), before);
+
+    const unconfirmed = runAgenticLoopResult(['configure', 'import-generated-models', '--target', d, '--adapter', 'opencode']);
+    assert.equal(unconfirmed.status, 2);
+    runAgenticLoop(['configure', 'import-generated-models', '--target', d, '--adapter', 'opencode', '--yes']);
+    assert.equal(loadJsonFile(configPath).adapters.opencode.roleSettings.engineer.model, 'explicit-import/model');
+
+    writeAgent(agentPath, [
+      '---', 'description: "Engineer"', 'mode: "subagent"',
+      'model: "must-not-replace/model"', '---', '', 'body',
+    ]);
+    const second = runAgenticLoopResult([
+      'configure', 'import-generated-models', '--target', d, '--adapter', 'opencode', '--dry-run', '--json',
+    ]);
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(JSON.parse(second.stdout).changed.some(item => item.path.endsWith('.model')), false);
   });
 });
 

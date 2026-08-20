@@ -8,7 +8,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { parseFrontmatter } from './frontmatter.js';
 import { loadAgenticLoopConfig, loadJsonFile } from './json.js';
 import {
@@ -241,6 +241,18 @@ function effectiveConfiguredReasoningSetting(roleSettings) {
   return roleSettings.reasoningEffort ?? roleSettings.variant;
 }
 
+function sourceArtifactFor(host, target, alConfig, roleName) {
+  const adapterCfg = alConfig.adapters?.[host] ?? {};
+  const agentName = agentNameForRole(adapterCfg, roleName);
+  let path;
+  if (host === 'opencode') path = resolveOpencodeAgentPath(target, roleName);
+  else if (host === 'codex') path = join(target, '.codex', 'agents', `${agentName}.toml`);
+  else if (host === 'claude-code') path = join(target, '.claude', 'agents', `${agentName}.md`);
+  else if (host === 'copilot') path = resolveCopilotAgentPath(target, agentName);
+  else path = resolveCursorAgentPath(target, agentName);
+  return relative(target, path).replaceAll('\\', '/');
+}
+
 /**
  * Backfill missing target-owned model settings from existing generated adapter
  * artifacts.
@@ -253,12 +265,13 @@ function effectiveConfiguredReasoningSetting(roleSettings) {
 export function preserveExistingAdapterModelSettings(target, adapters, options = {}) {
   const hosts = expandAdapters(adapters);
   const updated = [];
+  const imports = [];
   const warnings = [];
   const errors = [];
-  if (hosts.length === 0) return { updated, warnings, errors };
+  if (hosts.length === 0) return { updated, imports, warnings, errors };
 
   const cfgPath = join(target, 'agenticloop.json');
-  if (!existsSync(cfgPath)) return { updated, warnings, errors };
+  if (!existsSync(cfgPath)) return { updated, imports, warnings, errors };
 
   let targetConfig;
   let alConfig;
@@ -267,7 +280,7 @@ export function preserveExistingAdapterModelSettings(target, adapters, options =
     alConfig = loadAgenticLoopConfig(cfgPath);
   } catch (error) {
     errors.push(`Cannot preserve adapter model settings: ${error.message}`);
-    return { updated, warnings, errors };
+    return { updated, imports, warnings, errors };
   }
 
   for (const host of hosts) {
@@ -278,7 +291,9 @@ export function preserveExistingAdapterModelSettings(target, adapters, options =
       const targetRoleSettings = ensureRoleSettings(targetConfig, host, roleName);
       if (usefulString(roleSettings.model) && shouldFill(targetRoleSettings.model)) {
         targetRoleSettings.model = roleSettings.model;
-        updated.push(`adapters.${host}.roleSettings.${roleName}.model`);
+        const path = `adapters.${host}.roleSettings.${roleName}.model`;
+        updated.push(path);
+        imports.push({ path, value: roleSettings.model, source: sourceArtifactFor(host, target, alConfig, roleName) });
       }
       if (
         targetRoleSettings.reasoningEffortDefault !== true &&
@@ -286,7 +301,9 @@ export function preserveExistingAdapterModelSettings(target, adapters, options =
         shouldFill(effectiveConfiguredReasoningSetting(targetRoleSettings))
       ) {
         targetRoleSettings.reasoningEffort = roleSettings.reasoningEffort;
-        updated.push(`adapters.${host}.roleSettings.${roleName}.reasoningEffort`);
+        const path = `adapters.${host}.roleSettings.${roleName}.reasoningEffort`;
+        updated.push(path);
+        imports.push({ path, value: roleSettings.reasoningEffort, source: sourceArtifactFor(host, target, alConfig, roleName) });
       }
     }
   }
@@ -300,5 +317,5 @@ export function preserveExistingAdapterModelSettings(target, adapters, options =
     }
   }
 
-  return { updated, warnings, errors, config: targetConfig, content };
+  return { updated, imports, warnings, errors, config: targetConfig, content };
 }

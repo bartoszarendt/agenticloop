@@ -32,14 +32,15 @@ import { runCliInProcess } from './helpers/run-cli.js';
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
 describe('command registry', () => {
-  it('characterizes the legacy update surface before clone-safe modes are introduced', () => {
-    for (const option of ['--repository-only', '--dry-run']) {
-      assert.throws(
-        () => parseCommandArgs('update', COMMAND_REGISTRY.update, [option]),
-        error => error instanceof CliUsageError && /unknown option/i.test(error.message)
-      );
-    }
-    assert.equal(COMMAND_REGISTRY.hydrate, undefined);
+  it('registers clone-safe update, hydration, and explicit generated-model import options', () => {
+    const update = parseCommandArgs('update', COMMAND_REGISTRY.update, ['--repository-only', '--dry-run', '--json']);
+    assert.equal(update.opts.repositoryOnly, true);
+    assert.equal(update.opts.dryRun, true);
+    assert.equal(update.opts.json, true);
+    const hydrate = parseCommandArgs('hydrate', COMMAND_REGISTRY.hydrate, ['--adapter', 'opencode', '--dry-run']);
+    assert.deepEqual(hydrate.opts.adapter, ['opencode']);
+    assert.equal(hydrate.opts.dryRun, true);
+    assert.ok(COMMAND_REGISTRY.configure.subcommands['import-generated-models']);
   });
 
   it('resolves aliases to canonical commands', () => {

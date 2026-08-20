@@ -91,6 +91,13 @@ describe('lifecycle CLI', () => {
     assertSourceRepoUntouched();
   });
 
+  it('repository-only update dry-run also preserves the package source root', () => {
+    const result = run(['update', '--repository-only', '--dry-run', '--json'], { cwd: REPO_ROOT });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stdout, /Refusing to mutate the Agentic Loop package source repository/);
+    assertSourceRepoUntouched();
+  });
+
   it('remove --dry-run refuses to target the package source repo root', () => {
     const result = run(['remove', '--dry-run'], { cwd: REPO_ROOT });
 
@@ -180,6 +187,36 @@ describe('lifecycle CLI', () => {
     assert.ok(!existsSync(join(d, 'plugins', 'agenticloop')), 'plain update must not create Codex plugin artifacts for an OpenCode-only target');
     assert.ok(!existsSync(join(d, '.claude')), 'plain update must not create Claude Code artifacts for an OpenCode-only target');
     assert.ok(!existsSync(join(d, '.claude-plugin')), 'plain update must not create Claude Code plugin artifacts for an OpenCode-only target');
+  });
+
+  it('repository-only update refreshes portable assets without inspecting or generating adapters', () => {
+    const d = makeTarget();
+    assertOk(run(['init', '--target', d, '--adapter', 'opencode']));
+    const configPath = join(d, 'agenticloop.json');
+    const agentPath = join(d, '.opencode', 'agents', 'engineer.md');
+    const canonicalPath = join(d, 'agenticloop', 'AGENTIC_LOOP.md');
+    const configBefore = readFileSync(configPath);
+    writeFileSync(agentPath, 'clone-local generated state\n');
+    const agentBefore = readFileSync(agentPath);
+    writeFileSync(canonicalPath, 'stale\n');
+
+    const dryRun = run(['update', '--target', d, '--repository-only', '--dry-run', '--json']);
+    assertOk(dryRun);
+    const jsonPlan = JSON.parse(dryRun.stdout);
+    assert.equal(jsonPlan.command, 'update');
+    assert.ok(jsonPlan.actions.some(action => action.path === 'agenticloop/AGENTIC_LOOP.md' && action.kind === 'update'));
+    assert.deepEqual(readFileSync(canonicalPath), Buffer.from('stale\n'));
+    assert.deepEqual(readFileSync(configPath), configBefore);
+    assert.deepEqual(readFileSync(agentPath), agentBefore);
+
+    const human = run(['update', '--target', d, '--repository-only', '--dry-run', '--verbose']);
+    assertOk(human);
+    assert.match(human.stdout, /agenticloop\/AGENTIC_LOOP\.md/);
+    assertOk(run(['update', '--target', d, '--repository-only']));
+    assert.notEqual(readFileSync(canonicalPath, 'utf8'), 'stale\n');
+    assert.deepEqual(readFileSync(configPath), configBefore);
+    assert.deepEqual(readFileSync(agentPath), agentBefore);
+    assert.equal(existsSync(join(d, '.codex')), false);
   });
 
   it('ordinary update preserves explicit Codex model choices', () => {

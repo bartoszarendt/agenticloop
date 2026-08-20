@@ -95,6 +95,7 @@ export const CHECK_EVIDENCE_DIRECTORY_RELATIVE_PATH = '.agenticloop/checks';
  */
 export const LIFECYCLE_RECEIPT_RELATIVE_PATH = '.agenticloop/lifecycle-receipt.json';
 export const SCRATCH_DIRECTORY_RELATIVE_PATH = '.agenticloop/tmp';
+export const LOCAL_CONFIG_DIRECTORY_RELATIVE_PATH = '.agenticloop/local';
 export const LEGACY_SCRATCH_DIRECTORY_RELATIVE_PATH = 'tmp';
 
 export const TOOLKIT_SOURCE_RELATIVE_PATHS = Object.freeze([
@@ -192,6 +193,13 @@ export const SCRATCH_GITIGNORE_PATTERNS = Object.freeze([
   '.agenticloop/tmp/',
   '/.agenticloop/tmp',
   '/.agenticloop/tmp/',
+]);
+
+export const LOCAL_CONFIG_GITIGNORE_PATTERNS = Object.freeze([
+  '.agenticloop/local',
+  '.agenticloop/local/',
+  '/.agenticloop/local',
+  '/.agenticloop/local/',
 ]);
 
 export const LEGACY_SCRATCH_GITIGNORE_PATTERNS = Object.freeze([

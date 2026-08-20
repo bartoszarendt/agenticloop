@@ -195,6 +195,7 @@ const MANIFEST = {
     'test/cli-main.test.js',
     'test/command-failure-diagnosability.test.js',
     'test/cli-smoke.test.js',
+    'test/clone-hydration.test.js',
     'test/closeout-adversarial.test.js',
     'test/closeout-event-deltas.test.js',
     'test/closeout-event-integrity.test.js',
