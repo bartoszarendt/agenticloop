@@ -38,7 +38,7 @@ describe('the preflight sequence names every step and the commits it forces', ()
     // The second field failure: a packet minted before role start and consumed
     // after it is stale, because role start legitimately changed the digest.
     const sequence = deriveHandoffSequence({ taskId: 'T-018', host: 'opencode' });
-    const roleStart = sequence.steps.find(item => /task status T-018 in-progress/.test(item.command));
+    const roleStart = sequence.steps.find(item => /task role-start T-018/.test(item.command));
     assert.ok(roleStart, 'role start is part of the sequence preflight is predicting');
     assert.equal(roleStart.commitRequired, true);
     assert.equal(roleStart.gate, 'dispatch.packet.stale');

@@ -178,6 +178,7 @@ const MANIFEST = {
     'test/validate-config.test.js',
     'test/validate-skills.test.js',
     'test/verification-learning.test.js',
+    'test/role-start-and-decomposition-output.test.js',
   ],
   e2e: [
     'test/audit-e2e.test.js',

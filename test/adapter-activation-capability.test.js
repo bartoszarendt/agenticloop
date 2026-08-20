@@ -203,7 +203,7 @@ describe('production planner activation surfaces', () => {
       const init = await runCliInProcess(['init', '--adapter', adapter, '--target', target]);
       assert.equal(init.status, 0, `${adapter}: ${init.stderr}`);
       const delegation = readFileSync(join(target, 'agenticloop', 'skills', 'role-delegation', 'SKILL.md'), 'utf8');
-      assert.match(delegation, /task status <id> in-progress --dispatch-packet <packet-path>/, adapter);
+      assert.match(delegation, /task role-start <id> --packet <packet-path> --check-evidence-output <checks-path>/, adapter);
       assert.match(delegation, /task verify-return/, adapter);
       assert.match(delegation, /missing, stale, consumed, already-current, or noted starts fail closed without\s+a\s+fresh packet/i, adapter);
       for (const relPath of relPaths) {

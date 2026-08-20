@@ -1397,7 +1397,7 @@ describe('production decomposition producer', () => {
   it('exposes a read-only producer inside the existing task command family', () => {
     const task = COMMAND_REGISTRY.task;
     assert.ok(task.subcommands['prepare-decomposition'], 'the task family must own the producer');
-    assert.equal(task.subcommands['prepare-decomposition'].receiptRevalidation, 'read-only');
+    assert.equal(task.subcommands['prepare-decomposition'].receiptRevalidation, 'read-only-without-output');
     assert.match(task.usage, /prepare-decomposition/);
     // No second command family was created for it.
     assert.equal(Object.keys(COMMAND_REGISTRY).includes('decomposition'), false);

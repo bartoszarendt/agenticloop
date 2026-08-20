@@ -31,7 +31,7 @@ All commands:
 | `guidance` | Manage the activation-guidance block (`apply`, `check`, `remove`) |
 | `generate` | Generate adapter artifacts (`opencode`, `codex`, `claude-code`, `copilot`, `cursor`, `all`) |
 | `configure models` | Set per-host role model settings in `agenticloop.json` |
-| `task` | Task records and lifecycle preparation (`list`, `lint`, `new`, `establish-baseline`, `authorize-correction`, `prepare-decomposition`, `prepare-dispatch`, `handoff-preflight`, `refresh-handoff-evidence`, `prepare-return`, `verify-return`, `check-evidence-init`, `check-evidence-show`, `check-evidence-update`, `evidence`, `review-prepare`, `status`) |
+| `task` | Task records and lifecycle preparation (`list`, `lint`, `new`, `establish-baseline`, `authorize-correction`, `prepare-decomposition`, `prepare-dispatch`, `role-start`, `handoff-preflight`, `refresh-handoff-evidence`, `prepare-return`, `verify-return`, `check-evidence-init`, `check-evidence-show`, `check-evidence-update`, `evidence`, `review-prepare`, `status`) |
 | `audit` | Work-unit audit certificates (`new`, `baseline`, `report`, `status`, `gate`, `lint`, `repair-structure`, `disposition`, `override`, `resolve`) |
 | `closeout` | Composite closeout packets (`prepare`, `status`, `record`) |
 | `improvement` | Bounded improvement proposals (`new`, `lint`, `status`) |

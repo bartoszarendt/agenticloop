@@ -99,13 +99,32 @@ prepare-dispatch <id> --host <host> --role engineer --output <packet-path>
 scope/checks, role/invocation, host capability, worktree, and cancellation facts.
 Only its fixed operator-trust registry authorizes activation.
 
-All artifact paths are target-relative. The ordinary public sequence is:
+All artifact paths are target-relative. The files-backend canonical single
+command for role start is:
+
+```text
+npx agenticloop task role-start <id> --packet <packet-path> --check-evidence-output <checks-path> --json
+```
+
+This atomically combines the in-progress carrier transition, dispatch consumption,
+attempt supersession, and required-check evidence initialization into one guarded
+transaction. The caller must not pass `--expect-digest`; it is derived from the
+packet. Partial failure returns a typed receipt with exact recovery guidance and
+never implies success. An exact idempotent retry reports `already_current`; a
+retry with any changed bound state fails closed.
+
+For GitHub, the existing guarded task-body path is used instead:
+
+```text
+npx agenticloop task-body transition --issue <n> --status in-progress --dispatch-packet <packet-path> --expect-digest <digest> --yes
+npx agenticloop task check-evidence-init <id> --packet <packet-path> --output <checks-path> --json
+```
+
+The ordinary public sequence for the full lifecycle (files backend) is:
 
 ```text
 npx agenticloop task prepare-dispatch <id> --host <host> --role engineer --output <packet-path> --json
-npx agenticloop task status <id> in-progress --dispatch-packet <packet-path> --expect-digest <digest> --json
-npx agenticloop task prepare-dispatch <id> --packet <packet-path> --role engineer --json
-npx agenticloop task check-evidence-init <id> --packet <packet-path> --output <checks-path> --json
+npx agenticloop task role-start <id> --packet <packet-path> --check-evidence-output <checks-path> --json
 npx agenticloop task check-evidence-update <id> --packet <packet-path> --input <checks-path> --output <checks-path> --check <check-id> --outcome passed --evidence <text> --execution-output <execution-path> --json
 npx agenticloop task prepare-return <id> --packet <packet-path> --check-evidence <checks-path> --outcome implementation_ready_for_review --output <return-path> --json
 npx agenticloop task verify-return <id> --packet <packet-path> --return <return-path> --from-current-repository --json

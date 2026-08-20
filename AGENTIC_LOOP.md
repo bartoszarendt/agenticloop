@@ -513,11 +513,13 @@ The ordinary public handoff uses CLI-authored artifacts, in this order:
 
 1. The Orchestrator runs `npx agenticloop task prepare-dispatch <id> --host
    <host> --role engineer --output <packet-path> --json`.
-2. Guarded role start consumes and revalidates that packet through `task status
-   <id> in-progress --dispatch-packet <packet-path>`.
-3. The Engineer uses `task check-evidence-init` and `task check-evidence-update`
-   for packet-required checks, then derives the raw return with `task
-   prepare-return`.
+2. For the files backend, guarded role start atomically consumes and revalidates
+   that packet, transitions the carrier to in-progress, and initializes
+   required-check evidence through `task role-start <id> --packet <packet-path>
+   --check-evidence-output <checks-path>`. For GitHub, the existing guarded
+   `task-body transition` path is used.
+3. The Engineer uses `task check-evidence-update` for packet-required checks,
+   then derives the raw return with `task prepare-return`.
 4. The receiving boundary runs `task verify-return <id> --packet <packet-path>
    --return <return-path> --from-current-repository`; only verified evidence
    proceeds to review preparation and review.
@@ -860,12 +862,16 @@ them.
 `npx agenticloop task prepare-decomposition <task-id> --work-unit <id>
 --source-ref <path> --source-revision <ref> (--base <ref> | --base-paths <path>)
 --dependencies <path> [--route serial|parallel] [--observed-at <instant>]
-[--max-age-seconds <n>] [--rescan-trigger <text>] [--repo <owner/name>]` is the
+[--max-age-seconds <n>] [--rescan-trigger <text>] [--repo <owner/name>]
+[--output <path>]` is the
 production path. It
 lives inside the existing `task` command family, enumerates the configured task
 surface itself, evaluates the scan, validates the emitted record with the same
 validator its consumers run, constructs and validates the decomposition
 provenance, and prints the committable source as deterministic canonical JSON.
+When `--output` is provided, the source is also atomically written to the
+target-relative path using the filesystem mutation kernel, with disposition
+reported as `committed`, `already_current`, or `blocked`.
 It performs no task, Git, filesystem, GitHub, or lifecycle mutation, and returns
 canonical `agenticloop.validation-result` diagnostics on failure. The inventory
 enumerator is selected from `.agenticloop/project.md`. Files retain the exact

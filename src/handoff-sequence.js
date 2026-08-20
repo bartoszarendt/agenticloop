@@ -79,29 +79,48 @@ export function deriveHandoffSequence({
     gate: 'dispatch.packet.invalid',
   }));
 
-  // Role start is a carrier mutation. It changes the digest the packet bound,
-  // which is why a packet minted before it and consumed after it is stale, and
-  // it writes a dispatch consumption record the next gate reads from Git.
-  steps.push(step(order += 1, {
-    command:
-      `npx agenticloop task status ${id} in-progress --expect-digest <current-carrier-digest> ` +
-      '--dispatch-packet <packet.json> --json',
-    writes: [
-      `.agenticloop/tasks/${id}.md`,
-      `.agenticloop/handoffs/dispatch/${id}/`,
-    ],
-    commitRequired: true,
-    reason:
-      'role start mutates the carrier and writes a dispatch consumption record; commit both before the ' +
-      'evidence chain reads them from Git, and mint no further packet against the pre-start digest',
-    gate: 'dispatch.packet.stale',
-  }));
+  // Role start is a carrier mutation. For the files backend, the canonical
+  // command is `task role-start` which atomically combines the in-progress
+  // transition, dispatch consumption, and check-evidence initialization.
+  // For GitHub, `task-body transition` plus `task check-evidence-init` are
+  // used independently.
+  if (backend === 'files') {
+    steps.push(step(order += 1, {
+      command:
+        `npx agenticloop task role-start ${id} ` +
+        '--packet <packet.json> --check-evidence-output <checks.json> --json',
+      writes: [
+        `.agenticloop/tasks/${id}.md`,
+        `.agenticloop/handoffs/dispatch/${id}/`,
+        `<checks.json>`,
+      ],
+      commitRequired: true,
+      reason:
+        'role start mutates the carrier, writes a dispatch consumption record, and initializes check evidence; commit all before the evidence chain reads them from Git',
+      gate: 'dispatch.packet.stale',
+    }));
+  } else {
+    steps.push(step(order += 1, {
+      command:
+        `npx agenticloop task status ${id} in-progress --expect-digest <current-carrier-digest> ` +
+        '--dispatch-packet <packet.json> --json',
+      writes: [
+        `.agenticloop/tasks/${id}.md`,
+        `.agenticloop/handoffs/dispatch/${id}/`,
+      ],
+      commitRequired: true,
+      reason:
+        'role start mutates the carrier and writes a dispatch consumption record; commit both before the ' +
+        'evidence chain reads them from Git, and mint no further packet against the pre-start digest',
+      gate: 'dispatch.packet.stale',
+    }));
+  }
 
   if (backend === 'files') {
     steps.push(step(order += 1, {
       command:
         `npx agenticloop task evidence ${id} --class implementation_artifact_evidence ` +
-        '--expect-digest <current-carrier-digest> --product-head <commit> --json',
+        '--expect-digest <post-start-carrier-digest> --product-head <commit> --json',
       writes: [
         `.agenticloop/tasks/${id}.md`,
         `.agenticloop/handoffs/task-mutations/${id}/`,

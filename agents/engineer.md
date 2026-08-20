@@ -157,9 +157,12 @@ task-record obligation.
   its assumptions, and record divergences under `## Deviations From Plan` instead
    of blindly following stale steps.
 - Before the first mutation, receive the CLI-authored packet only after guarded
-  role start has consumed and revalidated it through `task status <id> in-progress
-  --dispatch-packet <packet-path>`. Then invoke the read-only `task
-  prepare-dispatch <id> --packet <packet-path> --role engineer` verifier. It refetches the task and
+  role start has consumed and revalidated it. For the files backend, use the
+  canonical single command `task role-start <id> --packet <packet-path>
+  --check-evidence-output <checks-path>`, which atomically combines the in-progress
+  carrier transition, dispatch consumption, attempt supersession, and required-check
+  evidence initialization. Then invoke the read-only `task prepare-dispatch <id>
+  --packet <packet-path> --role engineer` verifier. It refetches the task and
   current Git branch/head/base facts, reruns readiness from the bound dependency
   source, rereads the committed Maintainer decomposition source, and checks every
   packet and invocation binding, including the selected host's exact canonical
@@ -168,9 +171,9 @@ task-record obligation.
   Shipped and public in-process adapters cannot establish this authority.
   Without an externally authenticated packet, return blocked; never substitute
   callbacks, repository keys, environment values, or model-authored capture.
-- Use target-relative artifacts only. Initialize packet-required evidence with
-  `task check-evidence-init <id> --packet <packet-path> --output
-  <evidence-path>`. For each passed command check, use `task
+- Use target-relative artifacts only. When `task role-start` was used, the
+  required-check evidence scaffolding is already initialized at the path specified
+  by `--check-evidence-output`. For each passed command check, use `task
   check-evidence-update` with `--execution-output <path>` so the CLI executes
    the exact inert argv and produces schema-v3 execution evidence; schema-v2
    evidence is typed incompatible and must be regenerated, never relabeled; do not claim a

@@ -524,7 +524,7 @@ export const COMMAND_REGISTRY = {
   },
   task: {
     summary: 'Manage files-backed task records and canonical handoff preparation.',
-    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|handoff-preflight|refresh-handoff-evidence|commit-message|attempt-status|abandon-attempt|adopt-historical|readiness-plan|readiness-apply|measure|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|status> [options]',
+    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|role-start|handoff-preflight|refresh-handoff-evidence|commit-message|attempt-status|abandon-attempt|adopt-historical|readiness-plan|readiness-apply|measure|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|evidence|review-prepare|status> [options]',
     subcommands: {
       list: {
         summary: 'List task records.',
@@ -673,9 +673,9 @@ export const COMMAND_REGISTRY = {
         ],
       },
       'prepare-decomposition': {
-        summary: 'Enumerate the task surface, run the parallel scan, and emit a committable decomposition source. Read-only.',
-        usage: 'agenticloop task prepare-decomposition <id> --work-unit <id> --source-ref <path> --source-revision <ref> (--base <ref> | --base-paths <path>) --dependencies <path> [--repo <owner/name>] [--route <serial|parallel>] [--observed-at <instant>] [--max-age-seconds <n>] [--rescan-trigger <text>] [--json] [--target <dir>]',
-        receiptRevalidation: 'read-only',
+        summary: 'Enumerate the task surface, run the parallel scan, and emit a committable decomposition source. Read-only without --output; mutating with --output.',
+        usage: 'agenticloop task prepare-decomposition <id> --work-unit <id> --source-ref <path> --source-revision <ref> (--base <ref> | --base-paths <path>) --dependencies <path> [--repo <owner/name>] [--route <serial|parallel>] [--observed-at <instant>] [--max-age-seconds <n>] [--rescan-trigger <text>] [--output <path>] [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only-without-output',
         positionals: [{ name: 'id', required: true }],
         options: [
           targetOption(),
@@ -690,6 +690,7 @@ export const COMMAND_REGISTRY = {
           opt('observed-at', 'string', 'ISO-8601 UTC observation instant. Defaults to now.'),
           opt('max-age-seconds', 'string', 'Freshness policy for the observation. Bounded by the trusted maximum.'),
           opt('rescan-trigger', 'string', 'Concrete condition that invalidates this scan.'),
+          opt('output', 'string', 'Target-relative path to atomically write the decomposition source JSON. When omitted, the source is emitted to stdout only (read-only mode).'),
           jsonOption,
         ],
       },
@@ -699,6 +700,38 @@ export const COMMAND_REGISTRY = {
         receiptRevalidation: 'read-only',
         positionals: [{ name: 'id', required: true }],
         options: [targetOption(), opt('host', 'string', 'Canonical generated host identity used to derive the Engineer assignment from current durable facts. Required for the ordinary no-input producer.'), opt('output', 'string', 'Optional packet output path. With --json, stdout is a closed success result and this path holds the exact packet artifact. Input/output paths are target-relative and must remain inside the selected target.'), opt('input', 'string', 'Advanced compatibility input for projects where durable source selectors are unavailable. Its route is validated normally; it may not override refetched durable authority. Path is target-relative and must remain inside the selected target.'), opt('packet', 'string', 'Existing dispatch packet to revalidate read-only before receiver mutation. Path is target-relative and must remain inside the selected target.'), opt('role', 'string', 'Immutable receiving role required for ordinary and --packet routes. The advanced --input compatibility route preserves its existing no-host invocation.', { enum: ['engineer'] }), opt('return-adapter', 'string', 'Exact authenticated protected-boundary adapter to bind for host role-return receipts. Required when several eligible adapters exist; hardened mode requires one.'), opt('prior-receipts', 'string', 'JSON array of prior-gate or setup task-mutation receipts that must be resolved and undrifted before dispatch. Path is target-relative and must remain inside the selected target.'), opt('repo', 'string', 'GitHub repository in owner/name form. Defaults to the authenticated current repository for the GitHub backend.'), hostTrustStoreOption, jsonOption],
+      },
+      'role-start': {
+        summary: 'Atomically combine files-backend role start (in-progress transition), dispatch consumption, and required-check evidence initialization into one guarded transaction.',
+        usage: 'agenticloop task role-start <id> --packet <packet.json> --check-evidence-output <path> [--json] [--target <dir>]',
+        positionals: [{ name: 'id', required: true }],
+        details: [
+          'Files-backend only. The canonical single-command entry point for Engineer delegation:',
+          '  1. validates the dispatch packet against current target, repository, task contract, and policy;',
+          '  2. transitions the task carrier to in-progress with a recognized role start;',
+          '  3. records the dispatch consumption and retires superseded attempts;',
+          '  4. initializes required-check evidence scaffolding from the packet inventory.',
+          '',
+          'All four steps are one atomic guarded transaction.',
+          'The caller must not pass --expect-digest; it is derived from the packet.',
+          '',
+          'Partial failure returns a typed receipt with exact recovery guidance and',
+          'never implies success. An exact idempotent retry (all bound state identical)',
+          'reports already_current; a retry with any changed bound state fails closed.',
+          '',
+          'Returns an executable nextSequence for evidence updates, return preparation,',
+          'and verification. For the GitHub backend, use task-body transition and',
+          'task check-evidence-init independently.',
+          '',
+          'Exit statuses: 0 role start committed or already_current; 1 refusal or write failure; 2 invalid usage.',
+        ],
+        options: [
+          targetOption(),
+          opt('packet', 'string', 'Canonical dispatch packet produced by task prepare-dispatch. Required. Path is target-relative and confined.'),
+          opt('check-evidence-output', 'string', 'Required-check evidence scaffolding output path. Required. Path is target-relative and confined.'),
+          hostTrustStoreOption,
+          jsonOption,
+        ],
       },
       'handoff-preflight': {
         summary: 'Read-only pre-delegation prerequisite check: report every ordinary prerequisite and one safe repair before dispatch packet assembly.',
@@ -1230,6 +1263,7 @@ export function isReceiptRevalidationArgv(argv) {
   try {
     const parsed = parseCommandArgs(label, leaf, args);
     if (leaf.receiptRevalidation === 'read-only') return true;
+    if (leaf.receiptRevalidation === 'read-only-without-output') return parsed.opts.output === undefined;
     if (leaf.receiptRevalidation === 'requires-dry-run') return parsed.opts.dryRun === true;
     return false;
   } catch {

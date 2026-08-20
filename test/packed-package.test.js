@@ -1011,7 +1011,7 @@ describe('packed public handoff lifecycle', () => {
 
       const guidance = readFileSync(join(fixture.root, 'agenticloop', 'skills', 'role-delegation', 'SKILL.md'), 'utf8');
       assert.match(guidance, /prepare-dispatch <id> --host <host> --role engineer/, adapter);
-      assert.match(guidance, /task status <id> in-progress --dispatch-packet/, adapter);
+      assert.match(guidance, /task role-start <id> --packet <packet-path> --check-evidence-output <checks-path>/, adapter);
       assert.match(guidance, /task verify-return/, adapter);
 
       const taskPath = join(fixture.root, '.agenticloop', 'tasks', 'T-001.md');
