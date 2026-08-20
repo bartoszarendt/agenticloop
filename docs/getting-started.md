@@ -141,11 +141,30 @@ with internal `references/skills/<name>/reference.md` procedure copies and
 backend references. Activation is explicit with `/agenticloop`. It does not
 generate `.cursor/rules/` by default.
 
-To refresh an existing overlay after upgrading the package:
+To refresh an existing overlay after upgrading the package, use the portable
+repository-only path:
 
 ```text
-npx agenticloop update
+npx agenticloop update --repository-only --dry-run
+npx agenticloop update --repository-only
+npx agenticloop validate
 ```
+
+Commit those reviewed tracked changes once. Every clone then recreates its
+ignored host integration locally:
+
+```text
+git pull --ff-only
+npm ci
+npx agenticloop hydrate --adapter opencode
+git status --short
+```
+
+Running clone-local hydration must produce no tracked Git changes. Hydration
+requires one explicit host and works both in installed target layouts and in
+the Agentic Loop package source repository. Plain `update` remains temporarily
+as a deprecated compatibility command that combines canonical refresh with
+generated-output regeneration; do not use it for fresh-clone setup.
 
 `init` and `setup` also install one clearly marked, manifest-owned
 activation-guidance block into your repository-rules document (resolved as the
@@ -160,7 +179,7 @@ managed region, never surrounding target content. If the configured rules path
 changes, check reports the existing owned path and update does not add a second
 block.
 
-`update` preserves target-owned `.agenticloop/project.md`, task records,
+Legacy combined `update` preserves target-owned `.agenticloop/project.md`, task records,
 summaries, decisions, logs, and `.agenticloop/tmp/`, leaves existing
 `agenticloop.json` alone, refreshes adapter output that already exists, and
 refreshes an activation-guidance block it already owns (without enrolling an

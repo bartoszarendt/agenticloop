@@ -60,6 +60,31 @@ evidence, never malformed evidence and never trusted authority.
 Agentic Loop-owned adapter settings use strict JSON (`agenticloop.json` and
 `agenticloop/config.json`).
 
+Configuration has two explicit layers. `agenticloop.json` is tracked, portable
+project configuration. Optional `.agenticloop/local/config.json` is ignored
+clone/device configuration used only by `hydrate`. The local file may contain
+only adapter `roleSettings` model/effort fields supported by that host; unknown
+adapters, roles, fields, unsafe paths, backend/trust changes, and security
+boundary changes are rejected. The merge exists only in memory and is never
+written back to `agenticloop.json`.
+
+Example without credentials or device secrets:
+
+```json
+{
+  "adapters": {
+    "opencode": {
+      "roleSettings": {
+        "engineer": {
+          "model": "provider/model",
+          "reasoningEffort": "high"
+        }
+      }
+    }
+  }
+}
+```
+
 ## Setup
 
 Use `npx agenticloop setup` for guided adapter selection and model
@@ -821,14 +846,13 @@ an exact, unmodified owned output.
 Use a single-host generation command when you only want one host's artifacts
 in a target project.
 
-For package upgrades, `npx agenticloop update` refreshes toolkit-owned copied
-assets and refreshes adapter output that already exists. For OpenCode, that
-means regenerating the repo-local `.opencode/agents/*.md` files and
-`.opencode/commands/agenticloop.md`. User-owned `opencode.jsonc` is ignored.
-Use `npx agenticloop update --adapter <host>` to generate or refresh one
-specific host. Use `npx agenticloop update --adapter all` to generate or refresh every
-implemented adapter artifact.
-`agenticloop upgrade` is a compatibility alias for `agenticloop update`.
+For package upgrades, commit the output of `npx agenticloop update
+--repository-only`, then run `npx agenticloop hydrate --adapter <host>` in each
+clone. Hydration uses `.agenticloop/local/generated-artifacts.json`; legacy
+generation commands retain `.agenticloop/generated-artifacts.json`. This keeps
+portable and clone-local ownership separate. Plain `update`, `update --adapter
+<host>`, and `upgrade` remain deprecated compatibility paths for the former
+combined refresh behavior.
 
 ## OpenCode Activation
 

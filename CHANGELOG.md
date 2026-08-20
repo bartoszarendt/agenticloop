@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Added `agenticloop update --repository-only` with human and JSON no-write
+  dry-runs. It refreshes portable canonical assets and deterministic lifecycle
+  migrations without reading or generating clone-local adapter state.
+- Added `agenticloop hydrate --adapter <host>` for idempotent clone-local host
+  generation in installed targets and the package source repository. Hydration
+  uses strict optional `.agenticloop/local/config.json`, records ownership in
+  `.agenticloop/local/generated-artifacts.json`, and refuses any Git-tracked or
+  non-ignored destination before writing.
+- Added explicit generated-model migration through `agenticloop configure
+  import-generated-models --adapter <host>`, with source/value preview,
+  no-write dry-run, and required `--yes` confirmation.
+
+### Changed
+- The recommended upgrade workflow is now a reviewed repository-only update
+  followed by per-clone hydration. Running hydration must leave tracked Git
+  status clean.
+- Plain `update` and `upgrade` retain their established combined refresh and
+  adapter-regeneration behavior for compatibility, but now emit a deprecation
+  warning. Removal is deferred under the prerelease deprecation policy.
+
 ## 0.4.6 - 2026-08-19
 
 ### Fixed

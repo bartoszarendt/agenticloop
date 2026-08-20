@@ -15,9 +15,39 @@ them.
 
 Ownership model:
 
-- `agenticloop/` is toolkit-owned canonical source refreshed by `agenticloop update`.
+- `agenticloop/` is toolkit-owned canonical source refreshed by `agenticloop update --repository-only`.
 - `.agenticloop/` is target-owned workflow state and durable records.
 - Host folders such as `.opencode/`, `.codex/`, `.agents/`, `.claude/`, `.github/`, `.cursor/`, and `plugins/agenticloop/` are generated shims.
+
+Commit canonical `agenticloop/` source, `agenticloop.json`, the owned guidance
+block, managed `.gitignore` entries, and durable target workflow records. Do
+not commit clone-local host shims, `.agenticloop/local/config.json`, or
+`.agenticloop/local/generated-artifacts.json`; recreate them with `hydrate`.
+
+Running clone-local hydration must produce no tracked Git changes.
+
+Clone A performs a toolkit upgrade once:
+
+```text
+git switch -c chore/update-agenticloop
+npx agenticloop update --repository-only --dry-run
+npx agenticloop update --repository-only
+npx agenticloop validate
+git add <reviewed tracked changes>
+git commit -m "chore: update Agentic Loop assets"
+```
+
+Clone B pulls and hydrates its own host:
+
+```text
+git pull --ff-only
+npm ci
+npx agenticloop hydrate --adapter <host>
+git status --short
+```
+
+The final status is clean. A local override may select model preferences for
+hydration without changing the portable tracked configuration.
 
 Path convention: canonical toolkit assets (agents, skills, backends) always
 live under `agenticloop/` (no dot). Target-owned state (project map, tasks,
@@ -295,11 +325,11 @@ If Codex output is also generated in the same target, OpenCode may also see
 `.agents/skills/agenticloop/SKILL.md`. Agentic Loop's supported OpenCode entry
 point still remains `/agenticloop`.
 
-Generate only the host a target project actually uses. Plain
-`agenticloop update` refreshes existing host output; it does not create new
-host artifacts unless you pass `--adapter <host>`. For OpenCode, update
-regenerates `.opencode/agents/*.md` and `.opencode/commands/agenticloop.md`.
-User-owned `opencode.jsonc` is left alone. `--adapter all` is an explicit request for every supported host adapter.
+Generate only the host a clone actually uses with `agenticloop hydrate
+--adapter <host>`. Hydration never auto-detects local directories and does not
+support `all`. User-owned `opencode.jsonc` is left alone. Plain `update` and
+`update --adapter` retain the older combined behavior only as a deprecated
+compatibility path.
 
 Codex repo-local activation is skill-first: use `$agenticloop` or select
 `Agentic Loop` from `/skills` in Codex after generating the repo-local adapter.

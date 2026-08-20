@@ -15,6 +15,7 @@ agenticloop setup      Recommended guided onboarding; scaffolds or repairs as ne
 agenticloop init       Advanced files-only or direct adapter scaffolding
 agenticloop doctor     Read-only diagnosis and next steps
 agenticloop update     Refresh an existing installation
+agenticloop hydrate    Recreate one ignored clone-local host integration
 ```
 
 All commands:
@@ -23,7 +24,9 @@ All commands:
 |---|---|
 | `setup` | Guided onboarding: detect, review, choose, plan, apply, verify |
 | `init` | Deterministic scaffold: toolkit source, target state, optional adapter |
-| `update` (alias `upgrade`) | Refresh toolkit-owned assets and regenerate adapters |
+| `update --repository-only` | Refresh portable toolkit-owned assets and deterministic migrations |
+| `hydrate` | Generate one clone-local host integration using the local ownership manifest |
+| `update` (alias `upgrade`) | Deprecated compatibility path that refreshes toolkit assets and regenerates adapters |
 | `doctor` | Read-only setup checklist, adapter state, next steps |
 | `status` | Configured adapters, generated artifacts, next steps, or a closed lifecycle orientation snapshot with `--json` |
 | `validate` | Validate skills, config, links, role-capability bindings, and host setup |
@@ -31,6 +34,7 @@ All commands:
 | `guidance` | Manage the activation-guidance block (`apply`, `check`, `remove`) |
 | `generate` | Generate adapter artifacts (`opencode`, `codex`, `claude-code`, `copilot`, `cursor`, `all`) |
 | `configure models` | Set per-host role model settings in `agenticloop.json` |
+| `configure import-generated-models` | Explicitly preview or import missing tracked model settings from one generated host |
 | `task` | Task records and lifecycle preparation (`list`, `lint`, `new`, `establish-baseline`, `authorize-correction`, `prepare-decomposition`, `prepare-dispatch`, `role-start`, `handoff-preflight`, `refresh-handoff-evidence`, `prepare-return`, `verify-return`, `check-evidence-init`, `check-evidence-show`, `check-evidence-update`, `evidence`, `review-prepare`, `status`) |
 | `audit` | Work-unit audit certificates (`new`, `baseline`, `report`, `status`, `gate`, `lint`, `repair-structure`, `disposition`, `override`, `resolve`) |
 | `closeout` | Composite closeout packets (`prepare`, `status`, `record`) |
@@ -79,6 +83,60 @@ Use `init` when you want the deterministic, non-guided scaffold: files-only
 (`agenticloop init`) or direct adapter scaffolding
 (`agenticloop init --adapter <host>`). Both share the same planner, ownership
 checks, output renderer, and executor as guided setup.
+
+## Clone-safe update and hydration
+
+Portable repository refresh and clone-local generation are separate commands:
+
+```text
+agenticloop update --repository-only [--target <dir>] [--dry-run] [--json] [--verbose]
+agenticloop hydrate --adapter <host> [--target <dir>] [--dry-run] [--json] [--force-generated]
+```
+
+`update --repository-only` uses the lifecycle planner to refresh canonical
+`agenticloop/` assets, deterministic schema migrations, an already-owned
+guidance block, and managed ignore entries. It never detects adapters from
+generated directories, reads generated model settings, generates host files,
+or derives tracked output from ignored/untracked files. `--dry-run` performs
+no writes. `--json` also implies a no-write plan and emits the same actions as
+human dry-run output. The package source repository remains protected from
+this lifecycle mutation.
+
+`hydrate` requires exactly one of `opencode`, `codex`, `claude-code`,
+`copilot`, or `cursor`; it never auto-detects and does not accept `all`. It
+works in installed targets and in the package source layout. It reads
+canonical assets and effective configuration, then invokes the shared adapter
+planner, ownership preflight, and generation transaction with
+`.agenticloop/local/generated-artifacts.json`. It never writes
+`agenticloop.json`, `AGENTS.md`, `.gitignore`, canonical toolkit assets, or
+workflow/task state. In a Git worktree every planned destination and the local
+manifest must already be ignored and untracked, or hydration fails before the
+first write with a repair message. In a non-Git directory hydration is allowed
+with a warning that Git cleanliness cannot be verified.
+
+Both dry-run formats list the same action paths and blockers. Exit status is
+`0` for a valid plan or completed hydration, `1` for configuration,
+ownership, collision, ignore, path, or apply failure, and `2` for invalid CLI
+usage. `--force-generated` applies only to a modified file already proven
+owned by the local manifest; it never adopts user-created files. Repeating an
+unchanged hydration does not rewrite generated files or its manifest.
+
+Plain `update` and its `upgrade` alias retain the pre-existing combined
+behavior for compatibility and emit a deprecation warning. Its established
+flags retain their meanings. The recommended workflow is repository-only
+update followed by per-clone hydration.
+
+Generated output is not configuration authority. Importing missing values is
+an explicit, confirmed migration:
+
+```text
+agenticloop configure import-generated-models --adapter <host> --dry-run [--json]
+agenticloop configure import-generated-models --adapter <host> --yes
+```
+
+The preview reports every destination setting, value, and source artifact.
+The operation requires one concrete adapter, preserves explicit tracked
+settings, and modifies only `agenticloop.json` after `--yes`.
 
 ## Interactive and non-interactive behavior
 

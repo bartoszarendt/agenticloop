@@ -434,7 +434,9 @@ npx agenticloop init [--adapter <host>]              Scaffold overlay (files-onl
 npx agenticloop setup [--adapter <host>] [--event-logging <enabled|disabled>]
                                                        Guided onboarding: confirm setup, choose local event logging, pick adapter, configure models
 npx agenticloop doctor                               Show setup checklist and adapter state; writes nothing
-npx agenticloop update [--adapter <host>]            Refresh toolkit assets and existing adapter output
+npx agenticloop update --repository-only             Refresh portable toolkit assets only
+npx agenticloop hydrate --adapter <host>              Recreate ignored clone-local host artifacts
+npx agenticloop update [--adapter <host>]             Deprecated combined refresh compatibility path
 npx agenticloop upgrade                              Compatibility alias for update
 npx agenticloop validate                             Validate skills, config, links, and host setup
 npx agenticloop status                               Show configured adapters, artifacts, and next steps
@@ -480,6 +482,21 @@ npx agenticloop remove --dry-run                     Preview overlay removal
 npx agenticloop remove --yes                         Remove toolkit assets and generated shims
 npx agenticloop remove --yes --include-state         Also remove target-owned `.agenticloop/` state
 ```
+
+After cloning an existing Agentic Loop target, recreate the selected host
+integration without changing tracked files:
+
+```text
+git pull --ff-only
+npm ci
+npx agenticloop hydrate --adapter opencode
+git status --short
+```
+
+The final status must be clean. Toolkit upgrades are separate, reviewed
+repository changes: preview and apply them with `agenticloop update
+--repository-only --dry-run` and `agenticloop update --repository-only`, then
+commit the reviewed tracked changes once for every clone to pull.
 
 Worktree `remove` and `cleanup` preserve task-specific lane-local `.agenticloop` state before removal. See [docs/worktrees.md](docs/worktrees.md) for what counts as lane-local state, when preservation conflicts block cleanup, and the `resolve-state` strategies.
 
