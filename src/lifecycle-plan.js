@@ -893,7 +893,7 @@ export function applyLifecyclePlan(target, plan, options = {}) {
         result.rollbackErrors.push(...(generation.rollbackErrors ?? []));
         return result;
       }
-      result.warnings.push(...generation.errors);
+      result.warnings.push(...(generation.warnings ?? []));
       result.adapterFiles.push(...group.files);
       result.committedPaths.push(...group.files);
       result.committedSegments.push(segment.label);

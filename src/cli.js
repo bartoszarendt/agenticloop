@@ -510,7 +510,7 @@ async function generateAdapterTarget(sub, { opts, target, alConfig, preserveExis
   // Print preservation messages only after successful commit (Defect 14).
   if (preservation) printPreservationResult(preservation, io);
   // Print stale warnings from the transaction.
-  for (const warning of result.errors) io.warn(`  WARN: ${warning}`);
+  for (const warning of result.warnings) io.warn(`  WARN: ${warning}`);
 
   io.out(`Generated ${result.files.length} artifact(s) under ${result.outputDir}:`);
   for (const file of result.files) io.out(`  ${file}`);
@@ -771,6 +771,9 @@ async function cmdHydrate(args, io) {
   if (!result.ok) {
     for (const error of result.errors) io.err(`  ERROR: ${error}`);
     return 1;
+  }
+  for (const warning of result.warnings) {
+    if (!plan.warnings.includes(warning)) io.warn(`  WARN: ${warning}`);
   }
   io.out(`Hydrated ${result.files.length} clone-local artifact(s) for ${adapter}.`);
   return 0;

@@ -14,6 +14,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { applyHydration, planHydration } from '../src/hydration.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BIN = join(REPO_ROOT, 'bin', 'agenticloop.js');
@@ -92,6 +94,15 @@ describe('clone-local hydration', () => {
     }
   });
 
+  it('hydrates every supported host in an installed target without tracked changes', () => {
+    for (const adapter of ['opencode', 'codex', 'claude-code', 'copilot', 'cursor']) {
+      const target = downstreamFixture();
+      assertOk(run(['hydrate', '--target', target, '--adapter', adapter], target));
+      assert.ok(existsSync(join(target, '.agenticloop', 'local', 'generated-artifacts.json')));
+      assert.equal(git(target, ['status', '--porcelain']), '', `${adapter} hydration must leave Git clean`);
+    }
+  });
+
   it('merges allowed local model overrides only in memory and rejects unsafe fields', () => {
     const target = downstreamFixture();
     const configPath = join(target, 'agenticloop.json');
@@ -138,6 +149,16 @@ describe('clone-local hydration', () => {
     assert.equal(readFileSync(collisionPath, 'utf8'), 'user-owned\n');
   });
 
+  it('warns but permits hydration when Git cleanliness cannot be verified', () => {
+    const target = downstreamFixture();
+    rmSync(join(target, '.git'), { recursive: true, force: true });
+    const result = run(['hydrate', '--target', target, '--adapter', 'opencode'], target);
+    assertOk(result);
+    const warning = 'Target is not a Git worktree; hydration is allowed, but tracked-tree cleanliness cannot be verified.';
+    assert.equal(result.stderr.split(warning).length - 1, 1);
+    assert.ok(existsSync(join(target, '.opencode')));
+  });
+
   it('protects modified generated files, supports explicit force, and avoids timestamp churn', () => {
     const target = downstreamFixture();
     assertOk(run(['hydrate', '--target', target, '--adapter', 'opencode'], target));
@@ -156,6 +177,80 @@ describe('clone-local hydration', () => {
     assertOk(run(['hydrate', '--target', target, '--adapter', 'opencode', '--force-generated'], target));
     assert.doesNotMatch(readFileSync(agentPath, 'utf8'), /locally modified/);
     assert.equal(git(target, ['status', '--porcelain']), '');
+  });
+
+  it('reports preserved modified stale artifacts after successful hydration', () => {
+    const target = downstreamFixture();
+    assertOk(run(['hydrate', '--target', target, '--adapter', 'opencode'], target));
+    const manifestPath = join(target, '.agenticloop', 'local', 'generated-artifacts.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const generatedEntry = manifest.entries.find(entry =>
+      entry.kind === 'file' && entry.relPath.startsWith('.opencode/agents/')
+    );
+    assert.ok(generatedEntry, 'fixture hydration must generate an OpenCode agent');
+
+    const staleRelPath = '.opencode/agents/retired.md';
+    const stalePath = join(target, ...staleRelPath.split('/'));
+    const generatedContent = 'generated stale artifact\n';
+    writeFileSync(stalePath, generatedContent);
+    manifest.entries.push({
+      ...generatedEntry,
+      relPath: staleRelPath,
+      hash: createHash('sha256').update(generatedContent).digest('hex'),
+    });
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    writeFileSync(stalePath, 'locally modified stale artifact\n');
+
+    const result = run(['hydrate', '--target', target, '--adapter', 'opencode'], target);
+    assertOk(result);
+    assert.match(result.stderr, /WARN: Preserved modified stale generated file: .opencode\/agents\/retired.md/);
+    assert.equal(readFileSync(stalePath, 'utf8'), 'locally modified stale artifact\n');
+  });
+
+  it('rechecks Git output safety before the generation transaction mutates', () => {
+    const target = downstreamFixture();
+    const plan = planHydration({ target, adapter: 'opencode' });
+    assert.deepEqual(plan.blockers, []);
+
+    const ignorePath = join(target, '.gitignore');
+    writeFileSync(ignorePath, readFileSync(ignorePath, 'utf8').replace('.opencode/\n', ''));
+    const result = applyHydration({ target, adapter: 'opencode', plan });
+
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /Hydration destination '.opencode\/agents\/engineer.md' is not ignored/);
+    assert.equal(existsSync(join(target, '.opencode')), false, 'the late Git check must run before generation writes');
+  });
+
+  it('refuses tracked stale artifacts selected for cleanup before deleting them', () => {
+    const target = downstreamFixture();
+    assertOk(run(['hydrate', '--target', target, '--adapter', 'opencode'], target));
+    const manifestPath = join(target, '.agenticloop', 'local', 'generated-artifacts.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const generatedEntry = manifest.entries.find(entry =>
+      entry.kind === 'file' && entry.relPath.startsWith('.opencode/agents/')
+    );
+    assert.ok(generatedEntry, 'fixture hydration must generate an OpenCode agent');
+
+    const staleRelPath = '.opencode/agents/tracked-retired.md';
+    const stalePath = join(target, ...staleRelPath.split('/'));
+    const staleContent = 'generated stale artifact\n';
+    writeFileSync(stalePath, staleContent);
+    manifest.entries.push({
+      ...generatedEntry,
+      relPath: staleRelPath,
+      hash: createHash('sha256').update(staleContent).digest('hex'),
+    });
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    const plan = planHydration({ target, adapter: 'opencode' });
+    assert.deepEqual(plan.blockers, []);
+
+    git(target, ['add', '--force', staleRelPath]);
+    git(target, ['-c', 'user.name=Agentic Loop Tests', '-c', 'user.email=tests@example.invalid', 'commit', '-m', 'track stale artifact']);
+    const result = applyHydration({ target, adapter: 'opencode', plan });
+
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /Hydration destination '.opencode\/agents\/tracked-retired.md' is tracked/);
+    assert.equal(readFileSync(stalePath, 'utf8'), staleContent);
   });
 });
 

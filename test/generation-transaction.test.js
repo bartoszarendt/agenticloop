@@ -1,6 +1,6 @@
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -94,6 +94,29 @@ describe('generation transaction ownership regressions', () => {
     const unsafe = executeGenerationPlan(root, plan([]), { manifestRelPath: '../outside.json' });
     assert.equal(unsafe.ok, false);
     assert.match(unsafe.errors.join('\n'), /Path traversal not allowed/);
+  });
+
+  it('returns a throwing pre-mutation guard without touching existing output', () => {
+    const root = target();
+    const relPath = '.opencode/agents/engineer.md';
+    assert.equal(executeGenerationPlan(root, plan([
+      { type: 'write-file', adapter: 'opencode', relPath, content: 'before' },
+    ])).ok, true);
+    const path = join(root, relPath);
+    const before = statSync(path);
+
+    const result = executeGenerationPlan(root, plan([
+      { type: 'write-file', adapter: 'opencode', relPath, content: 'after' },
+    ]), {
+      beforeMutation: () => { throw new Error('late safety check failed'); },
+    });
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.errors, ['late safety check failed']);
+    assert.equal(readFileSync(path, 'utf8'), 'before');
+    const after = statSync(path);
+    assert.equal(after.ino, before.ino);
+    assert.equal(after.mtimeMs, before.mtimeMs);
   });
 
   it('rejects writes whose resolved output root is under .github/workflows', () => {

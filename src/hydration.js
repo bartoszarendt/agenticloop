@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { planAdapterArtifacts, generateAdapterArtifacts, IMPLEMENTED_ADAPTERS } from './adapter-generation.js';
 import { deepMerge, loadAgenticLoopConfig, loadJsonFile } from './json.js';
 import { isPackageSourceRepositoryRoot, resolveToolkitAssetLayout } from './layout.js';
-import { LOCAL_GENERATED_ARTIFACTS_PATH, resolveManagedPath } from './generated-artifacts.js';
+import { LOCAL_GENERATED_ARTIFACTS_PATH, loadManifest, resolveManagedPath } from './generated-artifacts.js';
 import { WORKFLOW_ROLE_IDS } from './workflow-roles.js';
 
 export const LOCAL_CONFIG_RELATIVE_PATH = '.agenticloop/local/config.json';
@@ -124,6 +124,33 @@ function gitCleanlinessPlan(target, relPaths) {
   return { warnings: [], blockers };
 }
 
+function hydrationDestinationPaths(target, generationPlan, manifestRelPath = LOCAL_GENERATED_ARTIFACTS_PATH) {
+  const paths = [
+    ...generationPlan.actions
+      .filter(action => action.relPath && action.type !== 'clear-owned-directory')
+      .map(action => action.relPath),
+    manifestRelPath,
+  ];
+  let manifest;
+  try {
+    manifest = loadManifest(target, manifestRelPath);
+  } catch {
+    // Generation preflight reports malformed ownership manifests as blockers.
+    return paths;
+  }
+  const clearRoots = generationPlan.actions
+    .filter(action => action.type === 'clear-owned-directory')
+    .map(action => ({ adapter: action.adapter, relPath: action.relPath }));
+  for (const entry of manifest?.entries ?? []) {
+    if (entry.kind !== 'file' || entry.outputRoot !== generationPlan.outputRoot) continue;
+    if (clearRoots.some(root =>
+      root.adapter === entry.adapter &&
+      (entry.relPath === root.relPath || entry.relPath.startsWith(`${root.relPath}/`))
+    )) paths.push(entry.relPath);
+  }
+  return paths;
+}
+
 function localOnlyPlan(plan) {
   const forbidden = new Set(['agenticloop.json', 'AGENTS.md', '.gitignore']);
   const actions = plan.actions.filter(action => action.type !== 'gitignore-append');
@@ -165,11 +192,7 @@ export function planHydration({ target, adapter, forceGenerated = false }) {
     return { schemaVersion: HYDRATION_PLAN_SCHEMA_VERSION, command: 'hydrate', adapter, actions: [], blockers: planned.errors, warnings: [] };
   }
   const generationPlan = localOnlyPlan(planned.plan);
-  const destinationPaths = [
-    ...generationPlan.actions.filter(action => action.relPath && action.type !== 'clear-owned-directory').map(action => action.relPath),
-    LOCAL_GENERATED_ARTIFACTS_PATH,
-  ];
-  const cleanliness = gitCleanlinessPlan(target, destinationPaths);
+  const cleanliness = gitCleanlinessPlan(target, hydrationDestinationPaths(target, generationPlan));
   const collisionBlockers = planned.preflight.blocked.map(item => `BLOCKED ${item.relPath}: ${item.message}`);
   const statuses = new Map(planned.preflight.collisions.map(item => [item.relPath, item.status]));
   return {
@@ -205,6 +228,12 @@ export function applyHydration({ target, adapter, forceGenerated = false, plan }
     manifestRelPath: LOCAL_GENERATED_ARTIFACTS_PATH,
     avoidUnchangedWrites: true,
     excludeGitignoreActions: true,
+    // Recheck after the transaction has prepared its current plan and directly
+    // before its first mutation, narrowing plan/apply races with Git state.
+    beforeMutation: ({ plan: currentGenerationPlan, manifestRelPath }) => {
+      const cleanliness = gitCleanlinessPlan(target, hydrationDestinationPaths(target, currentGenerationPlan, manifestRelPath));
+      return { errors: cleanliness.blockers, warnings: cleanliness.warnings };
+    },
   });
   return { ...result, plan: hydrationPlan };
 }

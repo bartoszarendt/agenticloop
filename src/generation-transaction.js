@@ -525,7 +525,24 @@ export function executeGenerationPlan(targetRoot, plan, options = {}) {
     return { ok: false, errors: [error.message], writtenFiles: [], adapters: plan.adapters };
   }
 
+  let beforeMutationErrors;
+  let beforeMutationWarnings;
   try {
+    const beforeMutationResult = options.beforeMutation?.({ targetRoot, plan, manifestRelPath }) ?? [];
+    beforeMutationErrors = Array.isArray(beforeMutationResult)
+      ? beforeMutationResult
+      : (beforeMutationResult.errors ?? []);
+    beforeMutationWarnings = Array.isArray(beforeMutationResult)
+      ? []
+      : (beforeMutationResult.warnings ?? []);
+  } catch (error) {
+    return { ok: false, errors: [error instanceof Error ? error.message : String(error)], writtenFiles: [], adapters: plan.adapters };
+  }
+
+  try {
+    if (beforeMutationErrors.length > 0) {
+      return { ok: false, errors: beforeMutationErrors, writtenFiles: [], adapters: plan.adapters };
+    }
     for (const entry of removableStale) {
       const path = resolveManagedPath(targetRoot, outputRoot, entry.relPath);
       if (existsSync(path)) rmSync(path);
@@ -548,7 +565,8 @@ export function executeGenerationPlan(targetRoot, plan, options = {}) {
       saveManifest(targetRoot, stableNext, manifestRelPath);
     }
     emptyParents(resolve(targetRoot), removableStale.map(entry => resolveManagedPath(targetRoot, outputRoot, entry.relPath)));
-    return { ok: true, errors: staleWarnings, writtenFiles: [...paths].map(path => relative(resolveManagedPath(targetRoot, outputRoot, '.'), path).replaceAll('\\', '/')), adapters: plan.adapters };
+    const warnings = [...staleWarnings, ...beforeMutationWarnings];
+    return { ok: true, errors: warnings, warnings, writtenFiles: [...paths].map(path => relative(resolveManagedPath(targetRoot, outputRoot, '.'), path).replaceAll('\\', '/')), adapters: plan.adapters };
   } catch (error) {
     const rollbackErrors = rollback(snapshots);
     // Roll back transaction-created empty directories (Defect 10).

@@ -37,12 +37,14 @@ const PLANNERS = {
  * @property {string} [manifestRelPath]
  * @property {boolean} [avoidUnchangedWrites]
  * @property {boolean} [excludeGitignoreActions]
+ * @property {(context: { targetRoot: string, plan: object, manifestRelPath: string }) => string[]|{errors?: string[], warnings?: string[]}} [beforeMutation]
  */
 
 /**
  * @typedef {Object} GenerationOutcome
  * @property {boolean} ok
  * @property {string[]} errors
+ * @property {string[]} warnings
  * @property {string[]} files
  * @property {string[]} adapters
  * @property {string} outputDir
@@ -138,11 +140,13 @@ export function generateAdapterArtifacts(options) {
     extraWrites,
     manifestRelPath: options.manifestRelPath,
     avoidUnchangedWrites: options.avoidUnchangedWrites,
+    beforeMutation: options.beforeMutation,
   });
 
   return {
     ok: result.ok,
     errors: result.errors,
+    warnings: result.warnings ?? [],
     files: result.ok ? planned.plan.files : [],
     adapters: planned.adapters,
     outputDir: planned.outputDir,
