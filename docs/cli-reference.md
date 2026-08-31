@@ -111,10 +111,9 @@ planner, ownership preflight, and generation transaction with
 `agenticloop.json`, `AGENTS.md`, `.gitignore`, canonical toolkit assets, or
 workflow/task state. In a Git worktree every planned destination and the local
 manifest must already be ignored and untracked, or hydration fails before the
-first write with a repair message. In a non-Git directory hydration is allowed
-with a warning that Git cleanliness cannot be verified. If Git cannot be run
-or its worktree probe fails, hydration fails closed instead of treating the
-target as non-Git.
+first write with a repair message. Hydration requires a verifiable Git
+worktree. In a non-Git directory, or when Git cannot run or inspect the
+worktree, hydration fails closed instead of writing unverified local output.
 
 Both dry-run formats list the same action paths and blockers. Exit status is
 `0` for a valid plan or completed hydration, `1` for configuration,

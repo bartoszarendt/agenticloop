@@ -149,14 +149,13 @@ describe('clone-local hydration', () => {
     assert.equal(readFileSync(collisionPath, 'utf8'), 'user-owned\n');
   });
 
-  it('warns but permits hydration when Git cleanliness cannot be verified', () => {
+  it('refuses hydration when Git cleanliness cannot be verified', () => {
     const target = downstreamFixture();
     rmSync(join(target, '.git'), { recursive: true, force: true });
     const result = run(['hydrate', '--target', target, '--adapter', 'opencode'], target);
-    assertOk(result);
-    const warning = 'Target is not a Git worktree; hydration is allowed, but tracked-tree cleanliness cannot be verified.';
-    assert.equal(result.stderr.split(warning).length - 1, 1);
-    assert.ok(existsSync(join(target, '.opencode')));
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Unable to verify Git cleanliness for hydration/);
+    assert.equal(existsSync(join(target, '.opencode')), false);
   });
 
   it('fails closed when the Git probe cannot run', () => {
@@ -166,6 +165,28 @@ describe('clone-local hydration', () => {
     });
     assert.equal(result.status, 1);
     assert.match(result.stderr, /Unable to verify Git cleanliness for hydration/);
+    assert.equal(existsSync(join(target, '.opencode')), false);
+  });
+
+  it('fails closed when Git environment overrides hide a worktree', () => {
+    const target = downstreamFixture();
+    const result = run(['hydrate', '--target', target, '--adapter', 'opencode'], target, {
+      env: { ...process.env, GIT_DIR: join(target, 'missing-git-dir') },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Unable to verify Git cleanliness for hydration/);
+    assert.equal(existsSync(join(target, '.opencode')), false);
+  });
+
+  it('fails closed when Git cannot inspect destination tracking', () => {
+    const target = downstreamFixture();
+    const invalidIndex = join(target, 'invalid.index');
+    writeFileSync(invalidIndex, 'not a Git index\n');
+    const result = run(['hydrate', '--target', target, '--adapter', 'opencode'], target, {
+      env: { ...process.env, GIT_INDEX_FILE: invalidIndex },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Unable to verify Git tracking for hydration destination/);
     assert.equal(existsSync(join(target, '.opencode')), false);
   });
 

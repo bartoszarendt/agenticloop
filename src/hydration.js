@@ -100,10 +100,6 @@ function git(target, args) {
   return spawnSync('git', args, { cwd: target, encoding: 'utf8', windowsHide: true });
 }
 
-function isConfirmedNonGitDirectory(probe) {
-  return probe.status === 128 && /not a git repository/i.test(probe.stderr ?? '');
-}
-
 function gitProbeError(probe) {
   if (probe.error) return probe.error.message;
   const stderr = probe.stderr?.trim();
@@ -113,19 +109,7 @@ function gitProbeError(probe) {
 
 function gitCleanlinessPlan(target, relPaths) {
   const probe = git(target, ['rev-parse', '--is-inside-work-tree']);
-  if (probe.status === 0 && probe.stdout?.trim() !== 'true') {
-    return {
-      warnings: [],
-      blockers: ['Unable to verify Git cleanliness for hydration: target is not a Git worktree.'],
-    };
-  }
-  if (isConfirmedNonGitDirectory(probe)) {
-    return {
-      warnings: ['Target is not a Git worktree; hydration is allowed, but tracked-tree cleanliness cannot be verified.'],
-      blockers: [],
-    };
-  }
-  if (probe.status !== 0) {
+  if (probe.status !== 0 || probe.stdout?.trim() !== 'true') {
     return {
       warnings: [],
       blockers: [`Unable to verify Git cleanliness for hydration: ${gitProbeError(probe)}`],
@@ -139,9 +123,17 @@ function gitCleanlinessPlan(target, relPaths) {
       blockers.push(`Hydration destination '${relPath}' is tracked. Remove it from the tracked tree before hydrating.`);
       continue;
     }
+    if (tracked.status !== 1) {
+      blockers.push(`Unable to verify Git tracking for hydration destination '${relPath}': ${gitProbeError(tracked)}`);
+      continue;
+    }
     const ignored = git(target, ['check-ignore', '--no-index', '-q', '--', relPath]);
-    if (ignored.status !== 0) {
+    if (ignored.status === 1) {
       blockers.push(`Hydration destination '${relPath}' is not ignored. Add a precise .gitignore rule with 'agenticloop update --repository-only', commit it, and retry.`);
+      continue;
+    }
+    if (ignored.status !== 0) {
+      blockers.push(`Unable to verify Git ignore rules for hydration destination '${relPath}': ${gitProbeError(ignored)}`);
     }
   }
   return { warnings: [], blockers };
