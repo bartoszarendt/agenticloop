@@ -24,8 +24,8 @@ let root;
 before(() => { root = mkdtempSync(join(tmpdir(), 'al-clone-hydration-')); });
 after(() => { rmSync(root, { recursive: true, force: true }); });
 
-function run(args, cwd) {
-  return spawnSync(process.execPath, [BIN, ...args], { cwd, encoding: 'utf8' });
+function run(args, cwd, options = {}) {
+  return spawnSync(process.execPath, [BIN, ...args], { cwd, encoding: 'utf8', ...options });
 }
 
 function assertOk(result) {
@@ -157,6 +157,16 @@ describe('clone-local hydration', () => {
     const warning = 'Target is not a Git worktree; hydration is allowed, but tracked-tree cleanliness cannot be verified.';
     assert.equal(result.stderr.split(warning).length - 1, 1);
     assert.ok(existsSync(join(target, '.opencode')));
+  });
+
+  it('fails closed when the Git probe cannot run', () => {
+    const target = downstreamFixture();
+    const result = run(['hydrate', '--target', target, '--adapter', 'opencode'], target, {
+      env: { ...process.env, PATH: '' },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Unable to verify Git cleanliness for hydration/);
+    assert.equal(existsSync(join(target, '.opencode')), false);
   });
 
   it('protects modified generated files, supports explicit force, and avoids timestamp churn', () => {

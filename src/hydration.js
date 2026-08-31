@@ -100,12 +100,35 @@ function git(target, args) {
   return spawnSync('git', args, { cwd: target, encoding: 'utf8', windowsHide: true });
 }
 
+function isConfirmedNonGitDirectory(probe) {
+  return probe.status === 128 && /not a git repository/i.test(probe.stderr ?? '');
+}
+
+function gitProbeError(probe) {
+  if (probe.error) return probe.error.message;
+  const stderr = probe.stderr?.trim();
+  if (stderr) return stderr;
+  return `git exited with status ${probe.status ?? 'unknown'}`;
+}
+
 function gitCleanlinessPlan(target, relPaths) {
   const probe = git(target, ['rev-parse', '--is-inside-work-tree']);
-  if (probe.status !== 0 || probe.stdout.trim() !== 'true') {
+  if (probe.status === 0 && probe.stdout?.trim() !== 'true') {
+    return {
+      warnings: [],
+      blockers: ['Unable to verify Git cleanliness for hydration: target is not a Git worktree.'],
+    };
+  }
+  if (isConfirmedNonGitDirectory(probe)) {
     return {
       warnings: ['Target is not a Git worktree; hydration is allowed, but tracked-tree cleanliness cannot be verified.'],
       blockers: [],
+    };
+  }
+  if (probe.status !== 0) {
+    return {
+      warnings: [],
+      blockers: [`Unable to verify Git cleanliness for hydration: ${gitProbeError(probe)}`],
     };
   }
   const blockers = [];
