@@ -271,12 +271,24 @@ const BASELINE_RATIONALE = Object.freeze([
       're-baseline against measured values, not a raised ceiling.',
     evidence: 'agents/auditor.md, src/adapters/shared.js STANDALONE_AUDITOR_PREAMBLE_LINES, AGENTIC_LOOP.md, skills/work-unit-audit/SKILL.md',
   },
+  {
+    pass: 'post-dual-mode lifecycle contracts (2026-08-31)',
+    adapters: ['claude-code'],
+    categories: ['agentDefinitions'],
+    previous: 12094, measured: 12721, delta: 627, valuesRecorded: true,
+    changes: [
+      { adapter: 'claude-code', category: 'agentDefinitions', previous: 12094, measured: 12721, delta: 627 },
+    ],
+    reason:
+      'Canonical role definitions gained the required attempt, readiness, handoff, review, and return-state contracts after the dual-mode Auditor measurement. Claude Code packages those role definitions directly; the measured increase is shared canonical capability rather than adapter-specific duplication.',
+    evidence: 'git history 94c321c..7315ecc for agents/',
+  },
 ]);
 
 const ADAPTERS = [
   { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 14061, agentDefinitions: 13084, activationSurface: 977 } },
   { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 71644, agentDefinitions: 13516, activationSurface: 1260, referenceLibrary: 56868 } },
-  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 54913, agentDefinitions: 12094, activationSurface: 2157, referenceLibrary: 40662 } },
+  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 54913, agentDefinitions: 12721, activationSurface: 2157, referenceLibrary: 40662 } },
   { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 69622, agentDefinitions: 13193, activationSurface: 1314, referenceLibrary: 55115 } },
   { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 69370, agentDefinitions: 13187, activationSurface: 1068, referenceLibrary: 55115 } },
 ];
@@ -327,6 +339,7 @@ describe('generated adapter payload-size budgets', () => {
   it('keeps the rebaseline history auditable', () => {
     assert.ok(BASELINE_RATIONALE.length > 0);
     const adapterNames = new Set(ADAPTERS.map(adapter => adapter.name));
+    const latestChanges = new Map();
     for (const record of BASELINE_RATIONALE) {
       const label = record.pass;
       assert.ok(typeof label === 'string' && label.trim(), 'every record names the pass that made it');
@@ -356,8 +369,7 @@ describe('generated adapter payload-size budgets', () => {
             assert.equal(typeof change.previous, 'number', `${label}: ${pair} previous`);
             assert.equal(typeof change.measured, 'number', `${label}: ${pair} measured`);
             assert.equal(change.delta, change.measured - change.previous, `${label}: ${pair} delta must equal measured - previous`);
-            const adapter = ADAPTERS.find(candidate => candidate.name === change.adapter);
-            assert.equal(change.measured, adapter.baseline[change.category], `${label}: ${pair} measured must equal its declared baseline`);
+            latestChanges.set(pair, change);
           }
           assert.deepEqual(actualPairs, expectedPairs, `${label}: every declared raised baseline must have numeric accounting`);
         } else {
@@ -368,6 +380,10 @@ describe('generated adapter payload-size budgets', () => {
           assert.equal(record.delta, record.measured - record.previous, `${label}: delta must equal measured - previous`);
         }
       }
+    }
+    for (const [pair, change] of latestChanges) {
+      const adapter = ADAPTERS.find(candidate => candidate.name === change.adapter);
+      assert.equal(change.measured, adapter.baseline[change.category], `${pair}: latest measurement must equal its declared baseline`);
     }
   });
 
