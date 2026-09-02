@@ -410,9 +410,29 @@ of those writes must be committed before the next step's gate can pass. A
 preflight verdict is a claim about that sequence, not about an instant, and a
 green that does not survive its own prescribed next action is a false green. A
 derived-only refresh plan may be
-applied explicitly through `task refresh-handoff-evidence`; it cannot alter
+applied explicitly through `task refresh-handoff-receipt` (the former
+`refresh-handoff-evidence` spelling remains a compatibility alias); it cannot alter
 protected task fields, human decisions, review dispositions, acceptance,
 closeout, or product files.
+
+A refresh distinguishes calculated evidence, an uncommitted written receipt,
+committed/current evidence, and decomposition requiring regeneration. A write
+returns `written_pending_commit`, never `proceed`; it names exact changed files,
+the canonical commit message, decomposition state, and the next preflight. Only
+a committed artifact that passes refetched preflight is handoff-ready.
+
+Readiness authoring warnings are visible and non-blocking. Lint,
+`task readiness-plan`, and `task readiness-apply` use the same authoring
+evaluation, and the complete diagnostics are plan-digest bound. A readiness
+error blocks candidate preparation before derivative bundle validation. One
+task uses the compatible positional command. A bounded sibling set uses
+`readiness-plan --tasks <first> <more...> --work-unit <id>` plus either one
+common dependency snapshot or a per-task snapshot map, then applies that plan
+atomically. Every prospective carrier is overlaid before the one canonical scan;
+all resulting decompositions bind the final inventory and one work-unit scan.
+The commit subject is `chore(<task-id>): settle readiness` for one task or
+`chore(<work-unit-id>): settle readiness` with exact canonical `Work-Unit`,
+`Tasks`, and `Agent` trailers for a set. Readiness never creates activation.
 
 Every commit the sequence forces is authored by `task commit-message <task-id>
 --class <commit-class> --subject <text> --output <file>` and committed with `git
@@ -815,7 +835,7 @@ authority-bearing semantic fact and would have no files-backend counterpart.
 #### Parallel-scan provenance
 
 A Parallel Opportunity Scan produces `agenticloop.parallel-scan` schema version
-`1`, digested in the `agenticloop.parallel-scan.v1` domain with a separate
+`3`, digested in the `agenticloop.parallel-scan.v3` domain with a separate
 backend-neutral `agenticloop.parallel-scan-semantics.v1` digest. The record binds
 the exact bounded work-unit identity and backend; the inventory ID, its digest,
 and every member's task identity, carrier, digest, revision, and readability
@@ -825,6 +845,17 @@ invalidator inventory; the ready task IDs; every excluded task with a stable
 reason code, evidence state, evidence reference, and carrier digest; per-task
 parallel eligibility and knowledge coupling with exact blockers; the pairwise
 mutation relation and candidate pairs; the conclusion and rescan trigger.
+
+The readiness context contains canonical dependency evidence per inventory task.
+Each member resolves its own declared dependencies from its bound committed
+snapshot, or from the authoritative carrier identity/digest/status of another
+inventory member; dependencies outside the inventory require explicit committed
+evidence. The complete context uses the
+`agenticloop.parallel-scan-readiness.v3` digest domain and participates in scan
+freshness. An initiating task therefore cannot alter ready membership,
+exclusions, eligibility, pairs, conclusion, or scan digest. Version 2 records
+used one initiating-task map for the work unit and are refused with regeneration
+guidance; version 3 is the migration path for both multi-task and single-task scans.
 
 Exclusion reason codes are `record_unreadable`, `record_malformed`,
 `identity_ambiguous`, `lifecycle_terminal`, `dependency_unresolved`, and
@@ -1199,6 +1230,24 @@ bounded relation with a dedicated task/artifact and exact evidence; an execution
 plan is an artifact of that relation, not a new `managed_join_plan` synonym. Use
 `cancellation_boundary`, `review_no_mutation_window`, and
 `digest_guarded_rollback` precisely. None is a lock or authority transfer.
+
+A delegation selects exactly one checkpoint cadence: after every record, or
+after each explicit batch of N records. It also carries a bounded diagnostic
+budget for unexpected tooling failures. Exhaustion returns `tooling_failure`,
+`needs_context`, or the applicable blocked category with the exact command,
+child exit/structured result, observed output, attempted repairs, and untouched
+remaining work. Tool transport completion does not prove child-command success.
+On hosts without streaming/cancellation, expected extended work is split before
+delegation; high-context materialization defaults to one-record returns. A lease
+is cooperative unless the host explicitly enforces it, never a claimed kill switch.
+
+If a child completed and the coordinator response failed, resume by reconciling
+durable backend and Git state first. A queued pause is acknowledged before any
+implementation or activation. Host session metadata remains `session_reported`
+and cannot become authenticated host evidence. Persist only compact coordination
+state (task, durable child artifact/ref, outstanding coordinator action, pause
+state), never raw transcripts. Reconciliation is idempotent: actions already
+proved durable are not repeated.
 
 A blocked role return has kind `agenticloop.role-return`, schema version `5`,
 and separately declares required fields plus constant `disposition: blocked`.
@@ -2360,6 +2409,7 @@ may coexist.
 | Current, non-binding project-wide operating fact | Project Operating Facts |
 | Binding convention, policy, architecture, security, quality, or release rule | Proposed/accepted decision record |
 | Repeated Agentic Loop process friction | Human-invoked retrospective or improvement artifact |
+| Downstream evidence of a toolkit defect | Keep the local Project Operating Fact, then optionally export a sanitized toolkit proposal under human confirmation |
 | Personal preference spanning repositories | Host memory outside Agentic Loop |
 
 Keep detailed runbooks in normal project documentation; a fact may link to one
@@ -2367,6 +2417,18 @@ instead of duplicating it. Promote a fact to a decision record when it
 constrains future implementation, architecture, security, quality, release
 behavior, or accepted project conventions – see [[decision-capture]]. A project
 fact may cite a decision, but a fact is not approval.
+
+The downstream-to-toolkit route is explicit and proposal-only:
+`improvement propose-toolkit-escalation --input <closed-facts.json>
+--toolkit-repository <identity> --output <target-relative.json> --yes`. Its
+closed facts are version, command, diagnostic codes, affected toolkit surface,
+durable references, and a reproduction outline. It excludes credentials, raw
+transcripts, private product content, local paths, and session stores. The
+target identity is recorded as operator-asserted external evidence, not locally
+authenticated. The receiving toolkit repository recreates or imports the
+proposal under its own durable evidence and review; the downstream command never
+mutates it. Do not invoke this automatically for isolated warnings, and keep
+`loop-retrospective` human-invoked.
 
 ### Ownership and updates
 

@@ -77,6 +77,24 @@ function safeTaskId(taskId) {
   return String(taskId ?? '').trim();
 }
 
+function decompositionRegenerationCommand(target, plan) {
+  const sourceRef = plan?.proposed?.decomposition?.sourceRef;
+  if (!sourceRef || !isSafeRelativePath(sourceRef)) return null;
+  let source;
+  try { source = JSON.parse(readFileSync(join(target, sourceRef), 'utf8')); } catch { return null; }
+  const scan = source?.scan;
+  const workUnit = scan?.workUnit?.id;
+  const baseIdentity = scan?.readinessContext?.base?.identity;
+  const dependencyRef = scan?.readinessContext?.dependencies?.sourceRef ??
+    scan?.readinessContext?.dependenciesByTask
+      ?.find(entry => entry.taskId === plan.taskId)?.evidence?.sourceRef;
+  const head = plan?.proposed?.repository?.head;
+  if (!workUnit || !baseIdentity || !dependencyRef || !head) return null;
+  const base = baseIdentity.startsWith('git-tree:') ? baseIdentity.slice('git-tree:'.length) : baseIdentity;
+  return `npx agenticloop task prepare-decomposition ${plan.taskId} --work-unit ${workUnit} ` +
+    `--source-ref ${sourceRef} --source-revision git-commit:${head} --base ${base} --dependencies ${dependencyRef}`;
+}
+
 function isSafeRelativePath(value) {
   if (typeof value !== 'string' || value.length === 0) return false;
   if (value.includes('\\') || value.includes('\0') || value.startsWith('/')) return false;
@@ -108,7 +126,7 @@ export function validateHandoffRefreshMaintainerTrailer(taskId, message = null) 
   const attribution = evaluateCommitAttribution({
     taskId,
     role: 'maintainer',
-    message: message ?? `refresh derived evidence\n\n${trailer}`,
+    message: message ?? `chore(${taskId}): refresh handoff receipt\n\n${trailer}`,
   });
   return {
     ok: attribution.ok,
@@ -420,7 +438,9 @@ function attemptDependencySnapshotRefresh({ target, preflight, backend = 'files'
   } catch {
     return { ok: false, skipped: true, reason: 'decomposition source is unreadable', expectedDigest: null, content: null, path: null, snapshot: null };
   }
-  const depSourceRef = decompositionSource?.scan?.readinessContext?.dependencies?.sourceRef;
+  const depSourceRef = decompositionSource?.scan?.readinessContext?.dependencies?.sourceRef ??
+    decompositionSource?.scan?.readinessContext?.dependenciesByTask
+      ?.find(entry => entry.taskId === taskId)?.evidence?.sourceRef;
   if (!depSourceRef) {
     return { ok: false, skipped: true, reason: 'no dependency snapshot sourceRef in decomposition readinessContext', expectedDigest: null, content: null, path: null, snapshot: null };
   }
@@ -544,7 +564,9 @@ function attemptDecompositionRegeneration({
   if (!scan?.workUnit || !scan?.inventory || !scan?.decomposition) {
     return { ok: false, skipped: false, reason: 'decomposition scan is missing required fields', expectedDigest: null, content: null, path: null };
   }
-  const depSourceRef = scan?.readinessContext?.dependencies?.sourceRef ?? null;
+  const depSourceRef = scan?.readinessContext?.dependencies?.sourceRef ??
+    scan?.readinessContext?.dependenciesByTask
+      ?.find(entry => entry.taskId === taskId)?.evidence?.sourceRef ?? null;
   let depEvidence = null;
   let depStatusMapValue = {};
   if (depSourceRef) {
@@ -636,6 +658,29 @@ function attemptDecompositionRegeneration({
     base: baseEvidence,
     dependencies: depEvidence,
   };
+  let dependenciesByTask = null;
+  if (Array.isArray(scan?.readinessContext?.dependenciesByTask)) {
+    dependenciesByTask = {};
+    for (const entry of scan.readinessContext.dependenciesByTask) {
+      if (!entry.evidence) {
+        dependenciesByTask[entry.taskId] = { evidence: null, statuses: {} };
+        continue;
+      }
+      const sourceRef = entry.evidence.sourceRef;
+      let bytes;
+      try {
+        bytes = refreshedSnapshotContent !== null && refreshedSnapshotPath === sourceRef
+          ? refreshedSnapshotContent
+          : readFileSync(join(target, sourceRef), 'utf8');
+      } catch {
+        return { ok: false, skipped: false, reason: `dependency snapshot unavailable at ${sourceRef}`, expectedDigest: null, content: null, path: null };
+      }
+      const parsed = parseDependencySnapshot(bytes, { sourceRef });
+      if (!parsed.ok) return { ok: false, skipped: false, reason: `dependency snapshot parse failed for ${entry.taskId}: ${parsed.errors.join('; ')}`, expectedDigest: null, content: null, path: null };
+      dependenciesByTask[entry.taskId] = { evidence: parsed.evidence, statuses: dependencyStatusMap(parsed.evidence) };
+    }
+    readinessContext.dependenciesByTask = dependenciesByTask;
+  }
   let scanned;
   try {
     scanned = evaluateParallelScan({
@@ -652,6 +697,7 @@ function attemptDecompositionRegeneration({
       freshnessPolicy: { maxAgeSeconds: derivedMaxAgeSeconds },
       basePaths,
       dependencies: depStatusMapValue,
+      ...(dependenciesByTask ? { dependenciesByTask } : {}),
       readinessContext,
       rescanTrigger: scan.rescanTrigger ?? 'derived-evidence refresh',
     });
@@ -1067,16 +1113,30 @@ export function applyHandoffEvidenceRefresh({ target, plan, preflight }) {
       };
     }
   }
+  const regenerationCommand = decompositionRegenerationCommand(target, plan);
   return {
-    ok: true,
+    ok: false,
     evidenceState: 'current',
-    disposition: 'proceed',
-    errors: [],
+    disposition: 'written_pending_commit',
+    errors: ['[handoff.refresh.pending_commit] refresh artifacts were written but are not committed; clean-checkout preflight must refuse this state'],
     changedFiles: applied.writtenFiles,
     receipt: written,
+    evidenceCalculated: true,
+    receiptState: 'written_uncommitted',
+    decompositionRegenerated: plan.categories.some(item =>
+      item.category === 'decomposition_provenance' && item.action === 'refreshed'),
+    decompositionStale: plan.categories.some(item =>
+      item.category === 'decomposition_provenance' && item.action === 'requires_maintainer_regeneration'),
     authority: plan.authority,
+    commitSubject: `chore(${plan.taskId}): refresh handoff receipt`,
     maintainerTrailerBlock: handoffRefreshMaintainerTrailerBlock(plan.taskId),
     attributionValidation: validateHandoffRefreshMaintainerTrailer(plan.taskId),
-    firstSafeRepair: null,
+    nextOperation: plan.categories.some(item =>
+      item.category === 'decomposition_provenance' && item.action === 'requires_maintainer_regeneration')
+      ? (regenerationCommand
+        ? `Regenerate decomposition exactly with: ${regenerationCommand}. Then commit every changed file and rerun: npx agenticloop task handoff-preflight ${plan.taskId} --json`
+        : `Decomposition regeneration inputs are incomplete in this plan. Regenerate the handoff-preflight repair plan, then run its exact task prepare-decomposition command before committing and rerunning preflight.`)
+      : `Review and commit exactly these files with the printed subject and trailer block, then rerun: npx agenticloop task handoff-preflight ${plan.taskId} --json`,
+    firstSafeRepair: 'Do not dispatch from this state: the written receipt is uncommitted and clean-checkout preflight must refuse it.',
   };
 }

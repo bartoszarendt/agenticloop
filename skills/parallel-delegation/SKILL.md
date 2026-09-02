@@ -114,12 +114,21 @@ The durable scan result contains:
 ```
 
 The executable contract for this shape is `agenticloop.parallel-scan` schema
-version `1` (see the parallel-scan provenance section of
+version `3` (see the parallel-scan provenance section of
 `agenticloop/AGENTIC_LOOP.md`). Every discovered inventory member is accounted
 for exactly once, as ready or as an explicit exclusion with a stable reason
 code. Exclusion reason codes are `record_unreadable`, `record_malformed`,
 `identity_ambiguous`, `lifecycle_terminal`, `dependency_unresolved`, and
 `not_ready`.
+
+Schema version 3 binds a canonical dependency context per inventory task. Each
+declared dependency is resolved from that task's committed snapshot or from the
+authoritative carrier identity/status in the same inventory. External
+dependencies require explicit committed evidence. The complete per-task context
+is scan-digest and freshness bound, so changing any member's relevant evidence
+stales the work-unit scan. Version 2 scans used the initiating task's map for
+every member and must be regenerated; single-task version 3 scans retain the
+same CLI workflow.
 
 Inventory completeness is derived from the authoritative enumerator's typed
 receipt, never declared. An unreadable, malformed, duplicate, or ambiguous task
@@ -675,6 +684,14 @@ observable-step counts, milestones, and no-progress budgets for model-followed
 leases. An observable step is a tool call, backend operation, artifact update,
 verification check, status return, or blocker record; private reasoning is not a
 step. A lease is not a hard kill switch for a runaway subagent.
+
+Each prompt selects exactly one cadence: return after every record, or return
+after each explicit batch of N records. Contradictory combinations are invalid.
+Also bind an unexpected-tooling diagnostic budget. At exhaustion the lane
+returns `tooling_failure`, `needs_context`, or the applicable blocked category
+with the failing command, child exit/structured result, attempted repairs, and
+untouched remaining work. A completed host tool envelope without a successful
+child exit is a failure observation, not progress.
 
 Observability requirements scale with lane duration, and do not disqualify all
 parallelism by themselves:

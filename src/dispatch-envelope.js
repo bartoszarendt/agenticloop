@@ -483,6 +483,7 @@ export function prepareDecompositionSource(input = {}, options = {}) {
       freshnessPolicy: input.freshnessPolicy,
       basePaths: input.basePaths,
       dependencies: input.dependencies ?? {},
+      dependenciesByTask: input.dependenciesByTask,
       readinessContext: input.readinessContext,
       rescanTrigger: input.rescanTrigger,
       joinPlans: input.joinPlans ?? {},

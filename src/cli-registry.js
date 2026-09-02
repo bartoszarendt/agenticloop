@@ -539,7 +539,7 @@ export const COMMAND_REGISTRY = {
   },
   task: {
     summary: 'Manage files-backed task records and canonical handoff preparation.',
-    usage: 'agenticloop task <list|show|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|role-start|handoff-preflight|refresh-handoff-evidence|commit-message|attempt-status|abandon-attempt|adopt-historical|readiness-plan|readiness-apply|measure|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|evidence|review-prepare|status> [options]',
+    usage: 'agenticloop task <list|show|lint|new|materialize|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|role-start|handoff-preflight|refresh-handoff-receipt|refresh-handoff-evidence|commit-message|attempt-status|abandon-attempt|adopt-historical|readiness-plan|readiness-apply|measure|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|evidence|review-prepare|status> [options]',
     subcommands: {
       list: {
         summary: 'List task records.',
@@ -559,12 +559,15 @@ export const COMMAND_REGISTRY = {
       },
       lint: {
         summary: 'Lint task records.',
-        usage: 'agenticloop task lint [<task-id>] [--expect-task-digest <digest>] [--json] [--target <dir>]',
+        usage: 'agenticloop task lint [<task-id>] [--expect-task-digest <digest>] [--base <ref> | --base-paths <path>] [--dependencies <path>] [--json] [--target <dir>]',
         receiptRevalidation: 'read-only',
         positionals: [{ name: 'task-id', required: false }],
         options: [
           targetOption(),
           opt('expect-task-digest', 'string', 'Exact SHA-256 digest the named task record must still hold. Read-only.'),
+          opt('base', 'string', 'Optional exact authoring-readiness base ref; requires a named task and --dependencies.'),
+          opt('base-paths', 'string', 'Optional exact authoring-readiness base inventory; requires a named task and --dependencies.'),
+          opt('dependencies', 'string', 'Optional exact committed dependency snapshot for shared authoring-readiness diagnostics.'),
           jsonOption,
         ],
       },
@@ -581,19 +584,34 @@ export const COMMAND_REGISTRY = {
           jsonOption,
         ],
       },
-      'readiness-plan': {
-        summary: 'Report the complete ordered readiness sequence for one task. Read-only; writes nothing.',
-        usage: 'agenticloop task readiness-plan <id> [--actor <git-author>] [--authority <kind:reference>] [--work-unit <id>] [--base <ref> | --base-paths <path>] [--dependencies <path>] [--max-age-seconds <n>] [--route <route>] [--json] [--target <dir>]',
-        receiptRevalidation: 'read-only',
+      materialize: {
+        summary: 'Deterministically materialize one canonical draft task from one unambiguous source work package plus Maintainer-owned judgment.',
+        usage: 'agenticloop task materialize <id> --source <plan.json> --package <package-id> --judgment <judgment.json> --yes [--json] [--target <dir>]',
         positionals: [{ name: 'id', required: true }],
         options: [
           targetOption(),
+          opt('source', 'string', 'Target-relative source plan JSON with sourceRevision and workPackages.'),
+          opt('package', 'string', 'Exact work-package id; ambiguous or missing selection is refused.'),
+          opt('judgment', 'string', 'Target-relative Maintainer judgment JSON for scope, state, files, parallel safety, notes, criteria, and checks.'),
+          yesOption,
+          jsonOption,
+        ],
+      },
+      'readiness-plan': {
+        summary: 'Report the complete ordered readiness sequence for one task or one bounded work-unit task set. Read-only; writes nothing.',
+        usage: 'agenticloop task readiness-plan (<id> | --tasks <first-id> [more-id ...]) [--actor <git-author>] [--authority <kind:reference>] [--work-unit <id>] [--base <ref> | --base-paths <path>] [--dependencies <path> | --dependencies-by-task <map.json>] [--max-age-seconds <n>] [--route <route>] [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only',
+        positionals: [{ name: 'id', required: false, variadic: true }],
+        options: [
+          targetOption(),
+          opt('tasks', 'string', 'Start an explicit bounded task set; subsequent task ids are operands and must be in canonical lexical order.'),
           opt('actor', 'string', 'Expected committed Git author. Required for an applicable plan; never fabricated.'),
           opt('authority', 'string', 'Durable authorization reference as <kind>:<reference>. Required for an applicable plan; never fabricated.'),
           opt('work-unit', 'string', 'Durable work-unit identity such as milestone:M2. Required for an applicable plan; a per-task fallback is refused.'),
           opt('base', 'string', 'Base ref resolved to its exact immutable tree identity. Mutually exclusive with --base-paths.'),
           opt('base-paths', 'string', 'Target-relative JSON path inventory used as base evidence. Mutually exclusive with --base.'),
           opt('dependencies', 'string', 'Exact committed Maintainer-attributed dependency-status snapshot. Required for an applicable plan.'),
+          opt('dependencies-by-task', 'string', 'Target-relative JSON object mapping each selected task id to its exact committed dependency snapshot.'),
           opt('max-age-seconds', 'string', 'Override the decomposition freshness policy bound by the plan.'),
           opt('route', 'string', 'Decomposition route bound by the plan. Defaults to serial.'),
           opt('rescan-trigger', 'string', 'Override the semantic rescan trigger bound by the plan.'),
@@ -601,10 +619,10 @@ export const COMMAND_REGISTRY = {
         ],
       },
       'readiness-apply': {
-        summary: 'Settle one reviewed executable readiness plan as a single transaction and at most one Maintainer-attributed commit. Never activates.',
-        usage: 'agenticloop task readiness-apply <id> --plan <path> (--dry-run | --yes) [--json] [--target <dir>]',
+        summary: 'Settle one reviewed task or work-unit readiness plan as a single transaction and at most one Maintainer-attributed commit. Never activates.',
+        usage: 'agenticloop task readiness-apply [<compatible-id>] --plan <path> (--dry-run | --yes) [--json] [--target <dir>]',
         receiptRevalidation: 'read-only-before-explicit-apply',
-        positionals: [{ name: 'id', required: true }],
+        positionals: [{ name: 'id', required: false }],
         options: [
           targetOption(),
           opt('plan', 'string', 'Target-relative executable readiness plan JSON produced by task readiness-plan. Required.'),
@@ -789,8 +807,15 @@ export const COMMAND_REGISTRY = {
         options: [targetOption(), opt('host', 'string', 'Canonical generated host identity for host-role capability resolution. Required when multiple adapter hosts are configured.'), hostTrustStoreOption, opt('return-adapter', 'string', 'Exact authenticated protected-boundary adapter to bind for host role-return receipts. Required when several eligible adapters exist; hardened mode requires one.'), opt('repair-plan', 'string', 'Write a bounded derived-evidence refresh plan to this target-relative path.'), opt('output', 'string', 'Write the preflight result JSON to this target-relative path. Atomic write; directory is created if needed.'), jsonOption],
       },
       'refresh-handoff-evidence': {
-        summary: 'Apply one current, digest-bound refresh plan for derived handoff evidence only.',
+        summary: 'Compatibility alias for refresh-handoff-receipt.',
         usage: 'agenticloop task refresh-handoff-evidence <id> --plan <path> --yes [--host-trust-store <expected-path>] [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only-before-explicit-apply',
+        positionals: [{ name: 'id', required: true }],
+        options: [targetOption(), hostTrustStoreOption, opt('plan', 'string', 'Target-relative handoff refresh plan JSON. Required.'), yesOption, jsonOption],
+      },
+      'refresh-handoff-receipt': {
+        summary: 'Write one current, digest-bound handoff receipt and report its pending-commit state.',
+        usage: 'agenticloop task refresh-handoff-receipt <id> --plan <path> --yes [--host-trust-store <expected-path>] [--json] [--target <dir>]',
         receiptRevalidation: 'read-only-before-explicit-apply',
         positionals: [{ name: 'id', required: true }],
         options: [targetOption(), hostTrustStoreOption, opt('plan', 'string', 'Target-relative handoff refresh plan JSON. Required.'), yesOption, jsonOption],
@@ -1059,8 +1084,8 @@ export const COMMAND_REGISTRY = {
     },
   },
   improvement: {
-    summary: 'Bounded improvement-proposal capture (new, lint, status).',
-    usage: 'agenticloop improvement <new|lint|status> [options]',
+    summary: 'Bounded improvement-proposal capture and sanitized toolkit escalation export.',
+    usage: 'agenticloop improvement <new|lint|status|propose-toolkit-escalation> [options]',
     subcommands: {
       new: {
         summary: 'Create one validated improvement proposal.',
@@ -1088,6 +1113,18 @@ export const COMMAND_REGISTRY = {
         summary: 'List improvement proposals and their statuses.',
         usage: 'agenticloop improvement status [--json] [--target <dir>]',
         options: [targetOption(), jsonOption],
+      },
+      'propose-toolkit-escalation': {
+        summary: 'Export a closed sanitized proposal for human-controlled transfer to a toolkit repository; never imports it.',
+        usage: 'agenticloop improvement propose-toolkit-escalation --input <facts.json> --toolkit-repository <identity> --output <target-relative.json> --yes [--json] [--target <dir>]',
+        options: [
+          targetOption(),
+          opt('input', 'string', 'Target-relative closed facts JSON to sanitize.'),
+          opt('toolkit-repository', 'string', 'Operator-asserted receiving toolkit repository identity.'),
+          opt('output', 'string', 'Target-relative proposal output. Outside-target writes are refused.'),
+          yesOption,
+          jsonOption,
+        ],
       },
     },
   },

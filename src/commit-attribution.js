@@ -7,7 +7,7 @@ import { getWorkflowRole } from './workflow-roles.js';
 import { isGitObjectId } from './git-oid.js';
 
 const TRAILER_LINE_RE = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\s*:\s*(.+?)\s*$/;
-const NAMED_TRAILER_RE = /^(Task|Agent)\s*:\s*(.+?)\s*$/i;
+const NAMED_TRAILER_RE = /^(Task|Tasks|Work-Unit|Agent)\s*:\s*(.+?)\s*$/i;
 
 export const ATTRIBUTION_REPAIR_RECORD_KIND = 'agenticloop.attribution-repair';
 
@@ -73,6 +73,32 @@ export function renderCommitMessage({ taskId, role, subject, body = null } = {})
   if (errors.length > 0) return { ok: false, errors, message: null };
   const paragraphs = [subjectLine, ...(bodyText ? [bodyText] : []), `Task: ${task}\nAgent: ${workflowRole}`];
   return { ok: true, errors: [], message: `${paragraphs.join('\n\n')}\n` };
+}
+
+/** Render the canonical attribution block for one bounded work-unit mutation. */
+export function renderWorkUnitCommitMessage({ workUnitId, taskIds, role = 'maintainer', subject, body = null } = {}) {
+  const errors = [];
+  const workUnit = String(workUnitId ?? '').trim();
+  const tasks = Array.isArray(taskIds) ? taskIds.map(value => String(value).trim()) : [];
+  const canonicalTasks = [...new Set(tasks)].sort();
+  const workflowRole = String(role ?? '').trim();
+  const subjectLine = String(subject ?? '').trim();
+  const bodyText = body === null || body === undefined ? '' : String(body).replace(/\r\n/g, '\n').trim();
+  if (!workUnit) errors.push('a work-unit commit message requires the exact work-unit id');
+  if (tasks.length === 0 || tasks.some(value => !value)) errors.push('a work-unit commit message requires a non-empty task id set');
+  if (canonicalTasks.length !== tasks.length) errors.push('a work-unit commit message cannot contain duplicate task ids');
+  if (tasks.join('\n') !== canonicalTasks.join('\n')) errors.push('work-unit task ids must be in canonical lexical order');
+  if (!subjectLine || subjectLine.includes('\n')) errors.push('a work-unit commit message requires a single-line subject');
+  if (workflowRole !== workflowRole.toLowerCase()) errors.push(`workflow role identity must be lowercase; received '${workflowRole}'`);
+  try { getWorkflowRole(workflowRole.toLowerCase()); } catch {
+    errors.push(`unknown workflow role '${workflowRole}'; expected a role from the canonical workflow-role registry`);
+  }
+  if (bodyText.split('\n').some(line => NAMED_TRAILER_RE.test(line.trim()))) {
+    errors.push('a commit message body cannot contain its own Work-Unit, Tasks, Task, or Agent trailer lines');
+  }
+  if (errors.length > 0) return { ok: false, errors, message: null };
+  const block = `Work-Unit: ${workUnit}\nTasks: ${tasks.join(', ')}\nAgent: ${workflowRole}`;
+  return { ok: true, errors: [], message: `${[subjectLine, ...(bodyText ? [bodyText] : []), block].join('\n\n')}\n` };
 }
 
 /** Validate the durable record required after an exceptional metadata rewrite. */
@@ -229,6 +255,51 @@ export function evaluateCommitAttribution({ message, taskId, role = 'engineer' }
         `Or author the whole message with the producer: ${commitMessageProducerHint(task)}\n` +
         `Then create or amend the commit explicitly as ${expectedRole}. This command never amends or publishes.`
       : null,
+  };
+}
+
+/** Validate exact work-unit and task-set attribution without accepting a Task trailer fallback. */
+export function evaluateWorkUnitCommitAttribution({ message, workUnitId, taskIds, role = 'maintainer' } = {}) {
+  const errors = [];
+  const workUnit = String(workUnitId ?? '').trim();
+  const expectedTasks = Array.isArray(taskIds) ? taskIds.map(value => String(value).trim()) : [];
+  const canonicalTasks = [...new Set(expectedTasks)].sort();
+  const suppliedRole = String(role ?? '').trim();
+  const expectedRole = suppliedRole.toLowerCase();
+  if (!workUnit) errors.push('work-unit id is required for commit attribution');
+  if (expectedTasks.length === 0 || expectedTasks.some(value => !value)) errors.push('a non-empty task id set is required for work-unit attribution');
+  if (canonicalTasks.length !== expectedTasks.length) errors.push('expected work-unit task ids contain duplicates');
+  if (canonicalTasks.join('\n') !== expectedTasks.join('\n')) errors.push('expected work-unit task ids are not in canonical lexical order');
+  if (suppliedRole !== expectedRole) errors.push(`workflow role identity must be lowercase; received '${suppliedRole}'`);
+  try { getWorkflowRole(expectedRole); } catch {
+    errors.push(`unknown workflow role '${expectedRole}'; expected a role from the canonical workflow-role registry`);
+  }
+  const { block, named, misplaced } = parseFinalTrailerBlock(message);
+  const workUnits = named.filter(entry => entry.name === 'work-unit').map(entry => entry.value);
+  const taskSets = named.filter(entry => entry.name === 'tasks').map(entry => entry.value);
+  const singularTasks = named.filter(entry => entry.name === 'task').map(entry => entry.value);
+  const agents = named.filter(entry => entry.name === 'agent').map(entry => entry.value);
+  if (misplaced.length) errors.push(`misplaced attribution trailer(s) appear outside the final contiguous trailer block: ${[...new Set(misplaced)].join(', ')}`);
+  if (!block) errors.push('missing final contiguous work-unit trailer block');
+  if (workUnits.length !== 1) errors.push(workUnits.length === 0 ? 'missing Work-Unit trailer' : 'duplicate Work-Unit trailers must be removed');
+  if (taskSets.length !== 1) errors.push(taskSets.length === 0 ? 'missing Tasks trailer' : 'duplicate Tasks trailers must be removed');
+  if (singularTasks.length > 0) errors.push('a work-unit commit must not contain a singular Task trailer');
+  if (agents.length !== 1) errors.push(agents.length === 0 ? `missing Agent trailer; expected 'Agent: ${expectedRole}'` : 'duplicate Agent trailers must be removed');
+  if (workUnits.length === 1 && workUnits[0] !== workUnit) errors.push(`unrelated Work-Unit trailer '${workUnits[0]}'; expected '${workUnit}'`);
+  if (agents.length === 1 && agents[0] !== expectedRole) errors.push(`wrong Agent trailer '${agents[0]}'; expected '${expectedRole}'`);
+  if (taskSets.length === 1) {
+    const actual = taskSets[0].split(',').map(value => value.trim()).filter(Boolean);
+    if (new Set(actual).size !== actual.length) errors.push('duplicate task ids in the Tasks trailer must be removed');
+    if (actual.length !== expectedTasks.length || actual.some((value, index) => value !== expectedTasks[index])) {
+      errors.push(`Tasks trailer must equal the exact canonical task order '${expectedTasks.join(', ')}'; received '${actual.join(', ')}'`);
+    }
+  }
+  return {
+    schemaVersion: 1,
+    ok: errors.length === 0,
+    errors,
+    warnings: [],
+    diagnostics: errors.map(message => createDiagnostic({ code: 'attribution.work_unit', message })),
   };
 }
 

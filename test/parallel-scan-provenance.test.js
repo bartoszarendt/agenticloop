@@ -128,7 +128,7 @@ const BASE_EVIDENCE = Object.freeze({
 });
 
 /** Canonical dependency evidence built through the existing snapshot parser. */
-function dependencyEvidence(statuses = {}, { observedAt = OBSERVED_AT, now = NOW } = {}) {
+function dependencyEvidence(statuses = {}, { observedAt = OBSERVED_AT, now = NOW, sourceRef = 'dependencies.json' } = {}) {
   const parsed = parseDependencySnapshot(JSON.stringify({
     kind: 'agenticloop.dependency-snapshot',
     schemaVersion: 1,
@@ -136,16 +136,16 @@ function dependencyEvidence(statuses = {}, { observedAt = OBSERVED_AT, now = NOW
     observedAt,
     freshnessPolicy: { maxAgeSeconds: 3600 },
     statuses,
-  }), { sourceRef: 'dependencies.json', now });
+  }), { sourceRef, now });
   assert.equal(parsed.ok, true, parsed.errors?.join('\n'));
   return parsed.evidence;
 }
 
 /** Re-derive the bound readiness-context digest after editing the context. */
 function rehashReadinessContext(scan) {
-  const { base, dependencies, observation } = scan.readinessContext;
+  const { base, dependencies, dependenciesByTask, observation } = scan.readinessContext;
   scan.readinessContext.digest =
-    `sha256:${PARALLEL_SCAN_READINESS_DIGEST_DOMAIN}:${canonicalSha256({ base, dependencies, observation })}`;
+    `sha256:${PARALLEL_SCAN_READINESS_DIGEST_DOMAIN}:${canonicalSha256({ base, dependencies, dependenciesByTask, observation })}`;
   return scan;
 }
 
@@ -208,6 +208,7 @@ function scanInput({
   inventory,
   declaredCompleteness = 'complete',
   dependencies = {},
+  dependenciesByTask,
   joinPlans = {},
   laneArtifacts = {},
   observedAt = OBSERVED_AT,
@@ -229,9 +230,11 @@ function scanInput({
     freshnessPolicy: { maxAgeSeconds },
     basePaths: BASE_PATHS,
     dependencies,
+    dependenciesByTask,
     readinessContext: readinessContext ?? {
       base: BASE_EVIDENCE,
       dependencies: dependencyEvidence(dependencies),
+      ...(dependenciesByTask ? { dependenciesByTask } : {}),
     },
     joinPlans,
     laneArtifacts,
@@ -1384,6 +1387,77 @@ describe('bound readiness context', () => {
 
     const dropped = validateParallelScanReadinessBinding(scan, { ...current, dependencies: null });
     assert.equal(dropped.ok, false);
+  });
+});
+
+describe('work-unit dependency evidence is task-specific and canonical', () => {
+  function siblingDependencyContext(order = ['T-001', 'T-002', 'T-003']) {
+    const entries = {
+      'T-001': {
+        statuses: { 'D-001': 'accepted' },
+        evidence: dependencyEvidence({ 'D-001': 'accepted' }, { sourceRef: 'dependencies/T-001.json' }),
+      },
+      'T-002': {
+        statuses: { 'D-002': 'closed' },
+        evidence: dependencyEvidence({ 'D-002': 'closed' }, { sourceRef: 'dependencies/T-002.json' }),
+      },
+      'T-003': { statuses: {}, evidence: null },
+    };
+    return Object.fromEntries(order.map(id => [id, entries[id]]));
+  }
+
+  function siblingInventory(order = ['T-001', 'T-002', 'T-003']) {
+    const tasks = {
+      'T-001': { taskId: 'T-001', ownedPaths: ['src/a/**'], dependsOn: ['D-001'] },
+      'T-002': { taskId: 'T-002', ownedPaths: ['src/b/**'], dependsOn: ['D-002'] },
+      'T-003': { taskId: 'T-003', ownedPaths: ['src/c/**'] },
+    };
+    return filesInventory(order.map(id => tasks[id]));
+  }
+
+  it('produces one ready set and scan identity from every initiating-task ordering', () => {
+    const first = evaluateParallelScan(scanInput({
+      inventory: siblingInventory(),
+      dependenciesByTask: siblingDependencyContext(),
+      readinessContext: { base: BASE_EVIDENCE, dependencies: null, dependenciesByTask: siblingDependencyContext() },
+    }), { now: NOW });
+    const second = evaluateParallelScan(scanInput({
+      inventory: siblingInventory(['T-003', 'T-001', 'T-002']),
+      dependenciesByTask: siblingDependencyContext(['T-002', 'T-003', 'T-001']),
+      readinessContext: { base: BASE_EVIDENCE, dependencies: null, dependenciesByTask: siblingDependencyContext(['T-003', 'T-001', 'T-002']) },
+    }), { now: NOW });
+    assert.equal(first.ok, true, first.result.errors.join('\n'));
+    assert.equal(second.ok, true, second.result.errors.join('\n'));
+    assert.deepEqual(first.scan.readyTaskIds, ['T-001', 'T-002', 'T-003']);
+    assert.deepEqual(second.scan.readyTaskIds, first.scan.readyTaskIds);
+    assert.deepEqual(second.scan.excluded, first.scan.excluded);
+    assert.deepEqual(second.scan.eligibility, first.scan.eligibility);
+    assert.deepEqual(second.scan.candidatePairs, first.scan.candidatePairs);
+    assert.equal(second.scan.conclusion, first.scan.conclusion);
+    assert.equal(second.scan.digest, first.scan.digest);
+  });
+
+  it('does not borrow a sibling snapshot and invalidates one changed task evidence binding', () => {
+    const byTask = siblingDependencyContext();
+    const scanned = evaluateParallelScan(scanInput({
+      inventory: siblingInventory(),
+      dependenciesByTask: byTask,
+      readinessContext: { base: BASE_EVIDENCE, dependencies: null, dependenciesByTask: byTask },
+    }), { now: NOW });
+    assert.equal(scanned.ok, true, scanned.result.errors.join('\n'));
+    assert.equal(scanned.scan.excluded.some(item => item.reasonCode === 'dependency_unresolved'), false);
+
+    const changed = siblingDependencyContext();
+    changed['T-002'] = {
+      statuses: { 'D-002': 'open' },
+      evidence: dependencyEvidence({ 'D-002': 'open' }, { sourceRef: 'dependencies/T-002.json' }),
+    };
+    const rebound = validateParallelScanReadinessBinding(scanned.scan, {
+      base: BASE_EVIDENCE,
+      dependenciesByTask: changed,
+    });
+    assert.equal(rebound.ok, false);
+    assert.match(rebound.errors.join('\n'), /changed after the scan for 'T-002'/);
   });
 });
 

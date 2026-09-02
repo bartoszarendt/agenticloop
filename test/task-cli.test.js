@@ -260,6 +260,62 @@ Implemented the scoped task.
 }
 
 describe('task CLI', () => {
+  it('materializes one unambiguous work package with bound source revision and digest', async () => {
+    const target = makeTarget('materialize');
+    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
+    const sourceRef = '.agenticloop/tmp/source.json';
+    const judgmentRef = '.agenticloop/tmp/judgment.json';
+    writeFileSync(join(target, sourceRef), `${JSON.stringify({
+      sourceRevision: 'git-commit:abc123',
+      workPackages: [{
+        id: 'WP-2', title: 'Materialized task',
+        sourceTraceability: ['Plan section 2'],
+        plannerContract: ['Produce the bounded output.'],
+        lockedDecisionIds: ['D-004'],
+        groupingMetadata: { milestone: 'M2' },
+      }],
+    })}\n`, 'utf8');
+    writeFileSync(join(target, judgmentRef), `${JSON.stringify({
+      currentState: 'No output exists.',
+      scope: ['Create the bounded output.'], outOfScope: ['No release.'],
+      acceptanceCriteria: ['The output is observable.'],
+      expectedFiles: ['src/output.js'],
+      implementationNotes: ['Keep the change local.'],
+      requiredChecks: ['command: `npm test`'],
+      parallelSafety: [
+        'Owned paths: src/output.js', 'Structured ownership: none', 'Shared mutations: none',
+        'Shared or generated files: none', 'Test/fixture/snapshot/shared-helper surfaces: none',
+        'Schema/API/lockfile risk: none', 'Backend objects owned: T-001', 'Dependency edges: none',
+        'Decision scope: D-004', 'Shared design questions: none', 'Shared assumptions/invariants: none',
+        'Discoveries that could affect other tasks: none', 'Parallel eligibility: eligible',
+        'Knowledge coupling: independent', 'Reason: disjoint output',
+      ],
+    })}\n`, 'utf8');
+    const result = await run([
+      'task', 'materialize', 'T-001', '--source', sourceRef, '--package', 'WP-2',
+      '--judgment', judgmentRef, '--yes', '--json', '--target', target,
+    ]);
+    assertOk(result);
+    const receipt = JSON.parse(result.stdout);
+    assert.equal(receipt.source_revision, 'git-commit:abc123');
+    assert.match(receipt.source_digest, /^sha256:[0-9a-f]{64}$/);
+    const body = readFileSync(taskPath(target, 'T-001'), 'utf8');
+    assert.match(body, /Work package: `WP-2`/);
+    assert.match(body, /Locked decision IDs: D-004/);
+    const lint = await run(['task', 'lint', 'T-001', '--target', target]);
+    assertOk(lint);
+
+    const ambiguousSource = JSON.parse(readFileSync(join(target, sourceRef), 'utf8'));
+    ambiguousSource.workPackages.push({ ...ambiguousSource.workPackages[0] });
+    writeFileSync(join(target, sourceRef), `${JSON.stringify(ambiguousSource)}\n`, 'utf8');
+    const refused = await run([
+      'task', 'materialize', 'T-002', '--source', sourceRef, '--package', 'WP-2',
+      '--judgment', judgmentRef, '--yes', '--target', target,
+    ]);
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /ambiguous/);
+  });
+
   it('creates, lists, lints, and refuses an unprepared role start', async () => {
     const target = makeTarget('happy');
 

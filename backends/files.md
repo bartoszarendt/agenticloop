@@ -115,14 +115,18 @@ uncommitted evidence still fails closed and must be committed first.
 
 If its derived observations are stale, write a
 plan with `--repair-plan <path>` and apply it explicitly with
-`task refresh-handoff-evidence <id> --plan <path> --yes`. The refresh writes only
+`task refresh-handoff-receipt <id> --plan <path> --yes`
+(`refresh-handoff-evidence` remains an alias). The refresh writes only
 derived evidence under `.agenticloop/handoffs/derived-evidence/`, the
 decomposition provenance under `.agenticloop/decompositions/`, and at most one
 bound dependency snapshot (the path named by the decomposition's
 `scan.readinessContext.dependencies.sourceRef`); it never touches task contracts,
 activation, human decisions, review dispositions, acceptance, closeout, or
 product files. It refetches after the atomic write and emits the cooperative
-Maintainer `Task:`/`Agent:` trailer block when a durable update is required.
+Maintainer `Task:`/`Agent:` trailer block when a durable update is required. A
+successful write is `written_pending_commit`, not `proceed`; JSON and human
+output name exact changed files, decomposition regenerated/stale state, and the
+next required commit/regeneration and preflight.
 Refreshing the dependency snapshot renews the observation *window*, not the
 observation: the Maintainer-recorded statuses are carried forward unchanged and
 only `observedAt` is re-stamped (resetting the `maxAgeSeconds` window). The
@@ -506,11 +510,17 @@ resolved base tree, the committed dependency snapshot, the observed task
 inventory, and the exact write set with each path's expected predecessor state.
 Without those inputs the plan is display-only and says so.
 
+The plan runs the same authoring readiness evaluator as lint and apply. Warnings
+are digest-bound, visible, and non-blocking; error diagnostics make it
+inapplicable and are reported before derivative bundle validation with exact
+diagnostic and plan-regeneration commands.
+
 `task readiness-apply <id> --plan <path> (--dry-run|--yes)` is the Maintainer-owned
 mutation that consumes one reviewed executable plan. It writes workflow and task
 evidence only - the task-contract history append, the decomposition source, and
 the task carrier - through `src/fs-mutation-kernel.js`, then creates **at most one**
-Maintainer-attributed commit (`settle readiness`, `Task: <id>`, `Agent: maintainer`).
+Maintainer-attributed commit (`chore(<id>): settle readiness`, `Task: <id>`,
+`Agent: maintainer`).
 Mutation without `--yes` is refused, and `--dry-run` and `--yes` are mutually
 exclusive.
 
@@ -551,6 +561,16 @@ message, and its paths are exactly the planned write set) - each form still
 passing current applicability, repository safety, and canonical verification.
 Any later HEAD movement makes the consumed plan `stale`; regenerate it.
 
+An explicit bounded set uses `readiness-plan --tasks <first-id> <more-id...>
+--work-unit <id>` and either a common `--dependencies` snapshot or a closed
+`--dependencies-by-task` map. It validates every task before writing, overlays
+all prospective carrier states into the final inventory, evaluates each member
+with its own dependency evidence, writes all baselines/decompositions/carriers
+through one mutation batch, and creates one
+`chore(<work-unit>): settle readiness` commit with exact `Work-Unit`, canonical
+`Tasks`, and `Agent` trailers. Every decomposition binds the same final scan;
+single-task planning is the specialization of this path.
+
 GitHub apply is unsupported: no equivalent transactional carrier exists there, so
 `readiness-apply` returns the standard typed unsupported-backend result. The files
 and GitHub semantic readiness rules remain aligned.
@@ -564,6 +584,10 @@ Operation mapping:
 
 - Create a non-activated Markdown scaffold: `agenticloop task new <title>
   --scaffold [--id <id>]`.
+- Materialize one canonical draft from closed plan and Maintainer-judgment JSON:
+  `agenticloop task materialize <id> --source <plan.json> --package <id>
+  --judgment <judgment.json> --yes`. It binds source revision/digest and refuses
+  ambiguous package selection.
 - Authorize one or more existing tasks for dispatch: `agenticloop activate
   <task-id...>` or `agenticloop activate --work-unit <id>`. This is the
   universal path; it needs no host plugin, requires an interactive operator
@@ -585,7 +609,7 @@ Operation mapping:
   readiness-plan <id> [--actor <git-author>] [--authority <kind:reference>]
   [--work-unit <id>] [--base <ref>] [--dependencies <path>] [--json]`.
 - Settle readiness in one transaction and one Maintainer commit: `agenticloop
-  task readiness-apply <id> --plan <path> (--dry-run|--yes)`. It never activates.
+  task readiness-apply [<id>] --plan <path> (--dry-run|--yes)`. It never activates.
 - Authorize a contract correction: `agenticloop task authorize-correction <id>
   --expect-prior-digest <digest> --reason <text> --authority <kind:reference>
   --actor <git-author>`, then commit separately.

@@ -41,7 +41,7 @@ import { tmpdir } from 'node:os';
 
 import { git } from './helpers/git-fixture.js';
 import { runCliInProcess } from './helpers/run-cli.js';
-import { taskPath } from './helpers/preflight-fixture.js';
+import { makePreflightTask, taskPath } from './helpers/preflight-fixture.js';
 import { buildReadinessPlan, readinessPlanDigest } from '../src/readiness-plan.js';
 import {
   READINESS_APPLY_DISPOSITIONS,
@@ -51,7 +51,9 @@ import {
   validateExecutableReadinessPlan,
 } from '../src/readiness-apply.js';
 import { createReadinessApplyBindings } from '../src/task-cli.js';
-import { evaluateCommitAttribution } from '../src/commit-attribution.js';
+import { evaluateCommitAttribution, evaluateWorkUnitCommitAttribution } from '../src/commit-attribution.js';
+import { evaluateTaskReadiness } from '../src/task-readiness.js';
+import { normalizeCandidateFailure } from '../src/readiness-candidates.js';
 import {
   ACTOR,
   AUTHORITY,
@@ -108,7 +110,7 @@ describe('one transaction, one commit', () => {
   it('carries the exact Maintainer trailers and the bounded readiness subject', async () => {
     const { target, taskId, result } = await settle('trailers');
     const message = git(target, ['show', '-s', '--format=%B', 'HEAD']);
-    assert.equal(result.commit.subject, 'settle readiness');
+    assert.equal(result.commit.subject, `chore(${taskId}): settle readiness`);
     assert.match(message, new RegExp(`^Task: ${taskId}$`, 'm'));
     assert.match(message, /^Agent: maintainer$/m);
     // The canonical validator is applied inside apply itself; this confirms the
@@ -186,6 +188,170 @@ describe('one transaction, one commit', () => {
     assert.deepEqual(result.changedPaths, [`.agenticloop/tasks/${taskId}.md`]);
     assert.equal(commitCountSince(target, partialHead), 1);
     void baseHead;
+  });
+});
+
+describe('atomic work-unit settlement', () => {
+  it('settles three siblings against one final inventory in one attributed commit', async () => {
+    const { target } = createReadinessTarget(temp, 'work-unit', { taskId: 'T-020' });
+    const taskIds = ['T-020', 'T-021', 'T-022'];
+    for (const taskId of taskIds.slice(1)) {
+      makePreflightTask(target, taskId, { status: 'draft' });
+      writeFileSync(join(target, DEPENDENCY_REF(taskId)), dependencySnapshot(), 'utf8');
+      git(target, ['add', '--', `.agenticloop/tasks/${taskId}.md`, DEPENDENCY_REF(taskId)]);
+      git(target, ['commit', '-m', `author ${taskId}\n\nTask: ${taskId}\nAgent: maintainer`]);
+    }
+    const baseHead = head(target);
+    const dependencyMapRef = '.agenticloop/tmp/work-unit-dependencies.json';
+    writeFileSync(join(target, dependencyMapRef), `${JSON.stringify(Object.fromEntries(
+      taskIds.map(taskId => [taskId, DEPENDENCY_REF(taskId)])
+    ), null, 2)}\n`, 'utf8');
+    const planned = await runCliInProcess([
+      'task', 'readiness-plan', '--tasks', ...taskIds,
+      '--actor', ACTOR, '--authority', AUTHORITY, '--work-unit', WORK_UNIT,
+      '--base', 'HEAD', '--dependencies-by-task', dependencyMapRef,
+      '--json', '--target', target,
+    ]);
+    assert.equal(planned.status, 1, planned.stderr);
+    const plan = JSON.parse(planned.stdout);
+    assert.equal(plan.applicable, true, plan.blockers.join('\n'));
+    assert.deepEqual(plan.taskIds, taskIds);
+    const planRef = '.agenticloop/tmp/work-unit-plan.json';
+    writeFileSync(join(target, planRef), `${JSON.stringify(plan, null, 2)}\n`, 'utf8');
+
+    const tamperedRef = '.agenticloop/tmp/work-unit-plan-tampered.json';
+    writeFileSync(join(target, tamperedRef), `${JSON.stringify({ ...plan, unexpected: true }, null, 2)}\n`, 'utf8');
+    const rejected = await runCliInProcess([
+      'task', 'readiness-apply', '--plan', tamperedRef, '--yes', '--json', '--target', target,
+    ]);
+    assert.equal(rejected.status, 1);
+    assert.equal(JSON.parse(rejected.stdout).mutationDisposition, 'blocked');
+    assert.match(JSON.parse(rejected.stdout).errors.join('\n'), /closed schema/);
+    assert.equal(head(target), baseHead);
+    assert.equal(porcelain(target), '');
+
+    const dryRun = await runCliInProcess([
+      'task', 'readiness-apply', '--plan', planRef, '--dry-run', '--json', '--target', target,
+    ]);
+    assert.equal(dryRun.status, 0, `${dryRun.stderr}\n${dryRun.stdout}`);
+    assert.equal(JSON.parse(dryRun.stdout).mutationDisposition, 'dry_run');
+    assert.equal(head(target), baseHead);
+
+    const applied = await runCliInProcess([
+      'task', 'readiness-apply', '--plan', planRef, '--yes', '--json', '--target', target,
+    ]);
+    const result = JSON.parse(applied.stdout);
+    assert.equal(applied.status, 0, `${applied.stderr}\n${JSON.stringify(result, null, 2)}`);
+    assert.equal(result.mutationDisposition, 'committed');
+    assert.equal(result.commitCount, 1);
+    assert.equal(commitCountSince(target, baseHead), 1);
+    assert.equal(porcelain(target), '');
+    for (const taskId of taskIds) assert.match(taskBody(target, taskId), /^status: agent-ready$/m);
+    const scans = taskIds.map(taskId => JSON.parse(readFileSync(join(target, DECOMPOSITION_REF(taskId)), 'utf8')).scan);
+    assert.equal(new Set(scans.map(scan => scan.scanDigest)).size, 1);
+    assert.equal(new Set(scans.map(scan => scan.inventory.membershipDigest)).size, 1);
+    const message = git(target, ['show', '-s', '--format=%B', 'HEAD']);
+    assert.equal(git(target, ['show', '-s', '--format=%s', 'HEAD']), `chore(${WORK_UNIT}): settle readiness`);
+    assert.equal(evaluateWorkUnitCommitAttribution({ message, workUnitId: WORK_UNIT, taskIds }).ok, true);
+
+    const replay = await runCliInProcess([
+      'task', 'readiness-apply', '--plan', planRef, '--yes', '--json', '--target', target,
+    ]);
+    assert.equal(replay.status, 1);
+    assert.equal(JSON.parse(replay.stdout).mutationDisposition, 'stale');
+    assert.equal(commitCountSince(target, baseHead), 1);
+  });
+
+  it('rejects reordered, duplicate, missing, and unrelated work-unit attribution', () => {
+    const taskIds = ['T-020', 'T-021', 'T-022'];
+    const valid = `chore(${WORK_UNIT}): settle readiness\n\nWork-Unit: ${WORK_UNIT}\nTasks: ${taskIds.join(', ')}\nAgent: maintainer`;
+    assert.equal(evaluateWorkUnitCommitAttribution({ message: valid, workUnitId: WORK_UNIT, taskIds }).ok, true);
+    for (const invalid of [
+      valid.replace('T-020, T-021, T-022', 'T-021, T-020, T-022'),
+      valid.replace('T-020, T-021, T-022', 'T-020, T-021, T-021'),
+      valid.replace('T-020, T-021, T-022', 'T-020, T-021'),
+      valid.replace(`Work-Unit: ${WORK_UNIT}`, 'Work-Unit: milestone:other'),
+    ]) {
+      assert.equal(evaluateWorkUnitCommitAttribution({ message: invalid, workUnitId: WORK_UNIT, taskIds }).ok, false);
+    }
+  });
+});
+
+describe('authoring readiness diagnostics are consistent', () => {
+  function addUnmatchedGlob(target, taskId) {
+    const path = taskPath(target, taskId);
+    const body = readFileSync(path, 'utf8').replace(
+      '  - "docs/**"\n',
+      '  - "docs/**"\n  - "not-yet-created/**"\n'
+    );
+    writeFileSync(path, body, 'utf8');
+    git(target, ['add', '--', `.agenticloop/tasks/${taskId}.md`]);
+    git(target, ['commit', '-m', `add warning fixture\n\nTask: ${taskId}\nAgent: maintainer`]);
+    return body;
+  }
+
+  it('keeps an unmatched authoring glob visible and non-blocking through dry-run and apply', async () => {
+    const { target, taskId } = createReadinessTarget(temp, 'warning-only');
+    const body = addUnmatchedGlob(target, taskId);
+    const direct = evaluateTaskReadiness({
+      taskBody: body,
+      basePaths: ['src/existing.txt', 'docs/existing.md'],
+      mode: 'authoring',
+      dependencies: {},
+    });
+    assert.equal(direct.ok, true);
+    assert.deepEqual(direct.errors, []);
+    assert.ok(direct.diagnostics.some(item => item.code === 'scope.glob.unmatched' && item.level === 'warning'));
+
+    const linted = await runCliInProcess([
+      'task', 'lint', taskId, '--base', 'HEAD', '--dependencies', DEPENDENCY_REF(taskId),
+      '--json', '--target', target,
+    ]);
+    assert.equal(linted.status, 0, linted.stderr);
+    const lintResult = JSON.parse(linted.stdout)[0];
+    assert.deepEqual(lintResult.errors, []);
+    assert.ok(lintResult.diagnostics.some(item => item.code === 'scope.glob.unmatched' && item.level === 'warning'));
+
+    const { plan, result: planned } = await writePlan(target, taskId);
+    assert.equal(planned.status, 1, planned.stderr);
+    assert.equal(plan.applicable, true, plan.blockers.join('\n'));
+    assert.equal(plan.readiness.ok, true);
+    assert.deepEqual(plan.readiness.errors, []);
+    assert.ok(plan.readiness.diagnostics.some(item => item.code === 'scope.glob.unmatched'));
+
+    const dryRun = receipt(await applyPlan(target, taskId, '--dry-run'));
+    assert.equal(dryRun.mutationDisposition, 'dry_run');
+    assert.ok(dryRun.readiness.diagnostics.some(item => item.code === 'scope.glob.unmatched'));
+    const applied = receipt(await applyPlan(target, taskId, '--yes'));
+    assert.equal(applied.mutationDisposition, 'committed', applied.errors.join('\n'));
+    assert.ok(applied.readiness.diagnostics.some(item => item.code === 'scope.glob.unmatched'));
+  });
+
+  it('turns an empty failed candidate into one stable internal diagnostic', () => {
+    const failed = normalizeCandidateFailure({ ok: false, errors: [] }, 'synthetic_test');
+    assert.deepEqual(failed.errors, ["[readiness.candidate.internal_failure] readiness candidate stage 'synthetic_test' failed without a diagnostic cause"]);
+    assert.equal(failed.diagnostics[0].code, 'readiness.candidate.internal_failure');
+    assert.equal(failed.diagnostics[0].evidence.stage, 'synthetic_test');
+  });
+
+  it('reports a genuine readiness error before any derivative bundle failure', async () => {
+    const { target, taskId } = createReadinessTarget(temp, 'readiness-primary-error');
+    const path = taskPath(target, taskId);
+    writeFileSync(path, readFileSync(path, 'utf8').replace(
+      'allowed_paths:\n',
+      'depends_on:\n  - T-999\nallowed_paths:\n'
+    ), 'utf8');
+    git(target, ['add', '--', `.agenticloop/tasks/${taskId}.md`]);
+    git(target, ['commit', '-m', `add readiness error\n\nTask: ${taskId}\nAgent: maintainer`]);
+    const { plan } = await writePlan(target, taskId);
+    assert.equal(plan.applicable, false);
+    assert.equal(plan.readiness.ok, false);
+    assert.ok(plan.readiness.diagnostics.some(item => item.code === 'dependency.unresolved' && item.level === 'error'));
+    const applied = receipt(await applyPlan(target, taskId));
+    assert.equal(applied.mutationDisposition, 'blocked');
+    assert.ok(applied.errors.some(error => /dependency\.unresolved/.test(error)), applied.errors.join('\n'));
+    assert.doesNotMatch(applied.errors.join('\n'), /bundle/i);
+    assert.equal(porcelain(target), '');
   });
 });
 
@@ -1017,7 +1183,7 @@ describe('rollback is bound to the original ref', () => {
     assert.equal(result.commitCount, 1);
     assert.equal(git(target, ['rev-parse', branch]), result.resultingHead);
     assert.equal(commitCountSince(target, baseHead), 1);
-    assert.match(git(target, ['show', '-s', '--format=%s', branch]), /^settle readiness$/);
+    assert.equal(git(target, ['show', '-s', '--format=%s', branch]), `chore(${taskId}): settle readiness`);
     // The other branch is untouched and still checked out.
     assert.equal(git(target, ['rev-parse', 'other']), otherTip);
     assert.equal(currentBranch(target), 'other');

@@ -53,10 +53,11 @@ import { deepFreeze } from './transition-contract.js';
 
 export const PARALLEL_SCAN_KIND = 'agenticloop.parallel-scan';
 export const LEGACY_PARALLEL_SCAN_SCHEMA_VERSION = 1;
-export const PARALLEL_SCAN_SCHEMA_VERSION = 2;
-export const PARALLEL_SCAN_DIGEST_DOMAIN = 'agenticloop.parallel-scan.v2';
+export const LEGACY_PARALLEL_SCAN_WORK_UNIT_SCHEMA_VERSION = 2;
+export const PARALLEL_SCAN_SCHEMA_VERSION = 3;
+export const PARALLEL_SCAN_DIGEST_DOMAIN = 'agenticloop.parallel-scan.v3';
 export const PARALLEL_SCAN_SEMANTIC_DIGEST_DOMAIN = 'agenticloop.parallel-scan-semantics.v1';
-export const PARALLEL_SCAN_READINESS_DIGEST_DOMAIN = 'agenticloop.parallel-scan-readiness.v2';
+export const PARALLEL_SCAN_READINESS_DIGEST_DOMAIN = 'agenticloop.parallel-scan-readiness.v3';
 export const PARALLEL_SCAN_COMMAND = 'parallel scan';
 
 /**
@@ -201,7 +202,7 @@ const INVENTORY_MEMBER_FIELDS = Object.freeze(['taskId', 'carrier', 'digest', 'r
 const DECOMPOSITION_FIELDS = Object.freeze([
   'source', 'sourceRef', 'revision', 'attribution', 'declaredCompleteness', 'state',
 ]);
-const READINESS_CONTEXT_FIELDS = Object.freeze(['base', 'dependencies', 'observation', 'digest']);
+const READINESS_CONTEXT_FIELDS = Object.freeze(['base', 'dependencies', 'dependenciesByTask', 'observation', 'digest']);
 const READINESS_BASE_FIELDS = Object.freeze(['kind', 'identity', 'inventoryDigest', 'pathCount']);
 // The dependency *identity*, not the moment some process happened to evaluate
 // it. `evaluatedAt` is deliberately excluded: it changes on every read of the
@@ -212,6 +213,10 @@ const READINESS_BASE_FIELDS = Object.freeze(['kind', 'identity', 'inventoryDiges
 const READINESS_DEPENDENCY_FIELDS = Object.freeze([
   'source', 'sourceRef', 'digest', 'observedAt', 'freshnessState', 'evaluatedState',
   'statusCount', 'statusDigest',
+]);
+const READINESS_TASK_DEPENDENCY_FIELDS = Object.freeze(['taskId', 'evidence', 'declared', 'digest']);
+const READINESS_DECLARED_DEPENDENCY_FIELDS = Object.freeze([
+  'id', 'status', 'source', 'carrier', 'carrierDigest', 'evidenceDigest',
 ]);
 const READINESS_OBSERVATION_FIELDS = Object.freeze(['observedAt', 'maxAgeSeconds']);
 const EXCLUSION_FIELDS = Object.freeze([
@@ -652,6 +657,7 @@ function readinessContextDigest(context) {
   return `sha256:${PARALLEL_SCAN_READINESS_DIGEST_DOMAIN}:${safeCanonicalSha256({
     base: context.base,
     dependencies: context.dependencies,
+    dependenciesByTask: context.dependenciesByTask,
     observation: context.observation,
   })}`;
 }
@@ -665,13 +671,69 @@ function readinessContextDigest(context) {
  * a second schema - makes that change visible as a scan-identity change and
  * gives `dependency_status` an exact evidence identity to invalidate.
  */
-function bindReadinessContext(input, observation, errors) {
+function dependencyEvidenceProjection(evidence, errors, label) {
+  if (evidence === null || evidence === undefined) return null;
+  let normalized;
+  try {
+    normalized = normalizeReadinessDependencyEvidence(evidence);
+  } catch (error) {
+    errors.push(`${label} dependency evidence is invalid: ${error.message}`);
+    return null;
+  }
+  const revalidationArgs = normalized.revalidationArgs;
+  const sourceRef = Array.isArray(revalidationArgs) && revalidationArgs.length === 2 &&
+    revalidationArgs[0] === '--dependencies' ? revalidationArgs[1] : null;
+  if (sourceRef === null || !validateCommittedSourcePath(sourceRef).ok) {
+    errors.push(`${label} dependency evidence must carry an exact target-relative --dependencies revalidation selector`);
+    return null;
+  }
+  if (normalized.freshnessState !== 'current') {
+    errors.push(`${label} dependency evidence is ${normalized.freshnessState} and cannot support a current ready set`);
+  }
+  return {
+    source: normalized.source,
+    sourceRef,
+    digest: normalized.digest,
+    observedAt: normalized.observedAt,
+    freshnessState: normalized.freshnessState,
+    evaluatedState: normalized.evaluatedState,
+    statusCount: normalized.statuses.length,
+    statusDigest: dependencyStatusDigest(normalized.statuses),
+  };
+}
+
+function dependencyInputForTask(input, taskId) {
+  const supplied = input?.dependenciesByTask?.[taskId];
+  if (supplied !== undefined) {
+    if (!isPlainObject(supplied)) return { invalid: true, evidence: null, statuses: {} };
+    return {
+      invalid: false,
+      evidence: supplied.evidence ?? null,
+      statuses: supplied.statuses ?? {},
+    };
+  }
+  return {
+    invalid: false,
+    evidence: input?.readinessContext?.dependencies ?? null,
+    statuses: input?.dependencies ?? {},
+  };
+}
+
+function taskDependencyDigest(entry) {
+  return `sha256:${PARALLEL_SCAN_READINESS_DIGEST_DOMAIN}:${safeCanonicalSha256({
+    taskId: entry.taskId,
+    evidence: entry.evidence,
+    declared: entry.declared,
+  })}`;
+}
+
+function bindReadinessContext(input, observation, errors, members) {
   const supplied = input?.readinessContext;
   if (!isPlainObject(supplied)) {
     errors.push('parallel scan requires a readinessContext binding its base and dependency evidence');
     return null;
   }
-  const unknown = Object.keys(supplied).filter(key => !['base', 'dependencies'].includes(key));
+  const unknown = Object.keys(supplied).filter(key => !['base', 'dependencies', 'dependenciesByTask'].includes(key));
   if (unknown.length > 0) {
     errors.push(`parallel scan readinessContext contains unknown fields: ${unknown.sort().join(', ')}`);
     return null;
@@ -695,55 +757,101 @@ function bindReadinessContext(input, observation, errors) {
     errors.push('parallel scan readinessContext base evidence inventoryDigest does not match the scanned base inventory');
   }
 
-  const statusMap = input?.dependencies ?? {};
-  if (!isPlainObject(statusMap)) {
-    errors.push('parallel scan dependencies must be an explicit dependency-status object');
-    return null;
+  if (input?.dependenciesByTask !== undefined && !isPlainObject(input.dependenciesByTask)) {
+    errors.push('parallel scan dependenciesByTask must be an object keyed by task id');
   }
-  let dependencies = null;
-  if (supplied.dependencies === null || supplied.dependencies === undefined) {
-    if (Object.keys(statusMap).length > 0) {
-      errors.push('parallel scan evaluated dependency statuses without binding the dependency evidence they came from');
-      return null;
-    }
-  } else {
-    let evidence;
-    try {
-      evidence = normalizeReadinessDependencyEvidence(supplied.dependencies);
-    } catch (error) {
-      errors.push(`parallel scan readinessContext dependency evidence is invalid: ${error.message}`);
-      return null;
-    }
-    const boundMap = dependencyStatusMap(evidence);
-    const flatten = map => canonicalJson(Object.entries(map).map(([id, status]) => `${id}=${String(status)}`).sort());
-    if (flatten(boundMap) !== flatten(statusMap)) {
-      errors.push('parallel scan readinessContext dependency evidence does not match the dependency statuses the scan evaluated');
-    }
-    // The semantic snapshot identity (`source`) and the target-relative
-    // artifact reference used to reopen that exact snapshot (`sourceRef`) are
-    // distinct facts. The scan persists both so dispatch never has to guess a
-    // path from a semantic identifier.
-    const revalidationArgs = evidence.revalidationArgs;
-    const sourceRef = Array.isArray(revalidationArgs) && revalidationArgs.length === 2 &&
-      revalidationArgs[0] === '--dependencies' ? revalidationArgs[1] : null;
-    if (sourceRef === null || !validateCommittedSourcePath(sourceRef).ok) {
-      errors.push('parallel scan readinessContext dependency evidence must carry an exact target-relative --dependencies revalidation selector');
-      return null;
-    }
-    dependencies = {
-      source: evidence.source,
-      sourceRef,
-      digest: evidence.digest,
-      observedAt: evidence.observedAt,
-      freshnessState: evidence.freshnessState,
-      evaluatedState: evidence.evaluatedState,
-      statusCount: evidence.statuses.length,
-      statusDigest: dependencyStatusDigest(evidence.statuses),
-    };
-    if (evidence.freshnessState !== 'current') {
-      errors.push(`parallel scan readinessContext dependency evidence is ${evidence.freshnessState} and cannot support a current ready set`);
-    }
+  if (supplied.dependenciesByTask !== undefined && !isPlainObject(supplied.dependenciesByTask)) {
+    errors.push('parallel scan readinessContext dependenciesByTask must be an object keyed by task id');
   }
+
+  const memberById = new Map(members.map(member => [member.taskId, member]));
+  const dependenciesByTask = [];
+  const statusesByTask = {};
+  for (const member of members) {
+    const parsed = parseTaskReadinessDeclaration(member.body);
+    const declaredIds = [...(parsed.declaration?.dependsOn ?? [])].sort();
+    const selected = dependencyInputForTask({
+      ...input,
+      dependenciesByTask: input?.dependenciesByTask ?? supplied.dependenciesByTask,
+    }, member.taskId);
+    if (selected.invalid || !isPlainObject(selected.statuses)) {
+      errors.push(`parallel scan dependency context for '${member.taskId}' must contain an explicit statuses object`);
+    }
+    let normalizedEvidence = null;
+    let evidenceProjection = null;
+    if (selected.evidence !== null && selected.evidence !== undefined) {
+      try {
+        normalizedEvidence = normalizeReadinessDependencyEvidence(selected.evidence);
+      } catch {
+        // The projection helper emits the stable diagnostic below.
+      }
+      evidenceProjection = dependencyEvidenceProjection(
+        selected.evidence, errors, `parallel scan dependency context for '${member.taskId}'`,
+      );
+      if (normalizedEvidence) {
+        const evidenceMap = dependencyStatusMap(normalizedEvidence);
+        const suppliedMap = selected.statuses ?? {};
+        const flatten = map => canonicalJson(Object.entries(map).map(([id, status]) => `${id}=${String(status)}`).sort());
+        if (flatten(evidenceMap) !== flatten(suppliedMap)) {
+          errors.push(`parallel scan dependency evidence for '${member.taskId}' does not match its supplied status map`);
+        }
+      }
+    } else if (Object.keys(selected.statuses ?? {}).length > 0) {
+      errors.push(`parallel scan evaluated external dependency statuses for '${member.taskId}' without binding the dependency evidence`);
+    }
+
+    const taskStatuses = {};
+    const declared = declaredIds.map(id => {
+      const dependencyMember = memberById.get(id);
+      if (Object.hasOwn(selected.statuses ?? {}, id)) {
+        const status = String(selected.statuses[id]);
+        taskStatuses[id] = status;
+        return {
+          id,
+          status,
+          source: dependencyMember ? 'snapshot' : 'external',
+          carrier: dependencyMember?.carrier ?? null,
+          carrierDigest: dependencyMember?.digest ?? null,
+          evidenceDigest: evidenceProjection?.digest ?? null,
+        };
+      }
+      if (dependencyMember && dependencyMember.state === 'readable') {
+        const parsedDependency = parseFrontmatterStrict(dependencyMember.body);
+        const status = String(parsedDependency.data?.status ?? '').trim().toLowerCase() || 'unresolved';
+        taskStatuses[id] = status;
+        return {
+          id,
+          status,
+          source: 'inventory',
+          carrier: dependencyMember.carrier,
+          carrierDigest: dependencyMember.digest,
+          evidenceDigest: null,
+        };
+      }
+      const status = String(selected.statuses?.[id] ?? 'unresolved');
+      taskStatuses[id] = status;
+      if (!evidenceProjection) {
+        errors.push(`external dependency '${id}' for '${member.taskId}' has no committed task-specific evidence`);
+      }
+      return {
+        id,
+        status,
+        source: 'external',
+        carrier: null,
+        carrierDigest: null,
+        evidenceDigest: evidenceProjection?.digest ?? null,
+      };
+    });
+    const entry = { taskId: member.taskId, evidence: evidenceProjection, declared, digest: null };
+    entry.digest = taskDependencyDigest(entry);
+    dependenciesByTask.push(entry);
+    statusesByTask[member.taskId] = taskStatuses;
+  }
+  dependenciesByTask.sort((left, right) => left.taskId < right.taskId ? -1 : 1);
+  const evidenceIdentities = [...new Map(
+    dependenciesByTask.filter(entry => entry.evidence).map(entry => [canonicalJson(entry.evidence), entry.evidence])
+  ).values()];
+  const dependencies = evidenceIdentities.length === 1 ? evidenceIdentities[0] : null;
 
   const context = {
     base: {
@@ -753,11 +861,12 @@ function bindReadinessContext(input, observation, errors) {
       pathCount: base.pathCount,
     },
     dependencies,
+    dependenciesByTask,
     observation,
     digest: null,
   };
   context.digest = readinessContextDigest(context);
-  return context;
+  return { context, statusesByTask };
 }
 
 /**
@@ -836,15 +945,6 @@ export function evaluateParallelScan(input = {}, options = {}) {
     : '';
   if (!rescanTrigger) push('parallel_scan.record.invalid', 'malformed', 'parallel scan requires a concrete rescan trigger');
 
-  const readinessErrors = [];
-  const readinessContext = bindReadinessContext(input, {
-    observedAt: instant.ok ? observedAt : null,
-    maxAgeSeconds: validFreshnessPolicy(maxAgeSeconds) ? maxAgeSeconds : null,
-  }, readinessErrors);
-  for (const error of readinessErrors) {
-    push('parallel_scan.record.invalid', 'malformed', error);
-  }
-
   if (inventory.complete !== true) {
     diagnostics.push(diagnostic('error', 'parallel_scan.inventory.incomplete', { state: 'negative' },
       'the normalized task inventory is not proven complete by its authoritative enumeration receipt'));
@@ -858,6 +958,16 @@ export function evaluateParallelScan(input = {}, options = {}) {
   const members = [...inventory.members]
     .map(member => normalizedMember(member ?? {}))
     .sort((left, right) => (`${left.taskId}\u0000${left.carrier}` < `${right.taskId}\u0000${right.carrier}` ? -1 : 1));
+  const readinessErrors = [];
+  const readinessBinding = bindReadinessContext(input, {
+    observedAt: instant.ok ? observedAt : null,
+    maxAgeSeconds: validFreshnessPolicy(maxAgeSeconds) ? maxAgeSeconds : null,
+  }, readinessErrors, members);
+  const readinessContext = readinessBinding?.context ?? null;
+  const dependencyStatusesByTask = readinessBinding?.statusesByTask ?? {};
+  for (const error of readinessErrors) {
+    push('parallel_scan.record.invalid', 'malformed', error);
+  }
   for (const member of members) {
     if (!MEMBER_STATES.includes(member.state)) {
       push('parallel_scan.record.invalid', 'malformed', `inventory member '${member.carrier}' has an unknown state`);
@@ -905,7 +1015,7 @@ export function evaluateParallelScan(input = {}, options = {}) {
       taskBody: member.body,
       basePaths: Array.isArray(input?.basePaths) ? input.basePaths : [],
       mode: 'authoring',
-      dependencies: isPlainObject(input?.dependencies) ? input.dependencies : {},
+      dependencies: dependencyStatusesByTask[member.taskId] ?? {},
     });
     if (!readiness.ok) {
       const codes = new Set(readiness.diagnostics.filter(item => item.level === 'error').map(item => item.code));
@@ -1384,38 +1494,38 @@ export function validateParallelScanReadinessBinding(record, current) {
     errors.push('authoritative base evidence changed after the scan; the bound ready set is stale');
   }
 
-  const suppliedDependencies = current.dependencies ?? null;
-  if (suppliedDependencies === null) {
-    if (bound.dependencies !== null) {
-      errors.push('the scan bound dependency evidence that the authoritative refetch no longer reports');
+  const suppliedByTask = isPlainObject(current.dependenciesByTask) ? current.dependenciesByTask : null;
+  for (const entry of bound.dependenciesByTask ?? []) {
+    if (entry.evidence === null) continue;
+    const supplied = suppliedByTask
+      ? suppliedByTask[entry.taskId]?.evidence ?? suppliedByTask[entry.taskId] ?? null
+      : current.dependencies ?? null;
+    if (supplied === null) {
+      errors.push(`the scan bound dependency evidence for '${entry.taskId}' that the authoritative refetch no longer reports`);
+      continue;
     }
-  } else {
-    let evidence;
-    try {
-      evidence = normalizeReadinessDependencyEvidence(suppliedDependencies);
-    } catch (error) {
-      return { ok: false, errors: [`authoritative parallel-scan dependency evidence is invalid: ${error.message}`] };
-    }
-    if (bound.dependencies === null) {
-      errors.push('the authoritative refetch reports dependency evidence the scan never bound');
-    } else {
-      const refetchSourceRef = Array.isArray(evidence.revalidationArgs) && evidence.revalidationArgs.length === 2 &&
-        evidence.revalidationArgs[0] === '--dependencies' ? evidence.revalidationArgs[1] : null;
-      if (refetchSourceRef !== bound.dependencies.sourceRef) {
-        errors.push('authoritative dependency revalidation selector changed after the scan; the bound ready set is stale');
+    const projectionErrors = [];
+    const projection = dependencyEvidenceProjection(
+      supplied, projectionErrors, `authoritative dependency refetch for '${entry.taskId}'`,
+    );
+    if (projectionErrors.length > 0 || canonicalJson(projection) !== canonicalJson(entry.evidence)) {
+      errors.push(...projectionErrors);
+      if (projection?.sourceRef !== entry.evidence.sourceRef) {
+        errors.push(`authoritative dependency revalidation selector changed for '${entry.taskId}' after the scan; the bound ready set is stale`);
       }
-      if (
-        evidence.source !== bound.dependencies.source ||
-        evidence.digest !== bound.dependencies.digest ||
-        evidence.observedAt !== bound.dependencies.observedAt ||
-        evidence.freshnessState !== bound.dependencies.freshnessState ||
-        evidence.evaluatedState !== bound.dependencies.evaluatedState ||
-        evidence.statuses.length !== bound.dependencies.statusCount ||
-        dependencyStatusDigest(evidence.statuses) !== bound.dependencies.statusDigest
-      ) {
-        errors.push('authoritative dependency status evidence changed after the scan; the bound ready set is stale');
+      errors.push(`authoritative dependency status evidence changed after the scan for '${entry.taskId}'; the bound ready set is stale`);
+    }
+  }
+  if (suppliedByTask) {
+    const boundIds = new Set((bound.dependenciesByTask ?? []).filter(entry => entry.evidence).map(entry => entry.taskId));
+    for (const taskId of Object.keys(suppliedByTask)) {
+      const supplied = suppliedByTask[taskId]?.evidence ?? null;
+      if (supplied !== null && !boundIds.has(taskId)) {
+        errors.push(`the authoritative refetch reports dependency evidence for '${taskId}' that the scan never bound`);
       }
     }
+  } else if (current.dependencies !== null && current.dependencies !== undefined && bound.dependencies === null) {
+    errors.push('the authoritative refetch supplied one legacy dependency snapshot for a scan whose tasks bind distinct evidence');
   }
   return { ok: errors.length === 0, errors };
 }
@@ -1484,6 +1594,11 @@ function validateParallelScanRecordInner(record, options) {
       `parallel scan schemaVersion ${LEGACY_PARALLEL_SCAN_SCHEMA_VERSION} is superseded and lacks the exact dependency revalidation selector; ` +
       `regenerate the decomposition source as schemaVersion ${PARALLEL_SCAN_SCHEMA_VERSION} with ` +
       `'agenticloop task prepare-decomposition <id> --work-unit <id> --source-ref <path> --source-revision <ref> --base <ref-or-tree> --dependencies <path>'`
+    );
+  } else if (record.kind === PARALLEL_SCAN_KIND && record.schemaVersion === LEGACY_PARALLEL_SCAN_WORK_UNIT_SCHEMA_VERSION) {
+    errors.push(
+      `parallel scan schemaVersion ${LEGACY_PARALLEL_SCAN_WORK_UNIT_SCHEMA_VERSION} used one initiating task's dependency map for the whole work unit; ` +
+      `regenerate every affected decomposition as schemaVersion ${PARALLEL_SCAN_SCHEMA_VERSION} with task-specific dependency evidence`
     );
   } else if (record.schemaVersion !== PARALLEL_SCAN_SCHEMA_VERSION) {
     errors.push(`parallel scan schemaVersion must be ${PARALLEL_SCAN_SCHEMA_VERSION}`);
@@ -1826,6 +1941,65 @@ function validateReadinessContextShape(record, errors) {
           !dependencies.statusDigest.startsWith(`sha256:${PARALLEL_SCAN_READINESS_DIGEST_DOMAIN}:`)) {
         errors.push('parallel scan readinessContext dependency statusDigest must use the canonical readiness digest domain');
       }
+    }
+  }
+  const byTask = requireArray(context.dependenciesByTask, 'parallel scan readinessContext dependenciesByTask', errors);
+  if (byTask) {
+    const inventoryIds = (record.inventory?.members ?? []).map(member => member.taskId).sort();
+    const taskIds = [];
+    for (const entry of byTask) {
+      if (!exactKeys(entry, READINESS_TASK_DEPENDENCY_FIELDS, 'parallel scan task dependency context', errors)) continue;
+      taskIds.push(entry.taskId);
+      if (typeof entry.taskId !== 'string' || !entry.taskId) {
+        errors.push('parallel scan task dependency context taskId is required');
+      }
+      if (entry.evidence !== null) {
+        exactKeys(entry.evidence, READINESS_DEPENDENCY_FIELDS,
+          `parallel scan dependency evidence for '${entry.taskId}'`, errors);
+        if (!SHA256.test(String(entry.evidence?.digest ?? '')) ||
+            !validateCommittedSourcePath(entry.evidence?.sourceRef).ok) {
+          errors.push(`parallel scan dependency evidence for '${entry.taskId}' has an invalid committed identity`);
+        }
+      }
+      const declared = requireArray(entry.declared,
+        `parallel scan declared dependencies for '${entry.taskId}'`, errors) ?? [];
+      let previous = null;
+      for (const dependency of declared) {
+        exactKeys(dependency, READINESS_DECLARED_DEPENDENCY_FIELDS,
+          `parallel scan declared dependency for '${entry.taskId}'`, errors);
+        if (typeof dependency?.id !== 'string' || !dependency.id ||
+            (previous !== null && previous >= dependency.id)) {
+          errors.push(`parallel scan declared dependencies for '${entry.taskId}' must be unique and canonically ordered`);
+        }
+        previous = dependency?.id ?? previous;
+        if (!['inventory', 'snapshot', 'external'].includes(dependency?.source)) {
+          errors.push(`parallel scan declared dependency '${dependency?.id}' for '${entry.taskId}' has an invalid source`);
+        }
+        if (typeof dependency?.status !== 'string' || !dependency.status) {
+          errors.push(`parallel scan declared dependency '${dependency?.id}' for '${entry.taskId}' requires a status`);
+        }
+        if (dependency?.source === 'inventory') {
+          if (typeof dependency.carrier !== 'string' || !dependency.carrier || !SHA256.test(String(dependency.carrierDigest ?? '')) || dependency.evidenceDigest !== null) {
+            errors.push(`inventory dependency '${dependency?.id}' for '${entry.taskId}' must bind its carrier and digest only`);
+          }
+        } else if (dependency?.source === 'snapshot') {
+          if (typeof dependency.carrier !== 'string' || !dependency.carrier ||
+              !SHA256.test(String(dependency.carrierDigest ?? '')) ||
+              !SHA256.test(String(dependency.evidenceDigest ?? ''))) {
+            errors.push(`snapshot dependency '${dependency?.id}' for '${entry.taskId}' must bind both carrier and committed evidence identities`);
+          }
+        } else if (dependency?.carrier !== null || dependency?.carrierDigest !== null || !SHA256.test(String(dependency?.evidenceDigest ?? ''))) {
+          errors.push(`external dependency '${dependency?.id}' for '${entry.taskId}' must bind committed evidence only`);
+        }
+      }
+      if (entry.digest !== taskDependencyDigest(entry)) {
+        errors.push(`parallel scan dependency context digest for '${entry.taskId}' is invalid`);
+      }
+    }
+    const sortedTaskIds = [...taskIds].sort();
+    if (taskIds.some((id, index) => id !== sortedTaskIds[index]) ||
+        taskIds.length !== inventoryIds.length || taskIds.some((id, index) => id !== inventoryIds[index])) {
+      errors.push('parallel scan dependenciesByTask must account for every inventory member exactly once in canonical order');
     }
   }
   if (exactKeys(context.observation, READINESS_OBSERVATION_FIELDS, 'parallel scan readinessContext observation', errors)) {

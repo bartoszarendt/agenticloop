@@ -69,10 +69,17 @@ import {
   repositoryAuthorityIdentity,
 } from './repository-identity.js';
 import { validateTaskStatusTransition } from './task-transition.js';
-import { prepareTaskStatusCandidate, taskRecordDigest } from './readiness-candidates.js';
+import { renderWorkUnitCommitMessage } from './commit-attribution.js';
+import {
+  evaluateAuthoringReadiness,
+  prepareTaskStatusCandidate,
+  taskRecordDigest,
+} from './readiness-candidates.js';
 
 export const READINESS_PLAN_KIND = 'agenticloop.readiness-plan';
-export const READINESS_PLAN_SCHEMA_VERSION = 2;
+export const READINESS_PLAN_SCHEMA_VERSION = 3;
+export const WORK_UNIT_READINESS_PLAN_KIND = 'agenticloop.work-unit-readiness-plan';
+export const WORK_UNIT_READINESS_PLAN_SCHEMA_VERSION = 1;
 
 /** The ordered readiness steps. Order is the point of the whole module. */
 export const READINESS_STEPS = Object.freeze([
@@ -85,7 +92,7 @@ export const READINESS_STEPS = Object.freeze([
   'lifecycle_agent_ready',
 ]);
 
-/** The subject line of the one final Maintainer readiness commit. */
+/** The action portion of the one final Maintainer readiness commit subject. */
 export const READINESS_COMMIT_SUBJECT = 'settle readiness';
 
 /**
@@ -94,7 +101,18 @@ export const READINESS_COMMIT_SUBJECT = 'settle readiness';
  * commit itself cannot spell it three ways.
  */
 export function readinessCommitMessage(taskId) {
-  return `${READINESS_COMMIT_SUBJECT}\n\nTask: ${taskId}\nAgent: maintainer`;
+  return `chore(${taskId}): ${READINESS_COMMIT_SUBJECT}\n\nTask: ${taskId}\nAgent: maintainer`;
+}
+
+export function workUnitReadinessCommitMessage(workUnitId, taskIds) {
+  const rendered = renderWorkUnitCommitMessage({
+    workUnitId,
+    taskIds,
+    role: 'maintainer',
+    subject: `chore(${workUnitId}): ${READINESS_COMMIT_SUBJECT}`,
+  });
+  if (!rendered.ok) throw new Error(rendered.errors.join('; '));
+  return rendered.message.trimEnd();
 }
 
 /** Every write role a readiness transaction may own. There are exactly three. */
@@ -159,6 +177,17 @@ function step(id, { settled, detail, owner, dependsOn = [], command = null, writ
     command,
     writes: Object.freeze([...writes]),
   });
+}
+
+function cliArg(value) {
+  const text = String(value ?? '');
+  return /^[A-Za-z0-9_./:@+-]+$/.test(text) ? text : JSON.stringify(text);
+}
+
+function evidenceArgs(evidence) {
+  return Array.isArray(evidence?.revalidationArgs)
+    ? evidence.revalidationArgs.map(cliArg).join(' ')
+    : '';
 }
 
 /** True when any bound executable field still carries an unresolved placeholder. */
@@ -318,7 +347,9 @@ export function buildReadinessPlan(target, taskId, options = {}) {
       decomposition = null;
     }
   }
-  const boundDependencyRef = decomposition?.scan?.readinessContext?.dependencies?.sourceRef ?? null;
+  const boundDependencyRef = decomposition?.scan?.readinessContext?.dependencies?.sourceRef ??
+    decomposition?.scan?.readinessContext?.dependenciesByTask
+      ?.find(entry => entry.taskId === taskId)?.evidence?.sourceRef ?? null;
   const dependencyRef = boundDependencyRef ?? (options.dependencyRef ? String(options.dependencyRef).replace(/\\/g, '/') : null);
   const dependencyCommitted = Boolean(boundDependencyRef) && isTrackedAtHead(target, boundDependencyRef);
   const head = git(target, ['rev-parse', 'HEAD']);
@@ -335,6 +366,8 @@ export function buildReadinessPlan(target, taskId, options = {}) {
   // consulted before any placeholder is printed.
   const durableWorkUnitId = [suppliedWorkUnit, decomposition?.scan?.workUnit?.id, declaredWorkUnit]
     .find(isDurable) ?? null;
+  const workUnitId = decomposition?.scan?.workUnit?.id ?? null;
+  const effectiveWorkUnit = suppliedWorkUnit ?? durableWorkUnitId ?? workUnitId;
   const decompositionCommand =
     `npx agenticloop task prepare-decomposition ${taskId} ` +
     `--work-unit ${durableWorkUnitId ?? '<work-unit-id>'} ` +
@@ -356,7 +389,6 @@ export function buildReadinessPlan(target, taskId, options = {}) {
     writes: dependencyCommitted || !boundDependencyRef ? [] : [boundDependencyRef],
   }));
 
-  const workUnitId = decomposition?.scan?.workUnit?.id ?? null;
   const durableWorkUnit = isDurable(workUnitId);
   const unconstructableWorkUnitRepair =
     'declare the durable grouping in the task record under "## Concurrency Plan" -> "- Work unit:", ' +
@@ -438,6 +470,39 @@ export function buildReadinessPlan(target, taskId, options = {}) {
       blockers.push(...candidate.errors.map(error => `the agent-ready task candidate is invalid: ${error}`));
     }
   }
+  // Planning and applying consume this exact shared evaluator. Its complete
+  // structured result is part of the plan digest, so a warning or error state
+  // reviewed here cannot silently differ when apply rebuilds the plan.
+  const readiness = contractOk && prospectiveTaskContent && options.base && options.dependencies
+    ? evaluateAuthoringReadiness({
+      taskBody: prospectiveTaskContent,
+      base: options.base,
+      dependencies: options.dependencies,
+    })
+    : null;
+  const readinessDiagnosticCommand = options.base
+    ? `npx agenticloop task-readiness --task ${cliArg(taskId)} ${evidenceArgs(options.base.evidence)} ` +
+      `--mode authoring${options.dependencies ? ` ${evidenceArgs(options.dependencies.evidence)}` : ''} --json ` +
+      `--target ${cliArg(target)}`
+    : null;
+  const readinessPlanCommand = options.actor && options.authority && effectiveWorkUnit && options.base && options.dependencies
+    ? `npx agenticloop task readiness-plan ${cliArg(taskId)} --actor ${cliArg(options.actor)} ` +
+      `--authority ${cliArg(options.authority)} --work-unit ${cliArg(effectiveWorkUnit)} ` +
+      `${evidenceArgs(options.base.evidence)} ${evidenceArgs(options.dependencies.evidence)} --json --target ${cliArg(target)}`
+    : null;
+  for (const diagnostic of readiness?.diagnostics ?? []) {
+    if (diagnostic.level !== 'error') continue;
+    const affected = [
+      ...(diagnostic.evidence?.paths ?? []),
+      ...(diagnostic.evidence?.dependencies ?? []),
+    ];
+    blockers.push(
+      `[${diagnostic.code}] ${diagnostic.message}` +
+      (affected.length > 0 ? ` (affected: ${affected.join(', ')})` : '') +
+      (readinessDiagnosticCommand ? `; diagnose: ${readinessDiagnosticCommand}` : '') +
+      (readinessPlanCommand ? `; regenerate: ${readinessPlanCommand}` : '')
+    );
+  }
   // The paths one readiness commit stages. Exactly the pending readiness
   // evidence, never `-A`: an unrelated staged change must never be able to ride
   // into a Maintainer readiness commit.
@@ -497,7 +562,6 @@ export function buildReadinessPlan(target, taskId, options = {}) {
   // it binds here exactly as `--work-unit` would. Without it a task whose
   // grouping is written down in its Concurrency Plan could still only be settled
   // by re-typing that grouping on the command line.
-  const effectiveWorkUnit = suppliedWorkUnit ?? durableWorkUnitId ?? workUnitId;
   if (!effectiveWorkUnit) {
     blockers.push('a durable --work-unit <kind:reference> is required; readiness never synthesizes a work-unit identity');
   } else if (!isDurable(effectiveWorkUnit)) {
@@ -540,7 +604,8 @@ export function buildReadinessPlan(target, taskId, options = {}) {
       membershipDigest: readinessInventoryMembershipDigest(
         (options.inventory.members ?? []).map(member => ({
           carrier: member.carrier,
-          digest: member.carrier === relTaskPath ? prospectiveTaskDigest : (member.digest ?? null),
+          digest: options.prospectiveInventoryDigests?.[member.carrier] ??
+            (member.carrier === relTaskPath ? prospectiveTaskDigest : (member.digest ?? null)),
           readable: member.state === 'readable',
         }))
       ),
@@ -663,6 +728,11 @@ export function buildReadinessPlan(target, taskId, options = {}) {
     activationNote: activationPresent
       ? 'An activation binding already exists and is left untouched. Readiness mutation may make its task binding stale; activation is evaluated again only after readiness, and an existing activation is never authorization for readiness mutation.'
       : 'Activation is the operator action that follows readiness; it is never part of this plan.',
+    readiness,
+    readinessCommands: {
+      diagnose: readinessDiagnosticCommand,
+      regeneratePlan: readinessPlanCommand,
+    },
     executable,
     planDigest: null,
   };
@@ -674,4 +744,68 @@ export function buildReadinessPlan(target, taskId, options = {}) {
     writeSet: Object.freeze(plan.writeSet),
     blockers: Object.freeze(plan.blockers),
   });
+}
+
+/**
+ * Build one bounded work-unit plan from the same single-task planner. The first
+ * pass calculates every prospective carrier digest; the second pass binds that
+ * complete overlay into every sibling plan, eliminating sequential scan churn.
+ */
+export function buildWorkUnitReadinessPlan(target, entries, options = {}) {
+  const supplied = Array.isArray(entries) ? entries : [];
+  const taskIds = supplied.map(entry => String(entry?.taskId ?? '').trim());
+  const canonicalTaskIds = [...new Set(taskIds)].sort();
+  const blockers = [];
+  if (taskIds.length === 0) blockers.push('a work-unit readiness plan requires at least one task');
+  if (taskIds.some(taskId => !taskId)) blockers.push('the task set contains a missing task id');
+  if (canonicalTaskIds.length !== taskIds.length) blockers.push('the task set contains duplicate task ids');
+  if (taskIds.join('\n') !== canonicalTaskIds.join('\n')) {
+    blockers.push(`task ids must be supplied in canonical lexical order: ${canonicalTaskIds.join(', ')}`);
+  }
+  const workUnitId = String(options.workUnitId ?? supplied[0]?.options?.workUnitId ?? '').trim();
+  if (!workUnitId) blockers.push('a bounded --work-unit <kind:reference> is required');
+
+  const initial = supplied.map(entry => buildReadinessPlan(target, entry.taskId, {
+    ...(entry.options ?? {}),
+    workUnitId,
+  }));
+  const prospectiveInventoryDigests = Object.fromEntries(initial
+    .filter(plan => plan.executable?.task?.path && plan.executable.task.prospectiveDigest)
+    .map(plan => [plan.executable.task.path, plan.executable.task.prospectiveDigest]));
+  const plans = supplied.map(entry => buildReadinessPlan(target, entry.taskId, {
+    ...(entry.options ?? {}),
+    workUnitId,
+    prospectiveInventoryDigests,
+  }));
+  const expectedHeads = [...new Set(plans.map(plan => plan.executable?.expectedHead).filter(Boolean))];
+  if (expectedHeads.length !== 1) blockers.push('every task must bind the same current HEAD');
+  for (const plan of plans) {
+    if (plan.executable?.workUnit?.id !== workUnitId) {
+      blockers.push(`task ${plan.taskId} is unrelated to work unit ${workUnitId}`);
+    }
+    blockers.push(...plan.blockers.map(blocker => `${plan.taskId}: ${blocker}`));
+  }
+  const finalCommitMessage = taskIds.length > 0 && workUnitId
+    ? workUnitReadinessCommitMessage(workUnitId, taskIds)
+    : null;
+  const plan = {
+    kind: WORK_UNIT_READINESS_PLAN_KIND,
+    schemaVersion: WORK_UNIT_READINESS_PLAN_SCHEMA_VERSION,
+    backend: 'files',
+    readOnly: true,
+    workUnitId,
+    taskIds,
+    expectedHead: expectedHeads[0] ?? null,
+    prospectiveInventoryDigests,
+    plans,
+    applicable: blockers.length === 0 && plans.every(item => item.applicable),
+    ready: plans.every(item => item.ready),
+    blockers: [...new Set(blockers)],
+    writeSet: [...new Set(plans.flatMap(item => item.writeSet))].sort(),
+    activationPlanned: false,
+    finalCommitMessage,
+    planDigest: null,
+  };
+  plan.planDigest = `sha256:${canonicalSha256({ ...plan, planDigest: null })}`;
+  return Object.freeze(plan);
 }

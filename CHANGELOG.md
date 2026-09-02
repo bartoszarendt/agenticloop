@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Added atomic work-unit readiness planning/apply, canonical work-unit commit
+  attribution, deterministic task materialization, and sanitized human-controlled
+  downstream toolkit escalation proposals.
+- Added explicit failed-coordinator reconciliation, non-streaming delegation
+  cadence/diagnostic budgets, and Windows native-command exit guidance.
+
+### Fixed
+- Authoring warnings remain visible and non-blocking across lint, readiness plan,
+  and readiness apply; empty candidate failures now receive a stable primary
+  diagnostic before bundle validation.
+- Parallel scans bind dependency evidence per inventory task, independent of the
+  initiating task, and handoff refresh writes report `written_pending_commit`
+  rather than `proceed`.
+
 ## 0.4.7 - 2026-09-02
 
 ### Added

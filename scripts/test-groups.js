@@ -26,6 +26,7 @@ const MANIFEST = {
     'test/candidate.test.js',
     'test/closeout-assurance.test.js',
     'test/closeout-contract.test.js',
+    'test/command-result.test.js',
     'test/cross-platform-runner.test.js',
     'test/execution-evidence.test.js',
     'test/github-backend.test.js',

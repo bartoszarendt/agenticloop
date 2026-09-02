@@ -39,18 +39,66 @@ import {
   validateTaskContractBaseline,
 } from './task-contract-baseline.js';
 import { createTaskEvidenceContext } from './task-evidence-contract.js';
+import { createDiagnostic } from './repair-policy.js';
 
 /** Digest of one exact task-record byte sequence. */
 export function taskRecordDigest(content) {
   return `sha256:${createHash('sha256').update(String(content ?? ''), 'utf8').digest('hex')}`;
 }
 
+/**
+ * The one authoring-mode readiness evaluation used by planning and candidate
+ * preparation. Callers pass the already-resolved base and dependency evidence;
+ * no stage is allowed to reopen or reinterpret those inputs independently.
+ */
+export function evaluateAuthoringReadiness({ taskBody, base, dependencies } = {}) {
+  return evaluateTaskReadiness({
+    taskBody,
+    basePaths: base?.paths,
+    mode: 'authoring',
+    dependencies: dependencies?.statuses ?? {},
+  });
+}
+
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function failure(stage, errors, extra = {}) {
-  return { ok: false, stage, errors: [...errors], ...extra };
+export function normalizeCandidateFailure(candidate, stage = 'unknown') {
+  const normalizedErrors = Array.isArray(candidate?.errors)
+    ? candidate.errors.map(error => String(error ?? '').trim()).filter(Boolean)
+    : [];
+  const suppliedDiagnostics = [...new Map([
+    ...(Array.isArray(candidate?.diagnostics) ? candidate.diagnostics : []),
+    ...(Array.isArray(candidate?.validation?.diagnostics) ? candidate.validation.diagnostics : []),
+    ...(Array.isArray(candidate?.readiness?.diagnostics) ? candidate.readiness.diagnostics : []),
+  ].map(item => [`${item?.level}\0${item?.code}\0${item?.message}`, item])).values()];
+  const errorDiagnostics = suppliedDiagnostics.filter(item =>
+    item?.level === 'error' && String(item?.message ?? '').trim());
+  let diagnostics = suppliedDiagnostics;
+  if (normalizedErrors.length > 0 && errorDiagnostics.length === 0) {
+    diagnostics = [...diagnostics, ...normalizedErrors.map(message => createDiagnostic({
+      level: 'error',
+      code: 'readiness.candidate.stage_failure',
+      message,
+      evidence: { state: 'negative', stage },
+    }))];
+  } else if (normalizedErrors.length === 0 && errorDiagnostics.length === 0) {
+    diagnostics = [...diagnostics, createDiagnostic({
+      level: 'error',
+      code: 'readiness.candidate.internal_failure',
+      message: `readiness candidate stage '${stage}' failed without a diagnostic cause`,
+      evidence: { state: 'malformed', stage },
+    })];
+  }
+  const errors = diagnostics.filter(item => item.level === 'error')
+    .map(item => `[${item.code}] ${item.message}`);
+  return { errors, diagnostics };
+}
+
+function failure(stage, errors = [], extra = {}) {
+  const normalized = normalizeCandidateFailure({ ...extra, errors }, stage);
+  return { ok: false, stage, ...extra, ...normalized };
 }
 
 /**
@@ -150,14 +198,13 @@ export function prepareAgentReadyEvidence(input) {
     return failure('evidence_context', [error instanceof Error ? error.message : String(error)]);
   }
 
-  const readiness = evaluateTaskReadiness({
-    taskBody: parsedContent,
-    basePaths: base.paths,
-    mode: 'authoring',
-    dependencies: dependencies.statuses,
-  });
-  if (readiness.errors.length > 0 || readiness.warnings.length > 0) {
-    return failure('readiness', readiness.errors, { readiness, evidenceContext });
+  const readiness = evaluateAuthoringReadiness({ taskBody: parsedContent, base, dependencies });
+  if (readiness.ok !== true || readiness.errors.length > 0) {
+    return failure('readiness', readiness.errors, {
+      readiness,
+      evidenceContext,
+      diagnostics: readiness.diagnostics,
+    });
   }
 
   // Entering agent-ready is always a lifecycle transition: even a schema-less

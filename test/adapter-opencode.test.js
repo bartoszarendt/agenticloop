@@ -74,6 +74,18 @@ describe('generateOpencodeAgentRecords', () => {
     assert.match(agents.orchestrator.prompt, /process\/skills\/blocked-state\/SKILL\.md/);
   });
 
+  it('renders bounded non-streaming cadence and retryable-parent reconciliation guidance', () => {
+    const fx = makeFixture();
+    const alConfig = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));
+    const prompt = generateOpencodeAgentRecords(alConfig, fx).orchestrator.prompt;
+    assert.match(prompt, /exactly one return cadence/i);
+    assert.match(prompt, /diagnostic budget/i);
+    assert.match(prompt, /parent response fails or disappears/i);
+    assert.match(prompt, /backend and Git state first/i);
+    assert.match(prompt, /session_reported/);
+    assert.match(prompt, /queued pause/i);
+  });
+
   it('tells agents internal procedures are file paths, not host Skill tool invocations', () => {
     const fx = makeFixture();
     const alConfig = loadAgenticLoopConfig(join(fx, 'agenticloop.json'));

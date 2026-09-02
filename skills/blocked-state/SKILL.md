@@ -157,6 +157,7 @@ Append dated notes under `## Comments` or a blocker section. Record:
 | `review-unknown` | A review did not produce a clear accepted or needs_revision result. |
 | `merge-conflict` | The implementation artifact cannot be merged cleanly. |
 | `ci-failure` | Required remote checks are failing or incomplete. |
+| `tooling-failure` | The bounded diagnostic budget for an unexpected command, transport, or host-tool defect was exhausted. |
 | `no-artifact` | Implementation ran but produced no reviewable artifact and no better marker. |
 | `no-progress` | The attempt budget or self-loop guard tripped: repeated equivalent attempts, or a restated intended next action never performed, with no new progress. |
 
@@ -167,6 +168,14 @@ The engineer must not create an empty pull request or placeholder artifact just 
 ## Resume
 
 Resume only after the underlying blocker is cleared and the task record reflects the decision.
+
+A tooling-failure return records the exact command, child exit status or
+structured refusal, observed output, attempted repairs, and untouched remaining
+work. Do not report a successful tool envelope as command success. If the child
+return is complete but the parent/coordinator response failed, reconcile from
+durable backend and Git state first. Session metadata is at most
+`session_reported`; store only compact coordination state, acknowledge a queued
+pause before continuing, and make the reconciliation a no-op when repeated.
 
 A normal resume retains the producing `roleId` from the exact blocked
 `agenticloop.role-return`. Run the resume through `task verify-return` /

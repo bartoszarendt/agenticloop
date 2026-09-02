@@ -59,9 +59,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
-import { canonicalJson } from './canonical-json.js';
+import { canonicalJson, canonicalSha256 } from './canonical-json.js';
 import { GIT_MAX_BUFFER } from './git-runner.js';
-import { evaluateCommitAttribution } from './commit-attribution.js';
+import { evaluateCommitAttribution, evaluateWorkUnitCommitAttribution } from './commit-attribution.js';
 import { verifyCommittedAttributedSource } from './committed-source.js';
 import { executeMutationBatch, fingerprintTargetPath, resolveTargetPath } from './fs-mutation-kernel.js';
 import { repositoryAuthorityIdentity } from './repository-identity.js';
@@ -76,14 +76,19 @@ import {
   READINESS_STEPS,
   READINESS_WRITE_ROLES,
   READINESS_WRITE_ROOT,
+  WORK_UNIT_READINESS_PLAN_KIND,
+  WORK_UNIT_READINESS_PLAN_SCHEMA_VERSION,
   buildReadinessPlan,
+  buildWorkUnitReadinessPlan,
   containsUnresolvedPlaceholder,
   readinessCommitMessage,
   readinessInventoryMembershipDigest,
   readinessPlanDigest,
+  workUnitReadinessCommitMessage,
 } from './readiness-plan.js';
 import {
   evaluateCurrentTaskCarrier,
+  normalizeCandidateFailure,
   prepareAgentReadyEvidence,
   prepareTaskStatusCandidate,
   prepareTrustedBaselineCandidate,
@@ -134,7 +139,7 @@ export const READINESS_OWNED_PREFLIGHT_CODE_PREFIXES = Object.freeze([
 const PLAN_FIELDS = Object.freeze([
   'kind', 'schemaVersion', 'taskId', 'backend', 'readOnly', 'ready', 'applicable', 'blockers',
   'steps', 'nextStep', 'pendingSteps', 'writeSet', 'writeSetIsWorkflowOnly', 'finalCommitTrailer',
-  'activationPlanned', 'activationNote', 'executable', 'planDigest',
+  'activationPlanned', 'activationNote', 'readiness', 'readinessCommands', 'executable', 'planDigest',
 ]);
 const STEP_FIELDS = Object.freeze(['id', 'settled', 'detail', 'owner', 'dependsOn', 'command', 'writes']);
 const EXECUTABLE_FIELDS = Object.freeze([
@@ -157,6 +162,12 @@ const NESTED_FIELDS = Object.freeze({
 });
 const WRITE_FIELDS = Object.freeze(['path', 'role', 'state', 'digest']);
 const PREDECESSOR_FIELDS = Object.freeze(['path', 'state', 'digest']);
+const READINESS_COMMAND_FIELDS = Object.freeze(['diagnose', 'regeneratePlan']);
+const WORK_UNIT_PLAN_FIELDS = Object.freeze([
+  'kind', 'schemaVersion', 'backend', 'readOnly', 'workUnitId', 'taskIds',
+  'expectedHead', 'prospectiveInventoryDigests', 'plans', 'applicable', 'ready',
+  'blockers', 'writeSet', 'activationPlanned', 'finalCommitMessage', 'planDigest',
+]);
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const CONTRACT_DIGEST_RE = /^sha256:v1:[0-9a-f]{64}$/;
 
@@ -220,10 +231,10 @@ export function validateExecutableReadinessPlan(plan, context = {}) {
   if (plan.readOnly !== true) errors.push('readiness plan readOnly must remain true');
   if (plan.activationPlanned !== false) errors.push('readiness plan activationPlanned must be false; readiness never activates');
   if (typeof plan.ready !== 'boolean') errors.push('readiness plan ready must be a boolean');
-  if (plan.applicable !== true) errors.push('readiness plan is display-only; rerun task readiness-plan with every exact apply input');
-  if (!Array.isArray(plan.blockers) || plan.blockers.length > 0) {
-    errors.push('an applicable readiness plan carries no blockers');
-  }
+  if (typeof plan.applicable !== 'boolean') errors.push('readiness plan applicable must be a boolean');
+  if (!Array.isArray(plan.blockers)) errors.push('readiness plan blockers must be an array');
+  else if (plan.applicable === true && plan.blockers.length > 0) errors.push('an applicable readiness plan carries no blockers');
+  else if (plan.applicable === false && plan.blockers.length === 0) errors.push('an inapplicable readiness plan must name its blockers');
   if (!Array.isArray(plan.steps) || plan.steps.length !== READINESS_STEPS.length ||
       plan.steps.some((item, index) => !exactKeys(item, STEP_FIELDS) || item.id !== READINESS_STEPS[index])) {
     errors.push('readiness plan steps must be the closed ordered readiness sequence');
@@ -239,6 +250,18 @@ export function validateExecutableReadinessPlan(plan, context = {}) {
     errors.push('readiness plan finalCommitTrailer must be the canonical Maintainer trailer pair');
   }
   if (typeof plan.activationNote !== 'string' || !plan.activationNote) errors.push('readiness plan activationNote is required');
+  if (!isObject(plan.readiness) || plan.readiness.schemaVersion !== 1 ||
+      typeof plan.readiness.ok !== 'boolean' || !Array.isArray(plan.readiness.errors) ||
+      !Array.isArray(plan.readiness.warnings) || !Array.isArray(plan.readiness.diagnostics)) {
+    errors.push('applicable readiness plans must bind the canonical structured authoring-readiness result');
+  } else if (plan.applicable === true && (plan.readiness.ok !== true || plan.readiness.errors.length > 0)) {
+    errors.push('an applicable readiness plan cannot carry blocking authoring diagnostics');
+  }
+  if (!exactKeys(plan.readinessCommands, READINESS_COMMAND_FIELDS) ||
+      typeof plan.readinessCommands.diagnose !== 'string' || !plan.readinessCommands.diagnose ||
+      typeof plan.readinessCommands.regeneratePlan !== 'string' || !plan.readinessCommands.regeneratePlan) {
+    errors.push('applicable readiness plans must carry exact diagnostic and regeneration commands');
+  }
 
   const executable = plan.executable;
   if (!exactKeys(executable, EXECUTABLE_FIELDS)) {
@@ -393,6 +416,11 @@ function buildRepositoryIdentityFacts(target) {
 }
 
 function result(fields) {
+  const successful = ['already_current', 'committed', 'dry_run'].includes(fields.mutationDisposition);
+  const suppliedErrors = [...(fields.errors ?? [])];
+  if (!successful && suppliedErrors.length === 0) {
+    suppliedErrors.push('[readiness.apply.internal_failure] readiness apply failed without a diagnostic cause');
+  }
   const receipt = {
     kind: READINESS_APPLY_RECEIPT_KIND,
     schemaVersion: READINESS_APPLY_RECEIPT_SCHEMA_VERSION,
@@ -413,12 +441,22 @@ function result(fields) {
     unresolved: !RESOLVED_DISPOSITIONS.has(fields.mutationDisposition),
     activationPlanned: false,
     activationCreated: false,
-    errors: [...(fields.errors ?? [])],
+    errors: suppliedErrors,
     rollbackErrors: [...(fields.rollbackErrors ?? [])],
     nextAction: fields.nextAction ?? null,
     recovery: fields.recovery ?? null,
   };
   return Object.freeze(receipt);
+}
+
+/**
+ * Normalize every candidate-preparation refusal at the aggregation boundary.
+ * A failed producer must name its stage and a diagnostic cause; otherwise the
+ * transaction stops with one stable internal diagnostic instead of continuing
+ * into derivative bundle validation.
+ */
+function candidateFailureErrors(candidate, stage) {
+  return normalizeCandidateFailure(candidate, stage).errors;
 }
 
 function activationGuidance(taskId) {
@@ -566,7 +604,9 @@ function validateProspectiveBundle({ plan, candidates, current }) {
     if (provenance.scan?.readinessContext?.base?.identity !== executable.base.identity) {
       errors.push('the decomposition candidate binds a different base tree');
     }
-    if (provenance.scan?.readinessContext?.dependencies?.sourceRef !== executable.dependencies.sourceRef) {
+    const dependencyBinding = provenance.scan?.readinessContext?.dependencies ??
+      provenance.scan?.readinessContext?.dependenciesByTask?.find(entry => entry.taskId === plan.taskId)?.evidence;
+    if (dependencyBinding?.sourceRef !== executable.dependencies.sourceRef) {
       errors.push('the decomposition candidate binds a different dependency snapshot');
     }
     if (provenance.scan?.inventory?.id !== executable.inventory.inventoryId) {
@@ -661,6 +701,23 @@ export function applyReadinessPlan(input) {
     });
   }
   const executable = plan.executable;
+  if (!plan.applicable) {
+    const diagnosticErrors = (plan.readiness?.diagnostics ?? [])
+      .filter(item => item?.level === 'error')
+      .map(item => `[${item.code}] ${item.message}`);
+    const primary = diagnosticErrors.length > 0
+      ? diagnosticErrors
+      : plan.readiness?.errors?.length > 0 ? plan.readiness.errors : plan.blockers;
+    return refuse('blocked', primary, {
+      planDigest: plan.planDigest,
+      expectedHead: executable.expectedHead,
+      readiness: readinessSummary(plan),
+      recovery: [
+        `Failed stage: authoring_readiness. Diagnose: ${plan.readinessCommands.diagnose}`,
+        `After correcting the named condition, regenerate the plan: ${plan.readinessCommands.regeneratePlan}`,
+      ].join(' '),
+    });
+  }
 
   // --- 2. Re-resolve every bound input ----------------------------------
   let base;
@@ -770,7 +827,7 @@ export function applyReadinessPlan(input) {
       affectedArtifact: relTaskPath,
       currentHistory,
     });
-    if (!prepared.ok) prepareErrors.push(...prepared.errors);
+    if (!prepared.ok) prepareErrors.push(...candidateFailureErrors(prepared, prepared.stage ?? 'trusted_contract_baseline'));
     else {
       baselineRecord = prepared.record;
       candidates.push({
@@ -796,7 +853,7 @@ export function applyReadinessPlan(input) {
       taskId,
       nextStatus: 'agent-ready',
     });
-    if (!carrier.ok) prepareErrors.push(...carrier.errors);
+    if (!carrier.ok) prepareErrors.push(...candidateFailureErrors(carrier, carrier.stage ?? 'task_carrier_current'));
     else {
       let evidence;
       try {
@@ -817,14 +874,14 @@ export function applyReadinessPlan(input) {
       } catch (error) {
         evidence = { ok: false, errors: [error instanceof Error ? error.message : String(error)] };
       }
-      if (!evidence.ok) prepareErrors.push(...evidence.errors);
+      if (!evidence.ok) prepareErrors.push(...candidateFailureErrors(evidence, evidence.stage ?? 'agent_ready_evidence'));
       else {
         const candidate = prepareTaskStatusCandidate({
           currentContent: currentTaskContent,
           relPath: relTaskPath,
           nextStatus: 'agent-ready',
         });
-        if (!candidate.ok) prepareErrors.push(...candidate.errors);
+        if (!candidate.ok) prepareErrors.push(...candidateFailureErrors(candidate, candidate.stage ?? 'task_carrier_candidate'));
         else if (candidate.candidateDigest !== executable.task.prospectiveDigest) {
           prepareErrors.push('the prepared agent-ready carrier does not equal the carrier the plan bound');
         } else {
@@ -870,7 +927,11 @@ export function applyReadinessPlan(input) {
       readinessContext: { base: base.evidence, dependencies: dependencies.evidence },
       rescanTrigger: executable.decomposition.rescanTrigger,
     }, { now });
-    if (!prepared.ok) prepareErrors.push(...(prepared.validation?.errors ?? ['decomposition candidate preparation failed']));
+    if (!prepared.ok) prepareErrors.push(...candidateFailureErrors({
+      ...prepared,
+      errors: prepared.validation?.errors ?? prepared.errors,
+      diagnostics: prepared.validation?.diagnostics ?? prepared.diagnostics,
+    }, 'committed_decomposition'));
     else {
       candidates.push({
         role: 'committed_decomposition',
@@ -888,7 +949,9 @@ export function applyReadinessPlan(input) {
       expectedHead: executable.expectedHead,
       priorTaskDigest,
       readiness: readinessSummary(current),
-      recovery: 'Repair the reported candidate defect, then regenerate the plan. Nothing was written.',
+      recovery: `Candidate preparation failed before bundle validation. Diagnose the exact authoring state with: ` +
+        `${current.readinessCommands.diagnose}. Then regenerate the reviewed plan with: ` +
+        `${current.readinessCommands.regeneratePlan}. Nothing was written.`,
     });
   }
 
@@ -1193,6 +1256,346 @@ export function applyReadinessPlan(input) {
   });
 }
 
+function workUnitResult(fields) {
+  const successful = ['committed', 'dry_run'].includes(fields.mutationDisposition);
+  const errors = [...(fields.errors ?? [])];
+  if (!successful && errors.length === 0) {
+    errors.push('[readiness.apply.internal_failure] work-unit readiness apply failed without a diagnostic cause');
+  }
+  return Object.freeze({
+    kind: 'agenticloop.work-unit-readiness-apply-receipt',
+    schemaVersion: 1,
+    command: 'task readiness-apply',
+    workUnitId: fields.workUnitId ?? null,
+    taskIds: Object.freeze([...(fields.taskIds ?? [])]),
+    dryRun: fields.dryRun === true,
+    planDigest: fields.planDigest ?? null,
+    expectedHead: fields.expectedHead ?? null,
+    resultingHead: fields.resultingHead ?? null,
+    mutationDisposition: fields.mutationDisposition,
+    changedPaths: Object.freeze([...(fields.changedPaths ?? [])]),
+    commit: fields.commit ?? null,
+    commitCount: fields.commitCount ?? 0,
+    activationPlanned: false,
+    activationCreated: false,
+    readinessByTask: fields.readinessByTask ?? {},
+    errors: Object.freeze(errors),
+    rollbackErrors: Object.freeze([...(fields.rollbackErrors ?? [])]),
+    recovery: fields.recovery ?? null,
+    nextAction: fields.nextAction ?? null,
+  });
+}
+
+/** Apply a reviewed bounded task set as one mutation batch and one commit. */
+export function applyWorkUnitReadinessPlan(input) {
+  const {
+    target, plan, projectConfig = {}, dryRun = false,
+    enumerateInventory, resolveBaseEvidence, resolveDependencyEvidence,
+    io = null, now = Date.now(), recordIds = {}, beforeWrite = null,
+    afterWrite = null, beforeCommit = null, beforeRollback = null, beforeRefRestore = null,
+  } = input;
+  const taskIds = Array.isArray(plan?.taskIds) ? [...plan.taskIds] : [];
+  const refuse = (disposition, errors, extra = {}) => workUnitResult({
+    workUnitId: plan?.workUnitId,
+    taskIds,
+    dryRun,
+    mutationDisposition: disposition,
+    planDigest: plan?.planDigest,
+    errors,
+    ...extra,
+  });
+
+  const outerDigest = plan && typeof plan === 'object'
+    ? `sha256:${canonicalSha256({ ...plan, planDigest: null })}`
+    : null;
+  const canonicalTasks = [...new Set(taskIds)].sort();
+  const integrityErrors = [];
+  if (!exactKeys(plan, WORK_UNIT_PLAN_FIELDS)) {
+    integrityErrors.push('work-unit readiness plan fields must equal the closed schema');
+  }
+  if (plan?.kind !== WORK_UNIT_READINESS_PLAN_KIND || plan?.schemaVersion !== WORK_UNIT_READINESS_PLAN_SCHEMA_VERSION) {
+    integrityErrors.push(`plan must be ${WORK_UNIT_READINESS_PLAN_KIND} schema ${WORK_UNIT_READINESS_PLAN_SCHEMA_VERSION}`);
+  }
+  if (taskIds.length === 0 || taskIds.some(taskId => !taskId)) integrityErrors.push('plan requires a non-empty task id set');
+  if (canonicalTasks.length !== taskIds.length) integrityErrors.push('plan task ids contain duplicates');
+  if (canonicalTasks.join('\n') !== taskIds.join('\n')) integrityErrors.push('plan task ids are not in canonical lexical order');
+  if (!String(plan?.workUnitId ?? '').trim()) integrityErrors.push('plan requires a bounded work-unit id');
+  if (!Array.isArray(plan?.plans) || plan.plans.length !== taskIds.length) integrityErrors.push('plan must contain exactly one task plan per task id');
+  if (plan?.planDigest !== outerDigest) integrityErrors.push('work-unit readiness plan digest does not match its canonical content');
+  if (Array.isArray(plan?.plans)) {
+    plan.plans.forEach((taskPlan, index) => {
+      if (taskPlan?.taskId !== taskIds[index]) integrityErrors.push(`task plan ${index} does not match task id ${taskIds[index] ?? '(missing)'}`);
+      const parsed = validateExecutableReadinessPlan(taskPlan, { target, taskId: taskIds[index], backend: 'files' });
+      if (!parsed.ok) integrityErrors.push(...parsed.errors.map(error => `${taskIds[index] ?? `task[${index}]`}: ${error}`));
+      if (taskPlan?.executable?.workUnit?.id !== plan?.workUnitId) integrityErrors.push(`${taskIds[index]} is unrelated to work unit ${plan?.workUnitId}`);
+    });
+  }
+  const expectedMessage = taskIds.length > 0 && plan?.workUnitId
+    ? workUnitReadinessCommitMessage(plan.workUnitId, taskIds)
+    : null;
+  if (plan?.finalCommitMessage !== expectedMessage) integrityErrors.push('work-unit final commit message is not canonical for the exact task set');
+  if (integrityErrors.length > 0) return refuse('blocked', integrityErrors);
+  if (plan.applicable !== true) return refuse('blocked', plan.blockers ?? ['the reviewed work-unit plan is not applicable']);
+  if (plan.ready === true) {
+    return refuse('stale', ['the work-unit plan contains no mutation; regenerate it to prove current readiness before reuse'], {
+      expectedHead: plan.expectedHead,
+      recovery: 'Regenerate the work-unit readiness plan. An already-consumed plan is never silently replayed.',
+    });
+  }
+
+  let inventory;
+  const resolved = new Map();
+  try {
+    inventory = enumerateInventory();
+    for (const taskPlan of plan.plans) {
+      const baseArgs = taskPlan.executable.base.revalidationArgs;
+      const base = resolveBaseEvidence(baseArgs[0] === '--base' ? { base: baseArgs[1] } : { basePaths: baseArgs[1] });
+      const dependencies = resolveDependencyEvidence(taskPlan.taskId, taskPlan.executable.dependencies.revalidationArgs[1]);
+      resolved.set(taskPlan.taskId, { base, dependencies });
+    }
+  } catch (error) {
+    return refuse('stale', [error instanceof Error ? error.message : String(error)], {
+      expectedHead: plan.expectedHead,
+      recovery: 'Repair the reported evidence, then regenerate the exact work-unit readiness plan.',
+    });
+  }
+  const currentEntries = plan.plans.map(taskPlan => {
+    const evidence = resolved.get(taskPlan.taskId);
+    return {
+      taskId: taskPlan.taskId,
+      options: {
+        projectConfig,
+        actor: taskPlan.executable.actor,
+        authority: taskPlan.executable.authority,
+        workUnitId: plan.workUnitId,
+        base: evidence.base,
+        dependencies: evidence.dependencies,
+        dependencyRef: taskPlan.executable.dependencies.sourceRef,
+        inventory,
+        freshnessMaxAgeSeconds: taskPlan.executable.decomposition.freshnessMaxAgeSeconds,
+        rescanTrigger: taskPlan.executable.decomposition.rescanTrigger,
+        route: taskPlan.executable.decomposition.route,
+      },
+    };
+  });
+  const current = buildWorkUnitReadinessPlan(target, currentEntries, { workUnitId: plan.workUnitId });
+  if (current.planDigest !== plan.planDigest) {
+    return refuse('stale', ['the recomputed work-unit readiness plan differs from the reviewed plan'], {
+      expectedHead: plan.expectedHead,
+      resultingHead: current.expectedHead,
+      readinessByTask: Object.fromEntries(current.plans.map(item => [item.taskId, readinessSummary(item)])),
+      recovery: 'Regenerate and review the work-unit readiness plan; nothing was written.',
+    });
+  }
+  const unionWrites = plan.plans.flatMap(item => item.executable.writes);
+  const safety = evaluateReadinessRepositorySafety(target, { executable: { writes: unionWrites } });
+  if (!safety.ok) return refuse('blocked', safety.errors, { expectedHead: plan.expectedHead });
+  const activationBeforeByTask = Object.fromEntries(taskIds.map(taskId => [
+    taskId,
+    readTaskActivationBinding(target, 'files', taskId).state,
+  ]));
+
+  const candidates = [];
+  const candidatesByTask = new Map();
+  const prospectiveContents = {};
+  const prepareErrors = [];
+  for (const taskPlan of plan.plans) {
+    const taskId = taskPlan.taskId;
+    const executable = taskPlan.executable;
+    const taskCandidates = [];
+    candidatesByTask.set(taskId, taskCandidates);
+    const taskAbsolute = resolveWorkflowPath(target, executable.task.path);
+    const currentContent = readFileSync(taskAbsolute, 'utf8');
+    const roles = new Map(executable.writes.map(entry => [entry.role, entry]));
+    let baselineRecord = null;
+    if (roles.has('trusted_contract_baseline')) {
+      const entry = roles.get('trusted_contract_baseline');
+      const currentHistory = entry.state === 'file'
+        ? readFileSync(resolveWorkflowPath(target, entry.path), 'utf8')
+        : '';
+      const prepared = prepareTrustedBaselineCandidate({
+        target, taskId, body: currentContent, actor: executable.actor,
+        authority: executable.authority, timestamp: new Date(now).toISOString(),
+        recordId: recordIds[taskId] ?? `files-task-contract:${randomUUID()}`,
+        affectedArtifact: executable.task.path, currentHistory,
+      });
+      if (!prepared.ok) prepareErrors.push(...candidateFailureErrors(prepared, `${taskId}:trusted_contract_baseline`));
+      else {
+        baselineRecord = prepared.record;
+        taskCandidates.push({ role: 'trusted_contract_baseline', path: entry.path, predecessor: entry, content: prepared.candidate, record: prepared.record });
+      }
+    }
+    let prospective = currentContent;
+    if (roles.has('task_carrier')) {
+      const entry = roles.get('task_carrier');
+      const carrier = evaluateCurrentTaskCarrier({ currentContent, relPath: executable.task.path, taskId, nextStatus: 'agent-ready' });
+      if (!carrier.ok) prepareErrors.push(...candidateFailureErrors(carrier, `${taskId}:task_carrier_current`));
+      else {
+        const evidence = prepareAgentReadyEvidence({
+          target, taskId, relPath: executable.task.path, currentContent,
+          parsedContent: currentContent, currentDigest: carrier.currentDigest,
+          currentStatus: carrier.currentStatus, base: resolved.get(taskId).base,
+          dependencies: resolved.get(taskId).dependencies,
+          prospectiveRecords: baselineRecord ? [baselineRecord] : [],
+        });
+        if (!evidence.ok) prepareErrors.push(...candidateFailureErrors(evidence, `${taskId}:agent_ready_evidence`));
+        else {
+          const prepared = prepareTaskStatusCandidate({ currentContent, relPath: executable.task.path, nextStatus: 'agent-ready' });
+          if (!prepared.ok) prepareErrors.push(...candidateFailureErrors(prepared, `${taskId}:task_carrier_candidate`));
+          else if (prepared.candidateDigest !== executable.task.prospectiveDigest) prepareErrors.push(`${taskId}: prepared carrier differs from the plan binding`);
+          else {
+            prospective = prepared.candidate;
+            taskCandidates.push({ role: 'task_carrier', path: entry.path, predecessor: entry, content: prospective, candidateDigest: prepared.candidateDigest, nextStatus: 'agent-ready' });
+          }
+        }
+      }
+    }
+    prospectiveContents[executable.task.path] = prospective;
+    candidates.push(...taskCandidates);
+  }
+  if (prepareErrors.length > 0) return refuse('blocked', prepareErrors, { expectedHead: plan.expectedHead });
+
+  const observedAt = new Date(now).toISOString();
+  const dependenciesByTask = Object.fromEntries(taskIds.map(taskId => [taskId, resolved.get(taskId).dependencies]));
+  for (const taskPlan of plan.plans) {
+    const entry = taskPlan.executable.writes.find(item => item.role === 'committed_decomposition');
+    if (!entry) continue;
+    const taskId = taskPlan.taskId;
+    const evidence = resolved.get(taskId);
+    const prepared = prepareDecompositionSource({
+      enumerateInventory: () => enumerateInventory({ observedAt, overlay: prospectiveContents }),
+      workUnit: { id: plan.workUnitId, backend: 'files' }, taskId,
+      sourceRef: taskPlan.executable.decomposition.path,
+      sourceRevision: taskPlan.executable.decomposition.sourceRevision,
+      route: taskPlan.executable.decomposition.route, observedAt,
+      freshnessPolicy: { maxAgeSeconds: taskPlan.executable.decomposition.freshnessMaxAgeSeconds },
+      basePaths: evidence.base.paths,
+      dependencies: evidence.dependencies.statuses,
+      dependenciesByTask,
+      readinessContext: {
+        base: evidence.base.evidence,
+        dependencies: evidence.dependencies.evidence,
+        dependenciesByTask,
+      },
+      rescanTrigger: taskPlan.executable.decomposition.rescanTrigger,
+    }, { now });
+    if (!prepared.ok) prepareErrors.push(...candidateFailureErrors({
+      ...prepared,
+      errors: prepared.validation?.errors ?? prepared.errors,
+      diagnostics: prepared.validation?.diagnostics ?? prepared.diagnostics,
+    }, `${taskId}:committed_decomposition`));
+    else {
+      const candidate = { role: 'committed_decomposition', path: entry.path, predecessor: entry, content: prepared.source, provenance: prepared.decomposition };
+      candidates.push(candidate);
+      candidatesByTask.get(taskId).push(candidate);
+    }
+  }
+  if (prepareErrors.length > 0) return refuse('blocked', prepareErrors, { expectedHead: plan.expectedHead });
+  for (let index = 0; index < plan.plans.length; index++) {
+    const checked = validateProspectiveBundle({ plan: plan.plans[index], candidates: candidatesByTask.get(taskIds[index]), current: current.plans[index] });
+    if (!checked.ok) prepareErrors.push(...checked.errors.map(error => `${taskIds[index]}: ${error}`));
+  }
+  if (prepareErrors.length > 0) return refuse('blocked', prepareErrors, { expectedHead: plan.expectedHead });
+
+  const unique = new Map();
+  for (const candidate of candidates) {
+    if (unique.has(candidate.path)) return refuse('blocked', [`planned path '${candidate.path}' is owned by more than one task`], { expectedHead: plan.expectedHead });
+    unique.set(candidate.path, candidate);
+  }
+  const transactionCandidates = [...unique.values()].sort((left, right) => left.path.localeCompare(right.path));
+  const changedPaths = transactionCandidates.map(item => item.path);
+  const readinessByTask = Object.fromEntries(current.plans.map(item => [item.taskId, readinessSummary(item)]));
+  if (dryRun) return workUnitResult({
+    workUnitId: plan.workUnitId, taskIds, dryRun: true, mutationDisposition: 'dry_run',
+    planDigest: plan.planDigest, expectedHead: plan.expectedHead, changedPaths,
+    commitCount: 0, readinessByTask,
+    nextAction: `Nothing was written. Rerun with --yes to create ${plan.finalCommitMessage.split('\n')[0]}.`,
+  });
+
+  capturePredecessorBytes(target, transactionCandidates);
+  const mutations = transactionCandidates.map(item => item.predecessor.state === 'absent'
+    ? { type: 'create', path: item.path, content: item.content }
+    : { type: 'write', path: item.path, content: item.content, expectedDigest: item.predecessor.digest, expectedKind: 'file' });
+  const written = executeMutationBatch(target, mutations, beforeWrite ? { beforeWrite } : {});
+  if (!written.ok) return refuse(written.rollbackErrors.length === 0 ? 'rolled_back' : 'unresolved', written.errors, {
+    expectedHead: plan.expectedHead,
+    changedPaths: written.rollbackErrors.length === 0 ? [] : changedPaths,
+    rollbackErrors: written.rollbackErrors,
+    readinessByTask,
+  });
+  try { afterWrite?.(); } catch (error) {
+    const rollbackErrors = restorePredecessors(target, transactionCandidates);
+    return refuse(rollbackErrors.length === 0 ? 'rolled_back' : 'unresolved', [error instanceof Error ? error.message : String(error)], {
+      expectedHead: plan.expectedHead, changedPaths: rollbackErrors.length === 0 ? [] : changedPaths,
+      rollbackErrors, readinessByTask,
+    });
+  }
+  for (const candidate of transactionCandidates) {
+    if (readFileSync(resolveWorkflowPath(target, candidate.path), 'utf8') !== candidate.content) {
+      return refuse('unresolved', [`'${candidate.path}' was replaced between write and verification`], { expectedHead: plan.expectedHead, changedPaths, readinessByTask });
+    }
+  }
+  const commitPlan = {
+    taskIds,
+    workUnitId: plan.workUnitId,
+    executable: {
+      expectedHead: plan.expectedHead,
+      writes: transactionCandidates.map(item => item.predecessor),
+      finalCommitMessage: plan.finalCommitMessage,
+    },
+  };
+  const committed = createReadinessCommit({ target, plan: commitPlan, candidates: transactionCandidates, changedPaths, beforeCommit });
+  if (!committed.ok) {
+    if (committed.contaminated && committed.rollbackable) {
+      let rollback;
+      try {
+        beforeRollback?.();
+        rollback = rollbackCreatedCommit({ target, originalRef: committed.originalRef, expectedHead: plan.expectedHead, createdHead: committed.head, candidates: transactionCandidates, changedPaths, beforeRefRestore });
+      } catch (error) { rollback = { errors: [error instanceof Error ? error.message : String(error)], unplannedPaths: [] }; }
+      return refuse(rollback.errors.length === 0 ? 'rolled_back' : 'unresolved', [...committed.errors, ...rollback.errors], {
+        expectedHead: plan.expectedHead, resultingHead: rollback.errors.length === 0 ? plan.expectedHead : committed.head,
+        changedPaths: rollback.errors.length === 0 ? [] : changedPaths, rollbackErrors: rollback.errors,
+        commitCount: rollback.errors.length === 0 ? 0 : 1, readinessByTask,
+      });
+    }
+    if (committed.committed || committed.worldDiverged) {
+      return refuse('unresolved', committed.errors, { expectedHead: plan.expectedHead, resultingHead: committed.head, changedPaths, commitCount: committed.committed ? 1 : 0, readinessByTask, recovery: committed.recovery });
+    }
+    const rollbackErrors = restorePredecessors(target, transactionCandidates, changedPaths, plan.expectedHead);
+    return refuse(rollbackErrors.length === 0 ? 'rolled_back' : 'unresolved', committed.errors, {
+      expectedHead: plan.expectedHead, resultingHead: plan.expectedHead,
+      changedPaths: rollbackErrors.length === 0 ? [] : changedPaths, rollbackErrors,
+      readinessByTask,
+    });
+  }
+
+  const verificationErrors = [];
+  const verifiedByTask = {};
+  for (let index = 0; index < plan.plans.length; index++) {
+    const taskPlan = plan.plans[index];
+    const evidence = resolved.get(taskPlan.taskId);
+    const verified = verifyCommittedReadiness({
+      target, taskId: taskPlan.taskId, projectConfig, plan: taskPlan,
+      base: evidence.base, dependencies: evidence.dependencies,
+      enumerateInventory, io, activationBefore: activationBeforeByTask[taskPlan.taskId],
+      workUnitAttribution: { workUnitId: plan.workUnitId, taskIds },
+    });
+    verifiedByTask[taskPlan.taskId] = verified.readiness;
+    if (!verified.ok) verificationErrors.push(...verified.errors.map(error => `${taskPlan.taskId}: ${error}`));
+  }
+  if (verificationErrors.length > 0) return refuse('unresolved', verificationErrors, {
+    expectedHead: plan.expectedHead, resultingHead: committed.head, changedPaths,
+    commit: committed.commit, commitCount: 1, readinessByTask: verifiedByTask,
+    recovery: 'The atomic readiness commit exists, but post-commit verification failed. It was preserved for Maintainer reconciliation.',
+  });
+  return workUnitResult({
+    workUnitId: plan.workUnitId, taskIds, dryRun: false, mutationDisposition: 'committed',
+    planDigest: plan.planDigest, expectedHead: plan.expectedHead, resultingHead: committed.head,
+    changedPaths, commit: committed.commit, commitCount: 1, readinessByTask: verifiedByTask,
+    nextAction: `Every task is current against work unit ${plan.workUnitId}. Activation remains a separate operator action.`,
+  });
+}
+
 /**
  * Prove - never assume - that applying over an already-settled task is a no-op.
  *
@@ -1342,7 +1745,14 @@ function proveConsumedReadinessCommit(target, plan) {
   if (message !== executable.finalCommitMessage) {
     errors.push('the commit at the readiness position does not carry the reviewed final commit message');
   }
-  const attribution = evaluateCommitAttribution({ message, taskId: plan.taskId, role: 'maintainer' });
+  const attribution = Array.isArray(plan.taskIds)
+    ? evaluateWorkUnitCommitAttribution({
+      message,
+      workUnitId: plan.workUnitId,
+      taskIds: plan.taskIds,
+      role: 'maintainer',
+    })
+    : evaluateCommitAttribution({ message, taskId: plan.taskId, role: 'maintainer' });
   if (!attribution.ok) {
     errors.push(...attribution.errors.map(error => `the commit at the readiness position is not the plan's commit: ${error}`));
   }
@@ -1412,6 +1822,10 @@ function readinessSummary(plan) {
     pendingSteps: [...plan.pendingSteps],
     status: plan.executable.task.status,
     writeSet: [...plan.writeSet],
+    errors: [...(plan.readiness?.errors ?? [])],
+    warnings: [...(plan.readiness?.warnings ?? [])],
+    diagnostics: [...(plan.readiness?.diagnostics ?? [])],
+    commands: plan.readinessCommands ?? null,
   });
 }
 
@@ -1613,7 +2027,14 @@ function createReadinessCommit({ target, plan, candidates, changedPaths, beforeC
     // A commit-msg hook rewrote the reviewed message.
     contentErrors.push('the readiness commit message does not equal the reviewed final commit message');
   }
-  const attribution = evaluateCommitAttribution({ message, taskId: plan.taskId, role: 'maintainer' });
+  const attribution = Array.isArray(plan.taskIds)
+    ? evaluateWorkUnitCommitAttribution({
+      message,
+      workUnitId: plan.workUnitId,
+      taskIds: plan.taskIds,
+      role: 'maintainer',
+    })
+    : evaluateCommitAttribution({ message, taskId: plan.taskId, role: 'maintainer' });
   if (!attribution.ok) {
     contentErrors.push(...attribution.errors.map(error => `readiness commit attribution: ${error}`));
   }
@@ -1756,7 +2177,7 @@ function readinessCommitFacts(target, sha, ref = null) {
  * Nothing here trusts a candidate: every fact comes from actual HEAD. If any
  * gate refuses, apply reports `unresolved` rather than claiming readiness.
  */
-function verifyCommittedReadiness({ target, taskId, projectConfig, plan, base, dependencies, enumerateInventory, io, activationBefore }) {
+function verifyCommittedReadiness({ target, taskId, projectConfig, plan, base, dependencies, enumerateInventory, io, activationBefore, workUnitAttribution = null }) {
   const errors = [];
   const executable = plan.executable;
   const after = buildReadinessPlan(target, taskId, {
@@ -1780,11 +2201,11 @@ function verifyCommittedReadiness({ target, taskId, projectConfig, plan, base, d
     errors.push(`the committed trusted contract chain is '${after.executable.contractChain.state}', not current`);
   }
 
-  for (const [label, path] of [
-    ['decomposition', executable.decomposition.path],
-    ['dependency snapshot', executable.dependencies.sourceRef],
+  for (const [label, path, attribution] of [
+    ['decomposition', executable.decomposition.path, workUnitAttribution],
+    ['dependency snapshot', executable.dependencies.sourceRef, null],
   ]) {
-    const verified = verifyCommittedAttributedSource(target, path, { taskId });
+    const verified = verifyCommittedAttributedSource(target, path, { taskId, ...(attribution ?? {}) });
     if (!verified.ok) errors.push(`the committed ${label} is not exact Maintainer-attributed evidence: ${verified.error}`);
   }
 

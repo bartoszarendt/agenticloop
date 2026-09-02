@@ -118,6 +118,23 @@ describe('generated orchestrator surfaces preserve mandatory scan wording', () =
 });
 
 describe('canonical Parallel Opportunity Scan policy is documented', () => {
+  it('uses one unambiguous cadence, a tooling diagnostic budget, and durable failed-parent reconciliation', () => {
+    const role = readFileSync(join(REPO_ROOT, 'skills', 'role-delegation', 'SKILL.md'), 'utf8');
+    const parallel = readFileSync(join(REPO_ROOT, 'skills', 'parallel-delegation', 'SKILL.md'), 'utf8');
+    const orchestrator = readFileSync(join(REPO_ROOT, 'agents', 'orchestrator.md'), 'utf8');
+    for (const text of [role, parallel, orchestrator]) {
+      assert.match(text, /exactly one (?:return |checkpoint )?cadence/i);
+      assert.match(text, /diagnostic budget/i);
+      assert.match(text, /not (?:a )?host-enforced kill switch|not a hard kill switch/i);
+    }
+    assert.match(role, /Coordinator-response reconciliation/);
+    assert.match(role, /durable task\/backend artifacts and Git refs\/commits/);
+    assert.match(role, /queued pause/);
+    assert.match(role, /session_reported/);
+    assert.match(role, /raw transcript/);
+    assert.match(role, /no-op/);
+  });
+
   it('parallel-delegation states the serial justification requirement', () => {
     const text = readFileSync(join(REPO_ROOT, 'skills', 'parallel-delegation', 'SKILL.md'), 'utf-8').replace(/\s+/g, ' ');
     assert.match(text, /only with a concrete recorded reason/i);

@@ -233,6 +233,43 @@ a branch alone is not sufficient in a shared checkout. The lease progress
 checkpoint is a return-to-orchestrator checkpoint cadence, not an async
 heartbeat, unless the host exposes running-subagent status.
 
+Choose exactly one cadence per delegation: return after every record, or after
+each explicit batch of N records. Give unexpected tooling a bounded diagnostic
+budget. OpenCode does not turn this cooperative lease into a kill switch. When
+the host cannot stream or cancel, do not start a delegation expected to run for
+an extended period; prefer one-record returns for high-context task
+materialization.
+
+If a child finishes but the provider socket fails before the parent response,
+resume the orchestrator by reading durable backend artifacts and Git state
+first. Acknowledge any queued pause before implementation or activation. Use
+OpenCode session metadata only as `session_reported`, persist only a compact
+checkpoint, and execute only coordinator actions still outstanding. Repeating
+reconciliation over unchanged durable state must do nothing.
+
+### Windows command-result discipline
+
+An OpenCode tool envelope marked complete only proves transport completion. For
+mutating commands and gates, inspect the native process exit code and, when
+available, the Agentic Loop JSON `disposition`/`ok` fields. Prefer `--json` and
+structured parsing over truncation pipelines.
+
+In PowerShell, use native filtering and preserve the child exit:
+
+```powershell
+$PSNativeCommandUseErrorActionPreference = $true
+$raw = & npx agenticloop task handoff-preflight T-020 --json
+$childExit = $LASTEXITCODE
+if ($childExit -ne 0) { throw "handoff-preflight failed with exit $childExit" }
+$receipt = $raw | ConvertFrom-Json
+if ($receipt.disposition -ne 'proceed') { throw "handoff refused: $($receipt.disposition)" }
+```
+
+Do not mix Unix `head`/`grep` pipelines into PowerShell or rely on a downstream
+pipeline stage to represent an upstream native command's exit. A structured
+refusal and a transport-complete process with non-zero exit are both non-success,
+but they remain distinct evidence.
+
 Launch OpenCode sessions that run Agentic Loop with non-interactive Git
 environment variables (`GIT_EDITOR=true`, `GIT_SEQUENCE_EDITOR=true`,
 `GIT_PAGER=cat`, `GIT_TERMINAL_PROMPT=0`, `GH_EDITOR=true`, `GH_PAGER=cat`,

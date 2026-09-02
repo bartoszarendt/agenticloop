@@ -326,3 +326,41 @@ explicit GitHub `User` identity counts as human, the review must be bound to the
 current PR head, and the required review state is outcome-sensitive (`APPROVED` for
 accepted, `CHANGES_REQUESTED` for needs_revision). Missing or malformed review data
 fails conservatively.
+
+## Atomic sibling readiness
+
+For three independently authored siblings in one work unit, store a closed
+task-to-snapshot map and settle them against one final inventory:
+
+```text
+npx agenticloop task readiness-plan --tasks T-020 T-021 T-022 \
+  --work-unit milestone:M01 --actor "Maintainer Name" --authority plan:M01 \
+  --base HEAD --dependencies-by-task .agenticloop/tmp/M01-dependencies.json \
+  --json > .agenticloop/tmp/M01-readiness-plan.json
+npx agenticloop task readiness-apply --plan .agenticloop/tmp/M01-readiness-plan.json --dry-run --json
+npx agenticloop task readiness-apply --plan .agenticloop/tmp/M01-readiness-plan.json --yes --json
+```
+
+The plan validates all tasks before writing. The commit subject is
+`chore(milestone:M01): settle readiness`; every decomposition binds the same
+final inventory and work-unit scan. Warning diagnostics remain visible and do
+not block. A changed dependency snapshot for any member stales the whole scan.
+
+## Resume after a failed parent response
+
+Suppose a Maintainer child returned a committed artifact, then the provider
+socket failed before the Orchestrator answered. On resume, first acknowledge a
+queued pause, then inspect the durable task/backend record and Git commit. Match
+them to the outstanding coordinator action and perform only that action. Session
+metadata may corroborate the event as `session_reported`; it does not become
+authenticated host evidence. Store a compact checkpoint, not the transcript.
+Repeating these steps over unchanged state is a no-op.
+
+## Propose a downstream toolkit escalation
+
+Keep current target-project knowledge in Project Operating Facts. When a human
+chooses to promote a toolkit defect, create a closed facts JSON and run
+`improvement propose-toolkit-escalation` to a target-relative tmp file. Review
+the sanitized proposal manually, transfer it, and recreate/import it in the
+toolkit repository with that repository's durable references. The downstream
+command never writes to the toolkit repository.

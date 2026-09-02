@@ -7,15 +7,19 @@
  */
 
 import { createIo, resolveCliTarget, EXIT_USAGE } from './cli-io.js';
+import { readFileSync } from 'node:fs';
 import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
 import { buildCliDurableReferenceContext } from './durable-refs.js';
 import {
   createImprovementProposal,
+  buildToolkitEscalationProposal,
   listImprovementProposals,
   parseImprovementProposal,
   validateImprovementProposal,
+  validateToolkitEscalationProposal,
 } from './improvement.js';
 import { loadProjectMap, PROJECT_MAP_DEFAULTS } from './project-map.js';
+import { executeMutationBatch, resolveTargetPath } from './fs-mutation-kernel.js';
 
 function projectConfig(target) {
   return loadProjectMap(target)?.config ?? PROJECT_MAP_DEFAULTS;
@@ -44,7 +48,7 @@ export async function cmdImprovement(args, io = createIo()) {
     const suggestion = sub ? suggestName(sub, Object.keys(SUBCOMMANDS)) : null;
     io.err(suggestion
       ? `improvement: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
-      : 'improvement requires a subcommand: new, lint, status.');
+      : 'improvement requires a subcommand: new, lint, status, propose-toolkit-escalation.');
     io.err('Run "agenticloop help improvement" for usage.');
     return EXIT_USAGE;
   }
@@ -133,7 +137,51 @@ export async function cmdImprovement(args, io = createIo()) {
       return 0;
     }
 
-    io.err(`Unknown improvement subcommand '${sub}'. Expected: new, lint, status.`);
+    if (sub === 'propose-toolkit-escalation') {
+      if (!opts.input || !opts.output || !opts.toolkitRepository || opts.yes !== true) {
+        io.err('improvement propose-toolkit-escalation requires --input, --toolkit-repository, --output, and explicit --yes');
+        return EXIT_USAGE;
+      }
+      let input;
+      let outputAbsolute;
+      try {
+        input = JSON.parse(readFileSync(resolveTargetPath(target, String(opts.input)), 'utf8'));
+        outputAbsolute = resolveTargetPath(target, String(opts.output));
+      } catch (error) {
+        io.err(error.message);
+        return 1;
+      }
+      void outputAbsolute;
+      const built = buildToolkitEscalationProposal(target, input, opts.toolkitRepository);
+      if (!built.ok) {
+        for (const error of built.errors) io.err(error);
+        return 1;
+      }
+      const validation = validateToolkitEscalationProposal(built.proposal);
+      if (!validation.ok) {
+        for (const error of validation.errors) io.err(error);
+        return 1;
+      }
+      const written = executeMutationBatch(target, [{
+        type: 'create', path: String(opts.output).replace(/\\/g, '/'),
+        content: `${JSON.stringify(built.proposal, null, 2)}\n`,
+      }]);
+      if (!written.ok) {
+        for (const error of [...written.errors, ...written.rollbackErrors]) io.err(error);
+        return 1;
+      }
+      if (opts.json) io.out(JSON.stringify({
+        disposition: 'proposal_exported', output: String(opts.output).replace(/\\/g, '/'),
+        digest: built.proposal.digest, transferAuthority: built.proposal.transferAuthority,
+      }, null, 2));
+      else {
+        io.out(`Exported sanitized toolkit proposal to ${opts.output}`);
+        io.out('  Human review and an explicit import/recreation in the receiving toolkit repository are still required.');
+      }
+      return 0;
+    }
+
+    io.err(`Unknown improvement subcommand '${sub}'. Expected: new, lint, status, propose-toolkit-escalation.`);
     return EXIT_USAGE;
   } catch (error) {
     io.err(error.message);

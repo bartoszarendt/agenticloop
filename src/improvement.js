@@ -19,6 +19,8 @@ import { join } from 'node:path';
 import { parseFrontmatter } from './frontmatter.js';
 import { durableReferenceErrors } from './durable-refs.js';
 import { executeMutationBatch } from './fs-mutation-kernel.js';
+import { canonicalSha256 } from './canonical-json.js';
+import { repositoryAuthorityIdentity } from './repository-identity.js';
 import {
   IMPROVEMENT_PROPOSAL_RISK_LEVELS,
   IMPROVEMENT_PROPOSAL_SECTION_HEADINGS,
@@ -28,6 +30,85 @@ import {
 } from './layout.js';
 
 export { IMPROVEMENTS_DIRECTORY_RELATIVE_PATH };
+
+export const TOOLKIT_ESCALATION_KIND = 'agenticloop.toolkit-improvement-proposal';
+export const TOOLKIT_ESCALATION_SCHEMA_VERSION = 1;
+
+const ESCALATION_INPUT_FIELDS = Object.freeze([
+  'agenticLoopVersion', 'command', 'diagnosticCodes', 'affectedSurface',
+  'sourceRefs', 'reproduction',
+]);
+
+function sanitizeEscalationText(value) {
+  return String(value ?? '')
+    .replace(/\bBearer\s+\S+/gi, 'Bearer <redacted>')
+    .replace(/\b(?:sk|ghp|github_pat)_[A-Za-z0-9_-]+\b/gi, '<redacted-secret>')
+    .replace(/\bses_[A-Za-z0-9]+\b/g, '<redacted-session>')
+    .replace(/\b[A-Za-z]:\\[^\s"']+/g, '<local-path>')
+    .replace(/\b(token|password|secret|private[_ -]?key)\s*[:=]\s*\S+/gi, '$1=<redacted>')
+    .trim();
+}
+
+/** Build the closed, sanitized transfer artifact; it never imports or mutates a toolkit. */
+export function buildToolkitEscalationProposal(sourceRepository, input, toolkitRepository) {
+  const errors = [];
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return { ok: false, errors: ['toolkit escalation input must be an object'], proposal: null };
+  }
+  const unknown = Object.keys(input).filter(key => !ESCALATION_INPUT_FIELDS.includes(key));
+  if (unknown.length > 0) errors.push(`toolkit escalation input contains forbidden field(s): ${unknown.sort().join(', ')}`);
+  for (const field of ['agenticLoopVersion', 'command', 'affectedSurface']) {
+    if (!String(input[field] ?? '').trim()) errors.push(`toolkit escalation input requires ${field}`);
+  }
+  for (const field of ['diagnosticCodes', 'sourceRefs', 'reproduction']) {
+    if (!Array.isArray(input[field]) || input[field].length === 0 || input[field].some(value => !String(value ?? '').trim())) {
+      errors.push(`toolkit escalation input requires a non-empty ${field} array`);
+    }
+  }
+  if (!String(toolkitRepository ?? '').trim()) errors.push('toolkit escalation requires an operator-asserted target repository identity');
+  if (errors.length > 0) return { ok: false, errors, proposal: null };
+  const proposal = {
+    kind: TOOLKIT_ESCALATION_KIND,
+    schemaVersion: TOOLKIT_ESCALATION_SCHEMA_VERSION,
+    sourceRepository: {
+      identity: repositoryAuthorityIdentity(sourceRepository),
+      evidenceGrade: 'repository_observed',
+    },
+    targetRepository: {
+      identity: sanitizeEscalationText(toolkitRepository),
+      evidenceGrade: 'operator_asserted_external',
+    },
+    agenticLoopVersion: sanitizeEscalationText(input.agenticLoopVersion),
+    command: sanitizeEscalationText(input.command),
+    diagnosticCodes: [...new Set(input.diagnosticCodes.map(sanitizeEscalationText))].sort(),
+    affectedSurface: sanitizeEscalationText(input.affectedSurface),
+    sourceRefs: [...new Set(input.sourceRefs.map(sanitizeEscalationText))].sort(),
+    reproduction: input.reproduction.map(sanitizeEscalationText),
+    exclusions: [
+      'credentials', 'raw_transcripts', 'private_product_content',
+      'local_session_stores', 'host_authentication_claims',
+    ],
+    transferAuthority: 'human_review_required',
+    digest: null,
+  };
+  proposal.digest = `sha256:${canonicalSha256({ ...proposal, digest: null })}`;
+  return { ok: true, errors: [], proposal: Object.freeze(proposal) };
+}
+
+export function validateToolkitEscalationProposal(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { ok: false, errors: ['toolkit escalation proposal must be an object'] };
+  const errors = [];
+  if (value.kind !== TOOLKIT_ESCALATION_KIND || value.schemaVersion !== TOOLKIT_ESCALATION_SCHEMA_VERSION) errors.push('toolkit escalation proposal kind or schema is invalid');
+  if (value.sourceRepository?.evidenceGrade !== 'repository_observed') errors.push('source repository identity must be repository-observed');
+  if (value.targetRepository?.evidenceGrade !== 'operator_asserted_external') errors.push('target repository identity must remain operator-asserted external evidence');
+  if (value.transferAuthority !== 'human_review_required') errors.push('toolkit escalation transfer must require human review');
+  const serialized = JSON.stringify(value);
+  if (/ses_[A-Za-z0-9]+|Bearer\s+(?!<redacted>)\S+|[A-Za-z]:\\|\b(?:sk|ghp|github_pat)_[A-Za-z0-9_-]+|\b(?:token|password|secret|private[_ -]?key)\s*[:=]\s*(?!<redacted>)\S+/i.test(serialized)) {
+    errors.push('toolkit escalation contains unsanitized session, credential, or local-path data');
+  }
+  if (value.digest !== `sha256:${canonicalSha256({ ...value, digest: null })}`) errors.push('toolkit escalation digest is invalid');
+  return { ok: errors.length === 0, errors };
+}
 
 export const IMPROVEMENT_ID_PATTERN = /^I-\d{4}-\d{2}-\d{2}-\d{3,}$/;
 

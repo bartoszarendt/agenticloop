@@ -163,10 +163,15 @@ import {
   resolveCarrierLineage,
 } from './handoff-consumption.js';
 import { measureTaskWorkflow } from './workflow-measurement.js';
-import { buildReadinessPlan } from './readiness-plan.js';
-import { applyReadinessPlan } from './readiness-apply.js';
+import {
+  WORK_UNIT_READINESS_PLAN_KIND,
+  buildReadinessPlan,
+  buildWorkUnitReadinessPlan,
+} from './readiness-plan.js';
+import { applyReadinessPlan, applyWorkUnitReadinessPlan } from './readiness-apply.js';
 import {
   evaluateCurrentTaskCarrier,
+  evaluateAuthoringReadiness,
   prepareAgentReadyEvidence,
   prepareTaskStatusCandidate,
   prepareTrustedBaselineCandidate,
@@ -670,6 +675,7 @@ const TASK_SUBCOMMAND_BACKENDS = Object.freeze({
   show: Object.freeze(['files']),
   lint: Object.freeze(['files']),
   new: Object.freeze(['files']),
+  materialize: Object.freeze(['files']),
   'establish-baseline': Object.freeze(['files']),
   'abandon-attempt': Object.freeze(['files']),
   'record-tooling-failure': Object.freeze(['files']),
@@ -693,6 +699,7 @@ const TASK_SUBCOMMAND_BACKENDS = Object.freeze({
   'role-start': Object.freeze(['files']),
   'handoff-preflight': Object.freeze(['files', 'github']),
   'refresh-handoff-evidence': Object.freeze(['files']),
+  'refresh-handoff-receipt': Object.freeze(['files']),
   'prepare-return': Object.freeze(['files']),
   'verify-return': Object.freeze(['files', 'github']),
   'check-evidence-init': Object.freeze(['files', 'github']),
@@ -1893,6 +1900,14 @@ export function createReadinessApplyBindings(target, projectConfig, taskId) {
   };
 }
 
+export function createWorkUnitReadinessApplyBindings(target, projectConfig) {
+  return {
+    enumerateInventory: (options = {}) => enumerateFilesTaskInventory(target, projectConfig, options),
+    resolveBaseEvidence: options => readExplicitBaseEvidence(target, options),
+    resolveDependencyEvidence: (taskId, relPath) => readDependencyEvidence(target, relPath, taskId),
+  };
+}
+
 /**
  * Resolve explicit base evidence. There is no implicit HEAD and no default
  * branch: exactly one of `--base` or `--base-paths` must be supplied, and a
@@ -2050,6 +2065,84 @@ function instantiateTaskTemplate(target, projectConfig, taskId, title) {
     .replaceAll('Short task title', title);
 }
 
+function replaceTaskSection(content, heading, body) {
+  const pattern = new RegExp(`(^${heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$)([\\s\\S]*?)(?=^## |(?![\\s\\S]))`, 'm');
+  if (!pattern.test(content)) throw new VerificationContextMalformedError(`task template is missing ${heading}`);
+  return content.replace(pattern, `$1\n${String(body).trim()}\n\n`);
+}
+
+function bulletLines(values, fallback = '- None.') {
+  return Array.isArray(values) && values.length > 0
+    ? values.map(value => `- ${String(value).trim()}`).join('\n')
+    : fallback;
+}
+
+/** Deterministically bind mechanical source blocks while retaining explicit Maintainer judgment. */
+function materializeTaskRecord(target, projectConfig, taskId, sourcePath, packageId, judgmentPath) {
+  const sourceBytes = readFileSync(resolveTargetPath(target, sourcePath), 'utf8');
+  const judgmentBytes = readFileSync(resolveTargetPath(target, judgmentPath), 'utf8');
+  const source = JSON.parse(sourceBytes);
+  const judgment = JSON.parse(judgmentBytes);
+  const packages = Array.isArray(source?.workPackages)
+    ? source.workPackages.filter(item => String(item?.id ?? '') === packageId)
+    : [];
+  if (packages.length !== 1) {
+    throw new VerificationContextMalformedError(
+      packages.length === 0
+        ? `source contains no work package '${packageId}'`
+        : `source work package selection '${packageId}' is ambiguous`
+    );
+  }
+  const selected = packages[0];
+  const requiredJudgment = [
+    'currentState', 'scope', 'outOfScope', 'acceptanceCriteria', 'expectedFiles',
+    'parallelSafety', 'implementationNotes', 'requiredChecks',
+  ];
+  const missing = requiredJudgment.filter(field => judgment[field] === undefined ||
+    (Array.isArray(judgment[field]) && judgment[field].length === 0) ||
+    (!Array.isArray(judgment[field]) && !String(judgment[field] ?? '').trim()));
+  if (missing.length > 0) throw new VerificationContextMalformedError(`Maintainer judgment is missing: ${missing.join(', ')}`);
+  const sourceRevision = String(source.sourceRevision ?? '').trim();
+  if (!sourceRevision) throw new VerificationContextMalformedError('materialization source requires sourceRevision');
+  const title = String(selected.title ?? '').trim();
+  if (!title) throw new VerificationContextMalformedError(`work package '${packageId}' requires title`);
+  const attemptBudget = resolveProjectAttemptBudget(projectConfig);
+  const reviewBudget = resolveProjectReviewBudget(projectConfig);
+  if (attemptBudget.error) throw new VerificationContextMalformedError(attemptBudget.error);
+  if (reviewBudget.error) throw new VerificationContextMalformedError(reviewBudget.error);
+  let content = replaceFrontmatterField(instantiateTaskTemplate(target, projectConfig, taskId, title), 'status', 'draft');
+  content = replaceFrontmatterField(content, 'attempt_budget', String(attemptBudget.budget));
+  content = replaceFrontmatterField(content, 'review_budget', String(reviewBudget.budget));
+  content = replaceFrontmatterField(content, 'task_contract_schema', '2');
+  const sourceDigest = `sha256:${createHash('sha256').update(sourceBytes, 'utf8').digest('hex')}`;
+  content = replaceTaskSection(content, '## Task', bulletLines(selected.plannerContract));
+  content = replaceTaskSection(content, '## Source Documents Reviewed', [
+    `- Materialization source: \`${String(sourcePath).replace(/\\/g, '/')}\``,
+    `- Source revision: \`${sourceRevision}\``,
+    `- Source digest: \`${sourceDigest}\``,
+    `- Work package: \`${packageId}\``,
+    bulletLines(selected.sourceTraceability),
+  ].join('\n'));
+  content = replaceTaskSection(content, '## Current State', String(judgment.currentState));
+  content = replaceTaskSection(content, '## Scope', bulletLines(judgment.scope));
+  content = replaceTaskSection(content, '## Out of Scope', bulletLines(judgment.outOfScope));
+  content = replaceTaskSection(content, '## Acceptance Criteria', bulletLines(judgment.acceptanceCriteria));
+  content = replaceTaskSection(content, '## Required Checks', judgment.requiredChecks.map((value, index) =>
+    `- [RC-${index + 1}] ${String(value).trim()}`).join('\n'));
+  content = replaceTaskSection(content, '## Expected Files or Areas', bulletLines(judgment.expectedFiles));
+  content = replaceTaskSection(content, '## Implementation Notes', [
+    bulletLines(judgment.implementationNotes),
+    '- Locked decision IDs: ' + ((selected.lockedDecisionIds ?? []).join(', ') || 'none'),
+  ].join('\n'));
+  content = replaceTaskSection(content, '## Parallel Safety', bulletLines(judgment.parallelSafety));
+  content = replaceTaskSection(content, '## Grouping', [
+    `- Work package: ${packageId}`,
+    ...Object.entries(selected.groupingMetadata ?? {}).sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => `- ${key}: ${String(value)}`),
+  ].join('\n'));
+  return { content, sourceRevision, sourceDigest, packageId };
+}
+
 export function appendComment(content, note) {
   const date = new Date().toISOString().slice(0, 10);
   const entry = `- ${date}: ${note.trim()}`;
@@ -2075,7 +2168,7 @@ function printLintResults(results, json, io) {
     }
     const diagnosticMessages = new Set((result.diagnostics ?? []).map(item => item.message));
     for (const diagnostic of result.diagnostics ?? []) {
-      io.out(`${result.file}: ERROR [${diagnostic.code}] ${diagnostic.message}`);
+      io.out(`${result.file}: ${diagnostic.level === 'warning' ? 'WARN' : 'ERROR'} [${diagnostic.code}] ${diagnostic.message}`);
       if (diagnostic.repairHint) io.out(`${result.file}: REPAIR ${diagnostic.repairHint}`);
     }
     for (const error of result.errors) {
@@ -2160,7 +2253,7 @@ export async function cmdTask(args, io = createIo()) {
     const suggestion = sub ? suggestName(sub, Object.keys(TASK_SUBCOMMANDS)) : null;
     throw new CliUsageError(suggestion
       ? `task: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
-      : 'task requires a subcommand: list, show, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, role-start, handoff-preflight, refresh-handoff-evidence, attempt-status, abandon-attempt, record-tooling-failure, prepare-product-commit, adopt-historical, readiness-plan, readiness-apply, measure, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, review-prepare, status.');
+      : 'task requires a subcommand: list, show, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, role-start, handoff-preflight, refresh-handoff-receipt, refresh-handoff-evidence, attempt-status, abandon-attempt, record-tooling-failure, prepare-product-commit, adopt-historical, readiness-plan, readiness-apply, measure, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, review-prepare, status.');
   }
   const { opts, positional } = parseCommandArgs(`task ${sub}`, TASK_SUBCOMMANDS[sub], args.slice(1));
   const target = resolveCliTarget(io, opts.target);
@@ -2216,6 +2309,11 @@ export async function cmdTask(args, io = createIo()) {
 
     if (sub === 'lint') {
       const taskId = positional[0];
+      const readinessLintRequested = Boolean(opts.base || opts.basePaths || opts.dependencies);
+      if (readinessLintRequested && (!taskId || !(opts.base || opts.basePaths) || !opts.dependencies)) {
+        io.err('task lint authoring-readiness diagnostics require one <task-id>, one of --base/--base-paths, and --dependencies');
+        return EXIT_USAGE;
+      }
       if (opts.expectTaskDigest && !taskId) {
         io.err('task lint --expect-task-digest requires the exact task id whose digest is being verified');
         return EXIT_USAGE;
@@ -2224,6 +2322,24 @@ export async function cmdTask(args, io = createIo()) {
       const results = files.map(file => existsSync(file)
         ? lintTaskFile(file, target, projectConfig, verificationContext)
         : { file: relative(target, file).replace(/\\/g, '/'), errors: [`Task record not found: ${taskId}`], warnings: [] });
+      if (readinessLintRequested && results[0]?.errors.length === 0) {
+        try {
+          const base = readExplicitBaseEvidence(target, { base: opts.base, basePaths: opts.basePaths });
+          const dependencies = readDependencyEvidence(target, opts.dependencies, taskId);
+          const readiness = evaluateAuthoringReadiness({
+            taskBody: readFileSync(files[0], 'utf8'), base, dependencies,
+          });
+          results[0].errors.push(...readiness.errors);
+          results[0].warnings.push(...readiness.warnings);
+          results[0].diagnostics = [
+            ...(results[0].diagnostics ?? []),
+            ...readiness.diagnostics,
+          ];
+          results[0].readiness = readiness;
+        } catch (error) {
+          results[0].errors.push(error instanceof Error ? error.message : String(error));
+        }
+      }
       // Read-only exact-digest verification: the receipt for a non-readiness
       // mutation names this command, so it must fail when the carrier no longer
       // holds the digest that receipt reported.
@@ -2240,6 +2356,58 @@ export async function cmdTask(args, io = createIo()) {
       }
       printLintResults(results, Boolean(opts.json), io);
       return results.some(result => result.errors.length > 0) ? 1 : 0;
+    }
+
+    if (sub === 'materialize') {
+      const taskId = positional[0];
+      if (!taskId || !opts.source || !opts.package || !opts.judgment || opts.yes !== true) {
+        io.err('task materialize requires <id>, --source, --package, --judgment, and explicit --yes');
+        return EXIT_USAGE;
+      }
+      if (!isValidTaskId(taskId, projectConfig.task_id_regex ?? PROJECT_MAP_DEFAULTS.task_id_regex)) {
+        io.err(`Task id '${taskId}' is malformed for this project`);
+        return EXIT_USAGE;
+      }
+      const relPath = relative(target, taskPathForId(target, projectConfig, taskId)).replace(/\\/g, '/');
+      if (existsSync(resolve(target, relPath))) {
+        io.err(`Task record already exists: ${relPath}`);
+        return 1;
+      }
+      let candidate;
+      try {
+        candidate = materializeTaskRecord(target, projectConfig, taskId, String(opts.source), String(opts.package), String(opts.judgment));
+      } catch (error) {
+        io.err(error.message);
+        return 1;
+      }
+      const diagnostics = validateTaskRecordDiagnostics(candidate.content, relPath);
+      const errors = [
+        ...diagnostics.map(item => item.message),
+        ...validateTaskRecord(candidate.content, relPath),
+        ...validateFilesTaskRecord(candidate.content, relPath, {
+          activeTaskBackend: 'files', projectMapConfig: projectConfig,
+          projectVerificationFacts: verificationContext.projectFacts,
+          decisionExists: verificationContext.decisionExists,
+          taskExists: verificationContext.taskExists,
+          repoRoot: target, commandRunner: taskLintCommandRunner, warnings: [],
+        }),
+      ];
+      if (errors.length > 0) {
+        for (const error of errors) io.err(error);
+        return 1;
+      }
+      const written = executeMutationBatch(target, [{ type: 'create', path: relPath, content: candidate.content }]);
+      if (!written.ok) {
+        for (const error of [...written.errors, ...written.rollbackErrors]) io.err(error);
+        return 1;
+      }
+      if (opts.json) io.out(JSON.stringify({
+        task_id: taskId, file: relPath, package_id: candidate.packageId,
+        source_revision: candidate.sourceRevision, source_digest: candidate.sourceDigest,
+        task_digest: taskRecordDigest(candidate.content), status: 'draft',
+      }, null, 2));
+      else io.out(`Materialized ${relPath} from ${candidate.packageId} at ${candidate.sourceRevision}.`);
+      return 0;
     }
 
     if (sub === 'new') {
@@ -2674,13 +2842,29 @@ export async function cmdTask(args, io = createIo()) {
         derivedSources?.decomposition ?? input?.decomposition ?? packet?.decomposition,
         snapshot.taskId
       );
-      const refetchParallelScanInventory = ({ decomposition }) => refetchDispatchParallelScanInventory(
-        backend,
-        backend === 'files'
-          ? () => enumerateFilesTaskInventory(target, projectConfig)
-          : () => currentGitHubSnapshot().normalized,
-        decomposition
-      );
+      const refetchParallelScanInventory = ({ decomposition, readiness }) => {
+        const boundByTask = decomposition?.scan?.readinessContext?.dependenciesByTask;
+        if (Array.isArray(boundByTask)) {
+          const dependenciesByTask = Object.fromEntries(boundByTask.map(entry => {
+            if (!entry.evidence) return [entry.taskId, { evidence: null, statuses: {} }];
+            const observed = readDependencyEvidence(target, entry.evidence.sourceRef, entry.taskId);
+            return [entry.taskId, observed];
+          }));
+          Object.defineProperty(readiness, 'dependenciesByTask', {
+            value: dependenciesByTask,
+            enumerable: false,
+            configurable: false,
+            writable: false,
+          });
+        }
+        return refetchDispatchParallelScanInventory(
+          backend,
+          backend === 'files'
+            ? () => enumerateFilesTaskInventory(target, projectConfig)
+            : () => currentGitHubSnapshot().normalized,
+          decomposition
+        );
+      };
       const readCarrierDigest = relPath => {
         if (backend === 'github' && String(relPath).startsWith('issue:')) {
           return currentGitHubSnapshot().normalized.members.find(member => member.carrier === relPath)?.digest ?? null;
@@ -3377,7 +3561,7 @@ export async function cmdTask(args, io = createIo()) {
       return result.ok ? 0 : 1;
     }
 
-    if (sub === 'refresh-handoff-evidence') {
+    if (sub === 'refresh-handoff-evidence' || sub === 'refresh-handoff-receipt') {
       const taskId = positional[0];
       const asJson = Boolean(opts.json);
       if (!taskId || !opts.plan || opts.yes !== true) {
@@ -3424,11 +3608,20 @@ export async function cmdTask(args, io = createIo()) {
         if (asJson) {
           io.out(JSON.stringify(applied, null, 2));
         } else {
-          io.out(`agenticloop task refresh-handoff-evidence ${taskId}`);
-          io.out(`  status: ${applied.ok ? 'REFRESHED' : 'BLOCKED'}`);
+          io.out(`agenticloop task refresh-handoff-receipt ${taskId}`);
+          io.out(`  status: ${applied.disposition === 'written_pending_commit' ? 'WRITTEN PENDING COMMIT' : (applied.ok ? 'REFRESHED' : 'BLOCKED')}`);
           io.out(`  evidence: ${applied.evidenceState}`);
           io.out(`  disposition: ${applied.disposition}`);
           io.out(`  changed files: ${(applied.changedFiles ?? []).join(', ') || '(none)'}`);
+          if (applied.decompositionRegenerated !== undefined) {
+            io.out(`  decomposition regenerated: ${applied.decompositionRegenerated ? 'yes' : 'no'}`);
+            io.out(`  decomposition stale: ${applied.decompositionStale ? 'yes' : 'no'}`);
+          }
+          if (applied.commitSubject) {
+            io.out(`  commit subject: ${applied.commitSubject}`);
+            io.out(`  trailers: ${applied.maintainerTrailerBlock.replace(/\n/g, ' / ')}`);
+          }
+          if (applied.nextOperation) io.out(`  next: ${applied.nextOperation}`);
           for (const error of applied.errors ?? []) io.err(`  ERROR: ${error}`);
           if (applied.firstSafeRepair) io.out(`  first safe repair: ${applied.firstSafeRepair}`);
         }
@@ -4889,18 +5082,75 @@ export async function cmdTask(args, io = createIo()) {
     }
 
     if (sub === 'readiness-plan') {
-      const taskId = positional[0];
       const asJson = Boolean(opts.json);
-      if (!taskId) {
-        io.err('task readiness-plan requires <id>');
+      const taskIds = opts.tasks
+        ? [String(opts.tasks), ...positional.map(String)]
+        : positional.map(String);
+      if (taskIds.length === 0) {
+        io.err('task readiness-plan requires <id> or --tasks <id> [id ...]');
         return EXIT_USAGE;
       }
-      const plan = buildReadinessPlan(target, taskId, readinessPlanInputs({
-        target, taskId, opts, projectConfig, backend: selectedBackend.backend,
+      if (!opts.tasks && taskIds.length > 1) {
+        io.err('multiple tasks require the explicit --tasks form');
+        return EXIT_USAGE;
+      }
+      if (new Set(taskIds).size !== taskIds.length || taskIds.some(taskId => !isValidTaskId(taskId, projectConfig.task_id_regex ?? PROJECT_MAP_DEFAULTS.task_id_regex))) {
+        io.err('task readiness-plan received duplicate or malformed task ids');
+        return EXIT_USAGE;
+      }
+      if (taskIds.join('\n') !== [...taskIds].sort().join('\n')) {
+        io.err(`task ids must be in canonical lexical order: ${[...taskIds].sort().join(', ')}`);
+        return EXIT_USAGE;
+      }
+      let dependencyPaths = {};
+      if (opts.dependenciesByTask) {
+        let parsed;
+        try { parsed = readTargetJson(target, opts.dependenciesByTask, 'per-task dependency map'); }
+        catch (error) {
+          return printGateResult('task readiness-plan',
+            commandFailure('task readiness-plan', error, 'operational_error', {}, target), asJson, io);
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+            Object.keys(parsed).some(taskId => !taskIds.includes(taskId) || typeof parsed[taskId] !== 'string')) {
+          io.err('--dependencies-by-task must be a JSON object containing only selected task ids and target-relative snapshot paths');
+          return EXIT_USAGE;
+        }
+        dependencyPaths = parsed;
+      }
+      if (taskIds.length > 1 && !opts.dependencies && taskIds.some(taskId => !dependencyPaths[taskId])) {
+        io.err('work-unit readiness requires --dependencies <common-path> or one --dependencies-by-task entry for every selected task');
+        return EXIT_USAGE;
+      }
+      const entries = taskIds.map(taskId => ({
+        taskId,
+        options: readinessPlanInputs({
+          target,
+          taskId,
+          opts: { ...opts, dependencies: dependencyPaths[taskId] ?? opts.dependencies },
+          projectConfig,
+          backend: selectedBackend.backend,
+        }),
       }));
+      const plan = taskIds.length === 1 && !opts.tasks
+        ? buildReadinessPlan(target, taskIds[0], entries[0].options)
+        : buildWorkUnitReadinessPlan(target, entries, { workUnitId: opts.workUnit });
       if (asJson) io.out(JSON.stringify(plan, null, 2));
       else {
-        io.out(`Readiness plan for ${taskId}: ${plan.ready ? 'settled' : `${plan.pendingSteps.length} step(s) remaining`}`);
+        if (plan.kind === WORK_UNIT_READINESS_PLAN_KIND) {
+          io.out(`Readiness plan for ${plan.workUnitId}: ${plan.ready ? 'settled' : `${plan.taskIds.length} task(s) reviewed atomically`}`);
+          io.out(`  tasks: ${plan.taskIds.join(', ')}`);
+          io.out(`  final commit: ${plan.finalCommitMessage?.split('\n')[0] ?? '(unavailable)'}`);
+          for (const taskPlan of plan.plans) {
+            io.out(`  ${taskPlan.taskId}: ${taskPlan.ready ? 'settled' : taskPlan.pendingSteps.join(', ')}`);
+            for (const diagnostic of taskPlan.readiness?.diagnostics ?? []) {
+              io.out(`    ${diagnostic.level.toUpperCase()} [${diagnostic.code}]: ${diagnostic.message}`);
+            }
+          }
+          io.out(`  applicable: ${plan.applicable ? 'yes' : 'no'}`);
+          for (const blocker of plan.blockers) io.out(`    blocker: ${blocker}`);
+          return plan.ready ? 0 : 1;
+        }
+        io.out(`Readiness plan for ${taskIds[0]}: ${plan.ready ? 'settled' : `${plan.pendingSteps.length} step(s) remaining`}`);
         for (const item of plan.steps) {
           io.out(`  [${item.settled ? 'x' : ' '}] ${item.id} (${item.owner}) - ${item.detail}`);
           if (!item.settled && item.command) io.out(`        ${item.command.replace(/\n/g, ' ')}`);
@@ -4909,6 +5159,16 @@ export async function cmdTask(args, io = createIo()) {
           io.out('  write set:');
           for (const path of plan.writeSet) io.out(`    ${path}`);
         }
+        for (const diagnostic of plan.readiness?.diagnostics ?? []) {
+          const affected = [
+            ...(diagnostic.evidence?.paths ?? []),
+            ...(diagnostic.evidence?.dependencies ?? []),
+          ];
+          io.out(`  ${diagnostic.level.toUpperCase()} [${diagnostic.code}]: ${diagnostic.message}` +
+            (affected.length > 0 ? ` (affected: ${affected.join(', ')})` : ''));
+        }
+        if (plan.readinessCommands?.diagnose) io.out(`  diagnose: ${plan.readinessCommands.diagnose}`);
+        if (plan.readinessCommands?.regeneratePlan) io.out(`  regenerate: ${plan.readinessCommands.regeneratePlan}`);
         if (!plan.ready) io.out(`  final commit trailer: ${plan.finalCommitTrailer.replace(/\n/g, ' / ')}`);
         io.out(`  applicable: ${plan.applicable ? 'yes (task readiness-apply can settle this plan in one commit)' : 'no (display only)'}`);
         for (const blocker of plan.blockers) io.out(`    blocker: ${blocker}`);
@@ -4918,36 +5178,36 @@ export async function cmdTask(args, io = createIo()) {
     }
 
     if (sub === 'readiness-apply') {
-      const taskId = positional[0];
       const asJson = Boolean(opts.json);
       const dryRun = opts.dryRun === true;
       const yes = opts.yes === true;
-      if (!taskId || !opts.plan || dryRun === yes) {
+      if (!opts.plan || dryRun === yes || positional.length > 1) {
         const error = new CliUsageError(
-          'task readiness-apply requires <id>, --plan <path>, and exactly one of --dry-run or --yes; readiness mutation is never implicit'
+          'task readiness-apply requires --plan <path>, at most one compatible <id>, and exactly one of --dry-run or --yes; readiness mutation is never implicit'
         );
         return printGateResult('task readiness-apply',
-          commandFailure('task readiness-apply', error, 'usage', { task_id: taskId ?? null }, target), asJson, io, EXIT_USAGE);
+          commandFailure('task readiness-apply', error, 'usage', { task_id: positional[0] ?? null }, target), asJson, io, EXIT_USAGE);
       }
       let plan;
       try {
         plan = readTargetJson(target, opts.plan, 'readiness plan');
       } catch (error) {
         return printGateResult('task readiness-apply',
-          commandFailure('task readiness-apply', error, 'operational_error', { task_id: taskId }, target), asJson, io);
+          commandFailure('task readiness-apply', error, 'operational_error', { task_id: positional[0] ?? null }, target), asJson, io);
       }
-      const applied = applyReadinessPlan({
-        target,
-        taskId,
-        plan,
-        projectConfig,
-        dryRun,
-        ...createReadinessApplyBindings(target, projectConfig, taskId),
-        io,
-      });
+      const taskId = positional[0] ?? plan.taskId ?? null;
+      const applied = plan.kind === WORK_UNIT_READINESS_PLAN_KIND
+        ? applyWorkUnitReadinessPlan({
+          target, plan, projectConfig, dryRun,
+          ...createWorkUnitReadinessApplyBindings(target, projectConfig), io,
+        })
+        : applyReadinessPlan({
+          target, taskId, plan, projectConfig, dryRun,
+          ...createReadinessApplyBindings(target, projectConfig, taskId), io,
+        });
       if (asJson) io.out(JSON.stringify(applied, null, 2));
       else {
-        io.out(`agenticloop task readiness-apply ${taskId}`);
+        io.out(`agenticloop task readiness-apply ${applied.workUnitId ?? taskId}`);
         io.out(`  disposition:   ${applied.mutationDisposition}`);
         io.out(`  plan digest:   ${applied.planDigest ?? '(unreadable)'}`);
         io.out(`  expected HEAD: ${applied.expectedHead ?? '(none)'}`);
@@ -4957,6 +5217,9 @@ export async function cmdTask(args, io = createIo()) {
         io.out(`  activation:    planned=${applied.activationPlanned} created=${applied.activationCreated}`);
         if (applied.readiness) {
           io.out(`  readiness:     ${applied.readiness.ready ? 'ready' : `pending ${applied.readiness.pendingSteps.join(', ')}`}`);
+          for (const diagnostic of applied.readiness.diagnostics ?? []) {
+            io.out(`  ${diagnostic.level.toUpperCase()} [${diagnostic.code}]: ${diagnostic.message}`);
+          }
         }
         for (const error of applied.errors) io.err(`  ERROR: ${error}`);
         for (const error of applied.rollbackErrors) io.err(`  ROLLBACK: ${error}`);
@@ -5499,9 +5762,9 @@ export async function cmdTask(args, io = createIo()) {
             errors: readiness.errors,
             warnings: readiness.warnings,
             evidenceState: readiness.evidenceState,
-            // Warnings alone still block agent-ready, so a 'proceed'
-            // disposition from the readiness evaluator cannot be forwarded on a
-            // failed gate result.
+            // A failed evidence candidate remains blocked here. Authoring-only
+            // warnings no longer reach this branch because they are visible,
+            // non-blocking readiness diagnostics.
             disposition: readiness.disposition === 'proceed' ? 'blocked' : readiness.disposition,
             committedStateEvaluated: true,
             rollbackAuthorized: false,
@@ -5892,7 +6155,7 @@ export async function cmdTask(args, io = createIo()) {
       }));
     }
 
-    io.err(`Unknown task subcommand '${sub}'. Expected: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, role-start, handoff-preflight, refresh-handoff-evidence, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, review-prepare, status.`);
+    io.err(`Unknown task subcommand '${sub}'. Expected: list, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, role-start, handoff-preflight, refresh-handoff-receipt, refresh-handoff-evidence, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, review-prepare, status.`);
     return EXIT_USAGE;
   } catch (error) {
     if (error instanceof CliUsageError) throw error;

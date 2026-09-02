@@ -126,7 +126,9 @@ describe('handoff derived-evidence refresh', () => {
 
     const taskBefore = readFileSync(join(value, '.agenticloop', 'tasks', 'T-001.md'), 'utf8');
     const applied = applyHandoffEvidenceRefresh({ target: value, plan: first, preflight: current });
-    assert.equal(applied.ok, true, applied.errors?.join('; '));
+    assert.equal(applied.ok, false, applied.errors?.join('; '));
+    assert.equal(applied.disposition, 'written_pending_commit');
+    assert.equal(applied.receiptState, 'written_uncommitted');
     assert.deepEqual(applied.changedFiles, [`${HANDOFF_REFRESH_ROOT}/T-001.json`]);
     assert.equal(existsSync(join(value, HANDOFF_REFRESH_ROOT, 'T-001.json')), true);
     assert.equal(readFileSync(join(value, '.agenticloop', 'tasks', 'T-001.md'), 'utf8'), taskBefore);
@@ -245,7 +247,8 @@ describe('handoff derived-evidence refresh', () => {
     assert.equal(writtenSnapshot.freshnessPolicy.maxAgeSeconds, defaultDependencyFreshnessSeconds('files'));
 
     const applied = applyHandoffEvidenceRefresh({ target: value, plan, preflight: stalePreflight });
-    assert.equal(applied.ok, true, applied.errors?.join('; '));
+    assert.equal(applied.ok, false, applied.errors?.join('; '));
+    assert.equal(applied.disposition, 'written_pending_commit');
   });
 
   it('category 3: stale decomposition triggers regeneration', () => {
@@ -572,7 +575,8 @@ describe('handoff derived-evidence refresh', () => {
     assert.equal(writtenSnapshot.observedAt > staleObservedAt, true, 'observedAt must be fresh');
 
     const applied = applyHandoffEvidenceRefresh({ target: value, plan, preflight: stalePreflight });
-    assert.equal(applied.ok, true, applied.errors?.join('; '));
+    assert.equal(applied.ok, false, applied.errors?.join('; '));
+    assert.equal(applied.disposition, 'written_pending_commit');
   });
 
   // F1(b): carrier 'done' does not degrade a satisfied snapshot
@@ -1036,7 +1040,8 @@ describe('handoff derived-evidence refresh', () => {
     const stalePreflight = { ...current, dependencyAge: { state: 'stale', evaluatedAt: new Date().toISOString(), maxAgeSeconds: 3600, observedAt: staleObservedAt } };
     const plan1 = createHandoffEvidenceRefreshPlan({ target: value, preflight: stalePreflight });
     const applied1 = applyHandoffEvidenceRefresh({ target: value, plan: plan1, preflight: stalePreflight });
-    assert.equal(applied1.ok, true, `cycle 1 apply failed: ${applied1.errors?.join('; ')}`);
+    assert.equal(applied1.ok, false, `cycle 1 apply failed: ${applied1.errors?.join('; ')}`);
+    assert.equal(applied1.disposition, 'written_pending_commit');
 
     git(value, ['add', ...applied1.changedFiles]);
     git(value, ['commit', '-m', 'apply cycle 1 refresh']);
@@ -1045,7 +1050,8 @@ describe('handoff derived-evidence refresh', () => {
     const stalePreflight2 = { ...current2, dependencyAge: { state: 'stale', evaluatedAt: new Date().toISOString(), maxAgeSeconds: 3600, observedAt: stalePreflight.dependencyAge.observedAt } };
     const plan2 = createHandoffEvidenceRefreshPlan({ target: value, preflight: stalePreflight2 });
     const applied2 = applyHandoffEvidenceRefresh({ target: value, plan: plan2, preflight: stalePreflight2 });
-    assert.equal(applied2.ok, true, `cycle 2 apply failed: ${applied2.errors?.join('; ')}`);
+    assert.equal(applied2.ok, false, `cycle 2 apply failed: ${applied2.errors?.join('; ')}`);
+    assert.equal(applied2.disposition, 'written_pending_commit');
   });
 
   it('CLI e2e: preflight --repair-plan then refresh-handoff-evidence via public CLI', async () => {
@@ -1075,12 +1081,22 @@ describe('handoff derived-evidence refresh', () => {
       '--plan', '.agenticloop/tmp/refresh-plan.json',
       '--yes', '--json',
     ], { cwd: value });
-    assert.equal(refreshRun.status, 0, `refresh should succeed\nstderr:\n${refreshRun.stderr}`);
+    assert.equal(refreshRun.status, 1, `refresh should report pending commit\nstderr:\n${refreshRun.stderr}`);
     const refreshResult = JSON.parse(refreshRun.stdout);
     assert.ok(refreshResult.receipt, 'refresh result should have a receipt');
     assert.ok(refreshResult.changedFiles, 'refresh result should have changedFiles');
     assert.ok(refreshResult.changedFiles.length > 0, 'should have at least one changed file');
     assert.ok(refreshResult.changedFiles.some(f => f.includes('T-001')), 'changed files should reference the task');
+    assert.equal(refreshResult.disposition, 'written_pending_commit');
+    assert.match(refreshResult.errors.join('\n'), /handoff\.refresh\.pending_commit/);
+    assert.match(refreshResult.nextOperation, /commit exactly these files/);
+    const nextPreflightRun = await runCliInProcess([
+      'task', 'handoff-preflight', 'T-001', '--json',
+    ], { cwd: value });
+    assert.notEqual(nextPreflightRun.status, 0, 'the uncommitted receipt must immediately block preflight');
+    const nextPreflight = JSON.parse(nextPreflightRun.stdout);
+    assert.notEqual(nextPreflight.disposition, 'proceed');
+    assert.match(JSON.stringify(nextPreflight), /clean|uncommitted|checkout|worktree/i);
   });
 
   it('CLI e2e: refresh-handoff-evidence rejects missing --yes', async () => {
@@ -1166,8 +1182,8 @@ describe('handoff derived-evidence refresh', () => {
       '--plan', '.agenticloop/tmp/plan.json',
       '--yes',
     ], { cwd: value });
-    assert.equal(run.status, 0, `refresh should succeed\nstderr:\n${run.stderr}`);
-    assert.match(run.stdout, /REFRESHED/);
+    assert.equal(run.status, 1, `refresh should report pending commit\nstderr:\n${run.stderr}`);
+    assert.match(run.stdout, /WRITTEN PENDING COMMIT/);
     assert.match(run.stdout, /T-001/);
   });
 
@@ -1237,7 +1253,8 @@ describe('handoff derived-evidence refresh', () => {
     assert.ok(decompWrite, 'decomposition write must be in additionalWrites');
 
     const applied = applyHandoffEvidenceRefresh({ target: value, plan, preflight: stalePreflight });
-    assert.equal(applied.ok, true, applied.errors?.join('; '));
+    assert.equal(applied.ok, false, applied.errors?.join('; '));
+    assert.equal(applied.disposition, 'written_pending_commit');
 
     const regenDecomp = JSON.parse(readFileSync(join(value, '.agenticloop', 'decompositions', 'T-001.json'), 'utf8'));
     const findings = findingSet('test');

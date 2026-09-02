@@ -4,7 +4,7 @@ import { lstatSync, readFileSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { evaluateCommitAttribution } from './commit-attribution.js';
+import { evaluateCommitAttribution, evaluateWorkUnitCommitAttribution } from './commit-attribution.js';
 import { GIT_OBJECT_ID_RE } from './git-oid.js';
 import { GIT_MAX_BUFFER } from './git-runner.js';
 import { isAbsoluteOrDriveQualifiedPath, samePathAuthority } from './path-identity.js';
@@ -109,7 +109,7 @@ function worktreeMatchesHead(target, path) {
  * clean/smudge filters cannot change what a verifier consumes. The source
  * commit must carry canonical Task:/Agent: Maintainer attribution.
  */
-export function verifyCommittedAttributedSource(target, sourceRef, { taskId } = {}) {
+export function verifyCommittedAttributedSource(target, sourceRef, { taskId, workUnitId = null, taskIds = null } = {}) {
   const checkedPath = validateCommittedSourcePath(sourceRef);
   if (!checkedPath.ok) return { ok: false, evidenceState: 'malformed', error: checkedPath.error };
   try {
@@ -155,11 +155,13 @@ export function verifyCommittedAttributedSource(target, sourceRef, { taskId } = 
     return { ok: false, evidenceState: 'missing', error: `committed source '${checkedPath.path}' lacks a durable source commit` };
   }
   const messageResult = git(target, ['show', '-s', '--format=%B', commit]);
-  const attribution = evaluateCommitAttribution({
-    message: String(messageResult.stdout ?? ''),
-    taskId,
-    role: 'maintainer',
-  });
+  const attribution = workUnitId && Array.isArray(taskIds)
+    ? evaluateWorkUnitCommitAttribution({
+      message: String(messageResult.stdout ?? ''), workUnitId, taskIds, role: 'maintainer',
+    })
+    : evaluateCommitAttribution({
+      message: String(messageResult.stdout ?? ''), taskId, role: 'maintainer',
+    });
   if (messageResult.status !== 0 || !attribution.ok) {
     return {
       ok: false,

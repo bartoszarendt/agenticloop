@@ -483,6 +483,31 @@ streaming/cancel limits, and join-based batch rules, load [[parallel-delegation]
 Status returns include `STATUS`, task id, branch/worktree, files touched,
 evidence, next step, and stop reason.
 
+Select exactly one checkpoint cadence in the prompt: `return after every
+record`, or `return after each batch of N records`. N is explicit; do not also
+say "after every record" or "at most one consolidated return." Every tool-using
+delegation also declares a small diagnostic budget for unexpected command or
+host failures. Once exhausted, return `tooling_failure`, `needs_context`, or the
+applicable blocked category with the failing command, observed output, attempted
+repairs, and untouched remaining work. Tool transport completion is not command
+success; inspect the child exit status or structured CLI disposition.
+
+On a host without streaming and cancellation, do not delegate work whose bounded
+return is expected to take an extended period. Prefer one-record returns for
+high-context task materialization. These leases are cooperative return contracts,
+not host-enforced kill switches.
+
+### Coordinator-response reconciliation
+
+If a child completed but the coordinator response failed, resume idempotently:
+
+1. acknowledge any queued pause; it prevents further implementation or activation;
+2. refetch durable task/backend artifacts and Git refs/commits before consulting session state;
+3. match the returned artifact/commit to the outstanding coordinator-owned action;
+4. use available host session metadata only as `session_reported` evidence, never authenticated host evidence;
+5. persist only a compact checkpoint (task, child outcome/ref, outstanding action, pause state), never a raw transcript;
+6. perform only the still-outstanding coordinator action. A second reconciliation over unchanged state is a no-op.
+
 Parallel returns also include findings or `Cross-lane findings: none`, routed
 finding dispositions, verification phase and exact tested artifact/tree, and
 any rehearsal result. Route live only when the host supports injection;

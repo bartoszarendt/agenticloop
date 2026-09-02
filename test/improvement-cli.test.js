@@ -215,6 +215,57 @@ describe('improvement new', () => {
   });
 });
 
+describe('toolkit escalation export', () => {
+  it('exports only the closed sanitized facts and requires explicit human confirmation', async () => {
+    const target = makeTarget('toolkit-export');
+    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
+    const input = '.agenticloop/tmp/tooling-fact.json';
+    const output = '.agenticloop/tmp/toolkit-proposal.json';
+    writeFileSync(join(target, input), `${JSON.stringify({
+      agenticLoopVersion: '0.4.7',
+      command: 'npx agenticloop task readiness-apply C:\\private\\product',
+      diagnosticCodes: ['readiness.candidate.internal_failure'],
+      affectedSurface: 'src/readiness-candidates.js',
+      sourceRefs: ['T-020'],
+      reproduction: ['session ses_private failed with token=abc123supersecretvalue'],
+    })}\n`, 'utf8');
+    const refused = await run([
+      'propose-toolkit-escalation', '--input', input,
+      '--toolkit-repository', 'github:owner/agenticloop', '--output', output, '--json',
+    ], target);
+    assert.equal(refused.status, 2);
+    assert.equal(existsSync(join(target, output)), false);
+    const exported = await run([
+      'propose-toolkit-escalation', '--input', input,
+      '--toolkit-repository', 'github:owner/agenticloop', '--output', output, '--yes', '--json',
+    ], target);
+    assert.equal(exported.status, 0, `${exported.stdout}${exported.stderr}`);
+    const proposal = JSON.parse(readFileSync(join(target, output), 'utf8'));
+    assert.equal(proposal.transferAuthority, 'human_review_required');
+    assert.equal(proposal.targetRepository.evidenceGrade, 'operator_asserted_external');
+    assert.doesNotMatch(JSON.stringify(proposal), /ses_private|C:\\\\private|supersecretvalue/);
+    assert.match(JSON.stringify(proposal), /redacted/);
+  });
+
+  it('rejects open-ended fields such as raw transcripts or private product content', async () => {
+    const target = makeTarget('toolkit-forbidden');
+    mkdirSync(join(target, '.agenticloop', 'tmp'), { recursive: true });
+    const input = '.agenticloop/tmp/tooling-fact.json';
+    writeFileSync(join(target, input), `${JSON.stringify({
+      agenticLoopVersion: '0.4.7', command: 'cmd', diagnosticCodes: ['x'],
+      affectedSurface: 'src/x.js', sourceRefs: ['T-020'], reproduction: ['step'],
+      rawTranscript: 'private',
+    })}\n`, 'utf8');
+    const result = await run([
+      'propose-toolkit-escalation', '--input', input,
+      '--toolkit-repository', 'github:owner/agenticloop',
+      '--output', '.agenticloop/tmp/out.json', '--yes', '--json',
+    ], target);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /forbidden field/);
+  });
+});
+
 describe('improvement lint and status', () => {
   it('lints a hand-corrupted proposal and reports the exact problem', async () => {
     const target = makeTarget('lint-corrupt');

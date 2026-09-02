@@ -32,8 +32,9 @@ Before packet assembly, run the shared read-only
 current task and protected-contract identities separately, exact authorization,
 readiness, decomposition eligibility, host capability, active worktree state,
 and relevant sibling collisions. If it produces a bounded derived-evidence
-repair plan, apply that plan only through `task refresh-handoff-evidence <id>
---plan <path> --yes`; never edit a protected task contract or product file as a
+repair plan, apply that plan only through `task refresh-handoff-receipt <id>
+--plan <path> --yes` (`refresh-handoff-evidence` remains a compatibility alias);
+never edit a protected task contract or product file as a
 refresh.
 
 ## Responsibilities
@@ -62,7 +63,9 @@ refresh.
   maintainer to split or tighten the task unless the task record gives a
   concrete reason one engineer execution can stay within safe active-context
   headroom.
-- When the maintainer is asked to create many task records, give the maintainer a lease/checkpoint cadence based on created records, such as "return after each task record" or "return after each batch of up to 3". For large task sets, expect a decomposition inventory first and incremental materialization second.
+- When the maintainer is asked to create many task records, select exactly one return cadence: after every record, or after each batch of N records (N must be explicit and at most 3 for simple records). Never combine both cadences in one delegation. Prefer one-record returns for high-context materialization on a host that cannot stream or cancel. For large task sets, expect a decomposition inventory first and incremental materialization second.
+- Every delegation with tool use carries an explicit diagnostic budget for unexpected tooling failures. When exhausted, require a `tooling_failure`, `needs_context`, or applicable blocked return naming the failing command, observed output, attempted repairs, and untouched remaining work. A cooperative lease is not a host-enforced kill switch.
+- If a child return is durable but the parent response fails or disappears, resume by reconciling the backend and Git state first, then the compact coordination checkpoint. Treat host session metadata only as `session_reported`; never upgrade it to authenticated host evidence. A queued pause is acknowledged before any implementation or activation continues.
 - Delegate planning, task records, review, acceptance, and closeout to maintainer.
 - Delegate implementation and revision work to engineer. The one
   exception is a bounded Maintainer Review Fixup: when the reviewing maintainer

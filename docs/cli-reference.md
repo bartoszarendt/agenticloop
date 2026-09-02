@@ -35,7 +35,7 @@ All commands:
 | `generate` | Generate adapter artifacts (`opencode`, `codex`, `claude-code`, `copilot`, `cursor`, `all`) |
 | `configure models` | Set per-host role model settings in `agenticloop.json` |
 | `configure import-generated-models` | Explicitly preview or import missing tracked model settings from one generated host |
-| `task` | Task records and lifecycle preparation (`list`, `show`, `lint`, `new`, `establish-baseline`, `authorize-correction`, `prepare-decomposition`, `prepare-dispatch`, `role-start`, `handoff-preflight`, `refresh-handoff-evidence`, `prepare-return`, `verify-return`, `check-evidence-init`, `check-evidence-show`, `check-evidence-update`, `evidence`, `review-prepare`, `status`) |
+| `task` | Task records and lifecycle preparation (`list`, `show`, `lint`, `new`, `materialize`, `readiness-plan`, `readiness-apply`, `establish-baseline`, `authorize-correction`, `prepare-decomposition`, `prepare-dispatch`, `role-start`, `handoff-preflight`, `refresh-handoff-receipt`, `prepare-return`, `verify-return`, `check-evidence-init`, `check-evidence-show`, `check-evidence-update`, `evidence`, `review-prepare`, `status`) |
 | `audit` | Work-unit audit certificates (`new`, `baseline`, `report`, `status`, `gate`, `lint`, `repair-structure`, `disposition`, `override`, `resolve`) |
 | `closeout` | Composite closeout packets (`prepare`, `status`, `record`) |
 | `improvement` | Bounded improvement proposals (`new`, `lint`, `status`) |
@@ -393,7 +393,7 @@ task instead.
 Apply a plan explicitly with:
 
 ```text
-npx agenticloop task refresh-handoff-evidence <task-id> --plan <path> --yes --json
+npx agenticloop task refresh-handoff-receipt <task-id> --plan <path> --yes --json
 ```
 
 The apply path is compare-before-write, atomic, and refetch-validated. Its write
@@ -404,6 +404,11 @@ one bound dependency snapshot — the exact path named by the decomposition's
 activation, human decisions, review dispositions, acceptance, closeout, or
 product files. A durable Maintainer update is cooperative and must use the
 emitted final trailer block; it does not authenticate the producer.
+`refresh-handoff-evidence` remains a compatibility alias. A write returns
+`written_pending_commit` and a non-proceed disposition until the exact changed
+files are committed and a new preflight passes. Human and JSON output report
+receipt state, decomposition regenerated/stale state, canonical commit subject
+and trailers, and the exact next operation.
 
 The dependency-observation category renews the observation *window*, not the
 observation: it carries the Maintainer-recorded statuses forward unchanged and
@@ -648,12 +653,52 @@ either the grant and every binding land, or none do and the versioned mutation
 receipt says so. A failed multi-task activation therefore produces no partial
 authority.
 
+### Task materialization producer
+
+```text
+npx agenticloop task materialize T-020 --source <plan.json> --package <work-package-id> \
+  --judgment <maintainer-judgment.json> --yes --json
+```
+
+The source has a required `sourceRevision` and a `workPackages` array. Selection
+must match exactly one package. Source traceability, planner-contract bullets,
+locked decision IDs, grouping metadata, and the standard task templates are
+copied deterministically; current state, scope/out-of-scope, acceptance,
+expected files, parallel safety, implementation notes, and required checks come
+only from the Maintainer judgment file. The draft binds source revision and the
+SHA-256 digest of the exact source bytes and is validated against the ordinary
+task-record contract before its one create-only write.
+
+### Sanitized toolkit escalation proposal
+
+```text
+npx agenticloop improvement propose-toolkit-escalation \
+  --input <closed-facts.json> --toolkit-repository <identity> \
+  --output .agenticloop/tmp/<name>.toolkit-proposal.json --yes --json
+```
+
+This is a human-confirmed export, not an import and not an external write. The
+closed input permits only Agentic Loop version, command, diagnostic codes,
+affected toolkit surface, durable references, and reproduction steps. Local
+paths, session identifiers, and credential-shaped text are redacted; raw
+transcript/private-content fields are refused. The receiving identity remains
+operator-asserted external evidence and must be recreated/imported under the
+toolkit repository's own durable evidence.
+
 ### Readiness plan
 
 ```text
 npx agenticloop task readiness-plan <task-id> [--actor <git-author>] [--authority <kind:reference>]
                                               [--work-unit <id>] [--base <ref> | --base-paths <path>]
                                               [--dependencies <path>] [--json]
+```
+
+For one bounded sibling set:
+
+```text
+npx agenticloop task readiness-plan --tasks T-020 T-021 T-022 \
+  --work-unit milestone:M01 --actor "<git-author>" --authority "<kind:reference>" \
+  --base <ref> --dependencies-by-task .agenticloop/tmp/M01-dependencies.json --json
 ```
 
 Read-only. It computes the **whole** readiness sequence at once, in dependency
@@ -676,6 +721,11 @@ The plan shows its **complete write set before anything is written**, naming
 only real paths; a placeholder in a write set would defeat the point. Every
 write is workflow or task evidence, never a product file, and the plan names one
 final Maintainer-attributed commit.
+
+Lint, plan, and apply use the same authoring readiness evaluator. Warnings are
+non-blocking but remain in human/JSON diagnostics and in `planDigest`. Errors
+make the plan inapplicable, name stable codes and affected paths/dependencies,
+and print exact `task-readiness` diagnosis and plan-regeneration commands.
 
 **It never plans activation**, and says so rather than leaving it to omission.
 Activation is the operator action that *follows* readiness — planning it here
@@ -713,7 +763,7 @@ make an old task binding stale and that activation is evaluated again afterwards
 ### Readiness apply
 
 ```text
-npx agenticloop task readiness-apply <task-id> --plan <path> (--dry-run | --yes) [--json]
+npx agenticloop task readiness-apply [<compatible-task-id>] --plan <path> (--dry-run | --yes) [--json]
 ```
 
 Maintainer-owned mutation. It consumes one reviewed **executable** plan and
@@ -738,6 +788,16 @@ npx agenticloop task readiness-plan T-018 \
 npx agenticloop task readiness-apply T-018 --plan .agenticloop/tmp/T-018-readiness-plan.json --dry-run --json
 npx agenticloop task readiness-apply T-018 --plan .agenticloop/tmp/T-018-readiness-plan.json --yes    --json
 ```
+
+A work-unit plan uses the same apply commands without a positional task id. It
+validates the complete canonical task set, calculates all prospective carrier
+digests, overlays them into one final inventory, evaluates each inventory member
+with its own bound dependency evidence, and writes all baselines,
+decompositions, and carrier transitions in one compare-before-write batch. The
+one commit is `chore(<work-unit>): settle readiness` with exact `Work-Unit`,
+ordered `Tasks`, and `Agent: maintainer` trailers. A single-task commit is
+`chore(<task>): settle readiness`. Reordered, duplicate, missing, or unrelated
+task attribution fails closed.
 
 `--dry-run` and `--yes` are mutually exclusive and one is required: mutation is
 never implicit. A dry run performs every validation that does not require

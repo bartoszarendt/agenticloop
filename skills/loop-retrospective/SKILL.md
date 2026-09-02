@@ -25,6 +25,21 @@ This skill is **parked and optional**. It is not part of [[task-closeout]] and d
    - File a follow-up task record when the pattern requires implementation or human decision.
 4. **Keep provenance visible.** Cite grouping ids when relevant, task ids, artifact references, and command evidence. Do not promote interpretation into fact without evidence.
 
+When the defect belongs to Agentic Loop rather than the target project, keep the
+Project Operating Fact as the local current record and use the explicit,
+human-confirmed export route:
+
+```text
+npx agenticloop improvement propose-toolkit-escalation --input <closed-facts.json> --toolkit-repository <identity> --output .agenticloop/tmp/<name>.toolkit-proposal.json --yes --json
+```
+
+The closed input contains only version, command, diagnostic codes, affected
+toolkit surface, durable references, and a bounded reproduction outline. The
+export redacts local paths/session ids and refuses open-ended fields such as raw
+transcripts. It never writes to or authenticates the receiving repository; a
+human transfers it and that repository recreates/imports it using its own
+durable evidence. Do not invoke this route automatically for one-off warnings.
+
 For the serious-incident exception, use `npx agenticloop improvement new` with
 both the audit reference and the erroneous marker/carrier reference. Proposal
 creation is collision-safe and proposal-only; it never changes the target surface.

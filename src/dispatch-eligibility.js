@@ -774,7 +774,11 @@ export function validateDecomposition(value, taskId, findings, options = {}) {
     }
     const depSourceRef = scan.readinessContext?.dependencies?.sourceRef;
     if (depSourceRef === null || depSourceRef === undefined) {
-      findings.malformed('decomposition scan readinessContext must carry a dependency revalidation selector');
+      const perTask = scan.readinessContext?.dependenciesByTask;
+      if (!Array.isArray(perTask) || perTask.length === 0 ||
+          perTask.some(entry => entry?.evidence !== null && !safeRepositoryPath(entry?.evidence?.sourceRef))) {
+        findings.malformed('decomposition scan readinessContext must carry canonical per-task dependency revalidation selectors');
+      }
     } else if (!safeRepositoryPath(depSourceRef)) {
       findings.malformed('decomposition scan readinessContext dependency sourceRef must be a safe repository-relative path');
     }
@@ -1735,6 +1739,7 @@ function decideWorkUnitBinding({ decomposition, parallelScanInventory, inventory
     const readinessBinding = validateParallelScanReadinessBinding(decomposition.scan, {
       base: readiness?.evidence?.base,
       dependencies: readiness?.evidence?.dependencies ?? null,
+      ...(readiness?.dependenciesByTask ? { dependenciesByTask: readiness.dependenciesByTask } : {}),
     });
     for (const error of readinessBinding.errors) sink.stale(error, { disposition: 'superseded' });
   }
