@@ -79,18 +79,20 @@ refresh.
   role, scope, checks, branch/worktree, the selected host's exact closed
   Engineer capability declaration, attribution, liveness, and
   cancellation. `<packet-path>` is target-relative. Route a failed packet; do
-  not summarize or repair it inline. Guarded role start must consume and
-  revalidate the exact packet through `task status <id> in-progress
-  --dispatch-packet <packet-path>` before Engineer mutation.
+  not summarize or repair it inline. For files, guarded role start consumes and
+  revalidates the exact packet through `task role-start <id> --packet
+  <packet-path> --check-evidence-output <checks-path>` before Engineer mutation.
 - Treat CLI-authored dispatch, check-evidence, raw-return, and verified-return
   artifacts as the only handoffs. Do not inspect their internals, hand-author
   JSON or digests, or substitute host status, messages, opaque handles, or
   cancellation observations for a return. Host cancellation/status alone does
   not establish cancellation.
-- Give the Engineer the packet path and require the public sequence: packet
-  revalidation after role start; `task check-evidence-init`; one `task
-  check-evidence-update` per required check (with `--execution-output` for each
-  passed command check); then `task prepare-return`. Do not prepare a review
+- Give the Engineer the packet path and require the public sequence: complete
+  and commit product work; publish implementation artifact, summary/check
+  summary, and non-authoritative outcome through `task evidence`; reinitialize
+  the final empty scaffold with `task check-evidence-init`; run and record every
+  required check with `task check-evidence-update`; then immediately run `task
+  prepare-return` without an intervening mutation. Do not prepare a review
   packet or treat a raw return as current until `task verify-return <id> --packet
   <packet-path> --return <return-path> --from-current-repository` succeeds.
 - Treat activation coverage, exact operator task authorization, and current task
@@ -106,6 +108,9 @@ refresh.
   blocks when that
   provenance is unavailable or replayed; it never turns an Orchestrator
   reconstruction into a valid return.
+- Use the mechanical `task measure <id> --json` projection for final attempt,
+  recovery, return, and review counters. Report physical host invocations as
+  `unavailable` when the host supplies no authenticated invocation evidence.
   Require the receipt's host-observed producer to match both the dispatched
   `roleId` and the raw return. Correct `Task:` and `Agent:` trailers do not
   repair an actor mismatch.

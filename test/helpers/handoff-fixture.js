@@ -234,7 +234,7 @@ export function syntheticRecognizedVerdict(target, transition, options = {}) {
     checks: [{
       id: 'RC-1', kind: 'command', command: 'npm test',
       outcome: 'passed', exitCode: 0, evidence: 'synthetic fixture pass',
-      executionEvidence: { path: '.agenticloop/tmp/evidence.json', digest: `sha256:agenticloop.execution-evidence.v3:${'a'.repeat(64)}` },
+      executionEvidence: { path: '.agenticloop/tmp/evidence.json', digest: `sha256:agenticloop.execution-evidence.v4:${'a'.repeat(64)}` },
     }],
     productAttribution: { range: { base: baseHead, head }, commits: [head] },
     carrierLineage: {

@@ -533,7 +533,7 @@ export function evaluateHandoffPreflight(input) {
     const sourceRevision = decompositionSource?.scan?.decomposition?.revision ?? head ?? 'HEAD';
     const base = baseTree ?? 'HEAD';
     const dependencies = decompositionSource?.scan?.readinessContext?.dependencies?.sourceRef ?? `.agenticloop/decompositions/${taskId}.dependencies.json`;
-    return `npx agenticloop task prepare-decomposition ${taskId} --work-unit ${workUnit} --source-ref ${sourceRef} --source-revision ${sourceRevision} --base ${base} --dependencies ${dependencies}`;
+    return `npx agenticloop task prepare-decomposition ${taskId} --work-unit ${workUnit} --source-ref ${sourceRef} --source-revision ${sourceRevision} --base ${base} --dependencies ${dependencies} --output .agenticloop/decompositions/${taskId}.json`;
   }
 
   try {

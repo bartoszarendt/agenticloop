@@ -2745,6 +2745,8 @@ export function canonicalizeAuditRecord(content, options, validationOptions = {}
  * @param {(decisionId: string) => boolean} [params.decisionExists]
  * @param {(decisionId: string) => boolean} [params.decisionAccepted]
  * @param {string} [params.inventoryError]  Explicit inventory failure forwarded to record validation.
+ * @param {string} [params.expectedCandidate] Exact canonical candidate being closed.
+ * @param {string[]} [params.expectedCoveredTasks] Exact task inventory being closed.
  * @returns {{ allowed: boolean, state: string, reasons: string[], auditId: string|null, optOut: boolean }}
  */
 export function evaluateAuditCloseoutGate(repoRoot, params) {
@@ -2764,6 +2766,38 @@ export function evaluateAuditCloseoutGate(repoRoot, params) {
       optOut: true,
       auditorReturnAssurance: null,
       producerAuthenticated: null,
+    };
+  }
+
+  const expectedCandidate = String(params?.expectedCandidate ?? '').trim();
+  const expectedCoveredTasks = Array.isArray(params?.expectedCoveredTasks)
+    ? normalizeCoveredTasks(params.expectedCoveredTasks)
+    : null;
+  const missingReasons = [];
+  const missingCodes = [];
+  if (!expectedCandidate) {
+    missingCodes.push('audit_candidate_missing');
+    missingReasons.push('audit gate requires an independently supplied exact candidate');
+  }
+  if (expectedCoveredTasks === null || expectedCoveredTasks.length === 0) {
+    missingCodes.push('audit_task_set_missing');
+    missingReasons.push('audit gate requires an independently supplied exact covered-task inventory');
+  }
+  if (missingReasons.length > 0) {
+    return {
+      allowed: false,
+      state: missingCodes[0],
+      codes: missingCodes,
+      reasons: missingReasons,
+      auditId: findAuditRecord(repoRoot, workUnit)?.record?.auditId ?? null,
+      optOut: false,
+      expectedCandidate: expectedCandidate || null,
+      expectedCoveredTasks,
+      auditorReturnAssurance: null,
+      producerAuthenticated: null,
+      repair: missingCodes.includes('audit_candidate_missing')
+        ? 'rerun audit gate with --candidate commit:<full-sha> and --covered-tasks <exact-ids>'
+        : 'rerun audit gate with --covered-tasks <exact-ids>',
     };
   }
 
@@ -2829,6 +2863,22 @@ export function evaluateAuditCloseoutGate(repoRoot, params) {
     );
   }
 
+  const certifiedCoveredTasks = normalizeCoveredTasks(record.certifiedCoveredTasks);
+  const lastRunCoveredTasks = normalizeCoveredTasks(lastRun?.coveredTasks ?? []);
+  const staleIdentity = (
+    record.certifiedArtifact !== expectedCandidate ||
+    lastRun?.auditedArtifact !== expectedCandidate ||
+    !coveredTaskSetsEqual(certifiedCoveredTasks, expectedCoveredTasks) ||
+    !coveredTaskSetsEqual(lastRunCoveredTasks, expectedCoveredTasks)
+  );
+  if (staleIdentity) {
+    reasons.push(
+      `audit certificate is stale for closeout: expected candidate '${expectedCandidate}', ` +
+      `certified candidate '${record.certifiedArtifact || '(none)'}'; expected task set ` +
+      `[${(expectedCoveredTasks ?? []).join(', ')}], certified task set [${certifiedCoveredTasks.join(', ')}]`
+    );
+  }
+
   if (typeof params?.taskStatus === 'function') {
     for (const taskId of normalizeCoveredTasks(record.coveredTasks)) {
       const taskState = String(params.taskStatus(taskId) ?? '').trim();
@@ -2870,12 +2920,19 @@ export function evaluateAuditCloseoutGate(repoRoot, params) {
 
   return {
     allowed: reasons.length === 0,
-    state: reasons.length === 0 ? 'certified' : 'audit_not_current',
+    state: reasons.length === 0 ? 'certified' : staleIdentity ? 'audit_stale' : 'audit_not_current',
     reasons,
     auditId: record.auditId,
     optOut: false,
     budget: budgetState,
     auditorReturnAssurance,
     producerAuthenticated,
+    expectedCandidate: expectedCandidate || null,
+    certifiedCandidate: record.certifiedArtifact || null,
+    expectedCoveredTasks,
+    certifiedCoveredTasks,
+    repair: staleIdentity
+      ? `agenticloop audit baseline ${record.auditId} --artifact ${expectedCandidate} --covered-tasks ${(expectedCoveredTasks ?? []).join(',')} --evidence <integrated-evidence>`
+      : null,
   };
 }

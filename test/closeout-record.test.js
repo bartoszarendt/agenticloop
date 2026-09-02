@@ -44,9 +44,10 @@ describe('closeout record and status', () => {
     const target = await makeVerifiedGitTarget('lifecycle');
     const artifact = await certify(target);
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
-    assert.equal((await closeout([
-      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--output', packetPath,
-    ], target)).status, 0);
+    const prepared = await closeout([
+      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--covered-tasks', 'T-001', '--output', packetPath,
+    ], target);
+    assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
 
     // dry-run mutates nothing.
     const carrierBefore = readFileSync(join(target, '.agenticloop', 'tasks', 'T-001.md'), 'utf-8');
@@ -95,9 +96,10 @@ describe('closeout record and status', () => {
     const target = await makeVerifiedGitTarget('stale');
     const artifact = await certify(target);
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
-    assert.equal((await closeout([
-      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--output', packetPath,
-    ], target)).status, 0);
+    const prepared = await closeout([
+      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--covered-tasks', 'T-001', '--output', packetPath,
+    ], target);
+    assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
 
     // Product drift after preparation makes the packet stale.
     writeFileSync(join(target, 'app.js'), 'export const v = 2;\n', 'utf-8');
@@ -112,9 +114,10 @@ describe('closeout record and status', () => {
     const target = await makeVerifiedGitTarget('marker-publication-race');
     const artifact = await certify(target);
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
-    assert.equal((await closeout([
-      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--output', packetPath,
-    ], target)).status, 0);
+    const prepared = await closeout([
+      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--covered-tasks', 'T-001', '--output', packetPath,
+    ], target);
+    assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
     const carrierPath = join(target, '.agenticloop', 'tasks', 'T-001.md');
     const concurrent = `${readFileSync(carrierPath, 'utf8')}\nConcurrent operator note.\n`;
     const recorded = await closeout(

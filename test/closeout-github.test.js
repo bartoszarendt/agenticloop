@@ -46,9 +46,27 @@ let tmpDir;
 before(() => { tmpDir = mkdtempSync(join(tmpdir(), 'al-closeout-gh-')); });
 after(() => { rmSync(tmpDir, { recursive: true, force: true }); });
 
+function canonicalCandidateGitRunner(args) {
+      if (args[0] === 'rev-parse' && args[1] === '--is-inside-work-tree') {
+        return { status: 0, stdout: 'true\n', stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && args.includes('--verify')) {
+        const sha = String(args.at(-1)).replace(/\^\{commit\}$/, '');
+        return { status: 0, stdout: `${sha}\n`, stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') {
+        return { status: 0, stdout: `${'a'.repeat(40)}\n`, stderr: '' };
+      }
+      if (args[0] === 'diff' || args[0] === 'status') {
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      return { status: 1, stdout: '', stderr: `unexpected git ${args.join(' ')}` };
+}
+
 function legacyOptions(ghCommandRunner) {
   return {
     ghCommandRunner,
+    gitCommandRunner: canonicalCandidateGitRunner,
     operatorActivationRoot: join(tmpDir, 'operator-activation'),
     stdinIsTTY: true, isTTY: true, ci: false,
     promptFactory: () => ({ ask: async () => 'waive', close() {} }),
@@ -301,9 +319,10 @@ describe('digest-idempotent marker publication', () => {
   const digest = 'sha256:' + 'd'.repeat(64);
   const markerBody = [
     'AGENT_CLOSEOUT_STATUS: complete',
-    'AGENT_CLOSEOUT_SCHEMA: 2',
+    'AGENT_CLOSEOUT_SCHEMA: 3',
     'AGENT_CLOSEOUT_WORK_UNIT: milestone:M00',
     'AGENT_CLOSEOUT_ARTIFACT: commit:' + 'a'.repeat(40),
+    'AGENT_CLOSEOUT_TASKS: T-001',
     'AGENT_CLOSEOUT_AUDIT: AUD-001/run:1',
     'AGENT_CLOSEOUT_AUDIT_ASSURANCE: session_reported',
     'AGENT_CLOSEOUT_AUDIT_PRODUCER_AUTHENTICATED: false',
@@ -419,6 +438,7 @@ describe('github closeout evaluation', () => {
     const conflictingMarker = renderCloseoutMarker({
       status: 'blocked',
       workUnit: 'milestone:M00',
+      coveredTasks: ['T-001'],
       artifact: `commit:${full}`,
       auditRef: 'none',
       predecessor: 'none',
@@ -598,7 +618,7 @@ describe('github closeout evaluation', () => {
       '--covered-tasks', 'T-001,T-002',
       '--artifact', 'commit:' + 'a'.repeat(40),
       '--json', '--target', target,
-    ], { ghCommandRunner });
+    ], { ghCommandRunner, gitCommandRunner: canonicalCandidateGitRunner });
     assert.equal(result.status, 1);
     const packet = JSON.parse(result.stdout);
     assert.equal(packet.completion_eligible, false);
@@ -617,7 +637,7 @@ describe('github closeout evaluation', () => {
       '--covered-tasks', 'T-007',
       '--artifact', 'commit:' + 'a'.repeat(40),
       '--json', '--target', target,
-    ], { ghCommandRunner });
+    ], { ghCommandRunner, gitCommandRunner: canonicalCandidateGitRunner });
     assert.equal(result.status, 1);
     const packet = JSON.parse(result.stdout);
     assert.ok(packet.reasons.some(item => item.category === 'identity_conflict' && /#7/.test(item.message) && /#12/.test(item.message)));
@@ -633,7 +653,7 @@ describe('github closeout evaluation', () => {
       '--covered-tasks', 'T-001',
       '--artifact', 'commit:' + 'a'.repeat(40),
       '--json', '--target', target,
-    ], { ghCommandRunner });
+    ], { ghCommandRunner, gitCommandRunner: canonicalCandidateGitRunner });
     assert.equal(result.status, 1);
     const packet = JSON.parse(result.stdout);
     assert.equal(packet.completion_eligible, false);

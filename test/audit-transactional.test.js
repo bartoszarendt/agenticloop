@@ -342,7 +342,10 @@ describe('finding dispositions', () => {
       'disposition', 'AUD-001', '--run', '1', '--finding', 'A-01',
       '--type', 'remediation_task', '--ref', 'T-055',
     ], target);
-    const gate = await run(['gate', 'AUD-001', '--json'], target);
+    const gate = await run([
+      'gate', 'AUD-001', '--candidate', `commit:${FULL_A}`,
+      '--covered-tasks', 'T-041,T-042', '--json',
+    ], target);
     assert.equal(gate.status, 1);
     assert.match(gate.stdout, /A-01/);
   });

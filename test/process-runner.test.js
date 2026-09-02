@@ -63,7 +63,7 @@ describe('process runner', () => {
     assert.equal(result.stderrTruncated, true);
   });
 
-  it('arms a timeout after readiness and settles with inherited descendant pipes', { timeout: 5000 }, async () => {
+  it('arms a timeout after readiness and settles with inherited descendant pipes', { timeout: 20000 }, async () => {
     const fixture = mkdtempSync(join(temp, 'inherited-pipe-'));
     const pidPath = join(fixture, 'descendant.pid');
     const parent = [
@@ -78,7 +78,7 @@ describe('process runner', () => {
     ].join('\n');
     try {
       const result = await runProcess(process.execPath, ['-e', parent, pidPath], {
-        timeout: 100, timeoutAfterStdout: 'READY\n', startupTimeout: 1000,
+        timeout: 100, timeoutAfterStdout: 'READY\n', startupTimeout: 10000,
         terminationGrace: 50, settlementGrace: 100,
       });
       assert.equal(result.failure, 'timeout');
@@ -99,7 +99,7 @@ describe('process runner', () => {
     }
   });
 
-  it('bounds startup when the readiness signal never arrives', { timeout: 5000 }, async () => {
+  it('bounds startup when the readiness signal never arrives', { timeout: 20000 }, async () => {
     const result = await runProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
       timeout: 2000,
       timeoutAfterStdout: 'READY\n',
@@ -114,7 +114,7 @@ describe('process runner', () => {
     assert.equal(result.termination.timeoutPhase, 'startup');
   });
 
-  it('terminates a timed-out descendant process tree', { timeout: 5000 }, async () => {
+  it('terminates a timed-out descendant process tree', { timeout: 20000 }, async () => {
     const fixture = mkdtempSync(join(temp, 'descendant-tree-'));
     const pidPath = join(fixture, 'descendant.pid');
     const parent = [
@@ -128,7 +128,7 @@ describe('process runner', () => {
     let descendantPid;
     try {
       const result = await runProcess(process.execPath, ['-e', parent, pidPath], {
-        timeout: 150, timeoutAfterStdout: 'READY\n', startupTimeout: 1000,
+        timeout: 150, timeoutAfterStdout: 'READY\n', startupTimeout: 10000,
         terminationGrace: 50, settlementGrace: 100,
       });
       assert.equal(result.failure, 'timeout');

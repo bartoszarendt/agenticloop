@@ -137,6 +137,11 @@ export function commandFailure(command, error, category = 'operational_error', d
     firstSafeRepair: error?.safeRepair ?? error?.hint ?? diagnostic.nextAction,
     debugReference: reference,
     requiredContext: Array.isArray(error?.requiredContext) ? error.requiredContext : [],
+    ...(usage ? {
+      safeToRetry: error?.safeToRetry === true && error?.mutationOccurred !== true,
+      mutationOccurred: error?.mutationOccurred === true,
+      canonicalUsage: error?.canonicalUsage ?? error?.hint ?? null,
+    } : {}),
     ...domainFields,
   });
 }

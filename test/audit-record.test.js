@@ -931,6 +931,10 @@ describe('verdicts and accepted limitations', () => {
 });
 
 describe('closeout gate', () => {
+  const externalBoundary = Object.freeze({
+    expectedCandidate: 'commit:abc123',
+    expectedCoveredTasks: Object.freeze(['T-041', 'T-042']),
+  });
   function seedCertified(target) {
     const certified = appendAuditReport(baseRecord(), report({ verdict: 'certified' })).content;
     writeAudit(target, 'AUD-001', certified);
@@ -939,7 +943,7 @@ describe('closeout gate', () => {
 
   it('blocks completion when audit is enabled and no record exists', () => {
     const target = makeTarget('gate-missing');
-    const gate = evaluateAuditCloseoutGate(target, { workUnit: 'phase:4', workUnitAudit: 'enabled' });
+    const gate = evaluateAuditCloseoutGate(target, { workUnit: 'phase:4', workUnitAudit: 'enabled', ...externalBoundary });
     assert.equal(gate.allowed, false);
     assert.equal(gate.state, 'audit_missing');
     assert.equal(gate.optOut, false);
@@ -947,7 +951,7 @@ describe('closeout gate', () => {
 
   it('blocks completion when the key is omitted, because the default is enabled', () => {
     const target = makeTarget('gate-default');
-    const gate = evaluateAuditCloseoutGate(target, { workUnit: 'phase:4' });
+    const gate = evaluateAuditCloseoutGate(target, { workUnit: 'phase:4', ...externalBoundary });
     assert.equal(gate.allowed, false);
     assert.equal(gate.state, 'audit_missing');
   });
@@ -958,11 +962,60 @@ describe('closeout gate', () => {
     const gate = evaluateAuditCloseoutGate(target, {
       workUnit: 'phase:4',
       workUnitAudit: 'enabled',
+      ...externalBoundary,
       taskStatus: () => 'accepted',
     });
     assert.equal(gate.allowed, true, gate.reasons.join('; '));
     assert.equal(gate.state, 'certified');
     assert.equal(gate.auditId, 'AUD-001');
+  });
+
+  it('requires the exact closeout candidate and exact covered-task inventory', () => {
+    const target = makeTarget('gate-exact-candidate');
+    seedCertified(target);
+    const exact = evaluateAuditCloseoutGate(target, {
+      workUnit: 'phase:4', workUnitAudit: 'enabled',
+      expectedCandidate: 'commit:abc123', expectedCoveredTasks: ['T-041', 'T-042'],
+      taskStatus: () => 'accepted',
+    });
+    assert.equal(exact.allowed, true, exact.reasons.join('; '));
+
+    const newer = evaluateAuditCloseoutGate(target, {
+      workUnit: 'phase:4', workUnitAudit: 'enabled',
+      expectedCandidate: 'commit:def456', expectedCoveredTasks: ['T-041', 'T-042'],
+      taskStatus: () => 'accepted',
+    });
+    assert.equal(newer.allowed, false);
+    assert.equal(newer.state, 'audit_stale');
+    assert.match(newer.repair, /audit baseline AUD-001 --artifact commit:def456/);
+
+    const expanded = evaluateAuditCloseoutGate(target, {
+      workUnit: 'phase:4', workUnitAudit: 'enabled',
+      expectedCandidate: 'commit:abc123', expectedCoveredTasks: ['T-041', 'T-042', 'T-043'],
+      taskStatus: () => 'accepted',
+    });
+    assert.equal(expanded.allowed, false);
+    assert.equal(expanded.state, 'audit_stale');
+  });
+
+  it('fails closed with distinct states when either external gate identity is omitted', () => {
+    const target = makeTarget('gate-missing-external-identities');
+    seedCertified(target);
+    const noCandidate = evaluateAuditCloseoutGate(target, {
+      workUnit: 'phase:4', workUnitAudit: 'enabled',
+      expectedCoveredTasks: ['T-041', 'T-042'],
+    });
+    assert.equal(noCandidate.allowed, false);
+    assert.equal(noCandidate.state, 'audit_candidate_missing');
+    assert.deepEqual(noCandidate.codes, ['audit_candidate_missing']);
+
+    const noTasks = evaluateAuditCloseoutGate(target, {
+      workUnit: 'phase:4', workUnitAudit: 'enabled',
+      expectedCandidate: 'commit:abc123',
+    });
+    assert.equal(noTasks.allowed, false);
+    assert.equal(noTasks.state, 'audit_task_set_missing');
+    assert.deepEqual(noTasks.codes, ['audit_task_set_missing']);
   });
 
   it('enforces the effective Auditor-return minimum independently at closeout', () => {
@@ -971,6 +1024,7 @@ describe('closeout gate', () => {
     const standard = evaluateAuditCloseoutGate(target, {
       workUnit: 'phase:4',
       workUnitAudit: 'enabled',
+      ...externalBoundary,
       minimumAuditorReturnAssurance: 'session_reported',
     });
     assert.equal(standard.allowed, true, standard.reasons.join('; '));
@@ -980,6 +1034,7 @@ describe('closeout gate', () => {
     const hardened = evaluateAuditCloseoutGate(target, {
       workUnit: 'phase:4',
       workUnitAudit: 'enabled',
+      ...externalBoundary,
       minimumAuditorReturnAssurance: 'host_receipt',
     });
     assert.equal(hardened.allowed, false);
@@ -997,6 +1052,7 @@ describe('closeout gate', () => {
     const result = evaluateAuditCloseoutGate(target, {
       workUnit: 'phase:4',
       workUnitAudit: 'enabled',
+      ...externalBoundary,
       taskStatus: () => 'accepted',
     });
     assert.equal(result.allowed, false);
@@ -1022,6 +1078,7 @@ describe('closeout gate', () => {
     const result = evaluateAuditCloseoutGate(target, {
       workUnit: 'phase:4',
       workUnitAudit: 'enabled',
+      ...externalBoundary,
       taskStatus: () => 'accepted',
     });
     assert.equal(result.allowed, false);
@@ -1037,15 +1094,18 @@ describe('closeout gate', () => {
       evidence: 'Integrated verification results for commit:def456.',
     }));
 
-    const gate = evaluateAuditCloseoutGate(target, { workUnit: 'phase:4', workUnitAudit: 'enabled' });
+    const gate = evaluateAuditCloseoutGate(target, {
+      workUnit: 'phase:4', workUnitAudit: 'enabled',
+      expectedCandidate: 'commit:def456', expectedCoveredTasks: ['T-041', 'T-042'],
+    });
     assert.equal(gate.allowed, false);
-    assert.equal(gate.state, 'audit_not_current');
+    assert.equal(gate.state, 'audit_stale');
   });
 
   it('blocks completion while a blocking finding is unresolved', () => {
     const target = makeTarget('gate-finding');
     writeAudit(target, 'AUD-001', appendAuditReport(baseRecord(), report({ findings: [blockingFinding()] })).content);
-    const gate = evaluateAuditCloseoutGate(target, { workUnit: 'phase:4', workUnitAudit: 'enabled' });
+    const gate = evaluateAuditCloseoutGate(target, { workUnit: 'phase:4', workUnitAudit: 'enabled', ...externalBoundary });
     assert.equal(gate.allowed, false);
     assert.ok(gate.reasons.some(r => r.includes('unresolved blocking findings')), gate.reasons.join('; '));
   });
@@ -1056,6 +1116,7 @@ describe('closeout gate', () => {
     const gate = evaluateAuditCloseoutGate(target, {
       workUnit: 'phase:4',
       workUnitAudit: 'enabled',
+      ...externalBoundary,
       taskStatus: taskId => (taskId === 'T-042' ? 'in-progress' : 'accepted'),
     });
     assert.equal(gate.allowed, false);
@@ -1065,7 +1126,7 @@ describe('closeout gate', () => {
   it('reports a blocked audit rather than allowing completion', () => {
     const target = makeTarget('gate-blocked');
     writeAudit(target, 'AUD-001', appendRuns(baseRecord(), 3));
-    const gate = evaluateAuditCloseoutGate(target, { workUnit: 'phase:4', workUnitAudit: 'enabled' });
+    const gate = evaluateAuditCloseoutGate(target, { workUnit: 'phase:4', workUnitAudit: 'enabled', ...externalBoundary });
     assert.equal(gate.allowed, false);
     assert.equal(gate.state, 'audit_blocked');
   });
@@ -1088,7 +1149,7 @@ describe('closeout gate', () => {
     const target = makeTarget('gate-reenabled');
     writeAudit(target, 'AUD-001', appendAuditReport(baseRecord(), report({ findings: [blockingFinding()] })).content);
     assert.equal(evaluateAuditCloseoutGate(target, { workUnit: 'phase:4', workUnitAudit: 'disabled' }).allowed, true);
-    assert.equal(evaluateAuditCloseoutGate(target, { workUnit: 'phase:4', workUnitAudit: 'enabled' }).allowed, false);
+    assert.equal(evaluateAuditCloseoutGate(target, { workUnit: 'phase:4', workUnitAudit: 'enabled', ...externalBoundary }).allowed, false);
   });
 });
 

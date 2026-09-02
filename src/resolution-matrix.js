@@ -105,7 +105,8 @@ export function parseResolutionMatrix(text) {
   }
 
   const sectionLines = section.lines ?? markdownLines(section.body);
-  const liveLines = sectionLines.filter(line => line.live && line.raw.trim());
+  const generatedMarker = /^\s*<!--\s*AGENTICLOOP_TASK_EVIDENCE:revisionResolution:(?:START|END)\s*-->\s*$/;
+  const liveLines = sectionLines.filter(line => line.live && line.raw.trim() && !generatedMarker.test(line.raw));
   if (liveLines.length === 1 && /^none\.?$/i.test(liveLines[0].raw.trim())) {
     return { status: 'parsed', found: true, entries: [], errors: [] };
   }

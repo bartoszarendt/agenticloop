@@ -40,6 +40,8 @@ export const TASK_CARRIER_MUTATION_CLASSES = Object.freeze([
   'implementation_artifact_evidence',
   'implementation_summary_evidence',
   'implementation_outcome_evidence',
+  'structured_engineer_evidence',
+  'structured_maintainer_evidence',
   'review_record',
 ]);
 // The broad task-mutation vocabulary also names transitions owned by other
@@ -49,9 +51,11 @@ export const ENGINEER_CARRIER_MUTATION_CLASSES = Object.freeze([
   'implementation_artifact_evidence',
   'implementation_summary_evidence',
   'implementation_outcome_evidence',
+  'structured_engineer_evidence',
 ]);
 export const LIFECYCLE_CARRIER_MUTATION_CLASSES = Object.freeze([
   ...ENGINEER_CARRIER_MUTATION_CLASSES,
+  'structured_maintainer_evidence',
   'acceptance_transition',
 ]);
 export const DEPENDENCY_SNAPSHOT_KIND = 'agenticloop.dependency-snapshot';
@@ -1190,12 +1194,16 @@ export function validateCarrierMutationReceipt(receipt) {
     errors.push('carrier mutation ownedFields and changedFields must be equal canonical string lists');
   }
   const producer = receipt.producer;
+  const structuredEvidence = receipt.mutationClass.startsWith('structured_');
   const expectedProducer = receipt.mutationClass === 'acceptance_transition'
     ? { workflowRole: 'maintainer', assuranceGrade: 'host_receipt' }
-    : { workflowRole: 'engineer', assuranceGrade: 'session_reported' };
-  if (!isPlainObject(producer) || Object.keys(producer).length !== 5 || producer.workflowRole !== expectedProducer.workflowRole ||
+    : receipt.mutationClass === 'structured_maintainer_evidence'
+      ? { workflowRole: 'maintainer', assuranceGrade: 'session_reported' }
+      : { workflowRole: 'engineer', assuranceGrade: 'session_reported' };
+  if (!isPlainObject(producer) || Object.keys(producer).length !== (structuredEvidence ? 6 : 5) || producer.workflowRole !== expectedProducer.workflowRole ||
       producer.assuranceGrade !== expectedProducer.assuranceGrade ||
-      !['invocationId', 'workUnitIdentity', 'repositoryIdentity'].every(field => typeof producer[field] === 'string' && producer[field])) {
+      !['invocationId', 'workUnitIdentity', 'repositoryIdentity'].every(field => typeof producer[field] === 'string' && producer[field]) ||
+      (structuredEvidence && !/^attempt:[a-f0-9]{32}$/.test(String(producer.attemptId ?? '')))) {
     errors.push('carrier mutation producer identity is invalid');
   }
   const predecessor = receipt.predecessor;

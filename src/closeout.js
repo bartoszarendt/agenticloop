@@ -11,7 +11,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   closeoutPacketDigest,
@@ -23,7 +23,7 @@ import {
   workflowRecordSubstance,
   CLOSEOUT_PACKET_SCHEMA_VERSION,
 } from './closeout-contract.js';
-import { compareCertifiedProductTree, resolveCandidateArtifact } from './candidate.js';
+import { compareCertifiedProductTree, resolveCloseoutCandidateArtifact } from './candidate.js';
 import {
   auditBudgetState,
   certificationStatus,
@@ -55,7 +55,7 @@ import { RETURN_USE_FRESHNESS_POLICY } from './return-use-freshness.js';
 import { resolveReturnUseFreshnessPolicy } from './return-use-freshness.js';
 import { evaluatePullRequestLifecycle } from './closeout-github.js';
 import { validateEvent, DEFAULT_LOG_DIR } from './event-logging.js';
-import { deriveConfiguredGroupScopes, deriveExplicitScopes } from './terminal-scope.js';
+import { deriveConfiguredGroupScopes, deriveExplicitScopes, listTaskRecords } from './terminal-scope.js';
 import {
   IMPROVEMENT_ID_PATTERN,
   IMPROVEMENTS_DIRECTORY_RELATIVE_PATH,
@@ -83,6 +83,12 @@ const REASON_CATEGORY_STATUS = Object.freeze({
   audit_blocked: 'blocked',
   marker_contradictory: 'blocked',
   audit_awaiting_human: 'needs_context',
+  // Closeout now requires an independently supplied candidate and exact task
+  // boundary before audit currency is evaluated. A historical audit that did
+  // not bind either identity therefore has a mechanical repair: rebaseline it
+  // against the already-known closeout identities.
+  audit_candidate_missing: 'follow_up_required',
+  audit_task_set_missing: 'follow_up_required',
   membership_underivable: 'needs_context',
   candidate_unverifiable: 'needs_context',
   plan_sync_missing: 'needs_context',
@@ -91,6 +97,7 @@ const REASON_CATEGORY_STATUS = Object.freeze({
   audit_missing: 'follow_up_required',
   audit_invalid: 'follow_up_required',
   audit_not_current: 'follow_up_required',
+  audit_stale: 'follow_up_required',
   covered_task: 'follow_up_required',
   pr_lifecycle: 'follow_up_required',
   product_drift: 'follow_up_required',
@@ -202,6 +209,9 @@ export function filesTaskInfo(target, config, taskId) {
   return {
     exists: true,
     status: String(frontmatter?.status ?? '').trim(),
+    implementationArtifact: typeof frontmatter?.implementation_artifact === 'string'
+      ? frontmatter.implementation_artifact.trim()
+      : '',
     relPath: filesTaskRelPath(config, taskId),
   };
 }
@@ -224,20 +234,9 @@ export function deriveFilesWorkUnitTasks(target, config, workUnit) {
   if (identity.kind === 'work-unit' || profile === 'flat' || identity.kind !== profile) {
     return null;
   }
-  const tasksDir = join(target, '.agenticloop', 'tasks');
-  if (!existsSync(tasksDir) || !statSync(tasksDir).isDirectory()) return [];
-  const members = [];
-  for (const name of readdirSync(tasksDir).filter(item => item.endsWith('.md')).sort()) {
-    const content = readFileSync(join(tasksDir, name), 'utf-8');
-    const [frontmatter] = parseFrontmatter(content);
-    const taskId = String(frontmatter?.task_id ?? '').trim() || name.replace(/\.md$/, '');
-    const grouping = markdownSection(content, '## Grouping')?.body ?? '';
-    const tokens = grouping.split(/[\s,]+/).map(item => item.trim()).filter(Boolean);
-    if (tokens.includes(identity.canonical)) {
-      members.push(taskId);
-    }
-  }
-  return members.sort();
+  const derived = deriveConfiguredGroupScopes(target, config);
+  if (!derived.ok) return null;
+  return derived.scopes.find(scope => scope.workUnit === identity.canonical)?.tasks ?? [];
 }
 
 // ---------------------------------------------------------------------------
@@ -713,7 +712,7 @@ export function summarizeCloseoutAssurance(input, coveredTasks = []) {
  * @param {string} target
  * @param {object} params
  * @param {string} params.workUnit
- * @param {string} [params.artifact]        Candidate override (defaults to the certified candidate).
+ * @param {string} params.artifact          Exact independently supplied closeout candidate.
  * @param {string[]} [params.coveredTasks]  Explicit boundary (required for flat projects without an audit record).
  * @param {string} [params.planSync]        Plan-sync disposition: none, not_required, synced, skipped.
  * @param {string[]} [params.improvementRefs]
@@ -741,8 +740,25 @@ export function evaluateCloseout(target, params) {
   }
   const workUnit = identity.ok ? identity.canonical : String(params?.workUnit ?? '');
 
-  // --- audit gate (the public audit-only subset evaluator) -----------------
+  // Resolve the exact closeout identities before asking whether a certificate
+  // is current. Record-internal consistency is not closeout currency.
   const workUnitAudit = resolveWorkUnitAudit(config);
+  let coveredTasks = Array.isArray(params?.coveredTasks) && params.coveredTasks.length > 0
+    ? normalizeCoveredTasks(params.coveredTasks)
+    : [];
+  if (coveredTasks.length === 0 && backend === 'files') {
+    const derived = deriveFilesWorkUnitTasks(target, config, workUnit);
+    if (derived && derived.length > 0) coveredTasks = derived;
+  }
+  const artifactInput = String(params?.artifact ?? '').trim();
+  let candidateArtifact = '';
+  let candidateResolution = null;
+  if (artifactInput) {
+    candidateResolution = resolveCloseoutCandidateArtifact(target, artifactInput, { gitRunner: params?.gitRunner });
+    if (candidateResolution.ok) candidateArtifact = candidateResolution.canonical;
+  }
+
+  // --- audit gate (the public audit-only subset evaluator) -----------------
   const auditGate = evaluateAuditCloseoutGate(target, {
     workUnit,
     workUnitAudit,
@@ -750,6 +766,8 @@ export function evaluateCloseout(target, params) {
     taskExists: params?.validationOptions?.taskExists,
     decisionAccepted: params?.validationOptions?.decisionAccepted,
     minimumAuditorReturnAssurance: params?.assurance?.minimumReturn,
+    expectedCandidate: candidateArtifact || undefined,
+    expectedCoveredTasks: coveredTasks,
     ...(backend === 'files'
       ? { taskStatus: taskId => filesTaskInfo(target, config, taskId).status }
       : {}),
@@ -767,20 +785,12 @@ export function evaluateCloseout(target, params) {
       reasons.push(reason('audit_gate', category, message, {
         repair: auditGate.state === 'audit_missing'
           ? `agenticloop audit new --work-unit ${workUnit} --covered-tasks <ids> --artifact commit:<full-sha> --goal "<outcome>" --completion-oracle "<observable completion>" --evidence "<checks>"`
-          : null,
+          : auditGate.repair,
       }));
     }
   }
 
   // --- covered tasks --------------------------------------------------------
-  let coveredTasks = auditRecord ? normalizeCoveredTasks(auditRecord.coveredTasks) : [];
-  if (coveredTasks.length === 0 && Array.isArray(params?.coveredTasks) && params.coveredTasks.length > 0) {
-    coveredTasks = normalizeCoveredTasks(params.coveredTasks);
-  }
-  if (coveredTasks.length === 0 && backend === 'files') {
-    const derived = deriveFilesWorkUnitTasks(target, config, workUnit);
-    if (derived && derived.length > 0) coveredTasks = derived;
-  }
   if (coveredTasks.length === 0) {
     gate('covered_tasks', false);
     reasons.push(reason('covered_tasks', 'membership_underivable',
@@ -829,18 +839,13 @@ export function evaluateCloseout(target, params) {
   }
 
   // --- candidate artifact ----------------------------------------------------
-  const artifactInput = String(params?.artifact ?? '').trim() ||
-    auditRecord?.certifiedArtifact ||
-    auditRecord?.candidateArtifact ||
-    '';
-  let candidateArtifact = '';
   if (!artifactInput) {
     gate('candidate', false);
     reasons.push(reason('candidate', 'candidate_missing',
       'no candidate artifact is available; freeze the exact integrated candidate',
-      { repair: 'pass --artifact commit:<full-sha> or bind the audit baseline to the frozen candidate' }));
+      { repair: 'pass --artifact commit:<full-sha>; the audit record is never an independent candidate source' }));
   } else {
-    const resolution = resolveCandidateArtifact(target, artifactInput, { gitRunner: params?.gitRunner });
+    const resolution = candidateResolution ?? resolveCloseoutCandidateArtifact(target, artifactInput, { gitRunner: params?.gitRunner });
     if (!resolution.ok) {
       gate('candidate', false);
       reasons.push(reason('candidate', 'candidate_unverifiable', resolution.error,
@@ -848,8 +853,7 @@ export function evaluateCloseout(target, params) {
     } else {
       candidateArtifact = resolution.canonical;
       gate('candidate', true);
-      if (auditRecord?.certifiedArtifact && resolution.canonical !== auditRecord.certifiedArtifact &&
-          artifactInput === String(params?.artifact ?? '').trim()) {
+      if (auditRecord?.certifiedArtifact && resolution.canonical !== auditRecord.certifiedArtifact) {
         gate('candidate', false);
         reasons.push(reason('candidate', 'audit_not_current',
           `candidate '${resolution.canonical}' does not match certified_artifact '${auditRecord.certifiedArtifact}'`));
@@ -895,9 +899,11 @@ export function evaluateCloseout(target, params) {
   const carrierForTree = backend === 'files'
     ? readFilesCloseoutCarrier(target, config, coveredTasks)
     : null;
-  if (candidateArtifact && auditRecord?.certifiedArtifact && workUnitAudit !== 'disabled') {
-    const comparison = compareCertifiedProductTree(target, {
-      certifiedArtifact: auditRecord.certifiedArtifact,
+  if (candidateArtifact) {
+    const treeOptions = {
+      certifiedArtifact: workUnitAudit !== 'disabled' && auditRecord?.certifiedArtifact
+        ? auditRecord.certifiedArtifact
+        : candidateArtifact,
       auditRecordRelPath: auditEntry?.relPath,
       markerCarrierRelPath: carrierForTree?.relPath,
       coveredTaskRelPaths: backend === 'files'
@@ -910,18 +916,44 @@ export function evaluateCloseout(target, params) {
       allowedWorkflowPaths: (params?.improvementRefs ?? [])
         .map(ref => `.agenticloop/improvements/${String(ref).trim()}.md`),
       gitRunner: params?.gitRunner,
-    });
-    gate('product_tree', comparison.ok);
-    if (!comparison.ok) {
+    };
+    const comparisons = [{ label: 'candidate', result: compareCertifiedProductTree(target, treeOptions) }];
+    if (backend === 'files') {
+      for (const taskId of coveredTasks) {
+        const observedReturn = typeof params?.assurance?.resolveReturns === 'function'
+          ? params.assurance.resolveReturns(taskId)
+          : null;
+        const observedProductHead = String(observedReturn?.productHead ?? '').trim();
+        const taskArtifact = observedProductHead
+          ? `commit:${observedProductHead}`
+          : filesTaskInfo(target, config, taskId).implementationArtifact;
+        if (!taskArtifact) continue;
+        comparisons.push({
+          label: `task ${taskId}`,
+          result: compareCertifiedProductTree(target, {
+            ...treeOptions,
+            certifiedArtifact: taskArtifact,
+            comparisonArtifact: candidateArtifact,
+            inspectWorkingTree: false,
+            validateWorkflowDeltas: false,
+          }),
+        });
+      }
+    }
+    gate('product_tree', comparisons.every(entry => entry.result.ok));
+    for (const { label, result: comparison } of comparisons) {
+      if (comparison.ok) continue;
       if (comparison.state === 'product_drift') {
         for (const item of comparison.drift) {
           reasons.push(reason('product_tree', 'product_drift',
-            `${item.source} product drift after certification: ${item.path}${item.error ? ` (${item.error})` : ''}`,
-            { repair: `rebaseline and re-audit: agenticloop audit baseline ${auditRecord.auditId} --artifact commit:<new-full-sha> --evidence "<checks>"` }));
+            `${label}: ${item.source} product drift: ${item.path}${item.error ? ` (${item.error})` : ''}`,
+            { repair: auditRecord
+              ? `rebaseline and re-audit: agenticloop audit baseline ${auditRecord.auditId} --artifact commit:<new-full-sha> --evidence "<checks>"`
+              : 'bind the task implementation artifact and closeout candidate to the same product tree, then rerun closeout prepare' }));
         }
       } else {
         reasons.push(reason('product_tree', 'candidate_unverifiable',
-          comparison.error ?? 'cannot verify the certified product tree'));
+          `${label}: ${comparison.error ?? 'cannot verify the certified product tree'}`));
       }
     }
   } else {
@@ -1093,7 +1125,7 @@ export function evaluateCloseout(target, params) {
     packet_schema: CLOSEOUT_PACKET_SCHEMA_VERSION,
     work_unit: workUnit,
     covered_tasks: coveredTasks,
-    candidate_artifact: candidateArtifact || artifactInput,
+    candidate_artifact: candidateArtifact,
     audit: auditRecord
       ? {
           audit_id: auditRecord.auditId,
@@ -1212,12 +1244,43 @@ export function deriveAuditDueWorkUnits(target, config = PROJECT_MAP_DEFAULTS) {
  */
 export function verifyCloseoutStatus(target, params) {
   let evaluation = evaluateCloseout(target, params);
-  const provisionalMarker = evaluation.markerState.current[0] ?? null;
+  if (evaluation.markerState.error) {
+    return {
+      state: 'contradictory',
+      status: 'blocked',
+      current: false,
+      marker: null,
+      expectedDigest: null,
+      reasons: [evaluation.markerState.error, ...evaluation.reasons.map(item => item.message)],
+    };
+  }
+  let provisionalMarker = evaluation.markerState.current[0] ?? null;
+  if (!provisionalMarker && (params?.backend ?? 'files') === 'files') {
+    const inventory = listTaskRecords(target, params?.config ?? PROJECT_MAP_DEFAULTS);
+    if (inventory.ok) {
+      const markers = inventory.entries.flatMap(entry => parseCloseoutMarkers(entry.content))
+        .filter(marker => String(marker.fields?.AGENT_CLOSEOUT_WORK_UNIT ?? '') === String(params?.workUnit ?? ''));
+      const resolved = resolveCurrentCloseoutMarkers(markers);
+      if (resolved.error) {
+        return {
+          state: 'contradictory',
+          status: 'blocked',
+          current: false,
+          marker: null,
+          expectedDigest: null,
+          reasons: [resolved.error, ...evaluation.reasons.map(item => item.message)],
+        };
+      }
+      if (!resolved.error && resolved.current.length === 1) provisionalMarker = resolved.current[0];
+    }
+  }
   // Audit opt-out completion still binds an exact candidate. Status has no
   // transient packet to supply it, so revalidate the durable marker artifact
   // rather than treating the marker itself as proof without resolution.
   if (provisionalMarker?.provenanced) {
     const artifact = String(provisionalMarker.fields?.AGENT_CLOSEOUT_ARTIFACT ?? '');
+    const markerCoveredTasks = String(provisionalMarker.fields?.AGENT_CLOSEOUT_TASKS ?? '')
+      .split(',').map(item => item.trim()).filter(item => item && item !== 'none').sort();
     const improvementField = String(provisionalMarker.fields?.AGENT_CLOSEOUT_IMPROVEMENTS ?? 'none');
     const improvementRefs = improvementField === 'none'
       ? []
@@ -1226,11 +1289,13 @@ export function verifyCloseoutStatus(target, params) {
     const callerPlanSync = parsePlanSyncValue(params?.planSync).disposition;
     const revalidatePlanSync = callerPlanSync === 'none' && markerPlanSync !== 'none';
     if ((!evaluation.packet.candidate_artifact && artifact && artifact !== 'none') ||
+        ((params?.coveredTasks?.length ?? 0) === 0 && markerCoveredTasks.length > 0) ||
         ((params?.improvementRefs?.length ?? 0) === 0 && improvementRefs.length > 0) ||
         revalidatePlanSync) {
       evaluation = evaluateCloseout(target, {
         ...params,
         ...(artifact && artifact !== 'none' ? { artifact } : {}),
+        ...(markerCoveredTasks.length > 0 ? { coveredTasks: markerCoveredTasks } : {}),
         ...(improvementRefs.length > 0 ? { improvementRefs } : {}),
         ...(revalidatePlanSync ? { planSync: markerPlanSync } : {}),
       });
@@ -1295,6 +1360,7 @@ export function verifyCloseoutStatus(target, params) {
     marker.knownStatus &&
     markerDigest === expectedDigest &&
     String(marker.fields?.AGENT_CLOSEOUT_WORK_UNIT ?? '') === packet.work_unit &&
+    String(marker.fields?.AGENT_CLOSEOUT_TASKS ?? '') === [...packet.covered_tasks].sort().join(',') &&
     markerArtifact === (packet.candidate_artifact || 'none') &&
     String(marker.fields?.AGENT_CLOSEOUT_AUDIT ?? '') === expectedAudit &&
     String(marker.fields?.AGENT_CLOSEOUT_AUDIT_ASSURANCE ?? '') === expectedAuditAssurance &&
@@ -1348,6 +1414,7 @@ export function renderMarkerForPacket(packet, options = {}) {
   return renderCloseoutMarker({
     status: packet.recommended_status,
     workUnit: packet.work_unit,
+    coveredTasks: packet.covered_tasks,
     artifact: packet.candidate_artifact,
     auditRef: packet.audit ? `${packet.audit.audit_id}/run:${packet.audit.run}` : 'none',
     auditAssurance: packet.audit?.return_assurance ?? 'none',

@@ -277,10 +277,20 @@ task-record obligation.
   `Task: <resolved task id>` plus `Agent: engineer`.
 - Produce every commit message with `task commit-message <id> --class
   <commit-class> --subject <text> --output .agenticloop/tmp/<task>-commit-message.txt`,
-  check it with `--message-file`, commit with `git commit -F`, then recheck HEAD
+  for GitHub-backed work only validate it with `commit-attribution check
+  --message-file .agenticloop/tmp/<task>-commit-message.txt`, commit with `git
+  commit -F .agenticloop/tmp/<task>-commit-message.txt`, then recheck HEAD
   before push. Never split trailers across `-m` paragraphs: Git inserts a blank
   line between every `-m`, which strands `Task:` outside the final contiguous
   trailer block. `Agent:` is content ownership, not a repair operator.
+- Engineer commit classes are `product_implementation`, `role_start_status`,
+  `implementation_artifact_evidence`, `implementation_summary_evidence`, and
+  `implementation_outcome_evidence`. Maintainer classes are
+  `attempt_abandonment`, `handoff_evidence_refresh`, `readiness_settlement`,
+  `review_record`, and `acceptance_transition`; `audit_record` is Auditor-owned.
+  An orchestrator may mechanically execute `git add` and `git commit -F` for
+  CLI-authored bookkeeping, but the `Agent:` trailer continues to name the role
+  that owns the content and does not broaden mutation authority.
 - For a pushed malformed trailer, follow the GitHub backend exception; never
   automate it.
 - Honor any delegation lease from the orchestrator, including observable-step
@@ -302,12 +312,17 @@ task-record obligation.
   <packet-path> --return <return-path> --from-current-repository` before review.
   Host status, messages, opaque handles, or cancellation observations do not
   replace a return or establish cancellation by themselves.
+- End at `prepare-return`; Maintainer begins `verify-return`. Use the guarded
+  retry/evidence paths in [[role-delegation]]; never store raw output or hand-edit.
 - For files-backed work, the only permitted Engineer task-carrier updates after
-  role start are guarded `task evidence` mutations in the three closed classes:
+  role start are guarded `task evidence` mutations in the closed classes:
   `implementation_artifact_evidence`, `implementation_summary_evidence`, and
-  `implementation_outcome_evidence`. Check-evidence and raw-return artifacts do
-  not authorize a carrier edit; each carrier mutation requires the current
-  digest and extends the dispatch-consumption lineage.
+  `implementation_outcome_evidence`, plus `structured_task_evidence` for Scope
+  Completed, Evidence, Deviations, Known Gaps, Verification Attempts, and
+  Revision Resolution. Structured input must bind this dispatch's Engineer
+  role, invocation ID, contract digest, and attempt ID. Check-evidence and
+  raw-return artifacts do not authorize a carrier edit; each carrier mutation
+  requires the current digest and extends the dispatch-consumption lineage.
 - A blocked return remains Engineer-owned unless `role_return_receive` verifies
   a fresh version 2 redelegation signed by the exact operator-pinned authority
   for that return, packet, producer, and new owner. Comments, labels, commit

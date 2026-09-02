@@ -261,10 +261,12 @@ export function resolveCarriedProductLineage(target, taskId, {
   const abandoned = listExecutionAttemptAbandonments(target, taskId);
   if (!abandoned.ok) return { ok: false, lineage: null, errors: abandoned.errors };
 
-  const attempts = groupExecutionAttempts({
+  const grouped = groupExecutionAttempts({
     consumptions: consumed.records,
     abandonments: abandoned.records,
   });
+  if (!grouped.ok) return { ok: false, lineage: null, errors: grouped.errors.map(error => error.message) };
+  const attempts = grouped.records;
   // The current attempt is the newest one that started from this packet's base.
   // Identifying it by base rather than by liveness keeps the derivation stable
   // whether it is asked before or after this attempt's own records land.

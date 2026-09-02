@@ -161,10 +161,13 @@ export function createCloseoutCliFixture() {
 
   async function closeout(args, target, options = {}) {
     const fixture = dispatchFixtures.get(target);
+    const boundary = args[0] === 'prepare' && !args.includes('--covered-tasks')
+      ? ['--covered-tasks', 'T-001']
+      : [];
     const compatibility = args[0] === 'prepare' && !fixture
       ? ['--legacy-unactivated', '--legacy-reason', 'pre-activation test fixture']
       : [];
-    return runCliInProcess(['closeout', ...args, ...compatibility, '--target', target], {
+    return runCliInProcess(['closeout', ...args, ...boundary, ...compatibility, '--target', target], {
       operatorTrustRoot: fixture?.operatorTrustRoot,
       operatorActivationRoot: join(temp, 'operator-activation'),
       hostAuthority: fixture ? protectedHostBoundary(fixture.trust) : undefined,

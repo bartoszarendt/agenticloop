@@ -4,11 +4,11 @@ import { canonicalSha256 } from './canonical-json.js';
 import { pathIdentity, samePathAuthority } from './path-identity.js';
 
 export const EXECUTION_EVIDENCE_KIND = 'agenticloop.execution-evidence';
-export const EXECUTION_EVIDENCE_SCHEMA_VERSION = 3;
+export const EXECUTION_EVIDENCE_SCHEMA_VERSION = 4;
 export const MAX_MONOTONIC_DURATION_MS = 31 * 24 * 60 * 60 * 1000;
 
 const FIELDS = Object.freeze([
-  'kind', 'schemaVersion', 'check', 'runner', 'binding', 'timing', 'locations', 'execution', 'digest',
+  'kind', 'schemaVersion', 'check', 'runner', 'binding', 'lineage', 'timing', 'locations', 'execution', 'digest',
 ]);
 const LOCATION_FIELDS = Object.freeze([
   'carrierRoot', 'artifactWorktreeRoot', 'workingDirectory', 'projectScratchRoot',
@@ -70,12 +70,12 @@ function strictUtc(value) {
 
 function evidenceDigest(value) {
   const { digest, ...unsigned } = value;
-  return `sha256:agenticloop.execution-evidence.v3:${canonicalSha256(unsigned)}`;
+  return `sha256:agenticloop.execution-evidence.v4:${canonicalSha256(unsigned)}`;
 }
 
 /** Typed signal for an artifact from the retired v2 digest domain. */
 export class ExecutionEvidenceStaleVersionError extends TypeError {
-  constructor(observedVersion = 2) {
+  constructor(observedVersion = 3) {
     super(`execution evidence schemaVersion ${observedVersion} is incompatible; produce fresh schemaVersion ${EXECUTION_EVIDENCE_SCHEMA_VERSION} evidence`);
     this.name = 'ExecutionEvidenceStaleVersionError';
     this.code = 'execution_evidence.stale_version';
@@ -134,8 +134,8 @@ export function validateExecutionEvidence(value, { expectedBinding = null, ...op
   const diagnostics = [];
   if (!exactKeys(value, FIELDS)) return { ok: false, errors: ['execution evidence fields must equal the closed schema'], diagnostics };
   if (value.kind !== EXECUTION_EVIDENCE_KIND || value.schemaVersion !== EXECUTION_EVIDENCE_SCHEMA_VERSION) {
-    if (value?.schemaVersion === 2) {
-      const stale = new ExecutionEvidenceStaleVersionError();
+    if (value?.schemaVersion === 2 || value?.schemaVersion === 3) {
+      const stale = new ExecutionEvidenceStaleVersionError(value.schemaVersion);
       errors.push(stale.message);
       diagnostics.push({ code: stale.code, observedVersion: stale.observedVersion, requiredVersion: stale.requiredVersion });
     } else {
@@ -148,6 +148,7 @@ export function validateExecutionEvidence(value, { expectedBinding = null, ...op
       typeof value.check?.command !== 'string' || !value.check.command ||
       !Array.isArray(value.check?.args) || !value.check.args.every(arg => typeof arg === 'string')) {
     errors.push('execution evidence check must preserve exact instruction and argv identity');
+    diagnostics.push({ code: 'execution_evidence.malformed_input', field: 'check', repair: 'malformed_input' });
   }
   if (!exactKeys(value.runner, ['logicalCommand', 'resolvedExecutable', 'wrapperKind', 'wrapperProgram', 'wrapperArgs']) ||
       value.runner?.logicalCommand !== value.check?.command ||
@@ -159,18 +160,20 @@ export function validateExecutionEvidence(value, { expectedBinding = null, ...op
     errors.push('execution evidence runner must preserve resolved executable and actual wrapper identity');
   }
   if (!exactKeys(value.binding, [
-    'packetId', 'packetDigest', 'invocationId', 'taskId',
-    'taskContractDigest', 'currentCarrierDigest', 'repositoryHead', 'productHead',
+    'packetId', 'packetDigest', 'invocationId', 'taskId', 'taskContractDigest', 'productHead',
   ]) ||
       typeof value.binding?.packetId !== 'string' || !/^dispatch:[0-9a-f-]{36}$/.test(value.binding.packetId) ||
       typeof value.binding?.packetDigest !== 'string' || !validPacketDigest(value.binding.packetDigest) ||
       typeof value.binding?.invocationId !== 'string' || !value.binding.invocationId ||
       typeof value.binding?.taskId !== 'string' || !value.binding.taskId ||
       typeof value.binding?.taskContractDigest !== 'string' || !validContractDigest(value.binding.taskContractDigest) ||
-      typeof value.binding?.currentCarrierDigest !== 'string' || !validSha256(value.binding.currentCarrierDigest) ||
-      typeof value.binding?.repositoryHead !== 'string' || !validGitObjectId(value.binding.repositoryHead) ||
       typeof value.binding?.productHead !== 'string' || !validGitObjectId(value.binding.productHead)) {
-    errors.push('execution evidence must bind one exact dispatch, task carrier, and repository state');
+    errors.push('execution evidence must bind one exact dispatch, task contract, and product candidate');
+  }
+  if (!exactKeys(value.lineage, ['currentCarrierDigest', 'repositoryHead']) ||
+      typeof value.lineage?.currentCarrierDigest !== 'string' || !validSha256(value.lineage.currentCarrierDigest) ||
+      typeof value.lineage?.repositoryHead !== 'string' || !validGitObjectId(value.lineage.repositoryHead)) {
+    errors.push('execution evidence lineage observations are invalid');
   }
   if (!exactKeys(value.timing, ['startedAt', 'endedAt', 'monotonicDurationMs']) ||
       !strictUtc(value.timing?.startedAt) || !strictUtc(value.timing?.endedAt) ||
@@ -180,6 +183,7 @@ export function validateExecutionEvidence(value, { expectedBinding = null, ...op
   }
   if (!exactKeys(value.locations, LOCATION_FIELDS)) {
     errors.push('execution evidence locations must equal the closed schema');
+    diagnostics.push({ code: 'execution_evidence.malformed_input', field: 'locations', repair: 'malformed_input' });
   } else {
     for (const field of LOCATION_FIELDS) {
       const location = value.locations[field];
@@ -187,6 +191,7 @@ export function validateExecutionEvidence(value, { expectedBinding = null, ...op
           typeof location.displayPath !== 'string' || !location.displayPath ||
           typeof location.authorityPath !== 'string' || !location.authorityPath) {
         errors.push(`execution evidence ${field} path identity is invalid`);
+        diagnostics.push({ code: 'execution_evidence.malformed_input', field, repair: 'malformed_input' });
       }
     }
     const scratch = value.locations.projectScratchRoot?.authorityPath;
@@ -194,6 +199,7 @@ export function validateExecutionEvidence(value, { expectedBinding = null, ...op
     const expectedScratch = `${worktree}/.agenticloop/tmp`;
     if (scratch && worktree && !samePathAuthority(scratch, expectedScratch, { ...options, base: '/' })) {
       errors.push('execution evidence scratch root must be project-owned under artifact worktree .agenticloop/tmp');
+      diagnostics.push({ code: 'execution_evidence.malformed_input', field: 'projectScratchRoot', repair: 'malformed_input' });
     }
   }
   if (!exactKeys(value.execution, ['outcome', 'childExitCode', 'wrapperFailure', 'outputFilterFailure', 'output'])) {
@@ -215,8 +221,79 @@ export function validateExecutionEvidence(value, { expectedBinding = null, ...op
     }
   }
   if (value.digest !== evidenceDigest(value)) errors.push('execution evidence digest is invalid');
-  if (expectedBinding !== null && JSON.stringify(value.binding) !== JSON.stringify(expectedBinding)) {
-    errors.push('execution evidence does not match the expected dispatch binding');
+  if (expectedBinding !== null) {
+    const semanticExpected = {
+      packetId: expectedBinding.packetId,
+      packetDigest: expectedBinding.packetDigest,
+      invocationId: expectedBinding.invocationId,
+      taskId: expectedBinding.taskId,
+      taskContractDigest: expectedBinding.taskContractDigest,
+      productHead: expectedBinding.productHead,
+    };
+    for (const [field, expected] of Object.entries(semanticExpected)) {
+      if (value.binding?.[field] === expected) continue;
+      errors.push(`execution evidence binding '${field}' does not match the expected value`);
+      diagnostics.push({
+        code: 'execution_evidence.binding_mismatch',
+        field,
+        expected,
+        observed: value.binding?.[field] ?? null,
+        repair: 'rerun',
+      });
+    }
+    const expectedCheck = {
+      id: expectedBinding.checkId,
+      command: expectedBinding.command,
+      args: expectedBinding.args,
+    };
+    for (const [field, expected] of Object.entries(expectedCheck)) {
+      if (expected === undefined) continue;
+      const observed = field === 'id' ? value.check?.id : value.check?.[field];
+      const equal = Array.isArray(expected)
+        ? Array.isArray(observed) && JSON.stringify(observed) === JSON.stringify(expected)
+        : observed === expected;
+      if (equal) continue;
+      errors.push(`execution evidence check '${field}' does not match the expected value`);
+      diagnostics.push({
+        code: 'execution_evidence.binding_mismatch', field: `check.${field}`,
+        expected, observed: observed ?? null, repair: 'rerun',
+      });
+    }
+    if (expectedBinding.currentCarrierDigest !== undefined &&
+        value.lineage?.currentCarrierDigest !== expectedBinding.currentCarrierDigest) {
+      errors.push("execution evidence lineage 'currentCarrierDigest' does not match the expected carrier");
+      diagnostics.push({
+        code: 'execution_evidence.lineage_mismatch', field: 'currentCarrierDigest',
+        expected: expectedBinding.currentCarrierDigest, observed: value.lineage?.currentCarrierDigest ?? null,
+        repair: 'workflow_lineage_repair',
+      });
+    }
+    const repositoryHeadMatches = expectedBinding.repositoryHead === undefined ||
+      value.lineage?.repositoryHead === expectedBinding.repositoryHead ||
+      (typeof options.repositoryHeadIsPermitted === 'function' &&
+        options.repositoryHeadIsPermitted(
+          value.lineage?.repositoryHead,
+          expectedBinding.repositoryHead,
+          value
+        ) === true);
+    if (!repositoryHeadMatches) {
+      errors.push("execution evidence lineage 'repositoryHead' does not match the expected product/workflow head");
+      diagnostics.push({
+        code: 'execution_evidence.lineage_mismatch', field: 'repositoryHead',
+        expected: expectedBinding.repositoryHead, observed: value.lineage?.repositoryHead ?? null,
+        repair: 'rerun',
+      });
+    }
+    if (expectedBinding.workingDirectoryAuthority !== undefined &&
+        value.locations?.workingDirectory?.authorityPath !== expectedBinding.workingDirectoryAuthority) {
+      errors.push("execution evidence working-directory authority does not match the expected value");
+      diagnostics.push({
+        code: 'execution_evidence.binding_mismatch', field: 'workingDirectoryAuthority',
+        expected: expectedBinding.workingDirectoryAuthority,
+        observed: value.locations?.workingDirectory?.authorityPath ?? null,
+        repair: 'malformed_input',
+      });
+    }
   }
   return { ok: errors.length === 0, errors, diagnostics };
 }
@@ -268,7 +345,18 @@ export function produceExecutionEvidence(input = {}, {
     schemaVersion: EXECUTION_EVIDENCE_SCHEMA_VERSION,
     check: { id: checkId, instruction, command, args: [...args] },
     runner,
-    binding: { ...binding },
+    binding: {
+      packetId: binding.packetId,
+      packetDigest: binding.packetDigest,
+      invocationId: binding.invocationId,
+      taskId: binding.taskId,
+      taskContractDigest: binding.taskContractDigest,
+      productHead: binding.productHead,
+    },
+    lineage: {
+      currentCarrierDigest: binding.currentCarrierDigest,
+      repositoryHead: binding.repositoryHead,
+    },
     timing: { startedAt: new Date(started).toISOString(), endedAt: new Date(ended).toISOString(), monotonicDurationMs: duration },
     locations: Object.fromEntries(LOCATION_FIELDS.map(field => [field, locationRecord(input[field], pathOptions)])),
     execution: { outcome, childExitCode, wrapperFailure, outputFilterFailure, output },

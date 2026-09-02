@@ -55,8 +55,7 @@ async function consumePacket(fixture, cli, sequence) {
   const preflight = await cli(['task', 'handoff-preflight', 'T-001', '--host', 'opencode', '--json']);
   if (preflight.status !== 0) {
     const repair = JSON.parse(preflight.stdout).firstSafeRepair.replace(/^npx agenticloop /, '').split(' ');
-    const regenerated = assertOk(await cli([...repair, '--json']), `regenerate the decomposition for ${sequence}`);
-    writeFileSync(join(root, '.agenticloop', 'decompositions', 'T-001.json'), regenerated.stdout, 'utf8');
+    assertOk(await cli([...repair, '--json']), `regenerate the decomposition for ${sequence}`);
     git(root, ['add', '.agenticloop/decompositions']);
     git(root, ['commit', '-m', `regenerate the decomposition\n\nTask: T-001\nAgent: maintainer`]);
   }
@@ -109,7 +108,7 @@ describe('consuming a packet retires the attempt it supersedes', () => {
     assertOk(await consumePacket(fixture, cli, 2), 'second role start');
 
     const status = await attemptStatus(cli);
-    const retired = status.attempts.find(attempt => attempt.state === 'abandoned');
+    const retired = status.attempts.find(attempt => attempt.state === 'superseded_by_packet');
     assert.equal(retired.abandonment.disposition, 'superseded_by_packet');
     assert.equal(retired.abandonment.authority, status.liveAttempt.packetId,
       'the successor packet is the durable reference that permitted the retirement');
@@ -144,6 +143,14 @@ describe('attempt_budget is a bound, not a comment', () => {
     git(fixture.root, ['commit', '-m', 'declare the attempt budget\n\nTask: T-001\nAgent: maintainer']);
 
     assertOk(await consumePacket(fixture, cli, 1), 'first role start');
+    const first = await attemptStatus(cli);
+    assertOk(await cli([
+      'task', 'abandon-attempt', 'T-001', '--attempt', first.liveAttempt.attemptId,
+      '--reason', 'Engineering attempt made no acceptable progress and requires a fresh approach.',
+      '--authority', 'maintainer:budget-test', '--json',
+    ]), 'record real no-progress attempt');
+    git(fixture.root, ['add', '.agenticloop/handoffs/attempts']);
+    git(fixture.root, ['commit', '-m', 'record no-progress attempt\n\nTask: T-001\nAgent: maintainer']);
     assertOk(await consumePacket(fixture, cli, 2), 'second role start');
 
     const status = JSON.parse((await cli(['task', 'attempt-status', 'T-001', '--json'])).stdout);

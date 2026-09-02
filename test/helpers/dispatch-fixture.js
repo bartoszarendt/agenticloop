@@ -49,7 +49,7 @@ export const RETURN_INVALIDATORS = Object.freeze([
 ]);
 const FIXTURE_EXECUTION_EVIDENCE = Object.freeze({
   path: '.agenticloop/tmp/evidence.json',
-  digest: `sha256:agenticloop.execution-evidence.v3:${'a'.repeat(64)}`,
+  digest: `sha256:agenticloop.execution-evidence.v4:${'a'.repeat(64)}`,
 });
 
 function withExecutionEvidence(checks) {

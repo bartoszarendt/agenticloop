@@ -95,23 +95,23 @@ product files.
 
 Before Engineer delegation, the orchestrator runs `npx agenticloop task
 prepare-dispatch <id> --host <host> --role engineer --output <packet-path>
---json`. The packet binds activation, task/contract, readiness, decomposition,
-scope/checks, role/invocation, host capability, worktree, and cancellation facts.
-Only its fixed operator-trust registry authorizes activation.
+--json`. The packet binds all dispatch facts. Only its fixed operator-trust
+registry authorizes activation.
 
-All artifact paths are target-relative. The files-backend canonical single
-command for role start is:
+Files-backend role start uses target-relative artifacts:
 
 ```text
 npx agenticloop task role-start <id> --packet <packet-path> --check-evidence-output <checks-path> --json
+npx agenticloop task prepare-product-commit <id> --packet <packet-path> --subject <subject> --message-output .agenticloop/tmp/<id>-product-commit.txt --json
 ```
 
-This atomically combines the in-progress carrier transition, dispatch consumption,
-attempt supersession, and required-check evidence initialization into one guarded
-transaction. The caller must not pass `--expect-digest`; it is derived from the
-packet. Partial failure returns a typed receipt with exact recovery guidance and
-never implies success. An exact idempotent retry reports `already_current`; a
-retry with any changed bound state fails closed.
+Role start atomically records status, dispatch consumption, attempt disposition,
+and the check scaffold. It derives the digest from the packet. Partial or changed
+retries fail closed; an exact retry is `already_current`.
+Missing, stale, consumed, already-current, or noted starts fail closed without a
+fresh packet.
+An unkeyed dispatch digest provides integrity only; it does not authenticate
+validator identity.
 
 For GitHub, the existing guarded task-body path is used instead:
 
@@ -120,30 +120,40 @@ npx agenticloop task-body transition --issue <n> --status in-progress --dispatch
 npx agenticloop task check-evidence-init <id> --packet <packet-path> --output <checks-path> --json
 ```
 
-The ordinary public sequence for the full lifecycle (files backend) is:
+Files lifecycle:
 
 ```text
 npx agenticloop task prepare-dispatch <id> --host <host> --role engineer --output <packet-path> --json
 npx agenticloop task role-start <id> --packet <packet-path> --check-evidence-output <checks-path> --json
+npx agenticloop task evidence <id> --class implementation_artifact_evidence --expect-digest <digest> --product-head <commit> --json
+npx agenticloop task evidence <id> --class implementation_summary_evidence --expect-digest <refetched-digest> --summary <text> --check-evidence <text> --json
+npx agenticloop task evidence <id> --class implementation_outcome_evidence --expect-digest <refetched-digest> --outcome implementation_ready_for_review --json
+npx agenticloop task check-evidence-init <id> --packet <packet-path> --output <checks-path> --json
 npx agenticloop task check-evidence-update <id> --packet <packet-path> --input <checks-path> --output <checks-path> --check <check-id> --outcome passed --evidence <text> --execution-output <execution-path> --json
 npx agenticloop task prepare-return <id> --packet <packet-path> --check-evidence <checks-path> --outcome implementation_ready_for_review --output <return-path> --json
+```
+
+Engineer ends at `prepare-return`; Maintainer starts with:
+
+```text
 npx agenticloop task verify-return <id> --packet <packet-path> --return <return-path> --from-current-repository --json
 ```
 
-For a non-passing or non-command check, use the same update command with its
-observed outcome and omit `--execution-output` as required by that check form.
-Missing, stale, consumed, already-current, or noted starts fail closed without a
-fresh packet. Engineer invokes the read-only verifier before mutation; its
-unkeyed record proves packet/result integrity, not validator identity or origin.
-Public boundaries rerun validation and accept no caller-authored receipt. The raw
-`agenticloop.role-return` binds that packet with `disposition: proceed` and only a
-non-authoritative implementation outcome; Orchestrator validates or reroutes,
-never reconstructs it. Standard mode may persist a fully revalidated
-`session_reported` return without producer authentication. Hardened mode requires
-host provenance for repository, adapter/key, invocation, packet, return,
-liveness, and repository evidence. The verifier uses the packet-selected key;
-replayed, unsigned, or self-attested receipts fail closed. The observed producer
-must match assignment and raw producer; trailers cannot repair a mismatch.
+For non-passing/manual checks, use the observed outcome and omit
+`--execution-output` where required. Invalid starts need a fresh packet.
+
+Only retry an in-lease usage refusal with `safeToRetry: true` and
+`mutationOccurred: false`, using its corrected command.
+Before an identical tooling retry, run `task record-tooling-failure <id>
+--attempt <attempt-id> --input <failure.json> --json`. Two total observations
+allow one retry; persist bounded provenance only.
+Authority, lifecycle, binding, ambiguity, evidence, and partial-mutation failures
+stop immediately and cannot consume this exception.
+Public boundaries revalidate and reject caller-authored receipts. The raw return
+binds the packet and a non-authoritative outcome; Orchestrator never reconstructs
+it. Standard mode permits revalidated `session_reported`; hardened mode requires
+host provenance for every bound identity. Replay, self-attestation, or producer
+mismatch fails closed.
 
 Do not hand-author JSON/digests or substitute host status, messages, handles, or
 cancellation observations for a return; host status proves no cancellation.

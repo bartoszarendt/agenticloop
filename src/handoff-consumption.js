@@ -7,6 +7,7 @@ import { listWorkflowEvidenceFiles } from './carrier-root.js';
 import { GIT_OBJECT_ID_RE } from './git-oid.js';
 import { validateHandoffRecognition } from './handoff-recognition.js';
 import { executeMutationBatch } from './fs-mutation-kernel.js';
+import { executionAttemptIdentity } from './execution-attempt-identity.js';
 import { ENGINEER_CARRIER_MUTATION_CLASSES, validateCarrierMutationReceipt } from './task-evidence-contract.js';
 import { classifyLifecycleCompatibility, compatibilityMessage } from './lifecycle-compatibility.js';
 import { producerRefusal } from './public-error.js';
@@ -287,6 +288,10 @@ export function resolveCarrierLineage(target, taskId, {
   let predecessorDigest = start.digest;
   let carrierDigest = start.currentCarrierDigest;
   const records = [];
+  const attemptId = executionAttemptIdentity(start);
+  const hasDispatchedStructuredProvenance = receipt =>
+    !receipt.mutationClass.startsWith('structured_') ||
+    (receipt.producer.workflowRole === start.workflowRole && receipt.producer.attemptId === attemptId);
   // Receipts from a completed/revised dispatch generation share a task
   // directory but are not predecessor candidates for this dispatch. Scope the
   // chain by the complete immutable dispatch tuple before looking for edges.
@@ -295,7 +300,8 @@ export function resolveCarrierLineage(target, taskId, {
     receipt.dispatchCarrierDigest === start.dispatchCarrierDigest &&
     receipt.producer.invocationId === start.invocationId &&
     receipt.producer.workUnitIdentity === start.workUnitIdentity &&
-    receipt.producer.repositoryIdentity === start.repositoryIdentity;
+    receipt.producer.repositoryIdentity === start.repositoryIdentity &&
+    hasDispatchedStructuredProvenance(receipt);
   // An Engineer return terminates where the Engineer stopped. A lifecycle-owned
   // mutation of the same generation is a real record, but it belongs to the
   // later boundary: absorbing it here would move the return terminal onto a
@@ -333,7 +339,8 @@ export function resolveCarrierLineage(target, taskId, {
         receipt.predecessor.kind !== (predecessorDigest === start.digest ? 'dispatch_consumption' : 'task_mutation_receipt') ||
         receipt.producer.invocationId !== start.invocationId ||
         receipt.producer.workUnitIdentity !== start.workUnitIdentity ||
-        receipt.producer.repositoryIdentity !== start.repositoryIdentity) {
+        receipt.producer.repositoryIdentity !== start.repositoryIdentity ||
+        !hasDispatchedStructuredProvenance(receipt)) {
       errors.push(`carrier mutation receipt '${receipt.receiptId}' does not continue the recognized carrier lineage`);
       break;
     }

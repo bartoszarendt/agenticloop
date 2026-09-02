@@ -126,7 +126,7 @@ describe('reproduced closeout-integrity failure sequence', () => {
       readFileSync(carrierFile, 'utf-8') + '\nAGENT_CLOSEOUT_STATUS: complete\n',
       'utf-8'
     );
-    commitAll(target, 'integrated work plus a premature marker');
+    const incidentArtifact = commitAll(target, 'integrated work plus a premature marker');
 
     // 2. Status exposes it as legacy history, never valid completion.
     const legacyStatus = await run(['closeout', 'status', '--work-unit', 'milestone:M00', '--json'], target);
@@ -138,6 +138,7 @@ describe('reproduced closeout-integrity failure sequence', () => {
     const correctionPath = join(target, '.agenticloop', 'tmp', 'correction.json');
     const prepareCorrection = await run([
       'closeout', 'prepare', '--work-unit', 'milestone:M00', '--output', correctionPath,
+      '--artifact', incidentArtifact, '--covered-tasks', 'T-001,T-002,T-003',
     ], target);
     assert.equal(prepareCorrection.status, 1);
     const correction = JSON.parse(readFileSync(correctionPath, 'utf-8'));
@@ -195,7 +196,10 @@ describe('reproduced closeout-integrity failure sequence', () => {
     assert.equal(reported.status, 0, `${reported.stdout}${reported.stderr}`);
 
     // 8. Terminal closeout waits for the non-blocking disposition.
-    const prematurePrepare = await run(['closeout', 'prepare', '--work-unit', 'milestone:M00', '--json'], target);
+    const prematurePrepare = await run([
+      'closeout', 'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact,
+      '--covered-tasks', 'T-001,T-002,T-003', '--json',
+    ], target);
     assert.equal(prematurePrepare.status, 1);
     assert.ok(JSON.parse(prematurePrepare.stdout).reasons.some(item => item.category === 'undisposed_findings'));
 
@@ -211,7 +215,8 @@ describe('reproduced closeout-integrity failure sequence', () => {
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     const prepared = await run([
       'closeout', 'prepare', '--work-unit', 'milestone:M00',
-      '--artifact', artifact, '--improvement-ref', proposalId, '--output', packetPath,
+      '--artifact', artifact, '--covered-tasks', 'T-001,T-002,T-003',
+      '--improvement-ref', proposalId, '--output', packetPath,
     ], target);
     assert.equal(prepared.status, 1, `${prepared.stdout}${prepared.stderr}`);
     const packet = JSON.parse(readFileSync(packetPath, 'utf-8'));

@@ -30,6 +30,8 @@ import {
 import { canonicalJson, canonicalSha256 } from './canonical-json.js';
 import { RETURN_ASSURANCE_VALUES } from './activation-grant.js';
 
+const CLOSEOUT_COMMIT_ARTIFACT_RE = /^commit:(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
 export {
   CLOSEOUT_MARKER_SCHEMA_VERSION,
   CLOSEOUT_MARKER_STATUSES,
@@ -162,6 +164,8 @@ export function validateCloseoutPacket(packet) {
   }
   if (typeof packet.candidate_artifact !== 'string') {
     errors.push('closeout packet candidate_artifact must be a string');
+  } else if (packet.candidate_artifact.trim() && !CLOSEOUT_COMMIT_ARTIFACT_RE.test(packet.candidate_artifact.trim())) {
+    errors.push('closeout packet candidate_artifact must be commit:<full-git-sha>');
   } else if (!packet.candidate_artifact.trim() &&
       (packet.completion_eligible === true || packet.recommended_status === 'complete')) {
     // Truthful correction packets may legitimately have no bound candidate;
@@ -242,6 +246,7 @@ export const CLOSEOUT_MARKER_KEYS = Object.freeze({
   status: 'AGENT_CLOSEOUT_STATUS',
   schema: 'AGENT_CLOSEOUT_SCHEMA',
   workUnit: 'AGENT_CLOSEOUT_WORK_UNIT',
+  coveredTasks: 'AGENT_CLOSEOUT_TASKS',
   artifact: 'AGENT_CLOSEOUT_ARTIFACT',
   audit: 'AGENT_CLOSEOUT_AUDIT',
   auditAssurance: 'AGENT_CLOSEOUT_AUDIT_ASSURANCE',
@@ -285,6 +290,7 @@ export function renderCloseoutMarker(fields) {
     `${CLOSEOUT_MARKER_KEYS.status}: ${status}`,
     `${CLOSEOUT_MARKER_KEYS.schema}: ${CLOSEOUT_MARKER_SCHEMA_VERSION}`,
     `${CLOSEOUT_MARKER_KEYS.workUnit}: ${String(fields?.workUnit ?? '')}`,
+    `${CLOSEOUT_MARKER_KEYS.coveredTasks}: ${Array.isArray(fields?.coveredTasks) && fields.coveredTasks.length > 0 ? [...new Set(fields.coveredTasks.map(String))].sort().join(',') : 'none'}`,
     `${CLOSEOUT_MARKER_KEYS.artifact}: ${String(fields?.artifact ?? '').trim() || 'none'}`,
     `${CLOSEOUT_MARKER_KEYS.audit}: ${fields?.auditRef ? String(fields.auditRef) : 'none'}`,
     `${CLOSEOUT_MARKER_KEYS.auditAssurance}: ${fields?.auditAssurance ? String(fields.auditAssurance) : 'none'}`,
@@ -353,6 +359,7 @@ export function parseCloseoutMarkers(text) {
         CLOSEOUT_MARKER_KEYS.status,
         CLOSEOUT_MARKER_KEYS.schema,
         CLOSEOUT_MARKER_KEYS.workUnit,
+        CLOSEOUT_MARKER_KEYS.coveredTasks,
         CLOSEOUT_MARKER_KEYS.artifact,
         CLOSEOUT_MARKER_KEYS.audit,
         CLOSEOUT_MARKER_KEYS.auditAssurance,
@@ -370,6 +377,12 @@ export function parseCloseoutMarkers(text) {
       }
       if (!MARKER_GATE_PATTERN.test(String(marker.fields[CLOSEOUT_MARKER_KEYS.gate] ?? ''))) {
         errors.push('closeout marker gate digest must be sha256:<64 lowercase hex characters>');
+      }
+      const coveredTasks = String(marker.fields[CLOSEOUT_MARKER_KEYS.coveredTasks] ?? '');
+      const parsedTasks = coveredTasks.split(',').map(value => value.trim()).filter(Boolean);
+      if (coveredTasks === 'none' || parsedTasks.length === 0 ||
+          JSON.stringify(parsedTasks) !== JSON.stringify([...new Set(parsedTasks)].sort())) {
+        errors.push('closeout marker must carry one canonical non-empty covered-task inventory');
       }
       const auditRef = String(marker.fields[CLOSEOUT_MARKER_KEYS.audit] ?? '');
       const auditAssurance = String(marker.fields[CLOSEOUT_MARKER_KEYS.auditAssurance] ?? '');

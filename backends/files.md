@@ -72,8 +72,8 @@ dependency status, makes the scan stale and refuses dispatch.
 
 The ordinary files handoff starts with `task prepare-dispatch <id> --host <host>
 --role engineer --output <packet-path> --json`; guarded role start consumes and
-revalidates it through `task status <id> in-progress --dispatch-packet
-<packet-path>`. `task prepare-dispatch <id> --input <dispatch-input.json>` is an
+revalidates it through `task role-start <id> --packet <packet-path>
+--check-evidence-output <checks-path>`. `task prepare-dispatch <id> --input <dispatch-input.json>` is an
 advanced compatibility route, while `task prepare-dispatch <id> --packet
 <packet.json> --role engineer` is the matching receive-side revalidator. An
 optional `--host-trust-store` can assert, but cannot select, the target's
@@ -130,9 +130,10 @@ refresh checks that every declared dependency has a recorded status; it does not
 re-observe dependency state, so the Maintainer stays responsible for those
 statuses being currently true.
 
-The Engineer creates required-check evidence with `task check-evidence-init`,
-updates it with `task check-evidence-update`, and derives the raw return with
-`task prepare-return`. The receiver runs `task verify-return <id> --packet
+After product work and all Engineer-owned carrier evidence are committed, the
+Engineer reinitializes the final empty scaffold with `task check-evidence-init`,
+runs and records every check with `task check-evidence-update`, and performs no
+mutating workflow command before `task prepare-return`. The receiver runs `task verify-return <id> --packet
 <packet-path> --return <return-path> --from-current-repository` before `task
 review-prepare <id>` or review. All these artifact paths are target-relative.
 Do not inspect artifact internals, hand-author JSON or digests, or replace a
@@ -141,11 +142,18 @@ host cancellation/status alone does not establish cancellation. A cancellation
 claim requires the Agentic Loop-controlled observation documented in
 docs/cli-reference.md (`--cancellation-evidence` on both `prepare-return` and
 `verify-return`); without it the outcome is unknown, not cancelled or complete.
-A passed command check is proved only by the closed schema-v3 CLI execution
-artifact it references; new check records must carry that evidence, while
-artifact-free legacy records verify under the documented reduced-assurance
-compatibility rule. Schema-v2 evidence and its digest domain are typed
-incompatible with v3 and must be regenerated.
+A passed command check is proved only by the closed schema-v4 CLI execution
+artifact it references. Semantic binding covers packet, invocation, task,
+protected contract, product candidate, check id, command, and argv. Carrier and
+workflow HEAD observations are separate lineage evidence checked at return
+consumption. Schema-v2/v3 evidence is typed incompatible and must be regenerated.
+
+Commit classes map directly to ownership: Engineer uses
+`product_implementation`, `role_start_status`,
+`implementation_artifact_evidence`, `implementation_summary_evidence`, and
+`implementation_outcome_evidence`; Maintainer uses `attempt_abandonment`,
+`handoff_evidence_refresh`, `readiness_settlement`, `review_record`, and
+`acceptance_transition`; Auditor uses `audit_record`.
 
 The receiving role verifies the packet before mutation and returns raw
 `agenticloop.role-return` JSON. `task verify-return --from-current-repository`

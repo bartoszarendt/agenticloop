@@ -283,14 +283,50 @@ const BASELINE_RATIONALE = Object.freeze([
       'Canonical role definitions gained the required attempt, readiness, handoff, review, and return-state contracts after the dual-mode Auditor measurement. Claude Code packages those role definitions directly; the measured increase is shared canonical capability rather than adapter-specific duplication.',
     evidence: 'git history 94c321c..7315ecc for agents/',
   },
+  {
+    pass: 'lifecycle evidence remediation payload (2026-09-01)',
+    adapters: ['opencode', 'copilot', 'cursor'],
+    categories: ['generatedPayload'],
+    previous: null, measured: null, delta: null, valuesRecorded: true,
+    changes: [
+      { adapter: 'opencode', category: 'generatedPayload', previous: 14061, measured: 14970, delta: 909 },
+      { adapter: 'copilot', category: 'generatedPayload', previous: 69622, measured: 73136, delta: 3514 },
+      { adapter: 'cursor', category: 'generatedPayload', previous: 69370, measured: 72884, delta: 3514 },
+    ],
+    reason:
+      'Canonical roles and reference material now carry the executable role-start ordering, exact ' +
+      'audit currency, return-attempt dispositions, evidence-v4 binding, idempotent verification, ' +
+      'and bounded safe-retry rules required by the lifecycle remediation. The content remains ' +
+      'authored once in existing role, skill, backend, and methodology sources; adapters only ' +
+      'package those sources through their established surfaces.',
+    evidence: 'agents/, skills/, backends/files.md, AGENTIC_LOOP.md lifecycle evidence remediation',
+  },
+  {
+    pass: 'lifecycle evidence remediation roles (2026-09-01)',
+    adapters: ['opencode', 'codex', 'copilot', 'cursor'],
+    categories: ['agentDefinitions'],
+    previous: null, measured: null, delta: null, valuesRecorded: true,
+    changes: [
+      { adapter: 'opencode', category: 'agentDefinitions', previous: 13084, measured: 13993, delta: 909 },
+      { adapter: 'codex', category: 'agentDefinitions', previous: 13516, measured: 14303, delta: 787 },
+      { adapter: 'copilot', category: 'agentDefinitions', previous: 13193, measured: 14006, delta: 813 },
+      { adapter: 'cursor', category: 'agentDefinitions', previous: 13187, measured: 14000, delta: 813 },
+    ],
+    reason:
+      'The canonical Engineer, Maintainer, and Orchestrator definitions now state the exact ' +
+      'role-start, evidence publication, return, review, and recovery responsibilities required ' +
+      'by the lifecycle remediation. Each adapter inherits the same role sources without an ' +
+      'adapter-local copy.',
+    evidence: 'agents/engineer.md, agents/maintainer.md, agents/orchestrator.md',
+  },
 ]);
 
 const ADAPTERS = [
-  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 14061, agentDefinitions: 13084, activationSurface: 977 } },
-  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 71644, agentDefinitions: 13516, activationSurface: 1260, referenceLibrary: 56868 } },
+  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 14970, agentDefinitions: 13993, activationSurface: 977 } },
+  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 71644, agentDefinitions: 14303, activationSurface: 1260, referenceLibrary: 56868 } },
   { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 54913, agentDefinitions: 12721, activationSurface: 2157, referenceLibrary: 40662 } },
-  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 69622, agentDefinitions: 13193, activationSurface: 1314, referenceLibrary: 55115 } },
-  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 69370, agentDefinitions: 13187, activationSurface: 1068, referenceLibrary: 55115 } },
+  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 73136, agentDefinitions: 14006, activationSurface: 1314, referenceLibrary: 55115 } },
+  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 72884, agentDefinitions: 14000, activationSurface: 1068, referenceLibrary: 55115 } },
 ];
 
 let tmpDir;

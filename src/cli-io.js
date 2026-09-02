@@ -55,6 +55,9 @@ export class CliUsageError extends Error {
     this.name = 'CliUsageError';
     this.exitCode = EXIT_USAGE;
     this.hint = options.hint ?? null;
+    this.safeToRetry = options.safeToRetry === true;
+    this.mutationOccurred = options.mutationOccurred === true;
+    this.canonicalUsage = options.canonicalUsage ?? null;
     this.code = 'cli.usage';
     this.evidenceState = 'negative';
     this.disposition = 'blocked';
@@ -103,6 +106,7 @@ function detectColor(env, stdoutIsTTY, ci) {
  * @param {boolean} [options.color]        Override color capability.
  * @param {(input: NodeJS.ReadableStream, output: NodeJS.WritableStream) => object} [options.promptFactory]
  * @param {Function} [options.ghCommandRunner]  Injectable read-only GitHub command runner for tests.
+ * @param {Function} [options.gitCommandRunner] Injectable Git command runner for boundary tests.
  * @param {Function} [options.auditProvenanceVerifier] Host receipt verifier for Auditor delegations.
  * @param {string} [options.operatorTrustRoot] Test-only alternate registry root; it cannot authorize supported adapters.
  * @param {string} [options.operatorActivationRoot] Alternate per-user root for operator activation confirmation material and the activation policy pin. It must resolve outside the target.
@@ -137,6 +141,7 @@ export function createIo(options = {}) {
     err: makeWriter(stderr),
     warn: makeWriter(stderr),
     ghCommandRunner: options.ghCommandRunner ?? null,
+    gitCommandRunner: options.gitCommandRunner ?? null,
     auditProvenanceVerifier: options.auditProvenanceVerifier ?? null,
     operatorTrustRoot: options.operatorTrustRoot ?? null,
     operatorActivationRoot: options.operatorActivationRoot ?? null,

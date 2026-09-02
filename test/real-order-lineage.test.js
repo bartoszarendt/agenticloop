@@ -458,6 +458,38 @@ describe('the execution and lifecycle carrier boundaries stay separate', () => {
       /producer identity is invalid/
     );
   });
+
+  it('refuses structured evidence whose receipt names a different execution attempt', async () => {
+    const attempt = await realOrderAttempt('structured-attempt-provenance');
+    const { root, packet } = attempt;
+    const consumption = currentDispatchConsumption(root, 'T-001', { backend: 'files' }).record;
+    const prior = receiptRecords(root).at(-1);
+    const forged = createCarrierMutationReceipt({
+      receiptId: `task-mutation:${randomUUID()}`,
+      backend: 'files', task: { id: 'T-001', carrier: '.agenticloop/tasks/T-001.md' },
+      taskContractDigest: packet.task.taskContractDigest,
+      dispatchCarrierDigest: packet.task.dispatchCarrierDigest,
+      priorCarrierDigest: attempt.returnCarrierDigest,
+      currentCarrierDigest: `sha256:${'9'.repeat(64)}`,
+      mutationClass: 'structured_engineer_evidence',
+      ownedFields: ['evidence'], changedFields: ['evidence'],
+      producer: {
+        workflowRole: 'engineer', assuranceGrade: 'session_reported',
+        invocationId: consumption.invocationId,
+        workUnitIdentity: consumption.workUnitIdentity,
+        repositoryIdentity: consumption.repositoryIdentity,
+        attemptId: `attempt:${'f'.repeat(32)}`,
+      },
+      predecessor: { kind: 'task_mutation_receipt', digest: prior.digest },
+    });
+    writeFileSync(join(root, carrierMutationRelativePath(forged)), `${JSON.stringify(forged, null, 2)}\n`, 'utf8');
+
+    const resolved = resolveCarrierLineage(root, 'T-001', {
+      backend: 'files', boundary: 'lifecycle', currentCarrierDigest: attempt.returnCarrierDigest,
+    });
+    assert.equal(resolved.ok, false);
+    assert.match(resolved.errors.join('; '), /claims the active dispatch generation with mismatched identity/);
+  });
 });
 
 describe('acceptance answers to the Engineer return terminal', () => {
@@ -600,11 +632,12 @@ describe('an expired grant still closes out the attempt it authorized', () => {
       operatorTrustRoot: fixture.operatorTrustRoot,
       operatorActivationRoot: fixture.operatorActivationRoot,
     };
-    writeFileSync(join(root, 'dispatch-input.json'), JSON.stringify({
+    const dispatchInputPath = '.agenticloop/tmp/dispatch-input.json';
+    writeFileSync(join(root, dispatchInputPath), JSON.stringify({
       readiness: fixture.readiness, decomposition: fixture.decomposition, assignment: fixture.assignment,
     }, null, 2), 'utf8');
     const dispatched = await runCliInProcess([
-      'task', 'prepare-dispatch', 'T-001', '--input', 'dispatch-input.json', '--target', root,
+      'task', 'prepare-dispatch', 'T-001', '--input', dispatchInputPath, '--target', root,
     ], cli);
     assert.equal(dispatched.status, 0, `${dispatched.stdout}${dispatched.stderr}`);
     const packet = JSON.parse(dispatched.stdout);
@@ -748,7 +781,7 @@ describe('an expired grant still closes out the attempt it authorized', () => {
 
     // No new packet is produced for this task either way.
     const reminted = await runCliInProcess([
-      'task', 'prepare-dispatch', 'T-001', '--input', 'dispatch-input.json', '--json', '--target', root,
+      'task', 'prepare-dispatch', 'T-001', '--input', dispatchInputPath, '--json', '--target', root,
     ], cli);
     assert.equal(reminted.status, 1, 'no second packet is minted for this task');
     assert.equal(JSON.parse(reminted.stdout).ok, false);

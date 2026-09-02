@@ -7,7 +7,6 @@ import { join } from 'node:path';
 
 import { provisionOperatorActivationKey, signOperatorActivationPayload } from '../src/activation-trust.js';
 import { canonicalSha256 } from '../src/canonical-json.js';
-import { validateCloseoutPacket } from '../src/closeout-contract.js';
 import {
   legacyWaiverPath,
   legacyWaiverSignaturePayload,
@@ -27,7 +26,7 @@ before(() => { tmpDir = fixture.setup(); });
 after(() => { fixture.cleanup(); });
 
 describe('closeout prepare', () => {
-  it('fails closed with a validator-clean non-complete packet when audit is disabled but no candidate exists', async () => {
+  it('fails closed before packet creation when audit is disabled but no candidate exists', async () => {
     const target = makeGitTarget('optout-no-candidate');
     writeFileSync(
       join(target, '.agenticloop', 'project.md'),
@@ -36,16 +35,12 @@ describe('closeout prepare', () => {
     );
     writeTask(target, 'T-001', 'accepted', 'milestone:M00');
     const result = await closeout(['prepare', '--work-unit', 'milestone:M00', '--json'], target);
-    assert.equal(result.status, 1);
-    const packet = JSON.parse(result.stdout);
-    assert.deepEqual(validateCloseoutPacket(packet), []);
-    assert.equal(packet.audit_opt_out, true);
-    assert.equal(packet.audit, null);
-    assert.equal(packet.candidate_artifact, '');
-    assert.equal(packet.completion_eligible, false);
-    assert.notEqual(packet.recommended_status, 'complete');
-    assert.ok(packet.gates.some(gate => gate.id === 'candidate' && gate.passed === false));
-    assert.ok(packet.reasons.some(reason => reason.gate === 'candidate'));
+    assert.equal(result.status, 2);
+    const refusal = JSON.parse(result.stdout);
+    assert.equal(refusal.kind, 'agenticloop.validation-result');
+    assert.equal(refusal.diagnostics[0].code, 'cli.usage');
+    assert.equal(refusal.mutationOccurred, false);
+    assert.equal(refusal.safeToRetry, true);
   });
 
   it('uses an authentic historical waiver through ordinary public prepare without retiring return evidence', async () => {
@@ -113,7 +108,7 @@ describe('closeout prepare', () => {
 
   it('marks undisposed non-blocking findings completion-ineligible with a repair', async () => {
     const target = await makeVerifiedGitTarget('undisposed');
-    await certify(target, { reportOverrides: {
+    const artifact = await certify(target, { reportOverrides: {
       findings: [{
         id: 'A-01', severity: 'low', blocking: false,
         claim: 'docs drift', evidenceRefs: 'docs/x.md:1',
@@ -121,7 +116,7 @@ describe('closeout prepare', () => {
       }],
     } });
 
-    const blocked = await closeout(['prepare', '--work-unit', 'milestone:M00', '--json'], target);
+    const blocked = await closeout(['prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--json'], target);
     assert.equal(blocked.status, 1);
     const packet = JSON.parse(blocked.stdout);
     assert.equal(packet.completion_eligible, false);
@@ -134,7 +129,7 @@ describe('closeout prepare', () => {
     ], target);
     assert.equal(disposed.status, 0, `${disposed.stdout}${disposed.stderr}`);
     fixtureGit(target, ['update-index', '--assume-unchanged', '.agenticloop/audits/AUD-001.md']);
-    const eligible = await closeout(['prepare', '--work-unit', 'milestone:M00', '--json'], target);
+    const eligible = await closeout(['prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--json'], target);
     assert.equal(eligible.status, 0, `${eligible.stdout}${eligible.stderr}`);
   });
 });
@@ -154,7 +149,7 @@ describe('marker states', () => {
       verdict: 'needs_human_decision',
     })), 'utf-8');
     assert.equal((await audit(['report', 'AUD-001', '--file', reportPath], target)).status, 0);
-    const prepare = await closeout(['prepare', '--work-unit', 'milestone:M00', '--json'], target);
+    const prepare = await closeout(['prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--json'], target);
     assert.equal(prepare.status, 1);
     assert.equal(JSON.parse(prepare.stdout).recommended_status, 'needs_context');
   });
@@ -176,7 +171,7 @@ describe('marker states', () => {
       const reported = await audit(['report', 'AUD-001', '--file', reportPath], target);
       assert.equal(reported.status, 0, `${reported.stdout}${reported.stderr}`);
     }
-    const prepare = await closeout(['prepare', '--work-unit', 'milestone:M00', '--json'], target);
+    const prepare = await closeout(['prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--json'], target);
     assert.equal(prepare.status, 1);
     assert.equal(JSON.parse(prepare.stdout).recommended_status, 'blocked');
   });

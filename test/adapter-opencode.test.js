@@ -12,9 +12,19 @@ import { fileURLToPath } from 'node:url';
 import {
   generateOpencodeAgentRecords,
   generateOpencodeArtifacts,
+  opencodeShellOperatingFact,
   renderOpencodeAgentMarkdown,
   renderOpencodeCommandMarkdown,
 } from '../src/adapters/opencode.js';
+
+it('renders platform-specific shell operating facts without cross-dialect examples', () => {
+  const windows = opencodeShellOperatingFact('win32');
+  assert.match(windows, /PowerShell 7\+/);
+  assert.match(windows, /do not use POSIX/);
+  const posix = opencodeShellOperatingFact('linux');
+  assert.match(posix, /POSIX shell/);
+  assert.match(posix, /do not assume PowerShell/);
+});
 import { parseFrontmatter } from '../src/frontmatter.js';
 import { loadAgenticLoopConfig } from '../src/json.js';
 import { seedTargetLayout } from './helpers/layout-fixture.js';

@@ -6,6 +6,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createCloseoutCliFixture } from './helpers/closeout-cli-fixture.js';
+import { renderCloseoutMarker } from '../src/closeout-contract.js';
 
 const fixture = createCloseoutCliFixture();
 const { makeGitTarget, makeVerifiedGitTarget, writeTask, commitAll, closeout, certify } = fixture;
@@ -45,17 +46,21 @@ describe('closeout record and status', () => {
         '\nAGENT_CLOSEOUT_STATUS: complete\n',
       'utf-8'
     );
-    commitAll(target, 'work plus premature marker');
-    const prepare = await closeout(['prepare', '--work-unit', 'milestone:M00', '--json'], target);
+    const artifact = commitAll(target, 'work plus premature marker');
+    const prepare = await closeout([
+      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact,
+      '--covered-tasks', 'T-001,T-002', '--json',
+    ], target);
     assert.equal(prepare.status, 1);
     const packet = JSON.parse(prepare.stdout);
-    assert.equal(packet.recommended_status, 'follow_up_required');
+    assert.equal(packet.recommended_status, 'follow_up_required', JSON.stringify(packet.reasons));
     assert.equal(packet.completion_eligible, false);
     assert.equal(packet.publishable, true, 'a truthful correction packet is publishable');
 
     const packetPath = join(target, '.agenticloop', 'tmp', 'correction.json');
     assert.equal((await closeout([
       'prepare', '--work-unit', 'milestone:M00', '--output', packetPath,
+      '--artifact', artifact, '--covered-tasks', 'T-001,T-002',
     ], target)).status, 1);
     const recorded = await closeout(['record', '--packet', packetPath, '--yes'], target);
     assert.equal(recorded.status, 0, `${recorded.stdout}${recorded.stderr}`);
@@ -74,7 +79,15 @@ describe('closeout record and status', () => {
     writeFileSync(
       join(target, '.agenticloop', 'tasks', 'T-001.md'),
       readFileSync(join(target, '.agenticloop', 'tasks', 'T-001.md'), 'utf-8') +
-        '\nAGENT_CLOSEOUT_STATUS: complete\n\nAGENT_CLOSEOUT_STATUS: blocked\n',
+        `\n${renderCloseoutMarker({
+          status: 'complete', workUnit: 'milestone:M00', coveredTasks: ['T-001'], artifact,
+          auditRef: 'AUD-001/run:1', auditAssurance: 'host_receipt', auditProducerAuthenticated: true,
+          gateDigest: `sha256:${'a'.repeat(64)}`,
+        })}\n\n${renderCloseoutMarker({
+          status: 'blocked', workUnit: 'milestone:M00', coveredTasks: ['T-001'], artifact,
+          auditRef: 'AUD-001/run:1', auditAssurance: 'host_receipt', auditProducerAuthenticated: true,
+          gateDigest: `sha256:${'b'.repeat(64)}`,
+        })}\n`,
       'utf-8'
     );
     commitAll(target, 'conflicting markers');

@@ -547,11 +547,6 @@ export async function cmdAudit(args, io = createIo()) {
         return EXIT_USAGE;
       }
       const existing = listAuditRecordFiles(target);
-      const duplicate = existing.find(entry => parseAuditRecord(entry.content).workUnit === identity.canonical);
-      if (duplicate) {
-        io.err(`Work unit '${identity.canonical}' already has audit record ${duplicate.relPath}`);
-        return 1;
-      }
       const budgetRaw = optionString(opts.budget);
       let budget;
       if (budgetRaw) {
@@ -573,6 +568,37 @@ export async function cmdAudit(args, io = createIo()) {
       if (!resolution.ok) {
         io.err(`audit new: ${resolution.error}`);
         if (resolution.repair) io.err(`repair: ${resolution.repair}`);
+        return 1;
+      }
+      const duplicate = existing.find(entry => parseAuditRecord(entry.content).workUnit === identity.canonical);
+      if (duplicate) {
+        const record = parseAuditRecord(duplicate.content);
+        const sameBoundary = record.candidateArtifact === resolution.canonical &&
+          JSON.stringify(normalizeCoveredTasks(record.coveredTasks)) === JSON.stringify(coveredTasks);
+        const baseline = `agenticloop audit baseline ${record.auditId} --artifact ${resolution.canonical} ` +
+          `--covered-tasks ${coveredTasks.join(',')} --evidence <integrated-evidence>`;
+        const payload = {
+          ok: false,
+          code: 'audit.already_exists',
+          audit_id: record.auditId,
+          file: duplicate.relPath,
+          mutationOccurred: false,
+          safeToRetry: false,
+          next: {
+            status: `agenticloop audit status ${record.auditId}`,
+            baseline,
+          },
+          message: sameBoundary
+            ? `work unit '${identity.canonical}' already has audit record ${record.auditId}; inspect the existing record`
+            : `work unit '${identity.canonical}' already has audit record ${record.auditId}; rebaseline that record to the requested candidate and task set`,
+        };
+        if (opts.json) io.out(JSON.stringify(payload, null, 2));
+        else {
+          io.err(payload.message);
+          io.err(`existing: ${duplicate.relPath}`);
+          io.err(`status: ${payload.next.status}`);
+          io.err(`baseline: ${baseline}`);
+        }
         return 1;
       }
       const auditId = nextAuditId(existing.map(entry => entry.auditId));
@@ -1067,6 +1093,39 @@ export async function cmdAudit(args, io = createIo()) {
         return EXIT_USAGE;
       }
       const gateOptions = commandValidation();
+      const requestedCandidate = optionString(opts.candidate);
+      const requestedTasks = normalizeCoveredTasks(splitList(opts.coveredTasks));
+      const auditMode = resolveWorkUnitAudit(config);
+      if (auditMode !== 'disabled' && (!requestedCandidate || requestedTasks.length === 0)) {
+        const missing = [
+          ...(!requestedCandidate ? ['candidate'] : []),
+          ...(requestedTasks.length === 0 ? ['covered-task set'] : []),
+        ];
+        const result = {
+          allowed: false,
+          state: !requestedCandidate ? 'audit_candidate_missing' : 'audit_task_set_missing',
+          codes: [
+            ...(!requestedCandidate ? ['audit_candidate_missing'] : []),
+            ...(requestedTasks.length === 0 ? ['audit_task_set_missing'] : []),
+          ],
+          reasons: missing.map(value => `audit gate requires an independently supplied exact ${value}`),
+          mutationOccurred: false,
+          safeToRetry: true,
+          operation: 'audit gate',
+        };
+        if (opts.json) io.out(JSON.stringify(result, null, 2));
+        else io.err(`audit gate requires --candidate <artifact> and --covered-tasks <ids>; missing: ${missing.join(', ')}`);
+        return EXIT_USAGE;
+      }
+      let expectedCandidate = null;
+      if (requestedCandidate) {
+        const resolved = resolveCandidateArtifact(target, requestedCandidate);
+        if (!resolved.ok) {
+          io.err(`audit gate: ${resolved.error}`);
+          return 1;
+        }
+        expectedCandidate = resolved.canonical;
+      }
       const assurance = auditAssuranceReport(
         target,
         io,
@@ -1076,13 +1135,15 @@ export async function cmdAudit(args, io = createIo()) {
       );
       const result = evaluateAuditCloseoutGate(target, {
         workUnit: identity.canonical,
-        workUnitAudit: resolveWorkUnitAudit(config),
+        workUnitAudit: auditMode,
         taskIdRegex: gateOptions.taskIdRegex,
         taskExists: gateOptions.taskExists,
         decisionExists: gateOptions.decisionExists,
         decisionAccepted: gateOptions.decisionAccepted,
         inventoryError: gateOptions.inventoryError,
         minimumAuditorReturnAssurance: assurance.minimum_return ?? 'host_receipt',
+        expectedCandidate,
+        expectedCoveredTasks: requestedTasks.length > 0 ? requestedTasks : undefined,
         ...(config.task_backend === 'files'
           ? { taskStatus: taskId => filesTaskStatus(target, config, taskId) }
           : { taskStatus: gateOptions.taskStatus }),
@@ -1090,9 +1151,13 @@ export async function cmdAudit(args, io = createIo()) {
       // The audit gate enforces the Auditor-return minimum and also reports the
       // task activation/return dimensions that composite closeout evaluates.
       if (opts.json) {
-        io.out(JSON.stringify({ ...result, assurance }, null, 2));
+        io.out(JSON.stringify({
+          ...result,
+          assurance,
+          auditOptOut: result.optOut === true,
+        }, null, 2));
       } else if (result.allowed) {
-        io.out(`${identity.canonical}: closeout audit gate passed${result.optOut ? ' (disabled by project policy)' : ''}`);
+        io.out(`${identity.canonical}: ${result.optOut ? 'audit disabled by explicit project policy; no certification claimed' : 'closeout audit gate passed'}`);
         printAuditAssurance(assurance, io);
       } else {
         io.out(`${identity.canonical}: closeout audit gate failed (${result.state})`);

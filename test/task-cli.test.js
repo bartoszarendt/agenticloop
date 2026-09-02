@@ -19,6 +19,9 @@ import { recognizeHandoff } from '../src/handoff-recognition.js';
 import { fixtureDispatchValidator } from './helpers/handoff-fixture.js';
 import { createCarrierMutationReceipt } from '../src/task-evidence-contract.js';
 import { carrierMutationRelativePath } from '../src/handoff-consumption.js';
+import { parseVerificationAttempts } from '../src/verification-learning.js';
+import { parseResolutionMatrix } from '../src/resolution-matrix.js';
+import { createCheckEvidenceSupersession } from '../src/check-evidence-supersession.js';
 
 let tmpDir;
 const IS_WINDOWS = platform() === 'win32';
@@ -750,10 +753,115 @@ describe('task CLI', () => {
     assert.equal(result.stderr, '');
     const summary = JSON.parse(result.stdout);
     assert.deepEqual(Object.keys(summary).sort(), [
-      'artifactKind', 'assuranceGrade', 'ok', 'outputPath', 'schemaVersion', 'semanticDigest', 'task_id',
+      'artifactKind', 'assuranceGrade', 'disposition', 'ok', 'outputPath', 'schemaVersion', 'semanticDigest', 'superseded', 'task_id',
     ]);
     assert.equal(summary.outputPath, join(fixture.root, outputPath));
     assert.equal(JSON.parse(readFileSync(join(fixture.root, outputPath), 'utf8'))[0].outcome, 'not_run');
+    const repeated = await runCliInProcess([
+      'task', 'check-evidence-init', 'T-001', '--packet', packetPath, '--output', outputPath, '--json', '--target', fixture.root,
+    ], { operatorTrustRoot: fixture.operatorTrustRoot });
+    assertOk(repeated);
+    assert.equal(JSON.parse(repeated.stdout).disposition, 'already_current');
+  });
+
+  it('fails closed on concurrent initialization changes and corrupt or pre-seeded supersession history', async () => {
+    const fixture = await createDispatchFixture(tmpDir, 'check-evidence-cas');
+    const packetPath = 'packet.json';
+    const outputPath = 'checks.json';
+    const packet = prepareDispatch(fixture).packet;
+    writeFileSync(join(fixture.root, packetPath), JSON.stringify(packet), 'utf8');
+    const options = {
+      operatorTrustRoot: fixture.operatorTrustRoot,
+      hostAuthority: protectedHostBoundary(fixture.trust),
+    };
+    assertOk(await runCliInProcess([
+      'task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(fixture.root, 'T-001'),
+      '--dispatch-packet', packetPath, '--json', '--target', fixture.root,
+    ], options));
+
+    const conflictBytes = '[{"concurrent":true}]\n';
+    let injected = false;
+    const conflicted = await runCliInProcess([
+      'task', 'check-evidence-init', 'T-001', '--packet', packetPath, '--output', outputPath,
+      '--json', '--target', fixture.root,
+    ], {
+      ...options,
+      fsMutationOptions: { beforeWrite() {
+        if (!injected) writeFileSync(join(fixture.root, outputPath), conflictBytes, 'utf8');
+        injected = true;
+      } },
+    });
+    assert.notEqual(conflicted.status, 0);
+    assert.equal(readFileSync(join(fixture.root, outputPath), 'utf8'), conflictBytes);
+
+    // Update must bind its final write to the exact evidence bytes it parsed,
+    // not take a fresh snapshot after a concurrent writer has already won.
+    rmSync(join(fixture.root, outputPath), { force: true });
+    assertOk(await runCliInProcess([
+      'task', 'check-evidence-init', 'T-001', '--packet', packetPath, '--output', outputPath,
+      '--json', '--target', fixture.root,
+    ], options));
+    const updateConflictBytes = '[{"concurrent":"update"}]\n';
+    let updateInjected = false;
+    const updateConflict = await runCliInProcess([
+      'task', 'check-evidence-update', 'T-001', '--packet', packetPath,
+      '--input', outputPath, '--output', outputPath, '--check', 'RC-1',
+      '--outcome', 'failed', '--evidence', 'failed once', '--exit-code', '1',
+      '--json', '--target', fixture.root,
+    ], {
+      ...options,
+      fsMutationOptions: { beforeWrite() {
+        if (!updateInjected) writeFileSync(join(fixture.root, outputPath), updateConflictBytes, 'utf8');
+        updateInjected = true;
+      } },
+    });
+    assert.notEqual(updateConflict.status, 0);
+    assert.equal(readFileSync(join(fixture.root, outputPath), 'utf8'), updateConflictBytes);
+
+    writeFileSync(join(fixture.root, outputPath), `${JSON.stringify(packet.task.requiredChecks.map(check => ({
+      ...check, outcome: 'failed', evidence: 'failed once', exitCode: check.kind === 'command' ? 1 : null,
+      ...(check.kind === 'command' ? { executionEvidence: null } : {}),
+    })), null, 2)}\n`, 'utf8');
+    const prior = JSON.parse(readFileSync(join(fixture.root, outputPath), 'utf8'));
+    const priorDigest = `sha256:${canonicalSha256(prior)}`;
+    const stale = await runCliInProcess([
+      'task', 'check-evidence-init', 'T-001', '--packet', packetPath, '--output', outputPath,
+      '--expect-existing-digest', `sha256:${'0'.repeat(64)}`, '--supersession-authority', 'maintainer:test',
+      '--json', '--target', fixture.root,
+    ], options);
+    assert.notEqual(stale.status, 0);
+
+    const historyDir = join(fixture.root, '.agenticloop', 'checks', 'T-001', 'history');
+    mkdirSync(historyDir, { recursive: true });
+    const preseeded = createCheckEvidenceSupersession({
+      taskId: 'T-001', packetId: packet.packetId, invocationId: packet.assignment.invocationId,
+      authority: 'maintainer:test', supersededEvidence: prior,
+    });
+    writeFileSync(join(historyDir, 'preseeded.json'), `${JSON.stringify(preseeded, null, 2)}\n`, 'utf8');
+    const refusedPreseed = await runCliInProcess([
+      'task', 'check-evidence-init', 'T-001', '--packet', packetPath, '--output', outputPath,
+      '--expect-existing-digest', priorDigest, '--supersession-authority', 'maintainer:test',
+      '--json', '--target', fixture.root,
+    ], options);
+    assert.notEqual(refusedPreseed.status, 0);
+    assert.match(refusedPreseed.stdout, /pre-seeded/);
+
+    rmSync(join(fixture.root, outputPath), { force: true });
+    const refusedOrphanedHistory = await runCliInProcess([
+      'task', 'check-evidence-init', 'T-001', '--packet', packetPath, '--output', outputPath,
+      '--json', '--target', fixture.root,
+    ], options);
+    assert.notEqual(refusedOrphanedHistory.status, 0);
+    assert.match(refusedOrphanedHistory.stdout, /pre-seeded/);
+    writeFileSync(join(fixture.root, outputPath), `${JSON.stringify(prior, null, 2)}\n`, 'utf8');
+
+    writeFileSync(join(historyDir, 'corrupt.json'), '{}\n', 'utf8');
+    const corrupt = await runCliInProcess([
+      'task', 'check-evidence-show', 'T-001', '--packet', packetPath, '--input', outputPath,
+      '--json', '--target', fixture.root,
+    ], options);
+    assert.notEqual(corrupt.status, 0);
+    assert.match(corrupt.stdout, /supersession history is invalid/);
   });
 
   it('never runs a required command from an untrusted packet or missing consumed lineage', async () => {
@@ -900,7 +1008,7 @@ describe('task CLI', () => {
     assert.notEqual(result.status, 0);
     assert.match(
       JSON.parse(result.stdout).diagnostics[0].message,
-      /execution evidence requires current task contract, carrier, repository, and product Git identities/
+      /required command check 'RC-1' did not pass/
     );
   });
 
@@ -1095,6 +1203,18 @@ describe('task CLI', () => {
     const persisted = JSON.parse(readFileSync(join(fixture.root, '.agenticloop', 'returns', 'verifications', records[0]), 'utf8'));
     assert.equal(persisted.requiredCheckEvidenceAssurance, 'unverified');
     assert.equal(persisted.evidence.producerIdentityAuthenticated, false);
+    const attemptStatus = await runCliInProcess([
+      'task', 'attempt-status', 'T-001', '--json', '--target', fixture.root,
+    ], options);
+    assertOk(attemptStatus);
+    const attemptReport = JSON.parse(attemptStatus.stdout);
+    assert.deepEqual(Object.keys(attemptReport).sort(), [
+      'attemptBudget', 'attempts', 'command', 'liveAttempt', 'newPacketPermitted', 'taskId',
+    ]);
+    assert.equal(attemptReport.attempts.length, 1);
+    assert.equal(attemptReport.attempts[0].state, 'returned');
+    assert.equal(attemptReport.attempts[0].productHead, productHead);
+    assert.equal(attemptReport.attemptBudget.reviewRevisions, 0);
   });
 
   it('prepares a files review entry with a finding-resolution matrix from a valid fixup episode', async () => {
@@ -1223,6 +1343,15 @@ describe('task CLI', () => {
       '--from-current-repository', '--json', '--target', fixture.root,
     ], options));
 
+    const attemptStatus = await runCliInProcess([
+      'task', 'attempt-status', 'T-001', '--json', '--target', fixture.root,
+    ], options);
+    assertOk(attemptStatus);
+    const attemptReport = JSON.parse(attemptStatus.stdout);
+    assert.equal(attemptReport.attempts[0].state, 'reviewed_needs_revision');
+    assert.equal(attemptReport.attempts[0].reviewOutcome.artifact, `commit:${productHead}`);
+    assert.equal(attemptReport.attemptBudget.reviewRevisions, 1);
+
     const review = await runCliInProcess([
       'task', 'review-prepare', 'T-001', '--json', '--target', fixture.root,
     ], options);
@@ -1309,7 +1438,7 @@ describe('task CLI', () => {
     assert.equal(existsSync(join(fixture.root, '..', 'outside.json')), false);
   });
 
-  it('rejects command execution evidence replayed after the repository head changes', async () => {
+  it('preserves checks across workflow-only commits and stales them after product commits', async () => {
     const fixture = await createDispatchFixture(tmpDir, 'stale-command-execution', {
       requiredChecksText: '- [RC-1] command: `node --version`',
     });
@@ -1343,12 +1472,21 @@ describe('task CLI', () => {
       '--json', '--target', fixture.root,
     ], options));
     fixtureGit(fixture.root, ['commit', '--allow-empty', '-m', 'advance repository after check\n\nTask: T-001\nAgent: engineer']);
+    const workflowOnly = await runCliInProcess([
+      'task', 'prepare-return', 'T-001', '--packet', packetPath, '--check-evidence', checksPath,
+      '--outcome', 'implementation_ready_for_review', '--output', returnPath, '--json', '--target', fixture.root,
+    ], options);
+    assertOk(workflowOnly);
+
+    writeFileSync(join(fixture.root, 'src', 'existing.js'), 'export const current = "corrected after check";\n', 'utf8');
+    fixtureGit(fixture.root, ['add', 'src/existing.js']);
+    fixtureGit(fixture.root, ['commit', '-m', 'correct product after check\n\nTask: T-001\nAgent: engineer']);
     const stale = await runCliInProcess([
       'task', 'prepare-return', 'T-001', '--packet', packetPath, '--check-evidence', checksPath,
       '--outcome', 'implementation_ready_for_review', '--output', returnPath, '--json', '--target', fixture.root,
     ], options);
     assert.notEqual(stale.status, 0);
-    assert.match(JSON.parse(stale.stdout).diagnostics[0].message, /execution evidence does not match the expected dispatch binding/);
+    assert.match(JSON.parse(stale.stdout).diagnostics[0].message, /changed after the declared productHead|binding 'productHead'|lineage 'repositoryHead'/);
   });
 
   it('rejects execution evidence replayed from a different dispatch invocation', async () => {
@@ -1394,6 +1532,119 @@ describe('task CLI', () => {
     ], options);
     assert.notEqual(replayed.status, 0);
     assert.match(JSON.parse(replayed.stdout).diagnostics[0].message, /exact packet invocation|does not bind exact target CLI execution evidence/);
+  });
+
+  it('authors canonical Engineer evidence and revision resolution through the guarded structured writer', async () => {
+    const fixture = await createDispatchFixture(tmpDir, 'structured-task-evidence');
+    const packetPath = '.agenticloop/tmp/dispatch.json';
+    const engineerInput = '.agenticloop/tmp/engineer-evidence.json';
+    const options = { operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: protectedHostBoundary(fixture.trust) };
+    mkdirSync(join(fixture.root, '.agenticloop', 'tmp'), { recursive: true });
+    const packet = prepareDispatch(fixture).packet;
+    writeFileSync(join(fixture.root, packetPath), JSON.stringify(packet), 'utf8');
+    assertOk(await runCliInProcess([
+      'task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(fixture.root, 'T-001'),
+      '--dispatch-packet', packetPath, '--json', '--target', fixture.root,
+    ], options));
+    const emptySections = {
+      scopeCompleted: [], evidence: [], deviations: [], knownGaps: [], verificationAttempts: [],
+      maintainerTriage: [], retryAuthorization: [], revisionResolution: [],
+    };
+    const attemptStatus = await runCliInProcess(['task', 'attempt-status', 'T-001', '--json', '--target', fixture.root], options);
+    assertOk(attemptStatus);
+    const attempt = JSON.parse(attemptStatus.stdout).attempts[0];
+    const provenance = {
+      workflowRole: 'engineer', invocationId: packet.assignment.invocationId,
+      taskContractDigest: packet.task.taskContractDigest, attemptId: attempt.attemptId,
+    };
+    const entry = (id, status = 'recorded') => ({ id, summary: `${id} summary`, status, evidenceRefs: [`evidence:${id}`] });
+    const validEvidenceInput = {
+      kind: 'agenticloop.task-evidence-input', schemaVersion: 1, actorRole: 'engineer',
+      provenance,
+      sections: {
+        ...emptySections,
+        scopeCompleted: [entry('scope-1', 'completed')], evidence: [entry('evidence-1')],
+        deviations: [entry('deviation-1')], knownGaps: [entry('gap-1')],
+        verificationAttempts: [{
+          id: 'RC-1', attempt: 1, artifact: `commit:${packet.repository.head}`,
+          command: 'npm test', strategy: 'focused', timeoutMs: 300000,
+          outcome: 'failed', durationMs: 1000, required: true,
+          partialEvidence: 'The focused assertion failed.', proposedNextStrategy: 'foreground',
+          candidateClassification: 'one_off', recordedAt: '2026-08-01T12:00:00.000Z',
+        }],
+        revisionResolution: [{ id: 'F-1', summary: 'Corrected the requested behavior.', status: 'resolved', evidenceRefs: ['commit:abcdef1'] }],
+      },
+    };
+    const mismatchedInputs = [
+      {
+        ...validEvidenceInput,
+        actorRole: 'maintainer',
+        provenance: { ...provenance, workflowRole: 'maintainer' },
+        sections: { ...emptySections, maintainerTriage: [entry('triage-1', 'resolved')] },
+      },
+      {
+        ...validEvidenceInput,
+        provenance: { ...provenance, invocationId: 'invocation-for-another-dispatch' },
+      },
+    ];
+    for (const mismatched of mismatchedInputs) {
+      writeFileSync(join(fixture.root, engineerInput), JSON.stringify(mismatched), 'utf8');
+      const refused = await runCliInProcess([
+        'task', 'evidence', 'T-001', '--class', 'structured_task_evidence', '--input', engineerInput,
+        '--expect-digest', currentDigest(fixture.root, 'T-001'), '--json', '--target', fixture.root,
+      ], options);
+      assert.notEqual(refused.status, 0);
+      assert.equal(JSON.parse(refused.stdout).diagnostics[0].code, 'task.evidence.provenance_mismatch');
+    }
+    writeFileSync(join(fixture.root, engineerInput), JSON.stringify(validEvidenceInput), 'utf8');
+    const engineer = await runCliInProcess([
+      'task', 'evidence', 'T-001', '--class', 'structured_task_evidence', '--input', engineerInput,
+      '--expect-digest', currentDigest(fixture.root, 'T-001'), '--json', '--target', fixture.root,
+    ], options);
+    assertOk(engineer);
+
+    const task = readFileSync(join(fixture.root, '.agenticloop', 'tasks', 'T-001.md'), 'utf8');
+    for (const heading of ['Scope Completed', 'Evidence', 'Deviations', 'Known Gaps', 'Verification Attempts', 'Revision Resolution']) {
+      assert.equal(task.match(new RegExp(`^## ${heading}$`, 'gm'))?.length, 1, heading);
+    }
+    assert.equal(parseVerificationAttempts(task).errors.length, 0);
+    assert.equal(parseResolutionMatrix(task).errors.length, 0);
+    const repeated = await runCliInProcess([
+      'task', 'evidence', 'T-001', '--class', 'structured_task_evidence', '--input', engineerInput,
+      '--expect-digest', currentDigest(fixture.root, 'T-001'), '--json', '--target', fixture.root,
+    ], options);
+    assertOk(repeated);
+    assert.equal(JSON.parse(repeated.stdout).bindingAlreadyCurrent, true);
+  });
+
+  it('persists and enforces the identical tooling-failure retry cohort through the task CLI', async () => {
+    const fixture = await createDispatchFixture(tmpDir, 'tooling-failure-cli');
+    const packetPath = '.agenticloop/tmp/dispatch.json';
+    const failurePath = '.agenticloop/tmp/tooling-failure.json';
+    const options = { operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: protectedHostBoundary(fixture.trust) };
+    mkdirSync(join(fixture.root, '.agenticloop', 'tmp'), { recursive: true });
+    writeFileSync(join(fixture.root, packetPath), JSON.stringify(prepareDispatch(fixture).packet), 'utf8');
+    assertOk(await runCliInProcess([
+      'task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(fixture.root, 'T-001'),
+      '--dispatch-packet', packetPath, '--json', '--target', fixture.root,
+    ], options));
+    writeFileSync(join(fixture.root, failurePath), JSON.stringify({
+      schemaVersion: 1, operation: 'task.role-start', diagnosticCode: 'host.spawn_failed',
+      diagnosticClass: 'tooling', mutationOccurred: false, safeToRetry: true,
+      provenance: { source: 'guarded-cli', operationRef: 'role-start' },
+    }), 'utf8');
+    const attemptStatus = await runCliInProcess(['task', 'attempt-status', 'T-001', '--json', '--target', fixture.root], options);
+    assertOk(attemptStatus);
+    const attemptId = JSON.parse(attemptStatus.stdout).attempts[0].attemptId;
+    const args = ['task', 'record-tooling-failure', 'T-001', '--attempt', attemptId, '--input', failurePath, '--json', '--target', fixture.root];
+    const first = await runCliInProcess(args, options);
+    assertOk(first);
+    assert.equal(JSON.parse(first.stdout).retryPermitted, true);
+    const threshold = await runCliInProcess(args, options);
+    assert.notEqual(threshold.status, 0);
+    const exhausted = JSON.parse(threshold.stdout);
+    assert.equal(exhausted.retryPermitted, false);
+    assert.equal(exhausted.repeated, 2);
   });
 
   it('fails closed for trailing, multiple, and directory JSON public handoff inputs', async () => {
@@ -1634,7 +1885,7 @@ describe('return evidence, cancellation provenance, and current-repository verif
 
     // A non-passed command check must not carry an artifact reference either.
     const nonPassedWithArtifact = [
-      { id: 'RC-1', kind: 'command', command: 'node --version', outcome: 'not_run', exitCode: -1, evidence: 'not run', executionEvidence: { path: 'x.json', digest: `sha256:agenticloop.execution-evidence.v3:${'a'.repeat(64)}` } },
+      { id: 'RC-1', kind: 'command', command: 'node --version', outcome: 'not_run', exitCode: -1, evidence: 'not run', executionEvidence: { path: 'x.json', digest: `sha256:agenticloop.execution-evidence.v4:${'a'.repeat(64)}` } },
       { id: 'RC-2', kind: 'command', command: 'node --version', outcome: 'not_run', exitCode: -1, evidence: 'not run', executionEvidence: null },
     ];
     const blockedEvidence = buildEvidence(fixture, packet, productHead, nonPassedWithArtifact);
@@ -2052,13 +2303,20 @@ describe('return evidence, cancellation provenance, and current-repository verif
       '--repository-evidence', evidencePath, '--producer-receipt', producerReceiptPath,
       '--execution-receipt', executionReceiptPath, '--repo', 'example/repo', '--json', '--target', fixture.root,
     ];
-    assertOk(await call(verifyArgs));
+    const firstVerification = await call(verifyArgs);
+    assertOk(firstVerification);
+    assert.equal(JSON.parse(firstVerification.stdout).details.storageDisposition, 'created');
     assert.equal(state.commandCalls, 1);
     assert.deepEqual(state.replay, ['prepare', 'commit']);
     const verificationFile = readdirSync(join(fixture.root, '.agenticloop', 'returns', 'verifications'))[0];
     const persisted = JSON.parse(readFileSync(join(fixture.root, '.agenticloop', 'returns', 'verifications', verificationFile), 'utf8'));
     assert.equal(persisted.backend, 'github');
     assert.equal(persisted.requiredCheckEvidenceAssurance, 'authenticated_receipt');
+
+    const repeatedVerification = await call(verifyArgs);
+    assertOk(repeatedVerification);
+    assert.equal(JSON.parse(repeatedVerification.stdout).details.storageDisposition, 'already_current');
+    assert.deepEqual(state.replay, ['prepare', 'commit', 'verify']);
 
     const review = await call([
       'github-review-prepare', '--pr', '7', '--repo', 'example/repo', '--json', '--target', fixture.root,

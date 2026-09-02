@@ -154,17 +154,31 @@ describe('audit CLI', () => {
   it('refuses a duplicate work unit', async () => {
     const target = makeTarget('dup-work-unit');
     await seedRecord(target);
+    const invalid = await run([
+      'new', '--work-unit', 'phase:4', '--covered-tasks', 'T-099',
+      '--artifact', 'commit:z', '--goal', 'Duplicate Phase 4.',
+      '--completion-oracle', 'Duplicate outcome exists.', '--evidence', 'Duplicate evidence.',
+    ], target);
+    assert.equal(invalid.status, 1);
+    assert.match(invalid.stderr, /cannot resolve short commit candidate/);
+
     const dup = await run([
       'new',
       '--work-unit', 'phase:4',
       '--covered-tasks', 'T-099',
-      '--artifact', 'commit:z',
+      '--artifact', `commit:${'a'.repeat(40)}`,
       '--goal', 'Duplicate Phase 4.',
       '--completion-oracle', 'Duplicate outcome exists.',
       '--evidence', 'Duplicate evidence.',
+      '--json',
     ], target);
     assert.equal(dup.status, 1);
-    assert.match(dup.stderr, /already has audit record/);
+    const payload = JSON.parse(dup.stdout);
+    assert.equal(payload.code, 'audit.already_exists');
+    assert.equal(payload.audit_id, 'AUD-001');
+    assert.equal(payload.mutationOccurred, false);
+    assert.match(payload.next.status, /audit status AUD-001/);
+    assert.match(payload.next.baseline, /audit baseline AUD-001/);
   });
 
   it('appends a report and refreshes the derived certification fields', async () => {
@@ -287,7 +301,10 @@ describe('audit CLI', () => {
     assert.equal(payload.record_valid, false);
     assert.equal(payload.certification_current, false);
 
-    const gate = await run(['gate', 'phase:4', '--json'], target);
+    const gate = await run([
+      'gate', 'phase:4', '--candidate', 'commit:abc1230000000000000000000000000000000000',
+      '--covered-tasks', 'T-041,T-042', '--json',
+    ], target);
     assert.equal(gate.status, 1);
     assert.equal(JSON.parse(gate.stdout).state, 'audit_invalid');
   });
@@ -300,16 +317,41 @@ describe('audit CLI', () => {
       '--invocation-mode', 'host_subagent', '--invocation-ref', 'ref-1',
       '--assessment', 'clean', '--evidence', 'npm test (pass)',
     ], target);
-    assert.equal((await run(['gate', 'AUD-001'], target)).status, 0);
+    const exactGateArgs = [
+      'gate', 'AUD-001', '--candidate', 'commit:abc1230000000000000000000000000000000000',
+      '--covered-tasks', 'T-041,T-042',
+    ];
+    assert.equal((await run(exactGateArgs, target)).status, 0);
 
     writeFileSync(
       join(target, '.agenticloop', 'tasks', 'T-042.md'),
       '---\ntask_id: T-042\nstatus: in-progress\n---\n',
       'utf-8'
     );
-    const blocked = await run(['gate', 'phase:4'], target);
+    const blocked = await run([
+      'gate', 'phase:4', '--candidate', 'commit:abc1230000000000000000000000000000000000',
+      '--covered-tasks', 'T-041,T-042',
+    ], target);
     assert.equal(blocked.status, 1);
     assert.match(blocked.stdout, /rather than accepted or closed/);
+  });
+
+  it('refuses audit gate without both independent closeout identities', async () => {
+    const target = makeTarget('gate-missing-inputs');
+    await seedRecord(target);
+    const missingBoth = await run(['gate', 'AUD-001', '--json'], target);
+    assert.notEqual(missingBoth.status, 0);
+    const bothPayload = JSON.parse(missingBoth.stdout);
+    assert.equal(bothPayload.state, 'audit_candidate_missing');
+    assert.deepEqual(bothPayload.codes, ['audit_candidate_missing', 'audit_task_set_missing']);
+    assert.equal(bothPayload.mutationOccurred, false);
+    assert.equal(bothPayload.safeToRetry, true);
+
+    const missingTasks = await run([
+      'gate', 'AUD-001', '--candidate', 'commit:abc1230000000000000000000000000000000000', '--json',
+    ], target);
+    assert.notEqual(missingTasks.status, 0);
+    assert.equal(JSON.parse(missingTasks.stdout).state, 'audit_task_set_missing');
   });
 
   it('requires audit resolve after a human-decision verdict', async () => {

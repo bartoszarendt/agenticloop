@@ -18,6 +18,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { createIo, resolveCliTarget, CliUsageError, EXIT_USAGE } from './cli-io.js';
 import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
 import { GIT_MAX_BUFFER } from './git-runner.js';
+import { resolveCloseoutCandidateArtifact } from './candidate.js';
 import { defaultGhCommandRunner } from './gh-helpers.js';
 import { evaluateCloseout,
   filesTaskInfo,
@@ -66,6 +67,7 @@ import { createValidationResult, emitValidationResult } from './result-envelope.
 import { presentDiagnostic } from './diagnostic-presentation.js';
 import { getProjectRoleCapabilities } from './role-capabilities.js';
 import { PublicCommandError } from './public-error.js';
+import { commandFailure, printGateResult } from './public-result.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
 import { taskContractDigest } from './task-contract-baseline.js';
 import { createExecutionReceiptReplayAuthority, loadHostTrustStore, targetRepositoryIdentity } from './host-trust.js';
@@ -598,6 +600,7 @@ async function buildEvaluationParams(target, config, opts, io) {
         return optionString(frontmatter?.status) === 'accepted';
       },
     },
+    gitRunner: io.gitCommandRunner ?? undefined,
   };
   // Both assurance dimensions are resolved from operator-owned state outside
   // the repository, never from a claim inside it. Resolution failure is carried
@@ -611,10 +614,10 @@ async function buildEvaluationParams(target, config, opts, io) {
     });
     params.ghRunner = ghRunner;
     params.repo = optionString(opts.repo) || undefined;
-    const audit = findAuditRecord(target, params.workUnit)?.record;
-    const carrierTasks = params.coveredTasks.length > 0
-      ? params.coveredTasks
-      : normalizeCoveredTasks(audit?.coveredTasks ?? []);
+    // GitHub membership cannot be inferred from the certificate being gated.
+    // Until the live backend can derive one exact work-unit boundary, the CLI
+    // requires --covered-tasks and keeps an omitted boundary empty/fail-closed.
+    const carrierTasks = params.coveredTasks;
     // Terminal PR lifecycle evidence for every covered task issue, fetched
     // once against the same command-local inventory snapshot.
     if (params.inventory.complete) {
@@ -865,6 +868,36 @@ export async function cmdCloseout(args, io = createIo()) {
         io.err('closeout prepare requires --work-unit <kind>:<id>');
         return EXIT_USAGE;
       }
+      if (!optionString(opts.artifact)) {
+        const error = new CliUsageError(
+          'closeout prepare requires --artifact <commit:full-sha>; an audit certificate cannot supply the expected candidate'
+        );
+        Object.assign(error, {
+          safeRepair: 'pass --artifact commit:<full-git-sha> naming an existing commit in this repository',
+          mutationOccurred: false,
+          safeToRetry: true,
+        });
+        return printGateResult(
+          'closeout prepare', commandFailure('closeout prepare', error, 'usage', {}, target),
+          Boolean(opts.json), io, EXIT_USAGE,
+        );
+      }
+      const candidate = resolveCloseoutCandidateArtifact(target, optionString(opts.artifact), {
+        gitRunner: io.gitCommandRunner ?? undefined,
+      });
+      if (!candidate.ok || candidate.verified !== true) {
+        const error = new CliUsageError(candidate.error);
+        Object.assign(error, {
+          safeRepair: candidate.repair,
+          mutationOccurred: false,
+          safeToRetry: true,
+        });
+        return printGateResult(
+          'closeout prepare', commandFailure('closeout prepare', error, 'usage', {}, target),
+          Boolean(opts.json), io, EXIT_USAGE,
+        );
+      }
+      opts.artifact = candidate.canonical;
       const params = await buildEvaluationParams(target, config, opts, io);
       let evaluation = evaluateCloseout(target, params);
       evaluation = await applyLegacyCompatibilityWaiver(target, params, evaluation, opts, io);

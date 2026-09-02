@@ -70,8 +70,19 @@ acting.
   one Maintainer-attributed commit instead of the multi-command, two-commit
   sequence; review its `--dry-run` result before confirming. A consumed plan is
   stale after any later commit - regenerate it rather than reuse it. Readiness
-  never activates - activation is the separate operator action that follows it.
+  never activates. Run handoff preflight after settlement and request the
+  separate operator activation only when activation is the remaining blocker.
+  A delegated Maintainer records `actor: maintainer` and references the human
+  authority separately; it never presents the human's name as its own actor.
   Own correction/recovery provenance; never widen `allowed_paths`.
+- The review window is a valid publication boundary for Maintainer-owned review
+  records and for validating Engineer-owned resolution matrices, but it is not the only route for Engineer
+  completion evidence: guarded `task evidence` mutations publish artifact,
+  summary/check summary, and outcome before final checks.
+- Begin the receiver sequence with `verify-return`; publish Maintainer-owned
+  triage and retry sections through the exact-CAS structured writer defined in
+  [[role-delegation]]. `## Revision Resolution` remains Engineer-owned and is
+  validated by the Maintainer during re-review.
 - Use the confirmed development stage to shape task boundaries, expected core areas,
   compatibility posture, and implementation notes. Stage never relaxes evidence,
   safety, authorization, or accepted scope; propose rather than silently apply a

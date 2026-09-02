@@ -16,12 +16,49 @@
   no-write dry-run, and required `--yes` confirmation.
 
 ### Changed
+- Closeout completion candidates must now be independently supplied as
+  `commit:<full-git-sha>` and resolve to an existing target-repository commit;
+  CLI, packet, and library boundaries reject arbitrary values, abbreviations,
+  missing objects, and product-tree mismatches even when audit is disabled.
+- Structured task evidence now uses section-specific canonical rendering,
+  semantic pre/post-write validation, exact dispatch/attempt provenance, and
+  byte-preserving section replacement. Revision Resolution is Engineer-owned;
+  Maintainer ownership is limited to Maintainer Triage and Retry Authorization.
+- Tooling retry admission now requires a live current-contract attempt with no
+  mutation, an explicit safe-to-retry result, and an atomically available slot
+  in the exact task/contract/attempt/operation/signature cohort.
+- Execution-attempt grouping now returns the explicit enumerable
+  `{ ok, records, errors }` contract; consumers must read `records`, and parse or
+  validation failures remain visible through serialization and destructuring.
+- Closeout now requires an audit certificate for the exact canonical candidate
+  and exact covered-task inventory; stale ancestor certificates are refused with
+  an executable rebaseline command.
+- Files attempts now derive returned/revision dispositions and separate
+  engineering-attempt, review-revision, and workflow-recovery accounting.
+- Execution evidence v4 separates immutable product/check identity from workflow
+  lineage, and the generated role-start sequence finalizes carrier evidence
+  before initializing and running checks.
+- Public return verification is idempotent, decomposition repairs include their
+  output path, duplicate audits route to the existing record, usage refusals
+  expose safe-retry facts, and `task show` provides read-only task state.
 - The recommended upgrade workflow is now a reviewed repository-only update
   followed by per-clone hydration. Running hydration must leave tracked Git
   status clean.
 - Plain `update` and `upgrade` retain their established combined refresh and
   adapter-regeneration behavior for compatibility, but now emit a deprecation
   warning. Removal is deferred under the prerelease deprecation policy.
+
+### Compatibility
+- Existing `agenticloop.execution-attempt-abandonment` schema-v1 records are
+  retained as historical evidence but are rejected as current lifecycle input;
+  they are not migrated or relabeled. Resume by creating a fresh current
+  attempt and, if it must be terminated, record a schema-v2 abandonment through
+  `task abandon-attempt` with current authority.
+- Existing `agenticloop.execution-evidence` schema-v3 artifacts are retained as
+  historical evidence but are rejected as current check proof; they are not
+  migrated or re-digested. Resume from a current packet, initialize fresh check
+  evidence, and rerun the required command through `task
+  check-evidence-update` to produce schema-v4 evidence.
 
 ## 0.4.6 - 2026-08-19
 

@@ -1163,7 +1163,7 @@ describe('complete terminal-scope derivation', () => {
     it(`derives an explicit task set from a current closeout marker with work_unit_audit ${auditMode}`, () => {
       const root = scopeFixture(`scope-marker-${auditMode}`);
       const marker = renderCloseoutMarker({
-        status: 'complete', workUnit: 'work-unit:manual', artifact: 'commit:abc123',
+        status: 'complete', workUnit: 'work-unit:manual', coveredTasks: ['T-701'], artifact: 'commit:abc123',
         auditRef: 'AUD-701/run:1', auditAssurance: 'session_reported',
         auditProducerAuthenticated: false, predecessor: 'none', planSync: 'none',
         improvementRefs: [], gateDigest: `sha256:${'f'.repeat(64)}`,
@@ -1848,6 +1848,7 @@ describe('closeout-owned terminal transition', () => {
     const prepared = await runCliInProcess([
       'closeout', 'prepare', '--work-unit', 'milestone:M00',
       '--artifact', closeoutFixtureArtifact(root), '--output', packetPath,
+      '--covered-tasks', 'T-001',
       '--target', root, '--json',
     ], closeoutFixtureOptions(root));
     assert.equal(prepared.status, 0, prepared.stdout + prepared.stderr);
@@ -1875,6 +1876,7 @@ describe('closeout-owned terminal transition', () => {
     const prepared = await runCliInProcess([
       'closeout', 'prepare', '--work-unit', 'milestone:M00',
       '--artifact', closeoutFixtureArtifact(root), '--output', packetPath,
+      '--covered-tasks', 'T-001',
       '--target', root, '--json',
     ], closeoutFixtureOptions(root));
     assert.equal(prepared.status, 0, prepared.stdout + prepared.stderr);

@@ -30,6 +30,12 @@ export const DEFAULT_EMPTY_RETURN_BUDGET = 2;
 /** The diagnostic an exhausted retry budget reports under. */
 export const EMPTY_RETURN_DIAGNOSTIC_CODE = 'role_result.schema.invalid';
 
+/** Identical tooling failures permitted before retry becomes a stop. */
+export const DEFAULT_IDENTICAL_TOOLING_FAILURE_BUDGET = 2;
+
+/** The diagnostic emitted for repeated identical no-progress tooling failures. */
+export const TOOLING_FAILURE_DIAGNOSTIC_CODE = 'role_result.tooling_failure_repeated';
+
 /** Roles whose work must be produced fresh, never continued. */
 export const NON_REUSABLE_ROLES = Object.freeze(['auditor']);
 
@@ -91,6 +97,72 @@ export function evaluateEmptyReturnBudget(input = {}) {
     repair:
       `Inspect why '${roleId}' produced no result before invoking it again: the host may not be delivering the role result, ` +
       'the packet may not describe actionable work, or the required inputs may be missing. Retrying without a change repeats the same outcome.',
+  });
+}
+
+/**
+ * Bound retries of one exact tooling failure to one task-contract generation.
+ * A changed signature or binding is a different recovery, not another count in
+ * the same no-progress loop.
+ */
+export function evaluateToolingFailureRetry(input = {}) {
+  const current = input.current ?? {};
+  const budget = Number.isSafeInteger(input.budget) && input.budget >= 0
+    ? input.budget
+    : DEFAULT_IDENTICAL_TOOLING_FAILURE_BUDGET;
+  const fields = ['taskId', 'taskContractDigest', 'attemptId', 'operation', 'signature'];
+  const valid = fields.every(field => typeof current[field] === 'string' && current[field].trim());
+  if (!valid) {
+    return Object.freeze({
+      ok: false, retryPermitted: false, repeated: 0, budget, remaining: 0,
+      code: TOOLING_FAILURE_DIAGNOSTIC_CODE,
+      reason: 'tooling-failure retry policy requires an exact task, task contract, attempt, operation, and failure signature',
+      repair: 'Capture the typed failure and current task-contract identity before deciding whether to retry.',
+    });
+  }
+  const refusal = (reason, repair) => Object.freeze({
+    ok: false, retryPermitted: false, repeated: 0, budget, remaining: 0,
+    code: TOOLING_FAILURE_DIAGNOSTIC_CODE, reason, repair,
+  });
+  if (current.attemptState !== 'live') {
+    return refusal(
+      `execution attempt '${current.attemptId}' is ${current.attemptState ?? 'not live'} and cannot be retried`,
+      'Start a new authorized attempt; terminal attempts cannot consume tooling-retry budget.'
+    );
+  }
+  if (current.contractCurrent !== true) {
+    return refusal(
+      `tooling-failure retry contract '${current.taskContractDigest}' is stale`,
+      'Prepare a new dispatch against the current task contract before retrying.'
+    );
+  }
+  if (current.mutationOccurred !== false) {
+    return refusal(
+      'the failed operation may have mutated state, so an automatic retry is unsafe',
+      'Inspect and reconcile the mutation before deciding on a new operation.'
+    );
+  }
+  if (current.safeToRetry !== true) {
+    return refusal(
+      'the failure did not positively attest that retry is safe',
+      'Change strategy or obtain explicit recovery evidence before another attempt.'
+    );
+  }
+  const repeated = (Array.isArray(input.failures) ? input.failures : []).filter(failure =>
+    fields.every(field => failure?.[field] === current[field])).length + 1;
+  if (repeated < budget) {
+    return Object.freeze({
+      ok: true, retryPermitted: true, repeated, budget, remaining: budget - repeated,
+      code: null, reason: null, repair: null,
+    });
+  }
+  return Object.freeze({
+    ok: false, retryPermitted: false, repeated, budget, remaining: 0,
+    code: TOOLING_FAILURE_DIAGNOSTIC_CODE,
+    reason:
+      `operation '${current.operation}' produced the identical tooling-failure signature ${repeated} time(s) ` +
+      `for ${current.taskId} at ${current.taskContractDigest}; another unchanged retry would make no progress`,
+    repair: 'Stop retrying. Change the execution strategy or record a typed blocked result with the failure signature.',
   });
 }
 

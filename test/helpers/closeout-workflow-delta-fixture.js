@@ -151,7 +151,10 @@ export function createCloseoutWorkflowDeltaFixture() {
 
   async function closeout(args, target) {
     const fixture = dispatchFixtures.get(target);
-    return runCliInProcess(['closeout', ...args, '--target', target], {
+    const boundary = args[0] === 'prepare' && !args.includes('--covered-tasks')
+      ? ['--covered-tasks', 'T-001']
+      : [];
+    return runCliInProcess(['closeout', ...args, ...boundary, '--target', target], {
       operatorTrustRoot: fixture.operatorTrustRoot,
       operatorActivationRoot: join(temp, 'operator-activation'),
       hostAuthority: protectedHostBoundary(fixture.trust),
@@ -329,6 +332,7 @@ export function createCloseoutWorkflowDeltaFixture() {
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     const prepared = await closeout([
       'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--output', packetPath,
+      '--covered-tasks', 'T-001',
     ], target);
     assert.equal(prepared.status, 0, `${prepared.stdout}${prepared.stderr}`);
     const recorded = await closeout(['record', '--packet', packetPath, '--yes'], target);

@@ -494,12 +494,14 @@ stale, replayed, abbreviated, mismatched, repository-self-attested, or manually
 reconstructed return is a typed rejection routed only to its producer.
 
 A passed command check is proved only by the closed
-`agenticloop.execution-evidence` schema version `3` artifact produced by the
-public CLI. It binds the exact parsed required-check argv, packet and invocation,
-task and carrier digests, repository and product heads, target paths, strict
+`agenticloop.execution-evidence` schema version `4` artifact produced by the
+public CLI. Its immutable binding covers the exact parsed required-check argv,
+packet and invocation, task, protected contract, and product candidate. Carrier
+digest and workflow HEAD are observational lineage fields validated separately
+at return consumption. It also records target paths, strict
 timing, actual child exit code, and filtered output. Check prose or a claimed
-zero exit code cannot substitute for this artifact. Schema-v2 evidence and its
-digest domain are typed incompatible with v3 and must be regenerated, never
+zero exit code cannot substitute for this artifact. Schema-v2/v3 evidence and
+their digest domains are typed incompatible with v4 and must be regenerated, never
 relabeled or re-digested.
 The receipt records the producer role observed by the host boundary; it is not
 derived from the packet assignment or return claim. That observed role must
@@ -518,11 +520,52 @@ The ordinary public handoff uses CLI-authored artifacts, in this order:
    required-check evidence through `task role-start <id> --packet <packet-path>
    --check-evidence-output <checks-path>`. For GitHub, the existing guarded
    `task-body transition` path is used.
-3. The Engineer uses `task check-evidence-update` for packet-required checks,
-   then derives the raw return with `task prepare-return`.
-4. The receiving boundary runs `task verify-return <id> --packet <packet-path>
+3. The Engineer completes product work, runs `task prepare-product-commit` to
+   derive the exact task-owned path set and canonical message file, commits it,
+   then publishes the
+   implementation artifact, structured Scope Completed/Evidence/Deviations/
+   Known Gaps/Verification Attempts/Revision Resolution, and non-authoritative
+   outcome through guarded `task evidence` mutations. Revision Resolution is
+   Engineer-authored; the Maintainer validates it during re-review.
+4. After the last carrier mutation, the Engineer runs `task check-evidence-init`
+   to establish the final empty scaffold, executes and records every required
+   check with `task check-evidence-update`, and performs no mutating workflow
+   command before deriving the raw return with `task prepare-return`.
+5. The receiving boundary runs `task verify-return <id> --packet <packet-path>
    --return <return-path> --from-current-repository`; only verified evidence
    proceeds to review preparation and review.
+
+A verified return terminates its attempt as `returned`. A following
+`needs_revision` derives `reviewed_needs_revision` and permits a revision packet
+without abandonment. The closed derived states are `live`,
+`superseded_before_work`, `tooling_failed`, `superseded_by_packet`,
+`superseded_by_maintainer_repair`, `abandoned`, `returned`,
+`reviewed_needs_revision`, and `accepted`; contradictory return and abandonment
+evidence is `attempt_terminal_conflict` and blocks measurement and conservation.
+Generic abandonment, live/productive, returned, revised, and accepted attempts
+consume engineering budget. Packet/repair/pre-work supersession does not.
+`tooling_failed` consumes engineering budget only when its durable termination
+record proves product mutation. Workflow recovery and engineering-budget
+consumption are mutually exclusive. `review_budget` separately governs revision
+rounds.
+
+Execution-attempt abandonment schema-v1 records and execution-evidence
+schema-v2/v3 records remain historical evidence only. They are never migrated,
+relabeled, or consumed as current: establish a fresh current attempt, then
+record a schema-v2 abandonment or rerun required checks to produce schema-v4
+execution evidence as applicable.
+
+Before retrying the same failed operation, record its bounded structured
+observation with `task record-tooling-failure`. The default identical-failure
+budget is two total failures: the first failure permits one retry; the second
+identical failure refuses another. A different exact attempt, task contract,
+operation, or normalized signature starts a different cohort.
+
+Closeout audit currency is exact identity equality: the candidate being closed,
+`certified_artifact`, and the latest certifying run candidate must be identical,
+as must the expected, certified, and latest-run covered-task sets. Ancestor
+relationship is not certification currency. Audit-disabled projects remain an
+explicit opt-out and are never reported as certified.
 
 `--input`, `--output`, `--packet`, `--return`, and check-evidence paths are
 target-relative, resolving below the selected target (the caller's current
@@ -2058,9 +2101,12 @@ npx agenticloop audit resolve <AUD-ID> \
 ```
 
 Resolution does not certify the work unit; it permits the next fresh Auditor
-invocation. Closeout enforces the complete certificate with
-`npx agenticloop audit gate <work-unit-or-audit-id>`. `audit status` is
-diagnostic and does not replace that closeout gate.
+invocation. Closeout enforces the complete certificate with `npx agenticloop
+audit gate <work-unit-or-audit-id> --candidate commit:<full-sha>
+--covered-tasks <exact-ids>`. Both identities are external gate inputs: the
+certificate never supplies its own expected candidate or task boundary. `audit
+status` is record-internal diagnostic inspection and does not replace that
+closeout gate.
 
 Existing Engineer-owned integration rehearsal remains the pre-integration
 composition proof. Audit runs after the exact candidate is integrated or frozen.
@@ -3019,7 +3065,11 @@ non-audit completion: it still requires an exact candidate and every other
 closeout gate, records `audit_opt_out: true` with `audit: null`, and never calls
 the result certification.
 
-Use `closeout prepare` then `closeout record --packet ... --yes`. Preparation
+Use `closeout prepare --work-unit <id> --artifact commit:<full-sha>` then
+`closeout record --packet ... --yes`. The candidate is independently supplied
+and resolved to its canonical full identity; it never defaults from the audit
+record. Preparation derives the exact current files-backend membership when it
+can and otherwise requires `--covered-tasks`. Preparation
 emits a versioned packet with `publishable`, `completion_eligible`,
 `recommended_status`, structured reasons, and a reconstructable digest. Exit 0
 from prepare means only completion eligibility; exit 1 may still emit a truthful

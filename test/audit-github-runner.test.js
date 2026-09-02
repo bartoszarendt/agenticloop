@@ -214,7 +214,10 @@ describe('one GitHub inventory snapshot per command', () => {
     assert.match(created.stderr, /inventory_incomplete/);
     const lint = await runCliInProcess(['audit', 'lint', '--target', target], { ghCommandRunner: failing });
     assert.equal(lint.status, 0); // no records exist; lint of nothing passes
-    const gate = await runCliInProcess(['audit', 'gate', 'milestone:M00', '--target', target], { ghCommandRunner: failing });
+    const gate = await runCliInProcess([
+      'audit', 'gate', 'milestone:M00', '--candidate', `commit:${'a'.repeat(40)}`,
+      '--covered-tasks', 'T-001,T-002', '--target', target,
+    ], { ghCommandRunner: failing });
     assert.equal(gate.status, 1);
   });
 });

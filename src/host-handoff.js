@@ -165,7 +165,7 @@ function exactExecutionReceiptArtifact(value) {
       .every(key => Object.hasOwn(value, key)) &&
     typeof value.checkId === 'string' && value.checkId &&
     typeof value.path === 'string' && value.path && !value.path.startsWith('/') && !value.path.includes('\\') && !value.path.split('/').some(part => !part || part === '.' || part === '..') &&
-    /^sha256:agenticloop\.execution-evidence\.v3:[a-f0-9]{64}$/.test(value.digest) &&
+    /^sha256:agenticloop\.execution-evidence\.v4:[a-f0-9]{64}$/.test(value.digest) &&
     typeof value.logicalCommand === 'string' && value.logicalCommand &&
     Array.isArray(value.args) && value.args.every(arg => typeof arg === 'string') &&
     typeof value.resolvedExecutable === 'string' && value.resolvedExecutable &&

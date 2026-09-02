@@ -63,6 +63,8 @@ function abandonment(attemptId, overrides = {}) {
     reason: 'the retained packet was minted after product work and cannot prove the original base',
     disposition: 'abandoned',
     authority: 'operator:x',
+    productMutationOccurred: true,
+    carrierMutationOccurred: true,
     abandonedAt: '2026-08-01T12:00:00.000Z',
     ...overrides,
   };
@@ -107,7 +109,7 @@ describe('attempts are grouped from durable evidence', () => {
       invocationId: 'invocation-2',
       consumedAt: '2026-08-01T11:00:00.000Z',
     });
-    const attempts = groupExecutionAttempts({
+    const { records: attempts } = groupExecutionAttempts({
       // Supplied out of order on purpose: ordering is derived, not trusted.
       consumptions: [second, first],
       abandonments: [abandonment(executionAttemptIdentity(first))],
@@ -120,7 +122,7 @@ describe('attempts are grouped from durable evidence', () => {
   });
 
   it('preserves each attempt product base distinctly', () => {
-    const attempts = groupExecutionAttempts({
+    const { records: attempts } = groupExecutionAttempts({
       consumptions: [
         consumption({ productBaseHead: '1'.repeat(40) }),
         consumption({
@@ -132,6 +134,118 @@ describe('attempts are grouped from durable evidence', () => {
       ],
     });
     assert.deepEqual(attempts.map(item => item.productBaseHead), ['1'.repeat(40), '2'.repeat(40)]);
+  });
+
+  it('derives a verified attempt as returned rather than abandoned', () => {
+    const consumed = consumption();
+    const { records: attempts } = groupExecutionAttempts({
+      consumptions: [consumed],
+      returns: [{ packetId: consumed.packetId }],
+    });
+    assert.equal(attempts[0].state, 'returned');
+    const verdict = evaluatePacketConservation({
+      consumptions: [consumed],
+      returns: [{ packetId: consumed.packetId }],
+      engineerMutationCount: 2,
+    });
+    assert.equal(verdict.ok, true);
+    assert.equal(verdict.liveAttempt, null);
+  });
+
+  it('derives review dispositions from the exact returned product artifact', () => {
+    const consumed = consumption();
+    const returned = { packetId: consumed.packetId, productHead: '2'.repeat(40), recordId: 'return-verification:1' };
+    const { records: needsRevision } = groupExecutionAttempts({
+      consumptions: [consumed], returns: [returned],
+      reviews: [{ type: 'outcome', status: 'needs_revision', artifact: `commit:${'2'.repeat(40)}`, sourceOrder: 1, sourceReference: 'review:1' }],
+    });
+    assert.equal(needsRevision[0].state, 'reviewed_needs_revision');
+    assert.equal(needsRevision[0].reviewOutcome.sourceReference, 'review:1');
+
+    const { records: accepted } = groupExecutionAttempts({
+      consumptions: [consumed], returns: [returned],
+      reviews: [
+        { type: 'outcome', status: 'needs_revision', artifact: `commit:${'2'.repeat(40)}`, sourceOrder: 1 },
+        { type: 'outcome', status: 'accepted', artifact: `commit:${'2'.repeat(40)}`, sourceOrder: 2 },
+      ],
+    });
+    assert.equal(accepted[0].state, 'accepted');
+  });
+
+  it('binds a return to only the exact invocation when packet ids are reused', () => {
+    const first = consumption({ invocationId: 'invocation-1' });
+    const second = consumption({ invocationId: 'invocation-2', consumedAt: '2026-08-01T11:00:00.000Z' });
+    const attempts = groupExecutionAttempts({
+      consumptions: [first, second],
+      returns: [{
+        taskId: first.taskId, packetId: first.packetId, packetDigest: first.packetDigest,
+        invocationId: first.invocationId, productBaseHead: first.productBaseHead,
+        recordId: 'return-verification:exact-invocation',
+      }],
+    });
+    assert.equal(attempts.ok, true);
+    assert.equal(attempts.records[0].state, 'returned');
+    assert.equal(attempts.records[1].state, 'live');
+  });
+
+  it('binds a return to only the exact product base when packet ids are reused', () => {
+    const first = consumption({ productBaseHead: '1'.repeat(40) });
+    const second = consumption({ productBaseHead: '2'.repeat(40), consumedAt: '2026-08-01T11:00:00.000Z' });
+    const attempts = groupExecutionAttempts({
+      consumptions: [first, second],
+      returns: [{
+        taskId: second.taskId, packetId: second.packetId, packetDigest: second.packetDigest,
+        invocationId: second.invocationId, productBaseHead: second.productBaseHead,
+        recordId: 'return-verification:exact-base',
+      }],
+    });
+    assert.equal(attempts.ok, true);
+    assert.equal(attempts.records[0].state, 'live');
+    assert.equal(attempts.records[1].state, 'returned');
+  });
+
+  it('fails closed for an ambiguous legacy return and conflicting terminal evidence', () => {
+    const first = consumption({ invocationId: 'invocation-1' });
+    const second = consumption({ invocationId: 'invocation-2', consumedAt: '2026-08-01T11:00:00.000Z' });
+    const ambiguous = groupExecutionAttempts({ consumptions: [first, second], returns: [{ packetId: first.packetId }] });
+    assert.equal(ambiguous.ok, false);
+    assert.equal(ambiguous.errors[0].code, 'attempt_return_ambiguous');
+
+    const exactReturn = {
+      packetId: first.packetId, packetDigest: first.packetDigest,
+      invocationId: first.invocationId, productBaseHead: first.productBaseHead,
+      taskId: first.taskId, recordId: 'return-verification:terminal-conflict',
+    };
+    const conflicting = groupExecutionAttempts({
+      consumptions: [first], returns: [exactReturn],
+      abandonments: [abandonment(executionAttemptIdentity(first))],
+    });
+    assert.equal(conflicting.ok, false);
+    assert.equal(conflicting.records[0].state, 'attempt_terminal_conflict');
+    assert.equal(conflicting.errors[0].code, 'attempt_terminal_conflict');
+  });
+
+  it('uses one mutually-exclusive terminal-state and budget classifier', () => {
+    const consumed = consumption();
+    const attemptId = executionAttemptIdentity(consumed);
+    const cases = [
+      ['superseded_before_work', false, false, false, true],
+      ['tooling_failed', false, false, false, true],
+      ['tooling_failed', true, false, true, false],
+      ['superseded_by_packet', false, false, false, true],
+      ['superseded_by_maintainer_repair', true, true, false, true],
+      ['abandoned', true, true, true, false],
+    ];
+    for (const [disposition, productMutationOccurred, carrierMutationOccurred, budget, recovery] of cases) {
+      const record = abandonment(attemptId, {
+        disposition, productMutationOccurred, carrierMutationOccurred,
+      });
+      const attempts = groupExecutionAttempts({ consumptions: [consumed], abandonments: [record] });
+      assert.equal(attempts.records[0].state, disposition);
+      assert.equal(attempts.records[0].engineeringBudgetConsumed, budget);
+      assert.equal(attempts.records[0].workflowRecovery, recovery);
+      assert.notEqual(budget && recovery, true);
+    }
   });
 });
 

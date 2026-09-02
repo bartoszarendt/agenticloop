@@ -270,6 +270,7 @@ describe('every GitHub task-body status change passes the transition gates', () 
     const marker = renderCloseoutMarker({
       status: 'complete',
       workUnit: 'selection:review',
+      coveredTasks: ['T-1'],
       artifact: `commit:${TREE_OID}`,
       auditRef: 'none',
       predecessor: 'none',
@@ -649,6 +650,7 @@ describe('GitHub closeout resumes the terminal transition after publication', ()
 describe('closeout-marker scope never invents a covered task set', () => {
   const marker = renderCloseoutMarker({
     workUnit: 'selection:reviewer-1',
+    coveredTasks: ['T-1'],
     gateDigest: DIGEST_A,
     status: 'complete',
     auditRef: null,
@@ -694,6 +696,7 @@ describe('closeout-marker scope never invents a covered task set', () => {
     createTaskProjectFixture(target);
     const superseding = renderCloseoutMarker({
       workUnit: 'selection:reviewer-2',
+      coveredTasks: ['T-1'],
       gateDigest: DIGEST_B,
       status: 'complete',
       auditRef: null,

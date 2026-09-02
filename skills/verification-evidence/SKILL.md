@@ -98,6 +98,14 @@ must use a stable `RC-N` id and have the matching marked attempt carrier.
 
 ## Timeout, retry, and learning procedure
 
+Command evidence schema v4 separates immutable execution identity from observed
+workflow lineage. Packet, invocation, task, protected contract, product
+candidate, required-check id, command, and argv are semantic. Carrier digest and
+workflow HEAD are observations revalidated when the return is consumed. A
+workflow-only commit does not require rerunning a product check; a product
+candidate change always does. Reinitialize the final scaffold after the last
+Engineer carrier mutation, preserving prior evidence as superseded history.
+
 This skill owns this procedure.
 
 ### Before a run

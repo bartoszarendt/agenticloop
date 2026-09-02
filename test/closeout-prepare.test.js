@@ -17,12 +17,43 @@ function verificationFiles(target) {
 }
 
 describe('closeout prepare', () => {
+  it('refuses preparation without an independently supplied candidate', async () => {
+    const target = makeGitTarget('candidate-required');
+    const result = await closeout([
+      'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001', '--json',
+    ], target);
+    assert.notEqual(result.status, 0);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.kind, 'agenticloop.validation-result');
+    assert.equal(payload.diagnostics[0].code, 'cli.usage');
+    assert.equal(payload.mutationOccurred, false);
+    assert.equal(payload.safeToRetry, true);
+    assert.match(payload.diagnostics[0].message, /cannot supply the expected candidate/);
+  });
+
+  it('rejects noncanonical, abbreviated, and nonexistent closeout candidates', async () => {
+    const target = makeGitTarget('candidate-invalid');
+    for (const artifact of ['release:not-a-commit', 'commit:abc1234', `commit:${'f'.repeat(40)}`]) {
+      const result = await closeout([
+        'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
+        '--artifact', artifact, '--json',
+      ], target);
+      assert.notEqual(result.status, 0, artifact);
+      const payload = JSON.parse(result.stdout);
+      assert.equal(payload.kind, 'agenticloop.validation-result', artifact);
+      assert.equal(payload.diagnostics[0].code, 'cli.usage', artifact);
+      assert.equal(payload.mutationOccurred, false, artifact);
+      assert.equal(payload.safeToRetry, true, artifact);
+    }
+  });
+
   it('emits a completion-eligible packet for a certified work unit', async () => {
     const target = await makeVerifiedGitTarget('eligible');
     const artifact = await certify(target);
     const packetPath = join(target, '.agenticloop', 'tmp', 'packet.json');
     const result = await closeout([
-      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--output', packetPath,
+      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact,
+      '--covered-tasks', 'T-001', '--output', packetPath,
     ], target);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     const packet = JSON.parse(readFileSync(packetPath, 'utf-8'));
@@ -46,7 +77,8 @@ describe('closeout prepare', () => {
     });
     const packetPath = join(target, '.agenticloop', 'tmp', 'standard-packet.json');
     const result = await closeout([
-      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact, '--output', packetPath,
+      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact,
+      '--covered-tasks', 'T-001', '--output', packetPath,
     ], target);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
     const packet = JSON.parse(readFileSync(packetPath, 'utf-8'));
@@ -58,8 +90,11 @@ describe('closeout prepare', () => {
   it('reports audit due and refuses completion when no audit exists', async () => {
     const target = makeGitTarget('due');
     writeTask(target, 'T-001', 'accepted', 'milestone:M00');
-    commitAll(target, 'work');
-    const result = await closeout(['prepare', '--work-unit', 'milestone:M00', '--json'], target);
+    const artifact = commitAll(target, 'work');
+    const result = await closeout([
+      'prepare', '--work-unit', 'milestone:M00', '--artifact', artifact,
+      '--covered-tasks', 'T-001', '--json',
+    ], target);
     assert.equal(result.status, 1);
     const packet = JSON.parse(result.stdout);
     assert.equal(packet.completion_eligible, false);
@@ -68,7 +103,7 @@ describe('closeout prepare', () => {
     const status = await closeout(['status', '--work-unit', 'milestone:M00', '--json'], target);
     assert.equal(status.status, 1);
     assert.ok(status.stdout, status.stderr);
-    assert.equal(JSON.parse(status.stdout).state, 'audit_due');
+    assert.equal(JSON.parse(status.stdout).state, 'missing');
   });
 
   it('never completes with an explicit audit opt-out but reports it truthfully', async () => {
@@ -84,6 +119,20 @@ describe('closeout prepare', () => {
     // The opt-out is visible; closeout never claims certification.
     assert.equal(packet.completion_eligible, true, JSON.stringify(packet.reasons));
     assert.equal(packet.recommended_status, 'complete');
+  });
+
+  it('still rejects product-tree drift when work-unit audit is disabled', async () => {
+    const target = await makeVerifiedGitTarget('optout-product-drift', { auditEnabled: false });
+    await certify(target, { skipAudit: true });
+    writeFileSync(join(target, 'src', 'existing.js'), 'export const changedAfterReturn = true;\n', 'utf8');
+    const candidate = commitAll(target, 'different product candidate');
+    const result = await closeout([
+      'prepare', '--work-unit', 'milestone:M00', '--covered-tasks', 'T-001',
+      '--artifact', candidate, '--json',
+    ], target);
+    assert.equal(result.status, 1);
+    const packet = JSON.parse(result.stdout);
+    assert.ok(packet.reasons.some(item => item.gate === 'product_tree'));
   });
 
   it('does not restore certification over a changed activation path', async () => {

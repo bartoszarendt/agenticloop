@@ -137,7 +137,7 @@ describe('measurement stores nothing and says so', () => {
     const reason = 'the retained packet cannot prove the original product base';
     const record = {
       kind: 'agenticloop.execution-attempt-abandonment',
-      schemaVersion: 1,
+      schemaVersion: 2,
       backend: 'files',
       taskId: 'T-001',
       attemptId,
@@ -145,6 +145,8 @@ describe('measurement stores nothing and says so', () => {
       reason,
       disposition: 'abandoned',
       authority: 'operator:x',
+      productMutationOccurred: true,
+      carrierMutationOccurred: true,
       abandonedAt: new Date().toISOString(),
     };
     const path = join(fixture.root, executionAttemptAbandonmentRelativePath(record));

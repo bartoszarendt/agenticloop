@@ -539,7 +539,7 @@ export const COMMAND_REGISTRY = {
   },
   task: {
     summary: 'Manage files-backed task records and canonical handoff preparation.',
-    usage: 'agenticloop task <list|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|role-start|handoff-preflight|refresh-handoff-evidence|commit-message|attempt-status|abandon-attempt|adopt-historical|readiness-plan|readiness-apply|measure|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|evidence|review-prepare|status> [options]',
+    usage: 'agenticloop task <list|show|lint|new|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|role-start|handoff-preflight|refresh-handoff-evidence|commit-message|attempt-status|abandon-attempt|adopt-historical|readiness-plan|readiness-apply|measure|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|evidence|review-prepare|status> [options]',
     subcommands: {
       list: {
         summary: 'List task records.',
@@ -549,6 +549,13 @@ export const COMMAND_REGISTRY = {
           opt('status', 'string', 'Filter by task status.'),
           jsonOption,
         ],
+      },
+      show: {
+        summary: 'Read one task record without mutation.',
+        usage: 'agenticloop task show <id> [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only',
+        positionals: [{ name: 'id', required: true }],
+        options: [targetOption(), jsonOption],
       },
       lint: {
         summary: 'Lint task records.',
@@ -631,13 +638,27 @@ export const COMMAND_REGISTRY = {
       },
       'abandon-attempt': {
         summary: 'Explicitly discard one live execution attempt so a new dispatch packet may be minted.',
-        usage: 'agenticloop task abandon-attempt <id> --attempt <attempt-id> --reason <text> --authority <kind:reference> [--json] [--target <dir>]',
+        usage: 'agenticloop task abandon-attempt <id> --attempt <attempt-id> --disposition <type> --reason <text> --authority <kind:reference> [--actor-role <role>] [--json] [--target <dir>]',
         positionals: [{ name: 'id', required: true }],
         options: [
           targetOption(),
           opt('attempt', 'string', 'Exact live execution attempt identity reported by the conservation refusal. Required.'),
+          opt('disposition', 'string', 'abandoned, superseded_before_work, tooling_failed, or superseded_by_maintainer_repair. Defaults to abandoned.'),
+          opt('actor-role', 'string', 'Authoring role. Required as maintainer for Maintainer-repair supersession.'),
           opt('reason', 'string', 'Why the attempt cannot reach a canonical return. Required and recorded verbatim.'),
           opt('authority', 'string', 'Durable authorization reference in <kind>:<reference> form. Required.'),
+          jsonOption,
+        ],
+      },
+      'record-tooling-failure': {
+        summary: 'Persist one bounded tooling-failure observation and evaluate the identical-failure retry bound.',
+        usage: 'agenticloop task record-tooling-failure <id> --attempt <attempt-id> --input <path> [--budget <n>] [--json] [--target <dir>]',
+        positionals: [{ name: 'id', required: true }],
+        options: [
+          targetOption(),
+          opt('attempt', 'string', 'Exact execution attempt identity. Required.'),
+          opt('input', 'string', 'Target-relative closed tooling-failure JSON input. Required.'),
+          opt('budget', 'string', 'Maximum identical failure observations; default 2 means the first permits one retry and the second stops.'),
           jsonOption,
         ],
       },
@@ -658,6 +679,18 @@ export const COMMAND_REGISTRY = {
           opt('body', 'string', 'Optional commit body paragraph.'),
           opt('body-file', 'string', 'Optional target-relative file whose contents become the commit body.'),
           opt('output', 'string', 'Target-relative message file to write atomically. Required.'),
+          jsonOption,
+        ],
+      },
+      'prepare-product-commit': {
+        summary: 'Derive exact task-owned product paths after work and write the canonical product commit message.',
+        usage: 'agenticloop task prepare-product-commit <id> --packet <path> --subject <text> --message-output <path> [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only-except-message-file',
+        positionals: [{ name: 'id', required: true }],
+        options: [
+          targetOption(), opt('packet', 'string', 'Consumed Engineer packet. Required.'),
+          opt('subject', 'string', 'Canonical product commit subject. Required.'),
+          opt('message-output', 'string', 'Target-relative commit message output under project scratch. Required.'),
           jsonOption,
         ],
       },
@@ -798,9 +831,9 @@ export const COMMAND_REGISTRY = {
       },
       'check-evidence-init': {
         summary: 'Create canonical not-run evidence scaffolding from a dispatch packet.',
-        usage: 'agenticloop task check-evidence-init <id> --packet <packet.json> --output <path> [--json] [--target <dir>]',
+        usage: 'agenticloop task check-evidence-init <id> --packet <packet.json> --output <path> [--expect-existing-digest <sha256>] [--supersession-authority <kind:ref>] [--json] [--target <dir>]',
         positionals: [{ name: 'id', required: true }],
-        options: [targetOption(), opt('packet', 'string', 'Dispatch packet path, target-relative and confined to the selected target.'), opt('output', 'string', 'Required-check evidence output path, target-relative and confined to the selected target.'), jsonOption],
+        options: [targetOption(), opt('packet', 'string', 'Dispatch packet path, target-relative and confined to the selected target.'), opt('output', 'string', 'Required-check evidence output path, target-relative and confined to the selected target.'), opt('expect-existing-digest', 'string', 'Exact sha256 digest required to replace a different existing scaffold.'), opt('supersession-authority', 'string', 'Typed Maintainer authority <kind:reference> required with replacement.'), jsonOption],
       },
       'check-evidence-show': {
         summary: 'Validate and print canonical required-check evidence for a dispatch packet.',
@@ -816,17 +849,18 @@ export const COMMAND_REGISTRY = {
         options: [targetOption(), opt('packet', 'string', 'Dispatch packet path, target-relative and confined to the selected target.'), opt('input', 'string', 'Existing required-check evidence path, target-relative and confined to the selected target.'), opt('output', 'string', 'Updated required-check evidence path, target-relative and confined to the selected target.'), opt('check', 'string', 'Packet required-check id to update. Required.'), opt('outcome', 'string', 'Observed check outcome. Required.', { enum: ['passed', 'failed', 'blocked', 'not_run'] }), opt('evidence', 'string', 'Bounded observation evidence. Required.'), opt('exit-code', 'string', 'Command check exit code; required for non-passing command observations.'), opt('execution-output', 'string', 'Target-confined path where the CLI writes its own execution-evidence JSON for a passed command check. The exact packet command is parsed as inert argv and run at the target root with a five-minute timeout.'), jsonOption],
       },
       evidence: {
-        summary: 'Record one bounded Engineer-owned task-evidence mutation through the carrier lineage.',
-        usage: 'agenticloop task evidence <id> --class <implementation_artifact_evidence|implementation_summary_evidence|implementation_outcome_evidence> --expect-digest <digest> [--product-head <git-object>] [--summary <text> --check-evidence <text>] [--outcome <implementation_ready_for_review|implementation_blocked>] [--json] [--target <dir>]',
+        summary: 'Record one bounded role-owned task-evidence mutation through the carrier lineage.',
+        usage: 'agenticloop task evidence <id> --class <implementation_artifact_evidence|implementation_summary_evidence|implementation_outcome_evidence|structured_task_evidence> --expect-digest <digest> [--input <path>] [--json] [--target <dir>]',
         positionals: [{ name: 'id', required: true }],
         options: [
           targetOption(),
-          opt('class', 'string', 'Closed Engineer evidence mutation class. Required.', { enum: ['implementation_artifact_evidence', 'implementation_summary_evidence', 'implementation_outcome_evidence'] }),
+          opt('class', 'string', 'Closed task evidence mutation class. Required.', { enum: ['implementation_artifact_evidence', 'implementation_summary_evidence', 'implementation_outcome_evidence', 'structured_task_evidence'] }),
           opt('expect-digest', 'string', 'Exact currentCarrierDigest before mutation. Required.'),
           opt('product-head', 'string', 'Exact current product Git head. Required for implementation_artifact_evidence.'),
           opt('summary', 'string', 'Engineer implementation summary. Required for implementation_summary_evidence.'),
           opt('check-evidence', 'string', 'Bounded required-check evidence summary. Required for implementation_summary_evidence.'),
           opt('outcome', 'string', 'Non-authoritative Engineer outcome. Required for implementation_outcome_evidence.', { enum: ['implementation_ready_for_review', 'implementation_blocked'] }),
+          opt('input', 'string', 'Target-relative closed structured task-evidence JSON. Required for structured_task_evidence.'),
           jsonOption,
         ],
       },
@@ -923,10 +957,10 @@ export const COMMAND_REGISTRY = {
         options: [targetOption(), jsonOption],
       },
       gate: {
-        summary: 'Fail-closed closeout certification check.',
-        usage: 'agenticloop audit gate <audit-id|work-unit> [--json] [--target <dir>]',
+        summary: 'Fail-closed exact-candidate and exact-task-inventory certification check.',
+        usage: 'agenticloop audit gate <audit-id|work-unit> --candidate <artifact> --covered-tasks <ids> [--json] [--target <dir>]',
         positionals: [{ name: 'audit-id|work-unit', required: true }],
-        options: [targetOption(), jsonOption],
+        options: [targetOption(), opt('candidate', 'string', 'Exact canonical candidate being considered for closeout.'), opt('covered-tasks', 'string', 'Exact comma-separated closeout task inventory.'), jsonOption],
       },
       lint: {
         summary: 'Validate audit records.',
@@ -981,12 +1015,12 @@ export const COMMAND_REGISTRY = {
     subcommands: {
       prepare: {
         summary: 'Read-only composite closeout evaluation; emits one versioned packet.',
-        usage: 'agenticloop closeout prepare --work-unit <id> [--artifact <ref>] [--output <path>] [--plan-sync <disposition>] [--json] [--target <dir>]',
+        usage: 'agenticloop closeout prepare --work-unit <id> --artifact <commit:full-sha> [--covered-tasks <ids>] [--output <path>] [--plan-sync <disposition>] [--json] [--target <dir>]',
         options: [
           targetOption(),
           opt('work-unit', 'string', 'Canonical work-unit identity (phase:4, milestone:M2, epic:x, custom:x, work-unit:x). Required.'),
-          opt('artifact', 'string', 'Exact candidate artifact (commit:<sha>). Defaults to the certified candidate.'),
-          opt('covered-tasks', 'string', 'Explicit covered-task boundary when membership cannot be derived (flat projects without an audit record).'),
+          opt('artifact', 'string', 'Independent exact candidate artifact (commit:<full-sha>). Required; never derived from the audit certificate.'),
+          opt('covered-tasks', 'string', 'Explicit exact covered-task boundary when live backend membership cannot be derived.'),
           opt('output', 'string', 'Packet output path under .agenticloop/tmp/. The packet is transient transport.'),
           opt('plan-sync', 'string', 'Plan-sync disposition: not_required, synced, or skipped. An omitted disposition is never sufficient when a source plan applies.'),
           opt('plan-ref', 'string', 'Exact plan reference for --plan-sync synced (defaults to the selected documents.plan).'),
@@ -1453,9 +1487,13 @@ function usageErrorFromParseFailure(label, spec, error) {
     const text = suggestion
       ? `${label}: unknown option '${token}'. Did you mean '--${suggestion}'?`
       : `${label}: unknown option '${token}'.`;
-    return new CliUsageError(text, { hint: shapeHint(label, spec) });
+    return new CliUsageError(text, {
+      hint: shapeHint(label, spec), safeToRetry: true, mutationOccurred: false, canonicalUsage: spec.usage ?? null,
+    });
   }
-  return new CliUsageError(`${label}: ${message}`, { hint: shapeHint(label, spec) });
+  return new CliUsageError(`${label}: ${message}`, {
+    hint: shapeHint(label, spec), safeToRetry: true, mutationOccurred: false, canonicalUsage: spec.usage ?? null,
+  });
 }
 
 /** True when argv requests help at any level (before an explicit `--`). */

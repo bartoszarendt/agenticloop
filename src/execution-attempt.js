@@ -35,25 +35,49 @@
  * abandonment is an authored record or it did not happen.
  */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
 import { GIT_MAX_BUFFER } from './git-runner.js';
 
 import { canonicalSha256 } from './canonical-json.js';
+import { executionAttemptIdentity } from './execution-attempt-identity.js';
 import { loadProjectMap } from './project-map.js';
 import { resolveTaskAttemptBudget } from './review-checkpoint.js';
 import { listWorkflowEvidenceFiles } from './carrier-root.js';
 import { classifyLifecycleCompatibility, compatibilityMessage } from './lifecycle-compatibility.js';
+import { listReturnVerifications } from './return-verification.js';
+import { parseFilesReviewHistory } from './review-history.js';
+import { taskRecordRelativePath } from './terminal-scope.js';
 import {
   listCarrierMutationReceipts,
   listDispatchConsumptions,
 } from './handoff-consumption.js';
 
 export const EXECUTION_ATTEMPT_ABANDONMENT_KIND = 'agenticloop.execution-attempt-abandonment';
-export const EXECUTION_ATTEMPT_ABANDONMENT_SCHEMA_VERSION = 1;
+export const EXECUTION_ATTEMPT_ABANDONMENT_SCHEMA_VERSION = 2;
 export const EXECUTION_ATTEMPT_ROOT = '.agenticloop/handoffs/attempts';
+
+function listAttemptReturns(target, taskId) {
+  return listReturnVerifications(target, taskId);
+}
+
+function normalizedArtifact(value) {
+  return String(value ?? '').trim().replace(/^commit:/, '');
+}
+
+function listAttemptReviews(target, taskId, projectConfig) {
+  const carrier = join(target, ...taskRecordRelativePath(projectConfig, taskId).split('/'));
+  try {
+    const history = parseFilesReviewHistory(readFileSync(carrier, 'utf8'));
+    return history.errors.length > 0
+      ? { ok: false, records: [], errors: history.errors }
+      : { ok: true, records: history.events.filter(event => event.type === 'outcome'), errors: [] };
+  } catch (error) {
+    return { ok: false, records: [], errors: [`review history is unreadable: ${error.message}`] };
+  }
+}
 
 /** The one diagnostic code a conservation refusal reports under. */
 export const PACKET_CONSERVATION_DIAGNOSTIC_CODE = 'dispatch.packet.conserved';
@@ -76,9 +100,42 @@ export const ATTEMPT_BUDGET_DIAGNOSTIC_CODE = 'dispatch.attempt.budget_exhausted
  */
 export const EXECUTION_ATTEMPT_ABANDONMENT_DISPOSITIONS = Object.freeze([
   'abandoned',
+  'superseded_before_work',
+  'tooling_failed',
   'superseded_by_maintainer_repair',
   'superseded_by_packet',
 ]);
+
+export const EXECUTION_ATTEMPT_STATES = Object.freeze([
+  'live', 'superseded_before_work', 'tooling_failed', 'superseded_by_packet',
+  'superseded_by_maintainer_repair', 'abandoned', 'returned',
+  'reviewed_needs_revision', 'accepted', 'attempt_terminal_conflict',
+]);
+
+/** One closed state/budget classifier shared by every projection. */
+export function classifyExecutionAttempt({ abandonment = null, returned = null, review = null } = {}) {
+  if (returned !== null && abandonment !== null) {
+    return Object.freeze({ state: 'attempt_terminal_conflict', engineeringBudgetConsumed: null, workflowRecovery: null });
+  }
+  let state;
+  if (review?.status === 'accepted') state = 'accepted';
+  else if (review?.status === 'needs_revision') state = 'reviewed_needs_revision';
+  else if (returned !== null) state = 'returned';
+  else if (abandonment) state = EXECUTION_ATTEMPT_ABANDONMENT_DISPOSITIONS.includes(abandonment.disposition)
+    ? abandonment.disposition : 'abandoned';
+  else state = 'live';
+  const workflowRecovery = [
+    'superseded_before_work', 'superseded_by_packet', 'superseded_by_maintainer_repair',
+  ].includes(state) || (state === 'tooling_failed' && abandonment?.productMutationOccurred === false);
+  const engineeringBudgetConsumed = state === 'tooling_failed'
+    ? abandonment?.productMutationOccurred === true
+    : !workflowRecovery;
+  return Object.freeze({
+    state,
+    engineeringBudgetConsumed,
+    workflowRecovery,
+  });
+}
 
 const ISO_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const ATTEMPT_ID_RE = /^attempt:[a-f0-9]{32}$/;
@@ -96,25 +153,14 @@ function safeSegment(value) {
  * from: two attempts that share a packet id but not a base are not the same
  * attempt, and neither are two that share a base but not an invocation.
  */
-export function executionAttemptIdentity(consumption) {
-  if (!consumption?.packetId || !consumption?.invocationId || !consumption?.productBaseHead) {
-    throw new TypeError('an execution attempt identity requires packetId, invocationId, and productBaseHead');
-  }
-  const digest = canonicalSha256({
-    packetId: consumption.packetId,
-    packetDigest: consumption.packetDigest,
-    invocationId: consumption.invocationId,
-    productBaseHead: consumption.productBaseHead,
-    taskId: consumption.taskId,
-  });
-  return `attempt:${digest.slice(0, 32)}`;
-}
+export { executionAttemptIdentity } from './execution-attempt-identity.js';
 
 /** Validate one authored abandonment record against the closed schema. */
 export function validateExecutionAttemptAbandonment(record, { taskId = null, now = Date.now() } = {}) {
   const required = [
     'kind', 'schemaVersion', 'backend', 'taskId', 'attemptId', 'packetId',
-    'reason', 'disposition', 'authority', 'abandonedAt',
+    'reason', 'disposition', 'authority', 'productMutationOccurred',
+    'carrierMutationOccurred', 'abandonedAt',
   ];
   const errors = [];
   if (!record || typeof record !== 'object' || Array.isArray(record) ||
@@ -144,6 +190,13 @@ export function validateExecutionAttemptAbandonment(record, { taskId = null, now
     errors.push(
       `execution attempt abandonment disposition must be one of: ${EXECUTION_ATTEMPT_ABANDONMENT_DISPOSITIONS.join(', ')}`
     );
+  }
+  if (typeof record.productMutationOccurred !== 'boolean' || typeof record.carrierMutationOccurred !== 'boolean') {
+    errors.push('execution attempt abandonment must record exact product/carrier mutation booleans');
+  }
+  if (['superseded_before_work', 'superseded_by_packet'].includes(record.disposition) &&
+      (record.productMutationOccurred !== false || record.carrierMutationOccurred !== false)) {
+    errors.push(`${record.disposition} requires proof that no product or Engineer carrier mutation occurred`);
   }
   // Abandoning a live attempt discards execution evidence, so it names the
   // durable authorization that permitted it rather than being self-authorizing.
@@ -204,21 +257,68 @@ export function listExecutionAttemptAbandonments(target, taskId, options = {}) {
  * authored record names it, and `live` otherwise. Ordering is by `consumedAt`
  * with the packet id as a deterministic tiebreak, so two consumptions recorded
  * in the same millisecond still produce a stable sequence.
+ *
+ * @returns {{ok: boolean, records: object[], errors: object[]}} Explicit result;
+ * parse and terminal-conflict errors are enumerable and never hidden on an array.
  */
-export function groupExecutionAttempts({ consumptions = [], abandonments = [] } = {}) {
+export function groupExecutionAttempts({ consumptions = [], abandonments = [], returns = [], reviews = [] } = {}) {
   const abandonedBy = new Map(abandonments.map(record => [record.attemptId, record]));
   const ordered = [...consumptions].sort((left, right) =>
     Date.parse(left.consumedAt) - Date.parse(right.consumedAt) ||
-    String(left.packetId).localeCompare(String(right.packetId)));
-  return ordered.map((consumption, index) => {
+    String(left.packetId).localeCompare(String(right.packetId)) ||
+    String(left.invocationId).localeCompare(String(right.invocationId)) ||
+    String(left.productBaseHead).localeCompare(String(right.productBaseHead)));
+  const attemptsById = new Map(ordered.map(consumption => [executionAttemptIdentity(consumption), consumption]));
+  const returnedByAttempt = new Map();
+  const bindingErrors = [];
+  for (const record of returns) {
+    const binding = {
+      taskId: record?.taskId ?? record?.evidence?.packet?.task?.id ?? null,
+      packetId: record?.packetId ?? record?.evidence?.packet?.packetId ?? null,
+      packetDigest: record?.packetDigest ?? record?.evidence?.packet?.digest ?? null,
+      invocationId: record?.invocationId ?? record?.evidence?.packet?.assignment?.invocationId ?? null,
+      productBaseHead: record?.productBaseHead ?? record?.evidence?.roleReturn?.productBaseHead ?? null,
+      attemptId: record?.attemptId ?? null,
+    };
+    const candidates = [...attemptsById].filter(([attemptId, consumption]) =>
+      (!binding.attemptId || binding.attemptId === attemptId) &&
+      (!binding.taskId || binding.taskId === consumption.taskId) &&
+      (!binding.packetId || binding.packetId === consumption.packetId) &&
+      (!binding.packetDigest || binding.packetDigest === consumption.packetDigest) &&
+      (!binding.invocationId || binding.invocationId === consumption.invocationId) &&
+      (!binding.productBaseHead || binding.productBaseHead === consumption.productBaseHead));
+    if (candidates.length === 0) {
+      bindingErrors.push({ code: 'attempt_return_unbound', recordId: record?.recordId ?? null, message: `return verification ${record?.recordId ?? '(unknown)'} matches no execution attempt` });
+      continue;
+    }
+    if (candidates.length > 1) {
+      bindingErrors.push({ code: 'attempt_return_ambiguous', recordId: record?.recordId ?? null, message: `return verification ${record?.recordId ?? '(unknown)'} ambiguously matches ${candidates.length} execution attempts` });
+      continue;
+    }
+    const attemptId = candidates[0][0];
+    if (returnedByAttempt.has(attemptId)) {
+      bindingErrors.push({ code: 'attempt_return_conflict', recordId: record?.recordId ?? null, message: `execution attempt ${attemptId} has multiple return verifications` });
+      continue;
+    }
+    returnedByAttempt.set(attemptId, record);
+  }
+  const grouped = ordered.map((consumption, index) => {
     const attemptId = executionAttemptIdentity(consumption);
     const abandonment = abandonedBy.get(attemptId) ?? null;
+    const returned = returnedByAttempt.get(attemptId) ?? null;
+    const review = returned === null ? null : [...reviews]
+      .filter(record => normalizedArtifact(record.artifact) === normalizedArtifact(returned.productHead))
+      .sort((left, right) => Number(left.sourceOrder ?? 0) - Number(right.sourceOrder ?? 0))
+      .at(-1) ?? null;
+    const classification = classifyExecutionAttempt({ abandonment, returned, review });
+    const state = classification.state;
     return Object.freeze({
       attemptId,
       sequence: index + 1,
       packetId: consumption.packetId,
       packetDigest: consumption.packetDigest,
       invocationId: consumption.invocationId,
+      taskContractDigest: consumption.taskContractDigest,
       // The product base this attempt started from. A packet minted after
       // product work names a different base, and that difference is the whole
       // reason the original packet cannot be replaced by a later one.
@@ -228,10 +328,27 @@ export function groupExecutionAttempts({ consumptions = [], abandonments = [] } 
       // role: a fresh Engineer packet retires the previous Engineer attempt and
       // says nothing about an Auditor attempt running beside it.
       workflowRole: consumption.workflowRole ?? null,
-      state: abandonment ? 'abandoned' : 'live',
+      state,
+      productHead: returned?.productHead ?? null,
+      returnVerificationId: returned?.recordId ?? null,
+      reviewOutcome: review === null ? null : Object.freeze({
+        status: review.status,
+        artifact: review.artifact,
+        sourceReference: review.sourceReference ?? null,
+      }),
       abandonment,
+      engineeringBudgetConsumed: classification.engineeringBudgetConsumed,
+      workflowRecovery: classification.workflowRecovery,
     });
   });
+  const errors = Object.freeze([
+    ...bindingErrors,
+    ...grouped.filter(attempt => attempt.state === 'attempt_terminal_conflict').map(attempt => ({
+      code: 'attempt_terminal_conflict', attemptId: attempt.attemptId,
+      message: `execution attempt ${attempt.attemptId} has both return and abandonment terminal evidence`,
+    })),
+  ]);
+  return Object.freeze({ ok: errors.length === 0, records: Object.freeze(grouped), errors });
 }
 
 /**
@@ -255,14 +372,23 @@ export function deriveAttemptSupersessions(target, taskId, consumption, { backen
   if (!consumed.ok) return { ok: false, records: [], errors: consumed.errors };
   const abandoned = listExecutionAttemptAbandonments(target, taskId);
   if (!abandoned.ok) return { ok: false, records: [], errors: abandoned.errors };
+  const returned = listAttemptReturns(target, taskId);
+  if (!returned.ok) return { ok: false, records: [], errors: returned.errors };
+  const reviews = backend === 'files' && returned.records.length > 0
+    ? listAttemptReviews(target, taskId, loadProjectMap(target)?.config ?? null)
+    : { ok: true, records: [], errors: [] };
+  if (!reviews.ok) return { ok: false, records: [], errors: reviews.errors };
 
   const successorId = executionAttemptIdentity(consumption);
   const role = consumption.workflowRole ?? null;
-  const attempts = groupExecutionAttempts({
+  const grouped = groupExecutionAttempts({
     consumptions: consumed.records,
     abandonments: abandoned.records,
+    returns: returned.records,
+    reviews: reviews.records,
   });
-  const records = attempts
+  if (!grouped.ok) return { ok: false, records: [], errors: grouped.errors.map(error => `${error.code}: ${error.message}`) };
+  const records = grouped.records
     .filter(attempt =>
       attempt.state === 'live' &&
       attempt.attemptId !== successorId &&
@@ -282,6 +408,8 @@ export function deriveAttemptSupersessions(target, taskId, consumption, { backen
       // retirement, so the record names it rather than an operator who was
       // never asked.
       authority: consumption.packetId,
+      productMutationOccurred: false,
+      carrierMutationOccurred: false,
       abandonedAt: consumption.consumedAt,
     }));
   const errors = records.flatMap(record => {
@@ -303,10 +431,23 @@ export function deriveAttemptSupersessions(target, taskId, consumption, { backen
 export function evaluatePacketConservation({
   consumptions = [],
   abandonments = [],
+  returns = [],
+  reviews = [],
   engineerMutationCount = 0,
   taskId = '<task-id>',
 } = {}) {
-  const attempts = groupExecutionAttempts({ consumptions, abandonments });
+  const grouped = groupExecutionAttempts({ consumptions, abandonments, returns, reviews });
+  if (!grouped.ok) {
+    return {
+      ok: false,
+      code: grouped.errors[0]?.code ?? PACKET_CONSERVATION_DIAGNOSTIC_CODE,
+      reason: grouped.errors.map(error => error.message).join('; '),
+      liveAttempt: null,
+      attempts: grouped.records,
+      repair: 'Repair the conflicting or unbound return/attempt evidence before requesting another packet.',
+    };
+  }
+  const attempts = grouped.records;
   const liveAttempt = attempts.filter(attempt => attempt.state === 'live').at(-1) ?? null;
   const allow = (liveAttemptValue = null) => ({
     ok: true, code: null, reason: null, liveAttempt: liveAttemptValue, attempts, repair: null,
@@ -366,6 +507,30 @@ export function evaluateTaskPacketConservation(target, taskId, {
       repair: 'Repair the execution attempt abandonment records before requesting a new packet.',
     };
   }
+  const returned = listAttemptReturns(target, taskId);
+  if (!returned.ok) {
+    return {
+      ok: false,
+      code: PACKET_CONSERVATION_DIAGNOSTIC_CODE,
+      reason: `return verification evidence is unreadable: ${returned.errors.join('; ')}`,
+      liveAttempt: null,
+      attempts: [],
+      repair: 'Repair the return verification records before requesting a new packet.',
+    };
+  }
+  const reviews = backend === 'files' && returned.records.length > 0
+    ? listAttemptReviews(target, taskId, projectConfig)
+    : { ok: true, records: [], errors: [] };
+  if (!reviews.ok) {
+    return {
+      ok: false,
+      code: PACKET_CONSERVATION_DIAGNOSTIC_CODE,
+      reason: `review history is unreadable: ${reviews.errors.join('; ')}`,
+      liveAttempt: null,
+      attempts: [],
+      repair: 'Repair the durable review history before requesting a new packet.',
+    };
+  }
   const mutations = listCarrierMutationReceipts(target, taskId, { backend });
   if (!mutations.ok) {
     return {
@@ -377,7 +542,23 @@ export function evaluateTaskPacketConservation(target, taskId, {
       repair: 'Repair the carrier mutation receipts before requesting a new packet.',
     };
   }
-  const attempts = groupExecutionAttempts({ consumptions: consumed.records, abandonments: abandoned.records });
+  const grouped = groupExecutionAttempts({
+    consumptions: consumed.records,
+    abandonments: abandoned.records,
+    returns: returned.records,
+    reviews: reviews.records,
+  });
+  if (!grouped.ok) {
+    return {
+      ok: false,
+      code: grouped.errors[0]?.code ?? PACKET_CONSERVATION_DIAGNOSTIC_CODE,
+      reason: grouped.errors.map(error => error.message).join('; '),
+      liveAttempt: null,
+      attempts: grouped.records,
+      repair: 'Repair the conflicting or unbound return/attempt evidence before requesting another packet.',
+    };
+  }
+  const attempts = grouped.records;
   const live = attempts.filter(attempt => attempt.state === 'live').at(-1) ?? null;
   // Receipts are scoped to the live attempt by the same immutable dispatch
   // tuple `resolveCarrierLineage` uses, not by wall clock. A receipt belongs to
@@ -395,6 +576,8 @@ export function evaluateTaskPacketConservation(target, taskId, {
   const verdict = evaluatePacketConservation({
     consumptions: consumed.records,
     abandonments: abandoned.records,
+    returns: returned.records,
+    reviews: reviews.records,
     engineerMutationCount,
     taskId,
   });
@@ -421,14 +604,23 @@ export function evaluateTaskPacketConservation(target, taskId, {
   // worse than absent, so it binds here, at the one read-side decision every
   // gate shares.
   const budget = resolveEffectiveAttemptBudget(target, taskId, { projectConfig });
-  const attemptBudget = Object.freeze({ ...budget, recorded: verdict.attempts.length });
-  if (budget.budget !== null && verdict.attempts.length >= budget.budget) {
+  const engineeringAttempts = verdict.attempts.filter(attempt => attempt.engineeringBudgetConsumed === true).length;
+  const reviewRevisions = verdict.attempts.filter(attempt => attempt.state === 'reviewed_needs_revision').length;
+  const workflowRecoveries = verdict.attempts.filter(attempt => attempt.workflowRecovery === true).length;
+  const attemptBudget = Object.freeze({
+    ...budget,
+    recorded: engineeringAttempts,
+    physicalAttempts: verdict.attempts.length,
+    reviewRevisions,
+    workflowRecoveries,
+  });
+  if (budget.budget !== null && engineeringAttempts >= budget.budget) {
     return {
       ...verdict,
       ok: false,
       code: ATTEMPT_BUDGET_DIAGNOSTIC_CODE,
       reason:
-        `task ${taskId} has recorded ${verdict.attempts.length} execution attempt(s) against an ` +
+        `task ${taskId} has recorded ${engineeringAttempts} engineering/no-progress attempt(s) against an ` +
         `attempt_budget of ${budget.budget} (source: ${budget.source}); the budget is a hard stop, ` +
         'not a guideline, and a further packet would repeat work that has produced no new evidence',
       repair:
@@ -456,10 +648,7 @@ export function resolveEffectiveAttemptBudget(target, taskId, { projectConfig = 
   if (!config) {
     try { config = loadProjectMap(target)?.config ?? null; } catch { config = null; }
   }
-  const template = typeof config?.task_file_template === 'string' && config.task_file_template
-    ? config.task_file_template
-    : '.agenticloop/tasks/{taskId}.md';
-  const carrier = join(target, ...template.replace(/\{taskId\}/g, String(taskId)).replace(/\\/g, '/').split('/'));
+  const carrier = join(target, ...taskRecordRelativePath(config, taskId).split('/'));
   let content;
   try { content = readFileSync(carrier, 'utf8'); } catch {
     return { budget: null, source: 'unreadable', error: null };

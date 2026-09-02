@@ -132,8 +132,7 @@ describe('a resumed attempt whose product work is already committed can return',
     ]);
     assert.equal(blocked.status, 1, 'the carrier drifted, so preflight refuses before a packet can be minted');
     const regenerate = JSON.parse(blocked.stdout).firstSafeRepair.replace(/^npx agenticloop /, '').split(' ');
-    const regenerated = assertOk(await cli([...regenerate, '--json']), 'regenerate the decomposition');
-    writeFileSync(join(root, '.agenticloop', 'decompositions', 'T-001.json'), regenerated.stdout, 'utf8');
+    assertOk(await cli([...regenerate, '--json']), 'regenerate the decomposition');
     commitWorkflow(root, 'regenerate the decomposition', 'maintainer');
     assertOk(await cli(['task', 'handoff-preflight', 'T-001', '--host', 'opencode', '--json']), 'preflight after the repairs');
 

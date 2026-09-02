@@ -292,6 +292,27 @@ describe('N7: role-start behavioral tests', () => {
     assert.ok(output1.currentCarrierDigest, 'must have carrier digest');
     assert.ok(output1.nextSequence, 'must have nextSequence');
     assert.ok(output1.nextSequence.steps.length > 0, 'nextSequence must have steps');
+    const commands = output1.nextSequence.steps.map(step => step.command).filter(command => typeof command === 'string');
+    const productCommit = commands.findIndex(command => command.includes('prepare-product-commit'));
+    const artifact = commands.findIndex(command => command.includes('implementation_artifact_evidence'));
+    const summary = commands.findIndex(command => command.includes('implementation_summary_evidence'));
+    const outcome = commands.findIndex(command => command.includes('implementation_outcome_evidence'));
+    const initialize = commands.findIndex(command => command.includes('check-evidence-init'));
+    const update = commands.findIndex(command => command.includes('check-evidence-update'));
+    const prepare = commands.findIndex(command => command.includes('prepare-return'));
+    const receiverCommands = output1.nextSequence.receiverSteps.map(step => step.command);
+    assert.ok(productCommit >= 0 && productCommit < artifact && artifact < summary && summary < outcome && outcome < initialize && initialize < update && update < prepare,
+      `unexpected lifecycle order: ${commands.join(' | ')}`);
+    assert.equal(commands.some(command => command.includes('verify-return')), false);
+    assert.match(receiverCommands[0], /verify-return/);
+    for (const step of output1.nextSequence.steps) {
+      if (step.commitRequired) {
+        assert.ok(step.commitClass && step.commitReason);
+      } else {
+        assert.equal(step.commitClass ?? null, null);
+        assert.equal(step.commitReason ?? null, null);
+      }
+    }
 
     // Exact retry should return already_current
     const result2 = await runCliInProcess([

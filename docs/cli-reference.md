@@ -35,7 +35,7 @@ All commands:
 | `generate` | Generate adapter artifacts (`opencode`, `codex`, `claude-code`, `copilot`, `cursor`, `all`) |
 | `configure models` | Set per-host role model settings in `agenticloop.json` |
 | `configure import-generated-models` | Explicitly preview or import missing tracked model settings from one generated host |
-| `task` | Task records and lifecycle preparation (`list`, `lint`, `new`, `establish-baseline`, `authorize-correction`, `prepare-decomposition`, `prepare-dispatch`, `role-start`, `handoff-preflight`, `refresh-handoff-evidence`, `prepare-return`, `verify-return`, `check-evidence-init`, `check-evidence-show`, `check-evidence-update`, `evidence`, `review-prepare`, `status`) |
+| `task` | Task records and lifecycle preparation (`list`, `show`, `lint`, `new`, `establish-baseline`, `authorize-correction`, `prepare-decomposition`, `prepare-dispatch`, `role-start`, `handoff-preflight`, `refresh-handoff-evidence`, `prepare-return`, `verify-return`, `check-evidence-init`, `check-evidence-show`, `check-evidence-update`, `evidence`, `review-prepare`, `status`) |
 | `audit` | Work-unit audit certificates (`new`, `baseline`, `report`, `status`, `gate`, `lint`, `repair-structure`, `disposition`, `override`, `resolve`) |
 | `closeout` | Composite closeout packets (`prepare`, `status`, `record`) |
 | `improvement` | Bounded improvement proposals (`new`, `lint`, `status`) |
@@ -994,6 +994,10 @@ abandoned attempt or its evidence.
 Unreadable consumption, abandonment, or carrier-mutation evidence fails closed.
 "I cannot read this abandonment" is never treated as "there is no abandonment",
 because that direction silently re-enables the reminting the rule prevents.
+Schema-v1 execution-attempt abandonment records remain historical evidence but
+are incompatible with the current schema-v2 lifecycle gate. They are not
+migrated or relabeled; create a fresh current attempt and use `task
+abandon-attempt` with current authority if that attempt must be terminated.
 
 The ledger also checks that the history each attempt names still exists. A
 recorded product base that Git can no longer reach, a base that is no longer an
@@ -1389,6 +1393,18 @@ npx agenticloop task prepare-return T-001 --packet .agenticloop/tmp/dispatch.jso
 npx agenticloop task verify-return T-001 --packet .agenticloop/tmp/dispatch.json --return .agenticloop/tmp/return.json --from-current-repository --json
 ```
 
+Run the scaffold initialization shown above only after product work and all
+Engineer-owned `task evidence` mutations are committed. It supersedes prior
+same-attempt check evidence durably. No mutating workflow command is legal
+between the last check update and `prepare-return`. Repeating the exact public
+`verify-return` reuses the first observation time and reports `already_current`;
+changed semantic evidence remains a conflict.
+
+`npx agenticloop task show <id> --json` is the read-only task-state command.
+Usage refusals report `safeToRetry`, `mutationOccurred`, and canonical usage. A
+role lease permits one retry only when the first two values are `true` and
+`false`, respectively.
+
 Cancellation is evidence-bound and never inferred. No shipped public runtime
 currently has a protected, non-agent-callable Agentic Loop cancellation receipt
 producer, so `prepare-return` and `verify-return` refuse a positive
@@ -1421,7 +1437,7 @@ All public artifact paths are relative to the selected target, must remain
 inside it, and must name regular files rather than links. For a `passed`
 command check the CLI itself parses the exact required command as inert argv
 (no shell), runs it at the target root with a five-minute timeout, and writes
-target-confined schema-v3
+target-confined schema-v4
 `agenticloop.execution-evidence` JSON with the actual argv, child exit code,
 and output. A caller-supplied execution artifact or `--outcome passed
 --exit-code 0` cannot prove execution.
@@ -1455,9 +1471,9 @@ before any refetch, because caller-independent rederivation requires the local
 trusted checkout.
 
 A passed command check in a files-backed return is proved by the closed
-schema-v3 `agenticloop.execution-evidence` artifact, never by exit-code prose.
-Schema-v2 execution evidence and its digest domain are typed incompatible and
-must be regenerated rather than relabeled or re-digested.
+schema-v4 `agenticloop.execution-evidence` artifact, never by exit-code prose.
+Schema-v2 and schema-v3 execution evidence and their digest domains are typed
+incompatible and must be regenerated rather than relabeled or re-digested.
 Current packets bind required-check evidence contract v2 into their semantic
 digest: every command check carries `executionEvidence`; a passed check carries
 its `{ path, digest }` artifact reference and every non-passed check carries
@@ -1467,6 +1483,19 @@ identities it binds. Removing this property is malformed, not legacy
 compatibility. Packets authenticated as schema 7 or older are typed stale and
 must be regenerated; they cannot authorize a current return or protected
 transition.
+
+Required-check retry history remains an explicit contract decision. The current
+v2 check-evidence contract stores one current observation per `RC-N`; it defines
+neither a `retryPolicy` field nor append-only per-check `history`, and the CLI
+must not claim that overwriting an observation preserves retry history. Before
+adding those fields, the product contract must decide all of the following
+together: where the retry budget is authored (task inventory or project
+policy), which outcomes consume it, whether the initial `not_run` observation
+counts, the append-only history carrier and digest domain, and how a retry binds
+to execution-evidence schema v4 under concurrent writers. That decision requires
+a new required-check evidence contract version and packet migration rule; it
+must not be introduced as optional fields in v2.
+
 `closeout prepare --legacy-unactivated --legacy-reason <text>` is the interactive,
 standard-only, exact-work-unit compatibility exception. New waivers name only
 missing activation evidence. An authentic, unexpired schema-v1 waiver that also
@@ -1502,17 +1531,35 @@ bounded evidence mutations before constructing the raw return:
 npx agenticloop task evidence T-001 --class implementation_artifact_evidence --expect-digest <currentCarrierDigest> --product-head <productHead> --json
 npx agenticloop task evidence T-001 --class implementation_summary_evidence --expect-digest <currentCarrierDigest> --summary <text> --check-evidence <text> --json
 npx agenticloop task evidence T-001 --class implementation_outcome_evidence --expect-digest <currentCarrierDigest> --outcome implementation_ready_for_review --json
+npx agenticloop task evidence T-001 --class structured_task_evidence --expect-digest <currentCarrierDigest> --input .agenticloop/tmp/task-evidence.json --json
 npx agenticloop task review-prepare T-001 --json
 ```
 
 `task evidence` atomically writes the task carrier and a versioned receipt under
 `.agenticloop/handoffs/task-mutations/`. It refuses an unreceipted carrier,
-protected contract drift, or any class outside artifact, summary, and outcome
-evidence. The chain binds `taskContractDigest`, `dispatchCarrierDigest`, and the
-resulting `currentCarrierDigest`. Raw returns and repository evidence name
+contract drift, unknown fields, or cross-role ownership.
+The structured schema canonically updates `## Scope Completed`, `## Evidence`,
+`## Deviations`, `## Known Gaps`, `## Verification Attempts`, `## Maintainer
+Triage`, `## Retry Authorization`, and `## Revision Resolution` without
+duplicate headings; identical application is a no-op. The chain binds
+the dispatched workflow role, invocation ID, `taskContractDigest`, attempt ID,
+`dispatchCarrierDigest`, and the resulting `currentCarrierDigest`; a caller's
+`actorRole` field is never provenance by itself. Engineer owns Revision
+Resolution as well as Scope Completed, Evidence, Deviations, Known Gaps, and
+Verification Attempts. Maintainer owns Maintainer Triage and Retry
+Authorization. Verification Attempts use stable `RC-N` headings and canonical
+attempt nesting; Revision Resolution uses the canonical `- [F-N] ... [ref:
+...]` grammar. The writer validates with the same semantic parsers before and
+after persistence and changes only its marked section blocks. Raw returns and repository evidence name
 `productBaseHead`, `productHead`, `workflowHead`, `candidateHead`, separate
 product/workflow paths, and exact chain references. `task review-prepare` uses
 one command-local carrier snapshot and writes no review receipt when it changes.
+
+Before retrying a failed tooling operation, run `task
+record-tooling-failure <id> --attempt <attempt-id> --input <path> --json`. The
+default is two identical observations: the first permits one retry; the second
+exits nonzero. Contract, attempt, operation, or signature changes start another
+cohort. Inputs are bounded and exclude raw output, secrets, and session data.
 
 `task review-prepare --json` also emits two revision-routing fields,
 `findingResolutionMatrix` and `matrixDecision`. Both are `null` on a first
@@ -1981,8 +2028,11 @@ provenance must agree.
 
 Audit schema version 3 persists the observed Auditor-return grade and producer
 authentication state on every run. Audit gate output, closeout packet schema
-version 2, and closeout marker schema version 2 carry those values and enforce
-the effective minimum again at closeout. Canonicalizing a version 2 wire-format
+version 2, and closeout marker schema version 3 carry those values and enforce
+the effective minimum again at closeout. Marker v3 also persists
+`AGENT_CLOSEOUT_TASKS`, so diagnostic status can reconstruct the independently
+recorded task boundary without borrowing it from the audit certificate.
+Canonicalizing a version 2 wire-format
 run derives the grade conservatively from its existing provenance and receipt;
 older or inline history does not gain fresh-return authority through migration.
 
@@ -2024,6 +2074,12 @@ npx agenticloop closeout prepare --work-unit milestone:M00 \
 npx agenticloop closeout record --packet .agenticloop/tmp/milestone-M00-closeout.json --dry-run
 npx agenticloop closeout record --packet .agenticloop/tmp/milestone-M00-closeout.json --yes
 ```
+
+`--artifact` is mandatory for preparation and must be exactly
+`commit:<full-git-sha>` naming an existing commit in the target repository. It
+never defaults to the audit's certified candidate. Preparation independently
+compares the candidate's product tree with the task/audit evidence, including
+when work-unit audit is disabled.
 
 `prepare` exit 0 means `completion_eligible: true`; exit 1 emits a truthful
 non-complete or unevaluable packet. `status` exits 0 only for one current,

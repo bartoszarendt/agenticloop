@@ -32,9 +32,18 @@
 
 import { listCarrierMutationReceipts, listDispatchConsumptions } from './handoff-consumption.js';
 import { groupExecutionAttempts, listExecutionAttemptAbandonments } from './execution-attempt.js';
+import { listReturnVerifications } from './return-verification.js';
+import { parseFilesReviewHistory } from './review-history.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
+import { loadProjectMap } from './project-map.js';
+import { taskRecordRelativePath } from './terminal-scope.js';
+import { GIT_MAX_BUFFER } from './git-runner.js';
+import { commitChangedPaths, createPathClassifier, isWorkflowPath } from './product-lineage.js';
 
 export const WORKFLOW_MEASUREMENT_KIND = 'agenticloop.workflow-measurement';
-export const WORKFLOW_MEASUREMENT_SCHEMA_VERSION = 1;
+export const WORKFLOW_MEASUREMENT_SCHEMA_VERSION = 2;
 
 /**
  * The ordinary shape one task should show.
@@ -70,6 +79,7 @@ export function measureTaskWorkflow(target, taskId, options = {}) {
   const backend = options.backend ?? 'files';
   const now = options.now ?? new Date().toISOString();
   const unreadable = [];
+  const unavailable = [];
 
   const consumed = listDispatchConsumptions(target, taskId, { backend });
   if (!consumed.ok) unreadable.push('dispatch_consumption');
@@ -77,11 +87,30 @@ export function measureTaskWorkflow(target, taskId, options = {}) {
   if (!abandoned.ok) unreadable.push('execution_attempt_abandonment');
   const mutations = listCarrierMutationReceipts(target, taskId, { backend });
   if (!mutations.ok) unreadable.push('carrier_mutation_receipt');
+  const returned = listReturnVerifications(target, taskId);
+  if (!returned.ok) unreadable.push('return_verification');
 
-  const attempts = groupExecutionAttempts({
-    consumptions: consumed.records ?? [],
-    abandonments: abandoned.records ?? [],
-  });
+  let reviewEntries = [];
+  if (backend === 'files') {
+    const config = options.projectConfig ?? loadProjectMap(target)?.config ?? null;
+    const carrier = join(target, ...taskRecordRelativePath(config, taskId).split('/'));
+    if (existsSync(carrier)) {
+      const review = parseFilesReviewHistory(readFileSync(carrier, 'utf8'));
+      if (review.errors.length > 0) unreadable.push('review_history');
+      else reviewEntries = review.events.filter(event => event.type === 'outcome');
+    }
+  } else {
+    unavailable.push('review_history');
+  }
+
+    const groupedAttempts = groupExecutionAttempts({
+      consumptions: consumed.records ?? [],
+      abandonments: abandoned.records ?? [],
+      returns: returned.records ?? [],
+      reviews: reviewEntries,
+    });
+    if (!groupedAttempts.ok) unreadable.push('attempt_binding');
+  const attempts = groupedAttempts.records;
   const firstAttempt = attempts[0] ?? null;
   const liveAttempt = attempts.filter(attempt => attempt.state === 'live').at(-1) ?? null;
 
@@ -89,6 +118,34 @@ export function measureTaskWorkflow(target, taskId, options = {}) {
   // attempts against the same base are a retry, two against different bases
   // mean work was rebuilt on a base the earlier packet did not describe.
   const distinctProductBases = new Set(attempts.map(attempt => attempt.productBaseHead)).size;
+  let commitCounters = { workflowCommits: 'unavailable', productCommits: 'unavailable', totalCommits: 'unavailable' };
+  if (firstAttempt?.productBaseHead) {
+    const runGit = options.runGit ?? (args => spawnSync('git', args, {
+      cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER,
+    }));
+    const head = runGit(['rev-parse', '--verify', 'HEAD']);
+    const currentHead = head?.status === 0 ? String(head.stdout ?? '').trim() : '';
+    const ancestry = currentHead
+      ? runGit(['merge-base', '--is-ancestor', firstAttempt.productBaseHead, currentHead])
+      : null;
+    const listed = ancestry?.status === 0
+      ? runGit(['rev-list', '--reverse', `${firstAttempt.productBaseHead}..${currentHead}`])
+      : null;
+    if (listed?.status === 0) {
+      const commits = String(listed.stdout ?? '').split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+      const classifier = createPathClassifier(target);
+      let workflowCommits = 0;
+      let productCommits = 0;
+      let readable = true;
+      for (const commit of commits) {
+        const changed = commitChangedPaths(runGit, commit);
+        if (!changed.ok) { readable = false; break; }
+        if (changed.paths.every(path => isWorkflowPath(path, classifier))) workflowCommits += 1;
+        else productCommits += 1;
+      }
+      if (readable) commitCounters = { workflowCommits, productCommits, totalCommits: commits.length };
+    }
+  }
 
   const counters = {
     executionAttempts: attempts.length,
@@ -98,6 +155,17 @@ export function measureTaskWorkflow(target, taskId, options = {}) {
     // Reminting is attempts beyond the first; it is a count, not a judgement.
     packetRemints: Math.max(0, attempts.length - 1),
     carrierMutations: (mutations.records ?? []).length,
+    dispatchConsumptions: (consumed.records ?? []).length,
+    physicalAttempts: attempts.length,
+    engineeringAttemptBudgetConsumption: attempts.filter(attempt => attempt.engineeringBudgetConsumed === true).length,
+    workflowRecoveries: attempts.filter(attempt => attempt.workflowRecovery === true).length,
+    reviewRounds: backend === 'files' ? reviewEntries.length : 'unavailable',
+    verifiedReturns: (returned.records ?? []).length,
+    reviewEntries: backend === 'files' ? reviewEntries.length : 'unavailable',
+    workflowCommits: options.workflowCommits ?? commitCounters.workflowCommits,
+    productCommits: options.productCommits ?? commitCounters.productCommits,
+    totalCommits: options.totalCommits ?? commitCounters.totalCommits,
+    physicalHostInvocations: options.physicalHostInvocations ?? 'unavailable',
   };
 
   const durations = {
@@ -152,6 +220,7 @@ export function measureTaskWorkflow(target, taskId, options = {}) {
     deviations: Object.freeze(deviations),
     // Unreadable evidence is named, never folded into a zero.
     unreadableEvidence: Object.freeze(unreadable),
+    unavailableEvidence: Object.freeze(unavailable),
     complete: unreadable.length === 0,
     observedAt: now,
   });

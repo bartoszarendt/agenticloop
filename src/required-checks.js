@@ -191,8 +191,8 @@ export function validateRequiredCheckEvidence(value, {
         if (typeof reference !== 'object' || Array.isArray(reference) ||
             Object.keys(reference).length !== 2 ||
             typeof reference.path !== 'string' || !reference.path.trim() ||
-            !/^sha256:agenticloop\.execution-evidence\.v3:[a-f0-9]{64}$/.test(String(reference.digest ?? ''))) {
-          errors.push(`${label} command check executionEvidence must be null or a closed { path, digest } schema-v3 artifact reference`);
+            !/^sha256:agenticloop\.execution-evidence\.v4:[a-f0-9]{64}$/.test(String(reference.digest ?? ''))) {
+          errors.push(`${label} command check executionEvidence must be null or a closed { path, digest } schema-v4 artifact reference`);
         }
       }
       if (currentContract && check.outcome !== 'passed' && check.executionEvidence !== null) {

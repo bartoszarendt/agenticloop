@@ -93,6 +93,7 @@ describe('content-aware workflow deltas', () => {
     const marker = renderCloseoutMarker({
       status: 'complete',
       workUnit: 'milestone:M00',
+      coveredTasks: ['T-001'],
       artifact: 'commit:abc',
       gateDigest: `sha256:${'a'.repeat(64)}`,
     });
@@ -209,6 +210,7 @@ describe('closeout markers', () => {
       const marker = renderCloseoutMarker({
         status,
         workUnit: 'milestone:M00',
+        coveredTasks: ['T-001'],
         artifact: 'commit:' + 'a'.repeat(40),
         auditRef: 'AUD-001/run:3',
         auditAssurance: 'session_reported',
@@ -235,9 +237,9 @@ describe('closeout markers', () => {
 
   it('fails closed on multiple unsuperseded current markers', () => {
     const text = [
-      renderCloseoutMarker({ status: 'complete', workUnit: 'milestone:M00', artifact: 'a', gateDigest: 'sha256:1' }),
+      renderCloseoutMarker({ status: 'complete', workUnit: 'milestone:M00', coveredTasks: ['T-001'], artifact: 'a', gateDigest: 'sha256:1' }),
       '',
-      renderCloseoutMarker({ status: 'blocked', workUnit: 'milestone:M00', artifact: 'a', gateDigest: 'sha256:2' }),
+      renderCloseoutMarker({ status: 'blocked', workUnit: 'milestone:M00', coveredTasks: ['T-001'], artifact: 'a', gateDigest: 'sha256:2' }),
     ].join('\n');
     const resolution = resolveCurrentCloseoutMarkers(parseCloseoutMarkers(text));
     assert.equal(resolution.current.length, 2);
@@ -247,10 +249,11 @@ describe('closeout markers', () => {
   it('supersedes deterministically by digest reference', () => {
     const firstDigest = `sha256:${'1'.repeat(64)}`;
     const secondDigest = `sha256:${'2'.repeat(64)}`;
-    const first = renderCloseoutMarker({ status: 'complete', workUnit: 'milestone:M00', artifact: 'a', gateDigest: firstDigest });
+    const first = renderCloseoutMarker({ status: 'complete', workUnit: 'milestone:M00', coveredTasks: ['T-001'], artifact: 'a', gateDigest: firstDigest });
     const second = renderCloseoutMarker({
       status: 'follow_up_required',
       workUnit: 'milestone:M00',
+      coveredTasks: ['T-001'],
       artifact: 'a',
       gateDigest: secondDigest,
       supersedes: firstDigest,
@@ -263,7 +266,7 @@ describe('closeout markers', () => {
   });
 
   it('strips marker blocks and correction notes without touching other content', () => {
-    const marker = renderCloseoutMarker({ status: 'complete', workUnit: 'milestone:M00', artifact: 'a', gateDigest: digest });
+    const marker = renderCloseoutMarker({ status: 'complete', workUnit: 'milestone:M00', coveredTasks: ['T-001'], artifact: 'a', gateDigest: digest });
     const text = `- 2026-07-27: human note\n\n${marker}\n\n- 2026-07-27: closeout marker corrected; the superseded marker above is retained as history.\n\n- real comment\n`;
     const stripped = stripCloseoutMarkers(text);
     assert.ok(!stripped.includes('AGENT_CLOSEOUT'));

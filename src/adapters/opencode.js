@@ -152,6 +152,12 @@ export function renderOpencodeCommandMarkdown() {
   ].join('\n');
 }
 
+export function opencodeShellOperatingFact(platform = process.platform) {
+  return platform === 'win32'
+    ? 'Shell dialect: PowerShell 7+. Use target-relative arguments and structured JSON; do not use POSIX glob expansion, head, sed, cat -A, or $() command substitution.'
+    : 'Shell dialect: POSIX shell. Use target-relative arguments and structured JSON; do not assume PowerShell syntax.';
+}
+
 function buildOpencodeAgentRecord(alConfig, repoRoot, roleName, capabilityInventory) {
   const ocAdapter = alConfig.adapters?.opencode ?? {};
   const skillsSourceDir = alConfig.skills?.sourceDirectory ?? SKILLS_SOURCE_DIRECTORY;
@@ -170,7 +176,7 @@ function buildOpencodeAgentRecord(alConfig, repoRoot, roleName, capabilityInvent
     // 'auto' is the shared unset fallback, not an explicit OpenCode variant;
     // only a configured reasoning effort renders frontmatter `variant`.
     variant: variant === 'auto' ? undefined : variant,
-    prompt: buildPrompt(roleName, sourceFile, requiredSkills, promptBody, skillsSourceDir, capabilityInventory),
+    prompt: `${buildPrompt(roleName, sourceFile, requiredSkills, promptBody, skillsSourceDir, capabilityInventory)}\n\n${opencodeShellOperatingFact()}`,
   };
 }
 

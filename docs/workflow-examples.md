@@ -79,7 +79,10 @@ record:
   `status`, `implementation_artifact`, and `review_status` in frontmatter.
 - For GitHub: create an issue using the task-record template from `[[task-record-contract]]`.
 
-Stop for human approval before implementation.
+Before requesting operator activation, establish the initial contract baseline,
+prepare dependencies and decomposition, apply the readiness transaction to
+`agent-ready`, and run handoff preflight. Stop for human approval only after
+dispatch readiness is otherwise clean.
 
 ### 8. Activate the tasks
 
@@ -139,14 +142,15 @@ After approval, the orchestrator delegates to the engineer. The engineer:
 2. Confirms scope, out of scope, acceptance criteria, and required checks; uses
    `[[tdd-implementation]]` for behavior changes and
    `[[debugging-before-fixes]]` if a check fails.
-3. Initializes and updates CLI-authored required-check evidence with
-   `task check-evidence-init` and `task check-evidence-update`, then runs the
-   required checks fresh.
-4. Publishes the implementation artifact and derives the raw return with `task
-   prepare-return`.
+3. Completes and commits product work, then publishes artifact, summary/check
+   summary, and non-authoritative outcome with `task evidence`.
+4. Reinitializes the final scaffold with `task check-evidence-init`, runs and
+   records each check with `task check-evidence-update`, and performs no mutation
+   before `task prepare-return`.
 5. Has the receiver run `task verify-return <id> --packet <packet-path> --return
    <return-path> --from-current-repository`; only then starts review.
-6. Publishes the implementation summary with evidence in the backend's canonical location and emits required gate events when event logging is enabled.
+6. Uses `task measure <id> --json` for final counters rather than maintaining
+   attempt or invocation totals in prose.
 
 Packet, evidence, and return paths are target-relative. The CLI authors those
 artifacts: do not inspect or hand-author their JSON/digests, and never treat host

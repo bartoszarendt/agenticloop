@@ -196,8 +196,6 @@ describe('portable execution evidence', () => {
       invocationId: 'invocation:forged',
       taskId: 'T-FORGED',
       taskContractDigest: `sha256:v1:${'9'.repeat(64)}`,
-      currentCarrierDigest: `sha256:${'9'.repeat(64)}`,
-      repositoryHead: '9'.repeat(40),
       productHead: '9'.repeat(40),
     };
 
@@ -205,13 +203,29 @@ describe('portable execution evidence', () => {
       const forged = structuredClone(evidence);
       forged.binding[field] = mutation;
       const { digest, ...unsigned } = forged;
-      forged.digest = `sha256:agenticloop.execution-evidence.v3:${canonicalSha256(unsigned)}`;
-      assert.equal(
-        validateExecutionEvidence(forged, { expectedBinding: evidence.binding }).ok,
-        false,
-        `mutated binding.${field} should be rejected`,
-      );
+      forged.digest = `sha256:agenticloop.execution-evidence.v4:${canonicalSha256(unsigned)}`;
+      const checked = validateExecutionEvidence(forged, { expectedBinding: evidence.binding });
+      assert.equal(checked.ok, false, `mutated binding.${field} should be rejected`);
+      assert.equal(checked.diagnostics.at(-1).field, field);
+      assert.equal(checked.diagnostics.at(-1).repair, 'rerun');
     }
+  });
+
+  it('validates workflow lineage separately from immutable product identity', () => {
+    const evidence = runEvidence();
+    const moved = structuredClone(evidence);
+    moved.lineage.currentCarrierDigest = `sha256:${'9'.repeat(64)}`;
+    moved.lineage.repositoryHead = '9'.repeat(40);
+    const { digest, ...unsigned } = moved;
+    moved.digest = `sha256:agenticloop.execution-evidence.v4:${canonicalSha256(unsigned)}`;
+    const checked = validateExecutionEvidence(moved, { expectedBinding: {
+      ...evidence.binding,
+      currentCarrierDigest: `sha256:${'8'.repeat(64)}`,
+      repositoryHead: '8'.repeat(40),
+    } });
+    assert.equal(checked.ok, false);
+    assert.ok(checked.diagnostics.some(item => item.field === 'currentCarrierDigest' && item.repair === 'workflow_lineage_repair'));
+    assert.ok(checked.diagnostics.some(item => item.field === 'repositoryHead' && item.repair === 'rerun'));
   });
 
   it('rejects execution evidence with mutated timing', () => {
@@ -258,8 +272,8 @@ describe('portable execution evidence', () => {
     assert.equal(evidence.binding.invocationId, 'invocation:example');
     assert.ok(evidence.binding.taskContractDigest.startsWith('sha256:v1:'));
     assert.ok(evidence.binding.packetDigest.startsWith('sha256:agenticloop.role-preparation.v8:'));
-    assert.ok(evidence.binding.currentCarrierDigest.startsWith('sha256:'));
-    assert.equal(evidence.binding.repositoryHead, 'd'.repeat(40));
+    assert.ok(evidence.lineage.currentCarrierDigest.startsWith('sha256:'));
+    assert.equal(evidence.lineage.repositoryHead, 'd'.repeat(40));
     assert.equal(evidence.binding.productHead, 'e'.repeat(40));
   });
 });

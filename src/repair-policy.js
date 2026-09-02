@@ -38,6 +38,7 @@ export const REPAIR_POLICY = Object.freeze({
   // owned by the Maintainer and escalates to human authority rather than being
   // cleared by another attempt.
   'dispatch.attempt.budget_exhausted': policy('dispatch', 'repair_task_policy', 'human_authority_review', 'The task has recorded as many execution attempts as its attempt_budget allows.'),
+  'role_result.tooling_failure_repeated': policy('role_result', 'repair_evidence', 'none', 'The same contract-bound tooling failure repeated without progress.'),
   'contract.baseline.missing': policy('task_contract', 'establish_baseline', 'contract_reconciliation', 'Task-contract baseline is missing.'),
   'contract.baseline.invalid': policy('task_contract', 'repair_baseline_record', 'human_authority_review', 'Task-contract baseline or correction record is invalid.'),
   'contract.baseline.stale': policy('task_contract', 'authorize_contract_correction', 'contract_reconciliation', 'Current task contract differs from the trusted baseline chain.'),
@@ -56,6 +57,12 @@ export const REPAIR_POLICY = Object.freeze({
   'evidence.stale': policy('evidence', 'repair_evidence', 'none', 'Supplied evidence is stale.'),
   'evidence.negative': policy('evidence', 'repair_evidence', 'none', 'Supplied evidence shows the required condition is false.'),
   'evidence.changed': policy('evidence', 'repair_evidence', 'none', 'Evidence changed after preparation or verification.'),
+  'task.evidence.not_in_progress': policy('evidence', 'repair_evidence', 'none', 'The task is not in a lifecycle state that permits this role-owned evidence mutation.'),
+  'task.evidence.lineage': policy('evidence', 'repair_evidence', 'none', 'The task carrier does not have one current recognized dispatch lineage.'),
+  'task.evidence.provenance_mismatch': policy('evidence', 'repair_evidence', 'none', 'Structured task evidence does not bind the dispatched role, invocation, contract, and attempt.'),
+  'task.evidence.contract_drift': policy('task_contract', 'repair_task_contract', 'contract_reconciliation', 'The proposed evidence mutation changes protected task-contract content or is not canonical.'),
+  'task.evidence.atomic_write': policy('evidence', 'repair_evidence', 'record_recovery', 'The evidence carrier and receipt could not be committed atomically.'),
+  'task.evidence.final_validation': policy('evidence', 'repair_evidence', 'record_recovery', 'Persisted evidence did not refetch as one canonical current carrier lineage.'),
   'verification.context.missing': policy('evidence', 'repair_evidence', 'none', 'Verification context was not supplied; committed state was not evaluated.'),
   'verification.context.malformed': policy('evidence', 'repair_evidence', 'none', 'Supplied verification context is malformed; committed state was not evaluated.'),
   'verification.context.stale': policy('evidence', 'repair_evidence', 'none', 'Supplied verification context is stale; committed state was not evaluated.'),

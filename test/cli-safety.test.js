@@ -36,7 +36,7 @@ before(() => {
 });
 
 after(() => {
-  rmSync(tmpBase, { recursive: true, force: true });
+  rmSync(tmpBase, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 function makeTarget() {

@@ -81,6 +81,7 @@ const MANIFEST = {
     'test/repair-cli.test.js',
     'test/readiness-apply.test.js',
     'test/readiness-plan.test.js',
+    'test/remediation-correctness.test.js',
     'test/role-session-policy.test.js',
     'test/work-unit-lease.test.js',
     'test/committed-source.test.js',

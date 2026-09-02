@@ -144,7 +144,10 @@ export function createCloseoutPlanSyncFixture() {
 
   async function closeout(args, target) {
     const fixture = dispatchFixtures.get(target);
-    return runCliInProcess(['closeout', ...args, '--target', target], {
+    const boundary = args[0] === 'prepare' && !args.includes('--covered-tasks')
+      ? ['--covered-tasks', 'T-001']
+      : [];
+    return runCliInProcess(['closeout', ...args, ...boundary, '--target', target], {
       operatorTrustRoot: fixture.operatorTrustRoot,
       operatorActivationRoot: join(temp, 'operator-activation'),
       hostAuthority: protectedHostBoundary(fixture.trust),

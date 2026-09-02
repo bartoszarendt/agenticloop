@@ -40,6 +40,7 @@ class MemoryStream {
  * @param {boolean} [options.color]
  * @param {Function} [options.promptFactory]
  * @param {Function} [options.ghCommandRunner]  Injectable read-only GitHub command runner.
+ * @param {Function} [options.gitCommandRunner] Injectable Git command runner for boundary tests.
  * @param {string} [options.operatorTrustRoot]  Injectable host-owned trust registry root.
  * @param {string} [options.operatorActivationRoot]  Injectable per-user operator activation root.
  * @param {Function} [options.hostAuthority] Test transport for a signed host-boundary challenge response.
@@ -64,6 +65,7 @@ export async function runCliInProcess(argv, options = {}) {
     color: options.color,
     promptFactory: options.promptFactory,
     ghCommandRunner: options.ghCommandRunner,
+    gitCommandRunner: options.gitCommandRunner,
     operatorTrustRoot: options.operatorTrustRoot,
     operatorActivationRoot: options.operatorActivationRoot,
     hostAuthority: options.hostAuthority,

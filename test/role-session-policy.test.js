@@ -14,10 +14,13 @@ import { tmpdir } from 'node:os';
 
 import {
   DEFAULT_EMPTY_RETURN_BUDGET,
+  DEFAULT_IDENTICAL_TOOLING_FAILURE_BUDGET,
   EMPTY_RETURN_DIAGNOSTIC_CODE,
   NON_REUSABLE_ROLES,
   SESSION_IDENTITY_FIELDS,
+  TOOLING_FAILURE_DIAGNOSTIC_CODE,
   evaluateEmptyReturnBudget,
+  evaluateToolingFailureRetry,
   evaluateSessionReuse,
 } from '../src/role-session-policy.js';
 import {
@@ -80,6 +83,61 @@ describe('an empty-return loop is bounded', () => {
     for (const emptyReturns of [undefined, null, -1, 'many']) {
       assert.equal(evaluateEmptyReturnBudget({ emptyReturns }).ok, true, String(emptyReturns));
     }
+  });
+});
+
+describe('an identical tooling-failure loop is contract-bound and bounded', () => {
+  const failure = {
+    taskId: 'T-018',
+    taskContractDigest: `sha256:v1:${'a'.repeat(64)}`,
+    attemptId: `attempt:${'1'.repeat(32)}`,
+    attemptState: 'live',
+    contractCurrent: true,
+    operation: 'task role-start',
+    signature: 'spawn:ENOENT:node',
+    mutationOccurred: false,
+    safeToRetry: true,
+  };
+
+  it('permits one recovery but stops the repeated identical failure', () => {
+    const first = evaluateToolingFailureRetry({ current: failure });
+    assert.equal(first.retryPermitted, true);
+    const repeated = evaluateToolingFailureRetry({ current: failure, failures: [failure] });
+    assert.equal(repeated.retryPermitted, false);
+    assert.equal(repeated.repeated, DEFAULT_IDENTICAL_TOOLING_FAILURE_BUDGET);
+    assert.match(repeated.repair, /Stop retrying/);
+    assert.ok(repairPolicyFor(TOOLING_FAILURE_DIAGNOSTIC_CODE));
+  });
+
+  it('does not conflate a changed task, contract, attempt, operation, or signature', () => {
+    for (const current of [
+      { ...failure, taskId: 'T-019' },
+      { ...failure, taskContractDigest: `sha256:v1:${'b'.repeat(64)}` },
+      { ...failure, attemptId: `attempt:${'2'.repeat(32)}` },
+      { ...failure, operation: 'task prepare-return' },
+      { ...failure, signature: 'exit:1' },
+    ]) {
+      assert.equal(evaluateToolingFailureRetry({ current, failures: [failure] }).retryPermitted, true);
+    }
+  });
+
+  it('refuses to guess from an unshaped failure', () => {
+    assert.equal(evaluateToolingFailureRetry({ current: { taskId: 'T-018' } }).retryPermitted, false);
+  });
+
+  it('requires a live current safe no-mutation attempt and honors zero budget', () => {
+    for (const current of [
+      { ...failure, mutationOccurred: true },
+      { ...failure, safeToRetry: false },
+      { ...failure, contractCurrent: false },
+      { ...failure, attemptState: 'returned' },
+      { ...failure, attemptState: 'accepted' },
+      { ...failure, attemptState: 'superseded_by_packet' },
+      { ...failure, attemptState: 'abandoned' },
+    ]) assert.equal(evaluateToolingFailureRetry({ current }).retryPermitted, false);
+    assert.equal(evaluateToolingFailureRetry({ current: failure, budget: 0 }).retryPermitted, false);
+    assert.equal(evaluateToolingFailureRetry({ current: failure, budget: 1 }).retryPermitted, false);
+    assert.equal(evaluateToolingFailureRetry({ current: failure, budget: 2 }).retryPermitted, true);
   });
 });
 

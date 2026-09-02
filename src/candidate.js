@@ -23,7 +23,7 @@ import { classifyCloseoutPath, validateWorkflowDeltaContent } from './closeout-c
 import { validateImprovementProposal } from './improvement.js';
 import { GIT_MAX_BUFFER } from './git-runner.js';
 
-const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
+const FULL_SHA_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const SHORTISH_SHA_PATTERN = /^[0-9a-f]{4,40}$/i;
 
 function defaultGitRunner(args, options = {}) {
@@ -123,6 +123,50 @@ export function resolveCandidateArtifact(target, artifact, options = {}) {
 }
 
 /**
+ * Resolve the stricter candidate identity required by closeout.
+ *
+ * Closeout never canonicalizes caller shorthand and never accepts an identity
+ * Git could not verify in the selected repository. Audit authoring retains the
+ * broader resolver above for its explicit migration/canonicalization surface;
+ * this entry point is the completion boundary.
+ *
+ * @param {string} target
+ * @param {string} artifact
+ * @param {{ gitRunner?: Function }} [options]
+ * @returns {{ ok: boolean, canonical?: string, error?: string, repair?: string, verified?: boolean }}
+ */
+export function resolveCloseoutCandidateArtifact(target, artifact, options = {}) {
+  const raw = String(artifact ?? '').trim();
+  if (!isCanonicalCommitArtifact(raw)) {
+    return {
+      ok: false,
+      error: `closeout candidate '${raw || '(empty)'}' must be commit:<full-git-sha>`,
+      repair: 'pass --artifact commit:<full-git-sha> naming an existing commit in this repository',
+      verified: false,
+    };
+  }
+  if (!isGitWorkTree(target, options.gitRunner)) {
+    return {
+      ok: false,
+      error: 'closeout candidate cannot be verified outside a Git work tree',
+      repair: 'rerun closeout from the target Git work tree',
+      verified: false,
+    };
+  }
+  const sha = raw.slice('commit:'.length);
+  const resolved = runGit(options.gitRunner, target, ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`]);
+  if (!resolved.ok || !FULL_SHA_PATTERN.test(resolved.stdout) || resolved.stdout !== sha) {
+    return {
+      ok: false,
+      error: `closeout candidate '${raw}' does not resolve to that exact commit in this repository`,
+      repair: 'pass --artifact commit:<full-git-sha> naming an existing commit in this repository',
+      verified: false,
+    };
+  }
+  return { ok: true, canonical: raw, verified: true };
+}
+
+/**
  * True when an artifact value is in canonical commit form (full 40-hex SHA).
  * Legacy non-canonical values receive migration diagnostics instead of silent
  * reinterpretation.
@@ -150,12 +194,15 @@ export function isCanonicalCommitArtifact(artifact) {
  * @param {string} target
  * @param {object} params
  * @param {string} params.certifiedArtifact  canonical 'commit:<full-sha>'.
+ * @param {string} [params.comparisonArtifact] canonical commit to compare with instead of HEAD.
+ * @param {boolean} [params.inspectWorkingTree=true] inspect dirty/untracked paths after the committed comparison.
  * @param {string} [params.auditRecordRelPath] bound audit record (allowed delta).
  * @param {string} [params.markerCarrierRelPath] marker carrier (content-validated delta).
  * @param {string[]} [params.allowedWorkflowPaths] validated improvement proposal paths.
  * @param {string[]} [params.coveredTaskRelPaths] covered task records (content-validated delta).
  * @param {string[]} [params.eventLogRelPaths] applicable event logs (append-only delta).
  * @param {Function} [params.validateEvent] event schema validator for appended log records.
+ * @param {boolean} [params.validateWorkflowDeltas=true] validate workflow-carrier bytes, not only their classification.
  * @param {Function} [params.gitRunner]
  * @returns {{ ok: boolean, state: string, drift: { path: string, classification: string, source: string }[], error?: string }}
  */
@@ -199,6 +246,27 @@ export function compareCertifiedProductTree(target, params) {
     };
   }
 
+  let comparisonSha = head.stdout;
+  let comparisonRef = 'HEAD';
+  if (params?.comparisonArtifact !== undefined) {
+    const comparisonArtifact = String(params.comparisonArtifact ?? '').trim();
+    if (!isCanonicalCommitArtifact(comparisonArtifact)) {
+      return {
+        ok: false, state: 'candidate_unverifiable', drift,
+        error: `comparison artifact '${comparisonArtifact || '(empty)'}' is not a canonical commit:<full-sha>`,
+      };
+    }
+    comparisonSha = comparisonArtifact.slice('commit:'.length);
+    comparisonRef = comparisonSha;
+    const comparisonExists = runGit(params?.gitRunner, target, ['rev-parse', '--verify', '--quiet', `${comparisonSha}^{commit}`]);
+    if (!comparisonExists.ok || comparisonExists.stdout !== comparisonSha) {
+      return {
+        ok: false, state: 'candidate_unverifiable', drift,
+        error: `comparison artifact '${comparisonArtifact}' does not resolve to that exact commit in this repository`,
+      };
+    }
+  }
+
   const classifyOptions = {
     auditRecordRelPath: params?.auditRecordRelPath,
     markerCarrierRelPath: params?.markerCarrierRelPath,
@@ -219,7 +287,7 @@ export function compareCertifiedProductTree(target, params) {
   // deltas compare the certified blob with the HEAD blob; dirty deltas
   // compare the HEAD blob with the working tree; untracked paths are adds.
   const contentAt = (relPath, source, side) => {
-    if (source === 'committed') return gitShow(side === 'old' ? sha : 'HEAD', relPath);
+    if (source === 'committed') return gitShow(side === 'old' ? sha : comparisonRef, relPath);
     if (side === 'old') return source === 'untracked' ? null : gitShow('HEAD', relPath);
     return workTreeContent(relPath);
   };
@@ -230,6 +298,7 @@ export function compareCertifiedProductTree(target, params) {
       drift.push({ path, classification, source });
       return;
     }
+    if (params?.validateWorkflowDeltas === false) return;
     if (classification === 'task_record' || classification === 'event_log') {
       const verdict = validateWorkflowDeltaContent(classification, {
         path,
@@ -274,14 +343,14 @@ export function compareCertifiedProductTree(target, params) {
     for (const path of endpoints) classify(path, source);
   };
 
-  if (head.stdout !== sha) {
-    const changed = runGit(params?.gitRunner, target, ['diff', '--name-status', '-z', sha, 'HEAD']);
+  if (comparisonSha !== sha) {
+    const changed = runGit(params?.gitRunner, target, ['diff', '--name-status', '-z', sha, comparisonRef]);
     if (!changed.ok) {
       return {
         ok: false,
         state: 'candidate_unverifiable',
         drift,
-        error: `cannot diff certified candidate against HEAD: ${changed.stderr || 'git diff failed'}`,
+        error: `cannot diff certified candidate against comparison commit: ${changed.stderr || 'git diff failed'}`,
       };
     }
     for (const change of parseNameStatusZ(changed.stdoutRaw)) {
@@ -290,24 +359,26 @@ export function compareCertifiedProductTree(target, params) {
     }
   }
 
-  const status = runGit(params?.gitRunner, target, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
-  if (!status.ok && status.status !== 0) {
-    return {
-      ok: false,
-      state: 'candidate_unverifiable',
-      drift,
-      error: `cannot inspect working-tree state: ${status.stderr || 'git status failed'}`,
-    };
-  }
-  for (const change of parsePorcelainV1Z(status.stdoutRaw)) {
-    if (change.paths.length > 1) classifyRename(change.paths, change.untracked ? 'untracked' : 'dirty');
-    else classify(change.paths[0], change.untracked ? 'untracked' : 'dirty');
+  if (params?.inspectWorkingTree !== false) {
+    const status = runGit(params?.gitRunner, target, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+    if (!status.ok && status.status !== 0) {
+      return {
+        ok: false,
+        state: 'candidate_unverifiable',
+        drift,
+        error: `cannot inspect working-tree state: ${status.stderr || 'git status failed'}`,
+      };
+    }
+    for (const change of parsePorcelainV1Z(status.stdoutRaw)) {
+      if (change.paths.length > 1) classifyRename(change.paths, change.untracked ? 'untracked' : 'dirty');
+      else classify(change.paths[0], change.untracked ? 'untracked' : 'dirty');
+    }
   }
 
   if (drift.length > 0) {
     return { ok: false, state: 'product_drift', drift };
   }
-  return { ok: true, state: head.stdout === sha ? 'current' : 'current_with_workflow_metadata', drift };
+  return { ok: true, state: comparisonSha === sha ? 'current' : 'current_with_workflow_metadata', drift };
 }
 
 /** Parse `git diff --name-status -z`; rename/copy records carry old then new. */

@@ -23,7 +23,11 @@ describe('covered-task terminal transitions', () => {
     await recordCompleteMarker(target, artifact);
 
     // Status regression is not the permitted terminal transition.
-    writeTask(target, 'T-001', 'in-progress');
+    writeFileSync(
+      taskPath(target, 'T-001'),
+      readFileSync(taskPath(target, 'T-001'), 'utf-8').replace(/^status: closed$/m, 'status: in-progress'),
+      'utf-8'
+    );
     commitAll(target, 'reopen T-001');
 
     const state = await statusState(target);

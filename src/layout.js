@@ -413,7 +413,7 @@ export const CLOSEOUT_MARKER_STATUSES = Object.freeze([
   'needs_context',
   'blocked',
 ]);
-export const CLOSEOUT_MARKER_SCHEMA_VERSION = 2;
+export const CLOSEOUT_MARKER_SCHEMA_VERSION = 3;
 export const CLOSEOUT_PACKET_SCHEMA_VERSION = 2;
 
 // Workflow defaults are centralized here so task validation, GitHub preflight,
