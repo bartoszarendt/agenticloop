@@ -1,7 +1,7 @@
 {
   "name": "agenticloop",
   "description": "Graph engineering for AI coding agents: guarded workflow transitions, four supervised roles, evidence, audit, and closeout.",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "author": {
     "name": "Bartosz Arendt"
   },

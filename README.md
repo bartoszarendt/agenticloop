@@ -6,7 +6,7 @@ AI coding agents are useful, but they are unreliable at sustained software work.
 
 Agentic Loop adds that layer. It installs as a lightweight, removable overlay in an existing project and never rewrites your target-owned documents: your `README.md`, implementation plan, and architecture docs stay untouched. (The one clearly marked, removable exception is described in [Repository-rules activation guidance](#repository-rules-activation-guidance).) It gives agents the scaffolding they need to stay in scope, produce evidence, and respect review gates.
 
-![Version: 0.4.6](https://img.shields.io/badge/version-0.4.6-blue)
+![Version: 0.4.7](https://img.shields.io/badge/version-0.4.7-blue)
 ![Node.js >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -605,7 +605,7 @@ updates. Canonical toolkit assets (agents, skills, backends) always live under
 
 ## Status
 
-Version 0.4.6. The guarded workflow graph, files and GitHub backends, Node CLI, validation, overlay management, universal operator-confirmed activation, cross-platform execution evidence, protected return-receipt replay, handoff preflight across both backends, bounded derived-evidence refresh, atomic files-backed readiness planning and apply, standard assurance path, and all five host adapters (OpenCode, Claude Code, Codex, Copilot, and Cursor) are supported and ready for use. Hardened host-signed activation and host-receipted returns require a protected host integration; no shipped adapter currently provides that boundary.
+Version 0.4.7. The guarded workflow graph, files and GitHub backends, Node CLI, validation, overlay management, universal operator-confirmed activation, cross-platform execution evidence, protected return-receipt replay, handoff preflight across both backends, bounded derived-evidence refresh, atomic files-backed readiness planning and apply, standard assurance path, and all five host adapters (OpenCode, Claude Code, Codex, Copilot, and Cursor) are supported and ready for use. Hardened host-signed activation and host-receipted returns require a protected host integration; no shipped adapter currently provides that boundary.
 
 Registry, marketplace, and centralized services are intentionally deferred – see [docs/registry-horizon.md](docs/registry-horizon.md) for the reasoning and the evidence gates that would need to pass before revisiting.
 
