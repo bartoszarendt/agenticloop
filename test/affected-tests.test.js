@@ -46,7 +46,7 @@ function createAffectedTestsRepository() {
     "writeFileSync('executed.marker', String(value));",
   ].join('\n'), 'utf8');
   writeFileSync(join(root, 'test', 'other.test.js'), "import { writeFileSync } from 'node:fs';\nwriteFileSync('executed.marker', 'other');\n", 'utf8');
-  writeFileSync(join(root, 'test', 'dynamic.test.js'), "readFileSync(join(REPO_ROOT, assetPath));\n", 'utf8');
+  writeFileSync(join(root, 'test', 'dynamic.test.js'), "readFileSync(join(REPO_ROOT, 'assets', assetPath));\n", 'utf8');
   writeFileSync(join(root, 'LICENSE'), 'initial\n', 'utf8');
   initTestGitRepository(root, { quiet: true });
   git(root, ['add', '-A']);
@@ -131,7 +131,7 @@ describe('affected test dependency graph', () => {
     assert.deepEqual(result.reasons.get('test/new.test.js'), ['test file changed']);
   });
 
-  it('falls back explicitly for central metadata and for relevant graph ambiguity', () => {
+  it('falls back for central metadata without widening for ambiguity on an affected source', () => {
     const tests = ['test/one.test.js', 'test/two.test.js'];
     const cleanGraph = buildDependencyGraph({
       'test/one.test.js': "import assert from 'node:assert';",
@@ -150,8 +150,8 @@ describe('affected test dependency graph', () => {
     }
 
     const ambiguity = selectAffectedTests({ changedFiles: ['src/core.js'], testFiles: tests, graph });
-    assert.deepEqual(ambiguity.selectedTests, tests);
-    assert.match(ambiguity.fallback, /dependency graph ambiguity/);
+    assert.deepEqual(ambiguity.selectedTests, ['test/one.test.js']);
+    assert.equal(ambiguity.fallback, null);
   });
 
   it('falls back conservatively for shared test helpers', () => {
@@ -164,6 +164,55 @@ describe('affected test dependency graph', () => {
     });
     assert.deepEqual(result.selectedTests, [...tests].sort());
     assert.match(result.fallback, /shared fixture/);
+  });
+
+  it('narrows graph-resolved shared JavaScript helpers to their static consumers', () => {
+    const tests = ['test/one.test.js', 'test/two.test.js'];
+    const graph = buildDependencyGraph({
+      'test/helpers/shared.js': 'export const fixture = true;',
+      'test/one.test.js': "import { fixture } from './helpers/shared.js';",
+      'test/two.test.js': "import assert from 'node:assert';",
+    });
+    const result = selectAffectedTests({
+      changedFiles: ['test/helpers/shared.js'],
+      testFiles: tests,
+      graph,
+    });
+
+    assert.deepEqual(result.selectedTests, ['test/one.test.js']);
+    assert.equal(result.fallback, null);
+  });
+
+  it('widens a shared helper when an unresolved consumer outside its closure may read it', () => {
+    const tests = ['test/static.test.js', 'test/dynamic.test.js'];
+    const graph = buildDependencyGraph({
+      'test/helpers/shared.js': 'export const fixture = true;',
+      'test/static.test.js': "import { fixture } from './helpers/shared.js';",
+      'test/dynamic.test.js': 'readFileSync(runtimePath);',
+    });
+    const result = selectAffectedTests({
+      changedFiles: ['test/helpers/shared.js'],
+      testFiles: tests,
+      graph,
+    });
+
+    assert.deepEqual(result.selectedTests, [...tests].sort());
+    assert.match(result.fallback, /non-literal runtime data read/);
+  });
+
+  it('does not treat the selector source scan as a runtime dependency', () => {
+    const tests = ['test/core.test.js', 'test/other.test.js'];
+    const graph = buildDependencyGraph({
+      'scripts/affected-tests.js': 'const source = readFileSync(file, \'utf8\');',
+      'src/core.js': 'export const core = true;',
+      'test/core.test.js': "import '../src/core.js';",
+      'test/other.test.js': "import assert from 'node:assert';",
+    });
+    const result = selectAffectedTests({ changedFiles: ['src/core.js'], testFiles: tests, graph });
+
+    assert.deepEqual(result.selectedTests, ['test/core.test.js']);
+    assert.equal(result.fallback, null);
+    assert.deepEqual(graph.ambiguities, []);
   });
 
   it('widens adapter and template changes to their conservative cohorts', () => {
@@ -282,12 +331,32 @@ describe('affected test dependency graph', () => {
       'test/loader.test.js': "import '../src/loader.js';",
       'test/other.test.js': "import assert from 'node:assert';",
     });
+
+    // The ambiguity belongs to the changed loader, which is already inside the
+    // affected closure. Its outgoing read cannot identify another consumer of
+    // the loader, and `test/other.test.js` has no possible edge to it.
     const result = selectAffectedTests({ changedFiles: ['src/loader.js'], testFiles: tests, graph });
-    assert.deepEqual(result.selectedTests, tests);
-    assert.match(result.fallback, /non-literal runtime data read/);
+    assert.deepEqual(result.selectedTests, ['test/loader.test.js']);
+    assert.equal(result.fallback, null);
   });
 
-  it('falls back when a changed static asset shares a consumer with an unresolved dynamic asset read', () => {
+  it('widens when an unaffected runtime consumer may read the changed repository region', () => {
+    const tests = ['test/static.test.js', 'test/dynamic.test.js', 'test/other.test.js'];
+    const graph = buildDependencyGraph({
+      'src/loader.js': 'export const value = true;',
+      'test/static.test.js': "import '../src/loader.js';",
+      'test/dynamic.test.js': 'readFileSync(new URL(`../src/${name}.js`, import.meta.url));',
+      'test/other.test.js': "import assert from 'node:assert';",
+    });
+
+    // The dynamic test is outside the static reverse-dependency closure, but its
+    // unresolved path scope includes the changed source file.
+    const result = selectAffectedTests({ changedFiles: ['src/loader.js'], testFiles: tests, graph });
+    assert.deepEqual(result.selectedTests, [...tests].sort());
+    assert.match(result.fallback, /dependency graph ambiguity/);
+  });
+
+  it('does not widen for an unresolved read on a consumer already in the affected closure', () => {
     const tests = ['test/loader.test.js', 'test/other.test.js'];
     const graph = buildDependencyGraph({
       'src/loader.js': [
@@ -301,8 +370,8 @@ describe('affected test dependency graph', () => {
       changedFiles: ['src/assets/data.json'], testFiles: tests, graph,
     });
 
-    assert.deepEqual(result.selectedTests, tests);
-    assert.match(result.fallback, /non-literal repository-relative data read/);
+    assert.deepEqual(result.selectedTests, ['test/loader.test.js']);
+    assert.equal(result.fallback, null);
   });
 
   it('does not let opaque runtime paths or a different dynamic directory poison a literal asset', () => {
@@ -339,17 +408,17 @@ describe('affected test dependency graph', () => {
       changedFiles: ['assets/data.json'], testFiles: tests, graph,
     });
 
-    assert.deepEqual(result.selectedTests, ['test/literal.test.js']);
-    assert.equal(result.fallback, null);
+    assert.deepEqual(result.selectedTests, [...tests].sort());
+    assert.match(result.fallback, /non-literal repository-relative data read/);
 
     const dynamic = selectAffectedTests({
       changedFiles: ['test/dynamic.test.js'], testFiles: tests, graph,
     });
-    assert.deepEqual(dynamic.selectedTests, [...tests].sort());
-    assert.match(dynamic.fallback, /non-literal repository-relative data read/);
+    assert.deepEqual(dynamic.selectedTests, ['test/dynamic.test.js']);
+    assert.equal(dynamic.fallback, null);
   });
 
-  it('fails safe for resolve(REPO_ROOT), variable-derived, and templated data reads', () => {
+  it('does not widen for dynamic dependencies of an already affected source', () => {
     const sources = {
       'src/loader.js': [
         'readFileSync(resolve(REPO_ROOT, pathFromConfig));',
@@ -363,8 +432,8 @@ describe('affected test dependency graph', () => {
     const graph = buildDependencyGraph(sources);
     const result = selectAffectedTests({ changedFiles: ['src/loader.js'], testFiles: ['test/loader.test.js', 'test/other.test.js'], graph });
 
-    assert.deepEqual(result.selectedTests, ['test/loader.test.js', 'test/other.test.js']);
-    assert.match(result.fallback, /non-literal repository-relative data read/);
+    assert.deepEqual(result.selectedTests, ['test/loader.test.js']);
+    assert.equal(result.fallback, null);
     assert.deepEqual(parseLocalDataReads(sources['src/loader.js']).ambiguous, [
       'non-literal join(REPO_ROOT, ...)',
       'non-literal new URL path relative to import.meta.url',
@@ -408,7 +477,7 @@ describe('affected test dependency graph', () => {
     assert.equal(test.fallback, null);
   });
 
-  it('selects actual task-record consumers from the repository graph', () => {
+  it('falls back when an actual unresolved repository reader may consume the changed task template', () => {
     const sources = repositorySources();
     const graph = buildDependencyGraph(sources, { knownFiles: ['memory/task-record.md'] });
     const tests = [...sources.keys()].filter(file => /^test\/.*\.test\.js$/.test(file));
@@ -416,8 +485,8 @@ describe('affected test dependency graph', () => {
       changedFiles: ['memory/task-record.md'], testFiles: tests, graph,
     });
 
-    assert.equal(result.fallback, null);
-    assert.ok(result.selectedTests.length < tests.length);
+    assert.match(result.fallback, /dependency graph ambiguity/);
+    assert.deepEqual(result.selectedTests, [...tests].sort());
     assert.ok(result.selectedTests.includes('test/closeout-prepare.test.js'));
     assert.ok(result.selectedTests.includes('test/parallel-ownership.test.js'));
   });

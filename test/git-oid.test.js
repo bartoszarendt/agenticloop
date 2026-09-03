@@ -27,6 +27,11 @@ import {
   readyReturn,
   repositoryEvidence,
 } from './helpers/dispatch-fixture.js';
+import {
+  git as fixtureGit,
+  initTestGitRepository,
+  spawnGit,
+} from './helpers/git-fixture.js';
 
 const SHA1 = 'a'.repeat(40);
 const SHA256 = 'b'.repeat(64);
@@ -139,10 +144,53 @@ describe('shared Git object identity rule', () => {
     const head = commit('b.txt', 'b\n', 'work\n\nTask: T-001\nAgent: engineer');
     assert.equal(base.length, 64);
     assert.equal(head.length, 64);
+    assert.equal(fixtureGit(root, ['rev-parse', 'HEAD']), head);
     const derived = deriveCommitRange({ runGit: run, baseHead: base, head, taskId: 'T-001', roleId: 'engineer' });
     assert.equal(derived.ok, true, derived.message);
     assert.deepEqual(derived.commits, [head]);
     assert.deepEqual(derived.changedPaths, ['b.txt']);
+  });
+});
+
+describe('Git fixture HEAD lookup', () => {
+  function committedRepository(label) {
+    const root = mkdtempSync(join(temp, `${label}-`));
+    initTestGitRepository(root, { quiet: true });
+    writeFileSync(join(root, 'tracked.txt'), `${label}\n`, 'utf8');
+    fixtureGit(root, ['add', 'tracked.txt']);
+    fixtureGit(root, ['commit', '-q', '-m', label]);
+    return root;
+  }
+
+  function realHead(root) {
+    const result = spawnGit(root, ['rev-parse', 'HEAD']);
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  }
+
+  it('matches Git for loose, detached, and packed HEAD representations', () => {
+    const root = committedRepository('head-representations');
+    const initial = realHead(root);
+    assert.equal(fixtureGit(root, ['rev-parse', 'HEAD']), initial);
+
+    fixtureGit(root, ['checkout', '-q', '--detach', initial]);
+    assert.equal(fixtureGit(root, ['rev-parse', 'HEAD']), realHead(root));
+
+    fixtureGit(root, ['checkout', '-q', '-b', 'packed-head']);
+    fixtureGit(root, ['pack-refs', '--all', '--prune']);
+    assert.equal(fixtureGit(root, ['rev-parse', 'HEAD']), realHead(root));
+  });
+
+  it('falls back to Git for linked worktrees and unborn branches', () => {
+    const root = committedRepository('head-fallback');
+    const linked = join(temp, 'linked-head-fallback');
+    fixtureGit(root, ['worktree', 'add', '-q', '-b', 'linked-head-fallback', linked]);
+    assert.equal(fixtureGit(linked, ['rev-parse', 'HEAD']), realHead(linked));
+
+    const unborn = mkdtempSync(join(temp, 'unborn-head-'));
+    initTestGitRepository(unborn, { quiet: true });
+    assert.notEqual(spawnGit(unborn, ['rev-parse', 'HEAD']).status, 0);
+    assert.throws(() => fixtureGit(unborn, ['rev-parse', 'HEAD']));
   });
 });
 

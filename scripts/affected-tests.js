@@ -6,6 +6,7 @@ import { dirname, extname, join, posix, relative, resolve, sep } from 'node:path
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const SELECTOR_PATH = 'scripts/affected-tests.js';
 const CODE_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts']);
 const SHARED_FIXTURES = /^(?:fixtures?\/|test\/(?:helpers|fixtures|__fixtures__)\/)/;
 const FULL_SUITE_PATHS = /^(?:package(?:-lock)?\.json|npm-shrinkwrap\.json|config\.json|scripts\/(?:affected-tests|profile-tests|run-tests|test-groups)\.js)$/;
@@ -319,7 +320,12 @@ export function buildDependencyGraph(sources, options = {}) {
       dependencies.get(importer).add(resolved.file);
       dependents.get(resolved.file).add(importer);
     }
-    const dataReads = parseLocalDataReads(source);
+    // This script reads every source file to build the graph. Those analysis
+    // inputs are not runtime dependencies of its tests and must not turn every
+    // repository change into a self-referential full-suite fallback.
+    const dataReads = importer === SELECTOR_PATH
+      ? { reads: [], ambiguityDetails: [] }
+      : parseLocalDataReads(source);
     for (const detail of dataReads.ambiguityDetails) {
       ambiguities.push({
         importer,
@@ -377,7 +383,9 @@ function isRecognizedPath(file, graph) {
 }
 
 function ambiguityMatchesPath(ambiguity, file) {
-  if (ambiguity.pathScope === null || ambiguity.pathScope === undefined) return false;
+  // No scope means the parser could not prove any repository boundary. It may
+  // therefore target every changed path and must remain fail-safe.
+  if (ambiguity.pathScope === null || ambiguity.pathScope === undefined) return true;
   if (ambiguity.pathScope === '') return true;
   return file === ambiguity.pathScope || file.startsWith(ambiguity.pathScope.endsWith('/')
     ? ambiguity.pathScope
@@ -385,12 +393,37 @@ function ambiguityMatchesPath(ambiguity, file) {
 }
 
 function relevantAmbiguity(graph, changed, affected) {
-  return graph.ambiguities.find(ambiguity =>
-    changed.some(file => ambiguity.importer === file) ||
-    (affected.has(ambiguity.importer) && changed.some(file =>
-      graph.dependencies.get(ambiguity.importer)?.has(file) && ambiguityMatchesPath(ambiguity, file)
-    ))
-  );
+  return graph.ambiguities.find(ambiguity => {
+    // An ambiguity on a node already reached by the reverse dependency walk
+    // cannot add another consumer: that node and all of its known dependents
+    // are already affected. Ambiguities on nodes outside the closure are the
+    // dangerous ones, because they may be an unobserved edge from that node to
+    // the changed file. A missing scope must therefore remain conservative.
+    if (affected.has(ambiguity.importer)) return false;
+    return changed.some(file => ambiguityMatchesPath(ambiguity, file));
+  });
+}
+
+/**
+ * Decide whether a shared fixture's consumers are already known exactly.
+ *
+ * A fixture written in JavaScript is an ordinary graph node: the reverse-import
+ * walk above has already selected precisely the tests that reach it, so the
+ * blanket full-suite fallback would discard a correct, much smaller answer.
+ * Two cases keep the fallback, because for each the graph carries no evidence
+ * rather than evidence of no consumers:
+ *   - a non-code asset, which has no import edges at all;
+ *   - a fixture the graph never observed, where an empty dependent set means
+ *     the walk never saw the file, not that nothing imports it.
+ *
+ * Dynamic reach is deliberately checked by `relevantAmbiguity` below. A shared
+ * fixture that is ordinary code is treated as an ordinary code node, while an
+ * unresolved consumer outside its reverse-dependency closure still widens the
+ * run conservatively.
+ */
+function isGraphResolvedFixture(file, graph) {
+  if (!CODE_EXTENSIONS.has(extname(file))) return false;
+  return graph.dependents?.has(file) ?? false;
 }
 
 /** Select affected tests using a reverse dependency graph and safety policies. */
@@ -425,7 +458,7 @@ export function selectAffectedTests({ changedFiles, testFiles, graph, untrackedF
     }
   }
 
-  const fixture = changed.find(file => SHARED_FIXTURES.test(file));
+  const fixture = changed.find(file => SHARED_FIXTURES.test(file) && !isGraphResolvedFixture(file, graph));
   const central = changed.find(file => FULL_SUITE_PATHS.test(file));
   const untracked = new Set(untrackedFiles.map(normalizePath));
   const unknown = changed.find(file => !untracked.has(file) && !isRecognizedPath(file, graph));
