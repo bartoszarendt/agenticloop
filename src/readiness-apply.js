@@ -693,6 +693,20 @@ export function applyReadinessPlan(input) {
   });
 
   // --- 1. Strict plan integrity -----------------------------------------
+  // Display-only plans intentionally omit exact executable bindings. Refuse
+  // them before executable-schema validation so the public result names the
+  // actual contract boundary; this branch grants no authority and performs no
+  // mutation, regardless of any other caller-authored field.
+  if (plan?.applicable === false) {
+    return refuse('blocked', [
+      `readiness plan is display-only: ${Array.isArray(plan.blockers) && plan.blockers.length > 0
+        ? plan.blockers.join('; ')
+        : 'exact apply inputs are absent'}`,
+    ], {
+      planDigest: typeof plan?.planDigest === 'string' ? plan.planDigest : null,
+      recovery: `Regenerate the plan: npx agenticloop task readiness-plan ${taskId} --json with every exact apply input.`,
+    });
+  }
   const parsed = validateExecutableReadinessPlan(plan, { target, taskId, backend: 'files' });
   if (!parsed.ok) {
     return refuse('blocked', parsed.errors, {

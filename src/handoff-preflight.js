@@ -28,7 +28,7 @@ import {
   resolveEffectiveActivationPolicy,
   resolveCurrentTaskAuthorization,
 } from './activation-resolution.js';
-import { loadHostTrustStore } from './host-trust.js';
+import { loadHostTrustStore, targetRepositoryIdentity } from './host-trust.js';
 import { taskContractDigest } from './task-contract-baseline.js';
 import { loadFilesTaskContractRecords } from './files-task-contract.js';
 import { evaluateTaskReadiness } from './task-readiness.js';
@@ -49,16 +49,35 @@ import {
   createTaskInventoryEnumeration,
   normalizeFilesTaskInventory,
 } from './parallel-scan.js';
-import { deriveHandoffSequence } from './handoff-sequence.js';
-import { ATTEMPT_HISTORY_DIAGNOSTIC_CODE, evaluateTaskPacketConservation } from './execution-attempt.js';
+import {
+  deriveHandoffSequence,
+  deriveLiveAttemptSequence,
+  nextLiveEngineerStep,
+} from './handoff-sequence.js';
+import {
+  ATTEMPT_HISTORY_DIAGNOSTIC_CODE,
+  evaluateTaskPacketConservation,
+  executionAttemptIdentity,
+} from './execution-attempt.js';
+import { resolveCarrierLineage } from './handoff-consumption.js';
+import { deriveProductHead } from './product-lineage.js';
+import {
+  parseRequiredCheckInventory,
+  REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION,
+  requiredCheckEvidenceMatchesInventory,
+  validateRequiredCheckEvidence,
+} from './required-checks.js';
 import { renderActivationRepair } from './activation-repair.js';
 import { fileMatchesScopePattern } from './scope-matcher.js';
 // The canonical dispatch-eligibility evaluator. Preflight resolves facts and
 // presents results; every shared prerequisite is decided in this one module,
 // the same one packet preparation and role start consume.
 import {
+  activationCapabilityInventory,
+  activationCaptureDisposition,
   observeDispatchInitialState,
   evaluateDispatchEligibility,
+  liveContinuationCandidate,
   liveReadinessCandidate,
 } from './dispatch-eligibility.js';
 
@@ -488,6 +507,13 @@ export function evaluateHandoffPreflight(input) {
     );
   }
 
+  // Attempt conservation is needed by both activation resolution and sequence
+  // selection. Resolve it once, before deciding whether activation is an
+  // initial-dispatch fact or a current live-continuation gate.
+  const conservation = backend === 'files'
+    ? evaluateTaskPacketConservation(resolvedTarget, taskId, { backend })
+    : { ok: true, liveAttempt: null };
+
   // ── 1b. Lifecycle dispatchability ─────────────────────────────────────
   // The same gate role start applies, asked here so a green preflight cannot be
   // refused later over unchanged facts.
@@ -554,10 +580,43 @@ export function evaluateHandoffPreflight(input) {
         const ref = contract.projection.activation_capture_ref;
         if (ref) {
           activationState = { source: 'legacy_task_capture', captureRef: ref };
-          activationAssurance = 'host_signed';
-          operatorAuthorization = 'authorized';
-          activationUsability = 'usable';
-          authorizationFact = { state: 'present', assurance: 'host_signed', errors: [] };
+          if (!conservation.liveAttempt) {
+            activationAssurance = 'host_signed';
+            operatorAuthorization = 'authorized';
+            activationUsability = 'usable';
+            authorizationFact = { state: 'present', assurance: 'host_signed', errors: [] };
+          } else {
+            const capture = JSON.parse(readFileSync(join(resolvedTarget, ref), 'utf8'));
+            const store = loadHostTrustStore(resolvedTarget, {
+              operatorTrustRoot: io?.operatorTrustRoot ?? undefined,
+              assertedPath: hostTrustStore,
+              protectedBoundary: io?.hostAuthority ?? undefined,
+            });
+            const disposition = activationCaptureDisposition(capture, {
+              capabilities: activationCapabilityInventory(store.ok ? store.adapters : {}),
+              intendedTaskId: snapshot.taskId,
+              repositoryIdentity: targetRepositoryIdentity(resolvedTarget),
+              now: Date.parse(now) || undefined,
+            });
+            const contractBound = capture.normalizedActivationDigest === contract.projection.activation_input_digest;
+            if (disposition.ok && contractBound) {
+              activationAssurance = 'host_signed';
+              operatorAuthorization = 'authorized';
+              activationUsability = 'usable';
+              authorizationFact = { state: 'present', assurance: 'host_signed', errors: [] };
+            } else {
+              operatorAuthorization = disposition.evidenceState === 'stale' ? 'expired' : 'malformed';
+              activationUsability = 'blocked';
+              authorizationFact = {
+                state: operatorAuthorization,
+                assurance: null,
+                errors: [
+                  ...disposition.errors,
+                  ...(!contractBound ? ['activation capture does not bind the current task contract digest'] : []),
+                ],
+              };
+            }
+          }
         } else {
           const auth = resolveCurrentTaskAuthorization(resolvedTarget, io, {
             backend: snapshot.backend,
@@ -1103,25 +1162,53 @@ export function evaluateHandoffPreflight(input) {
   // Preflight keeps only its presentation: the owning repair for each canonical
   // finding, its command-specific domain fields, and boundary-only advisories.
   let eligibility = null;
+  let liveLineage = null;
+  if (backend === 'files' && conservation.liveAttempt && taskContractDigestValue && taskCarrierDigest) {
+    liveLineage = resolveCarrierLineage(resolvedTarget, taskId, {
+      backend: 'files',
+      taskContractDigest: taskContractDigestValue,
+      currentCarrierDigest: taskCarrierDigest,
+      boundary: 'engineer_return',
+    });
+  }
   if (snapshot) {
-    eligibility = evaluateDispatchEligibility(liveReadinessCandidate({
-      snapshot,
-      authorization: authorizationFact,
-      readinessObservation,
-      dependencyObservation: dependencyAge,
-      repository: repositoryState,
-      decomposition: decompositionSource,
-      parallelScanInventory: currentTaskInventory,
-      hostRoleCapability: hostRoleCapabilityFact,
-      policy: effectivePolicy
-        ? { mode: effectivePolicy.mode, minimumActivation: effectivePolicy.minimumActivation }
-        : null,
-      returnCapability: returnCapabilityFact,
-      cleanStateObservation,
-      inventoryRecheck,
-      authority: {},
-      now: Date.parse(now) || undefined,
-    }));
+    // Initial preflight decides the full dispatch domain. A consumed attempt
+    // instead decides the current continuation domain: activation, task/check
+    // contract, repository identity, host capability, and return capability
+    // remain live, while role-start-only readiness/decomposition/clean-start
+    // facts are explicitly not applicable rather than silently skipped or
+    // incorrectly replayed after the required role-start commit.
+    eligibility = conservation.liveAttempt
+      ? evaluateDispatchEligibility(liveContinuationCandidate({
+          snapshot,
+          authorization: authorizationFact,
+          repository: repositoryState,
+          hostRoleCapability: hostRoleCapabilityFact,
+          policy: effectivePolicy
+            ? { mode: effectivePolicy.mode, minimumActivation: effectivePolicy.minimumActivation }
+            : null,
+          returnCapability: returnCapabilityFact,
+          consumption: liveLineage?.dispatchConsumption ?? null,
+          now: Date.parse(now) || undefined,
+        }))
+      : evaluateDispatchEligibility(liveReadinessCandidate({
+          snapshot,
+          authorization: authorizationFact,
+          readinessObservation,
+          dependencyObservation: dependencyAge,
+          repository: repositoryState,
+          decomposition: decompositionSource,
+          parallelScanInventory: currentTaskInventory,
+          hostRoleCapability: hostRoleCapabilityFact,
+          policy: effectivePolicy
+            ? { mode: effectivePolicy.mode, minimumActivation: effectivePolicy.minimumActivation }
+            : null,
+          returnCapability: returnCapabilityFact,
+          cleanStateObservation,
+          inventoryRecheck,
+          authority: {},
+          now: Date.parse(now) || undefined,
+        }));
 
     for (const finding of eligibility.findings) {
       // The boundary already named the exact unreadable path and its repair;
@@ -1146,24 +1233,13 @@ export function evaluateHandoffPreflight(input) {
     for (const warning of eligibility.warnings) {
       findings.warning(warning.code, warning.message, warning.evidenceState);
     }
-    if (decompositionDispatchable) {
+    if (!conservation.liveAttempt && decompositionDispatchable) {
       decompositionDispatchable.dispatchCompatible =
         eligibility.dimensions.decomposition.state === 'satisfied';
     }
   }
 
   // ── 10. Build result ──────────────────────────────────────────────────
-  const hasErrors = findings.hasErrors;
-  const primaryError = findings.errorItems[0] ?? null;
-
-  // Diagnostics are already canonical (created through createDiagnostic)
-  const diagnostics = findings.errorItems;
-  const warningDiagnostics = findings.warningItems;
-
-  // Derive evidence state from the primary error's diagnostic evidence
-  const evidenceState = primaryError?.evidence?.state ?? 'current';
-  const disposition = hasErrors ? 'blocked' : 'proceed';
-
   const activation = activationState ? {
     source: activationState.source ?? null,
     assurance: activationAssurance,
@@ -1177,9 +1253,6 @@ export function evaluateHandoffPreflight(input) {
   // step forces. A point-in-time green that does not survive its own prescribed
   // next action is a false green; reporting the sequence is what makes it a
   // prediction rather than a snapshot.
-  const conservation = backend === 'files'
-    ? evaluateTaskPacketConservation(resolvedTarget, taskId, { backend })
-    : { ok: true, liveAttempt: null };
   // Rewritten execution provenance is a pre-dispatch refusal, not an
   // after-the-fact discovery. Preflight is where a role would next mint a
   // packet, so it is where a reset attempt range has to stop.
@@ -1191,13 +1264,140 @@ export function evaluateHandoffPreflight(input) {
       'changed'
     );
   }
-  const nextSequence = deriveHandoffSequence({
-    taskId,
-    backend,
-    host: hostRoleCapability?.host ?? requestedHost ?? null,
-    liveAttempt: conservation.liveAttempt,
-    newPacketPermitted: conservation.ok,
-  });
+  let liveAttemptGate = null;
+  let nextSequence;
+  if (backend === 'files' && conservation.liveAttempt && taskCarrierDigest && taskContractDigestValue) {
+    const lineage = liveLineage;
+    let nextStep = nextLiveEngineerStep(lineage.receipts ?? []);
+    let nextCheckId = null;
+    let derivedProductHead = null;
+    if (nextStep === 'implementation_artifact_evidence' && lineage.dispatchConsumption && repositoryState?.head) {
+      const product = deriveProductHead({
+        runGit: args => runGit(resolvedTarget, args),
+        baseHead: lineage.dispatchConsumption.productBaseHead,
+        head: repositoryState.head,
+      });
+      derivedProductHead = product.ok ? product.productHead : null;
+      if (product.ok && product.productHead === lineage.dispatchConsumption.productBaseHead) {
+        nextStep = 'product_work';
+      }
+    }
+    const attemptId = lineage.dispatchConsumption
+      ? executionAttemptIdentity(lineage.dispatchConsumption)
+      : conservation.liveAttempt.attemptId;
+    const identityMatches = Boolean(
+      lineage.dispatchConsumption &&
+      attemptId === conservation.liveAttempt.attemptId &&
+      lineage.dispatchConsumption.packetId === conservation.liveAttempt.packetId &&
+      lineage.dispatchConsumption.taskContractDigest === taskContractDigestValue
+    );
+    liveAttemptGate = {
+      nextStep,
+      derivedProductHead,
+      attemptId,
+      packetId: lineage.dispatchConsumption?.packetId ?? conservation.liveAttempt.packetId,
+      taskContractDigest: taskContractDigestValue,
+      consumedTaskContractDigest: lineage.dispatchConsumption?.taskContractDigest ?? null,
+      expectedCarrierDigest: lineage.currentCarrierDigest ?? null,
+      currentCarrierDigest: taskCarrierDigest,
+      lineageCurrent: lineage.ok && identityMatches,
+      errors: lineage.errors ?? [],
+      continuation: eligibility ? {
+        factShape: eligibility.factShape,
+        dimensions: eligibility.dimensions,
+      } : null,
+    };
+    if (!liveAttemptGate.lineageCurrent) {
+      findings.error(
+        'task.evidence.lineage.stale',
+        `the next live-attempt gate '${nextStep}' will refuse: expected carrier ` +
+          `${liveAttemptGate.expectedCarrierDigest ?? '(unresolved)'}, current carrier ${taskCarrierDigest}; ` +
+          `${identityMatches ? lineage.errors.join('; ') : 'consumed packet/attempt identity does not match the live attempt'}`,
+        `Restore ${taskCarrierPath} to the recognized lineage terminal ` +
+          `${liveAttemptGate.expectedCarrierDigest ?? '(shown by attempt-status)'}, preserving product commits, then rerun ` +
+          `'npx agenticloop task handoff-preflight ${taskId} --json'. If the edit was intentional, stop for ` +
+          `Maintainer diagnosis and explicitly abandon ${attemptId}; do not remint or rebind another packet.`,
+        'changed'
+      );
+    }
+    if (nextStep === 'required_checks') {
+      const checkPath = `.agenticloop/tmp/${String(taskId).replace(/[^A-Za-z0-9._-]/g, '_')}-checks.json`;
+      const checkFullPath = join(resolvedTarget, checkPath);
+      let checkEvidence = null;
+      if (existsSync(checkFullPath)) {
+        try {
+          const checkBytes = readFileSync(checkFullPath, 'utf8');
+          const checks = JSON.parse(checkBytes);
+          const checked = validateRequiredCheckEvidence(checks, {
+            label: 'live check aggregate',
+            contractVersion: REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION,
+          });
+          const inventory = parseRequiredCheckInventory(taskContract.projection.required_checks);
+          const matches = checked.ok && inventory.ok && requiredCheckEvidenceMatchesInventory(
+            checks,
+            inventory.checks,
+            { contractVersion: REQUIRED_CHECK_EVIDENCE_CONTRACT_VERSION },
+          );
+          checkEvidence = { path: checkPath, digest: digestBytes(checkBytes), current: matches };
+          if (matches && checks.every(check => check.outcome === 'passed')) {
+            nextStep = 'prepare_return';
+            liveAttemptGate.nextStep = nextStep;
+          } else if (matches) {
+            nextCheckId = checks.find(check => check.outcome !== 'passed')?.id ?? null;
+          }
+          if (!matches) {
+            findings.error(
+              'evidence.malformed',
+              `live check aggregate '${checkPath}' does not match the current task required-check contract`,
+              `Reinitialize '${checkPath}' from the retained consumed packet, then rerun preflight.`,
+              'malformed',
+            );
+          }
+        } catch (error) {
+          checkEvidence = { path: checkPath, digest: null, current: false };
+          findings.error(
+            'evidence.malformed',
+            `live check aggregate '${checkPath}' is unreadable: ${error.message}`,
+            `Reinitialize '${checkPath}' from the retained consumed packet, then rerun preflight.`,
+            'malformed',
+          );
+        }
+      } else {
+        checkEvidence = { path: checkPath, digest: null, current: false };
+        findings.error(
+          'evidence.missing',
+          `live check aggregate is missing at '${checkPath}'`,
+          `Run 'npx agenticloop task check-evidence-init ${taskId} --packet <retained-packet.json>' to recreate scratch state, then rerun preflight.`,
+          'missing',
+        );
+      }
+      liveAttemptGate.checkEvidence = checkEvidence;
+    }
+    nextSequence = deriveLiveAttemptSequence({
+      taskId,
+      nextStep,
+      currentCarrierDigest: liveAttemptGate.expectedCarrierDigest ?? taskCarrierDigest,
+      checkId: nextCheckId ?? '<id>',
+    });
+  } else {
+    nextSequence = deriveHandoffSequence({
+      taskId,
+      backend,
+      host: hostRoleCapability?.host ?? requestedHost ?? null,
+      liveAttempt: conservation.liveAttempt,
+      newPacketPermitted: conservation.ok,
+    });
+  }
+
+  // Conservation and live-lineage findings are computed after dispatch
+  // eligibility. Derive the final envelope only now; otherwise an appended
+  // blocker can accidentally retain an earlier green snapshot.
+  const hasErrors = findings.hasErrors;
+  const primaryError = findings.errorItems[0] ?? null;
+  const diagnostics = findings.errorItems;
+  const warningDiagnostics = findings.warningItems;
+  const evidenceState = primaryError?.evidence?.state ?? 'current';
+  const disposition = hasErrors ? 'blocked' : 'proceed';
 
   const domain = {
     kind: HANDOFF_PREFLIGHT_KIND,
@@ -1222,6 +1422,7 @@ export function evaluateHandoffPreflight(input) {
       declaration: hostRoleCapability.declaration,
     } : null,
     returnAdapter: returnAdapterResolution,
+    liveAttemptGate,
     nextSequence,
     siblingCollisions,
     siblingWorktrees,

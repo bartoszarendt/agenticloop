@@ -319,14 +319,55 @@ const BASELINE_RATIONALE = Object.freeze([
       'adapter-local copy.',
     evidence: 'agents/engineer.md, agents/maintainer.md, agents/orchestrator.md',
   },
+  {
+    pass: 'files lifecycle reliability Codex contract (2026-09-03)',
+    adapters: ['codex'],
+    categories: ['generatedPayload', 'referenceLibrary'],
+    previous: null, measured: null, delta: null, valuesRecorded: true,
+    changes: [
+      { adapter: 'codex', category: 'generatedPayload', previous: 71644, measured: 76593, delta: 4949 },
+      { adapter: 'codex', category: 'referenceLibrary', previous: 56868, measured: 60541, delta: 3673 },
+    ],
+    reason:
+      'The Codex payload packages the canonical lifecycle roles plus the shared reference ' +
+      'library carrying the files reliability contract; neither surface adds adapter-local workflow.',
+    evidence: 'agents/, skills/, backends/files.md, AGENTIC_LOOP.md, test/files-lifecycle-reliability.test.js',
+  },
+  {
+    pass: 'files lifecycle reliability Claude role contract (2026-09-03)',
+    adapters: ['claude-code'],
+    categories: ['agentDefinitions'],
+    previous: 12721, measured: 13390, delta: 669, valuesRecorded: true,
+    changes: [
+      { adapter: 'claude-code', category: 'agentDefinitions', previous: 12721, measured: 13390, delta: 669 },
+    ],
+    reason:
+      'Claude Code packages the expanded canonical role definitions that specify live carrier ' +
+      'freezing, predictive preflight, and repeated-refusal stopping without an adapter-local copy.',
+    evidence: 'agents/engineer.md, agents/maintainer.md, agents/orchestrator.md',
+  },
+  {
+    pass: 'files lifecycle reliability shared references (2026-09-03)',
+    adapters: ['copilot', 'cursor'],
+    categories: ['referenceLibrary'],
+    previous: 55115, measured: 58788, delta: 3673, valuesRecorded: true,
+    changes: [
+      { adapter: 'copilot', category: 'referenceLibrary', previous: 55115, measured: 58788, delta: 3673 },
+      { adapter: 'cursor', category: 'referenceLibrary', previous: 55115, measured: 58788, delta: 3673 },
+    ],
+    reason:
+      'Copilot and Cursor package the same canonical skills, backend guidance, and methodology ' +
+      'for scratch checks, carried lineage, predictive preflight, and blocked-return authority.',
+    evidence: 'skills/, backends/files.md, AGENTIC_LOOP.md, test/files-lifecycle-reliability.test.js',
+  },
 ]);
 
 const ADAPTERS = [
   { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 14970, agentDefinitions: 13993, activationSurface: 977 } },
-  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 71644, agentDefinitions: 14303, activationSurface: 1260, referenceLibrary: 56868 } },
-  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 54913, agentDefinitions: 12721, activationSurface: 2157, referenceLibrary: 40662 } },
-  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 73136, agentDefinitions: 14006, activationSurface: 1314, referenceLibrary: 55115 } },
-  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 72884, agentDefinitions: 14000, activationSurface: 1068, referenceLibrary: 55115 } },
+  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 76593, agentDefinitions: 14303, activationSurface: 1260, referenceLibrary: 60541 } },
+  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 54913, agentDefinitions: 13390, activationSurface: 2157, referenceLibrary: 40662 } },
+  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 73136, agentDefinitions: 14006, activationSurface: 1314, referenceLibrary: 58788 } },
+  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 72884, agentDefinitions: 14000, activationSurface: 1068, referenceLibrary: 58788 } },
 ];
 
 let tmpDir;

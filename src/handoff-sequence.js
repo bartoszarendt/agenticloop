@@ -23,11 +23,15 @@
 const CLEAN_GATE_REASON =
   'the dispatch clean gate refuses relevant untracked workflow state, so this write must be committed before the next step';
 
-function step(order, { command, writes = [], commitRequired = false, reason = null, gate = null }) {
+function step(order, {
+  command = null, action = null, writes = [], scratchWrites = [], commitRequired = false, reason = null, gate = null,
+}) {
   return Object.freeze({
     order,
     command,
+    action,
     writes: Object.freeze([...writes]),
+    scratchWrites: Object.freeze([...scratchWrites]),
     commitRequired,
     commitReason: commitRequired ? (reason ?? CLEAN_GATE_REASON) : null,
     gate,
@@ -88,15 +92,16 @@ export function deriveHandoffSequence({
     steps.push(step(order += 1, {
       command:
         `npx agenticloop task role-start ${id} ` +
-        '--packet <packet.json> --check-evidence-output <checks.json> --json',
+        '--packet <packet.json> --json',
       writes: [
         `.agenticloop/tasks/${id}.md`,
         `.agenticloop/handoffs/dispatch/${id}/`,
-        `<checks.json>`,
+        ...(liveAttempt ? [`.agenticloop/handoffs/attempts/${id}/`] : []),
       ],
+      scratchWrites: [`.agenticloop/tmp/${id}-checks.json`],
       commitRequired: true,
       reason:
-        'role start mutates the carrier, writes a dispatch consumption record, and initializes check evidence; commit all before the evidence chain reads them from Git',
+        'role start mutates the carrier and writes a dispatch consumption record; commit those durable outputs before the evidence chain reads them from Git; the mutable check aggregate remains scratch',
       gate: 'dispatch.packet.stale',
     }));
   } else {
@@ -136,6 +141,77 @@ export function deriveHandoffSequence({
   };
 }
 
+const ENGINEER_EVIDENCE_ORDER = Object.freeze([
+  'implementation_artifact_evidence',
+  'implementation_summary_evidence',
+  'implementation_outcome_evidence',
+]);
+
+/** Derive the next ordered gate from one live attempt's durable receipts. */
+export function nextLiveEngineerStep(receipts = []) {
+  const observed = new Set(receipts.map(receipt => receipt.mutationClass));
+  return ENGINEER_EVIDENCE_ORDER.find(mutationClass => !observed.has(mutationClass)) ?? 'required_checks';
+}
+
+/**
+ * Report the sequence owned by an already-consumed attempt. This intentionally
+ * never begins with packet preparation: packet identity was sealed and
+ * consumed at role start, so recomputing it would ask a post-start repository
+ * to equal its pre-start binding.
+ */
+export function deriveLiveAttemptSequence({ taskId, nextStep, currentCarrierDigest, checkId = '<id>' } = {}) {
+  const id = String(taskId ?? '<id>');
+  const digest = currentCarrierDigest ?? '<current-carrier-digest>';
+  const definitions = {
+    implementation_artifact_evidence: {
+      command: `npx agenticloop task evidence ${id} --class implementation_artifact_evidence --expect-digest ${digest} --product-head <commit> --json`,
+      writes: [`.agenticloop/tasks/${id}.md`, `.agenticloop/handoffs/task-mutations/${id}/`],
+      gate: 'task.evidence.lineage.stale',
+    },
+    implementation_summary_evidence: {
+      command: `npx agenticloop task evidence ${id} --class implementation_summary_evidence --expect-digest ${digest} --summary <text> --check-evidence <reference> --json`,
+      writes: [`.agenticloop/tasks/${id}.md`, `.agenticloop/handoffs/task-mutations/${id}/`],
+      gate: 'task.evidence.lineage.stale',
+    },
+    implementation_outcome_evidence: {
+      command: `npx agenticloop task evidence ${id} --class implementation_outcome_evidence --expect-digest ${digest} --outcome implementation_ready_for_review --json`,
+      writes: [`.agenticloop/tasks/${id}.md`, `.agenticloop/handoffs/task-mutations/${id}/`],
+      gate: 'task.evidence.lineage.stale',
+    },
+    required_checks: {
+      command: `npx agenticloop task check-evidence-update ${id} --packet <retained-packet.json> --input .agenticloop/tmp/${id}-checks.json --output .agenticloop/tmp/${id}-checks.json --check ${checkId} --outcome passed --evidence <text> --json`,
+      writes: [`.agenticloop/checks/${id}/<check-id>.execution.json`],
+      scratchWrites: [`.agenticloop/tmp/${id}-checks.json`],
+      gate: 'evidence.missing',
+      commitRequired: true,
+      reason: 'commit immutable execution evidence; the mutable aggregate remains scratch',
+    },
+    prepare_return: {
+      command: `npx agenticloop task prepare-return ${id} --packet <retained-packet.json> --check-evidence .agenticloop/tmp/${id}-checks.json --outcome implementation_ready_for_review --output .agenticloop/tmp/${id}-return.json --json`,
+      writes: [],
+      scratchWrites: [`.agenticloop/tmp/${id}-return.json`],
+      gate: 'return_verification.invalid',
+      commitRequired: false,
+      reason: 'produce the raw return from the current consumed attempt and completed check aggregate',
+    },
+    product_work: {
+      action:
+        'Perform and commit genuine task-scoped product work, or identify the validated product head carried from the preceding abandoned attempt.',
+      writes: [],
+      gate: 'verification.context.missing',
+      commitRequired: false,
+      reason: 'produce a genuine product commit before publishing implementation evidence',
+    },
+  };
+  const chosen = definitions[nextStep] ?? definitions.implementation_artifact_evidence;
+  const first = step(1, {
+    ...chosen,
+    commitRequired: chosen.commitRequired ?? true,
+    reason: chosen.reason ?? 'commit the carrier and its mutation receipt before the next evidence gate',
+  });
+  return { steps: Object.freeze([first]), commitCount: first.commitRequired ? 1 : 0 };
+}
+
 /**
  * Render the sequence for human output, including the commits it forces.
  *
@@ -147,9 +223,12 @@ export function renderHandoffSequence(sequence) {
     `  next ordered sequence (${sequence.steps.length} steps, ${sequence.commitCount} commit${sequence.commitCount === 1 ? '' : 's'} required):`,
   ];
   for (const item of sequence.steps) {
-    lines.push(`    ${item.order}. ${item.command}`);
+    lines.push(`    ${item.order}. ${item.command ?? item.action}`);
     if (item.commitRequired) {
       lines.push(`       commit ${item.writes.join(', ')} before the next step (${item.commitReason})`);
+    }
+    if (item.scratchWrites.length > 0) {
+      lines.push(`       scratch only (do not commit): ${item.scratchWrites.join(', ')}`);
     }
   }
   return lines;

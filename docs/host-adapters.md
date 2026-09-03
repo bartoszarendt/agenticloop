@@ -14,10 +14,13 @@ Host UI status, messages, opaque handles, and cancellation notifications are
 transport observations, not Agentic Loop role returns. The ordinary public
 handoff uses target-relative CLI artifacts: `task prepare-dispatch` with
 `--host`, `--role engineer`, `--output`, and `--json`; guarded role start;
-`task check-evidence-init`/`task check-evidence-update`; `task prepare-return`;
+for files, the role start creates the scratch aggregate before ordered `task
+evidence` and `task check-evidence-update`; then `task prepare-return`;
 then `task verify-return --from-current-repository` before review. Hosts and
 agents must not inspect internals, hand-author JSON/digests, substitute those
 observations for a return, or infer cancellation from host status alone.
+GitHub has no files `role-start` aggregate producer and retains its documented
+explicit `task check-evidence-init` step.
 
 Adapters are status-bearing in `agenticloop.json` so downstream projects can
 see what is supported and what is reserved.

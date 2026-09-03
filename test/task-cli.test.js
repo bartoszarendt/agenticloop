@@ -22,6 +22,10 @@ import { carrierMutationRelativePath } from '../src/handoff-consumption.js';
 import { parseVerificationAttempts } from '../src/verification-learning.js';
 import { parseResolutionMatrix } from '../src/resolution-matrix.js';
 import { createCheckEvidenceSupersession } from '../src/check-evidence-supersession.js';
+import {
+  gitTracksPath,
+  isExactImplementationArtifactReaffirmation,
+} from '../src/task-cli.js';
 
 let tmpDir;
 const IS_WINDOWS = platform() === 'win32';
@@ -40,6 +44,41 @@ after(() => {
 function run(args) {
   return runCliInProcess([...args]);
 }
+
+describe('task CLI fail-closed guard helpers', () => {
+  it('distinguishes tracked and untracked aggregate paths only from conclusive Git results', () => {
+    assert.equal(gitTracksPath('/repo', '.agenticloop/tmp/T-001-checks.json', () => ({ status: 0 })), true);
+    assert.equal(gitTracksPath('/repo', '.agenticloop/tmp/T-001-checks.json', () => ({ status: 1 })), false);
+  });
+
+  it('fails closed with an actionable typed diagnostic when aggregate tracking cannot be probed', () => {
+    for (const result of [
+      { status: 128, stderr: 'fatal: index file corrupt' },
+      { status: 0, error: Object.assign(new Error('wrapper lost Git result'), { code: 'EIO' }) },
+      { status: null, stderr: '' },
+    ]) {
+      assert.throws(
+        () => gitTracksPath('/repo', '.agenticloop/tmp/T-001-checks.json', () => result),
+        error => error.code === 'check.aggregate.git_probe_failed' &&
+          error.evidenceState === 'malformed' &&
+          error.disposition === 'blocked' &&
+          /readable Git work tree and index/.test(error.safeRepair),
+      );
+    }
+  });
+
+  it('treats only an exact canonical commit artifact as a no-op reaffirmation', () => {
+    const base = 'a'.repeat(40);
+    const head = 'b'.repeat(40);
+    const carrier = value => `---\nimplementation_artifact: ${value}\n---\n`;
+    assert.equal(isExactImplementationArtifactReaffirmation(carrier(`commit:${head}`), head), true);
+    assert.equal(isExactImplementationArtifactReaffirmation(carrier(`"commit:${head}"`), head), false);
+    assert.equal(isExactImplementationArtifactReaffirmation(`---\nimplementation_artifact:   commit:${head}\n---\n`, head), false);
+    assert.equal(isExactImplementationArtifactReaffirmation(`---\nimplementation_artifact: commit:${head}  \n---\n`, head), false);
+    assert.equal(isExactImplementationArtifactReaffirmation(carrier(`range:${base}..${head}`), head), false);
+    assert.equal(isExactImplementationArtifactReaffirmation(carrier(`commit:${base}`), head), false);
+  });
+});
 
 // Real callers read the current digest before mutating and supply explicit
 // base and dependency evidence. These helpers only compute those values; every
@@ -788,7 +827,8 @@ describe('task CLI', () => {
   it('creates closed required-check evidence from an installed dispatch fixture', async () => {
     const fixture = await createDispatchFixture(tmpDir, 'public-check-evidence');
     const packetPath = 'packet.json';
-    const outputPath = 'checks.json';
+    const outputPath = '.agenticloop/tmp/checks.json';
+    mkdirSync(join(fixture.root, '.agenticloop', 'tmp'), { recursive: true });
     writeFileSync(join(fixture.root, packetPath), JSON.stringify(prepareDispatch(fixture).packet), 'utf8');
 
     // The protected role-start boundary consumes this exact packet. The later
@@ -823,7 +863,8 @@ describe('task CLI', () => {
   it('fails closed on concurrent initialization changes and corrupt or pre-seeded supersession history', async () => {
     const fixture = await createDispatchFixture(tmpDir, 'check-evidence-cas');
     const packetPath = 'packet.json';
-    const outputPath = 'checks.json';
+    const outputPath = '.agenticloop/tmp/checks.json';
+    mkdirSync(join(fixture.root, '.agenticloop', 'tmp'), { recursive: true });
     const packet = prepareDispatch(fixture).packet;
     writeFileSync(join(fixture.root, packetPath), JSON.stringify(packet), 'utf8');
     const options = {
@@ -1042,7 +1083,7 @@ describe('task CLI', () => {
   it('executes the exact required argv itself and refuses a passed claim it cannot evidence', async () => {
     const fixture = await createDispatchFixture(tmpDir, 'fabricated-check-evidence');
     const packetPath = 'packet.json';
-    const checksPath = 'checks.json';
+    const checksPath = '.agenticloop/tmp/checks.json';
     writeFileSync(join(fixture.root, packetPath), JSON.stringify(prepareDispatch(fixture).packet), 'utf8');
     assertOk(await runCliInProcess([
       'task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(fixture.root, 'T-001'),
@@ -1139,7 +1180,7 @@ describe('task CLI', () => {
       requiredChecksText: '- [RC-1] command: `node --version; node --version`\n- [RC-2] manual: Inspect the final state.',
     });
     const packetPath = 'packet.json';
-    const checksPath = 'checks.json';
+    const checksPath = '.agenticloop/tmp/checks.json';
     writeFileSync(join(fixture.root, packetPath), JSON.stringify(prepareDispatch(fixture).packet), 'utf8');
     assertOk(await runCliInProcess([
       'task', 'status', 'T-001', 'in-progress', '--expect-digest', currentDigest(fixture.root, 'T-001'),
@@ -1153,11 +1194,11 @@ describe('task CLI', () => {
     ], { operatorTrustRoot: fixture.operatorTrustRoot }));
     const result = await runCliInProcess([
       'task', 'check-evidence-update', 'T-001', '--packet', packetPath, '--input', checksPath, '--output', checksPath,
-      '--check', 'RC-1', '--outcome', 'passed', '--evidence', 'claimed pass', '--execution-output', 'rc-1.json', '--json', '--target', fixture.root,
+      '--check', 'RC-1', '--outcome', 'passed', '--evidence', 'claimed pass', '--execution-output', '.agenticloop/checks/T-001/RC-1.execution.json', '--json', '--target', fixture.root,
     ], { operatorTrustRoot: fixture.operatorTrustRoot });
     assert.notEqual(result.status, 0);
     assert.match(JSON.parse(result.stdout).diagnostics[0].message, /safe inert argv/);
-    assert.equal(existsSync(join(fixture.root, 'rc-1.json')), false);
+    assert.equal(existsSync(join(fixture.root, '.agenticloop/checks/T-001/RC-1.execution.json')), false);
   });
 
   it('rejects hand-authored passed checks and derives an Engineer return from CLI-executed checks and current Git facts', async () => {
@@ -1200,7 +1241,7 @@ describe('task CLI', () => {
     ], options);
     assertOk(checks);
     for (const check of JSON.parse(readFileSync(join(fixture.root, checksPath), 'utf8'))) {
-      const executionOutputPath = `.agenticloop/tmp/${check.id}.execution.json`;
+      const executionOutputPath = `.agenticloop/checks/T-001/${check.id}.execution.json`;
       const updated = await runCliInProcess([
         'task', 'check-evidence-update', 'T-001', '--packet', packetPath,
         '--input', checksPath, '--output', checksPath, '--check', check.id,
@@ -1384,7 +1425,7 @@ describe('task CLI', () => {
         'task', 'check-evidence-update', 'T-001', '--packet', packetPath,
         '--input', checksPath, '--output', checksPath, '--check', check,
         '--outcome', 'passed', '--evidence', `${check} passed`,
-        '--execution-output', `.agenticloop/tmp/${check}.execution.json`, '--json', '--target', fixture.root,
+        '--execution-output', `.agenticloop/checks/T-001/${check}.execution.json`, '--json', '--target', fixture.root,
       ], options));
     }
 
@@ -1500,7 +1541,7 @@ describe('task CLI', () => {
     });
     const packetPath = '.agenticloop/tmp/dispatch.json';
     const checksPath = '.agenticloop/tmp/checks.json';
-    const executionPath = '.agenticloop/tmp/RC-1.execution.json';
+    const executionPath = '.agenticloop/checks/T-001/RC-1.execution.json';
     const returnPath = '.agenticloop/tmp/return.json';
     const options = { operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: protectedHostBoundary(fixture.trust) };
     mkdirSync(join(fixture.root, '.agenticloop', 'tmp'), { recursive: true });
@@ -1552,7 +1593,7 @@ describe('task CLI', () => {
     const firstPacketPath = '.agenticloop/tmp/first-dispatch.json';
     const secondPacketPath = '.agenticloop/tmp/second-dispatch.json';
     const checksPath = '.agenticloop/tmp/checks.json';
-    const executionPath = '.agenticloop/tmp/RC-1.execution.json';
+    const executionPath = '.agenticloop/checks/T-001/RC-1.execution.json';
     const returnPath = '.agenticloop/tmp/return.json';
     const options = { operatorTrustRoot: fixture.operatorTrustRoot, hostAuthority: protectedHostBoundary(fixture.trust) };
     mkdirSync(join(fixture.root, '.agenticloop', 'tmp'), { recursive: true });
@@ -1632,25 +1673,25 @@ describe('task CLI', () => {
       },
     };
     const mismatchedInputs = [
-      {
+      [{
         ...validEvidenceInput,
         actorRole: 'maintainer',
         provenance: { ...provenance, workflowRole: 'maintainer' },
         sections: { ...emptySections, maintainerTriage: [entry('triage-1', 'resolved')] },
-      },
-      {
+      }, 'task.carrier.armed'],
+      [{
         ...validEvidenceInput,
         provenance: { ...provenance, invocationId: 'invocation-for-another-dispatch' },
-      },
+      }, 'task.evidence.provenance_mismatch'],
     ];
-    for (const mismatched of mismatchedInputs) {
+    for (const [mismatched, expectedCode] of mismatchedInputs) {
       writeFileSync(join(fixture.root, engineerInput), JSON.stringify(mismatched), 'utf8');
       const refused = await runCliInProcess([
         'task', 'evidence', 'T-001', '--class', 'structured_task_evidence', '--input', engineerInput,
         '--expect-digest', currentDigest(fixture.root, 'T-001'), '--json', '--target', fixture.root,
       ], options);
       assert.notEqual(refused.status, 0);
-      assert.equal(JSON.parse(refused.stdout).diagnostics[0].code, 'task.evidence.provenance_mismatch');
+      assert.equal(JSON.parse(refused.stdout).diagnostics[0].code, expectedCode);
     }
     writeFileSync(join(fixture.root, engineerInput), JSON.stringify(validEvidenceInput), 'utf8');
     const engineer = await runCliInProcess([
@@ -1701,6 +1742,13 @@ describe('task CLI', () => {
     const exhausted = JSON.parse(threshold.stdout);
     assert.equal(exhausted.retryPermitted, false);
     assert.equal(exhausted.repeated, 2);
+    assert.match(exhausted.repair, /validator\/source diagnosis/i);
+    assert.match(exhausted.repair, /Do not mint or consume another packet/i);
+    const conserved = JSON.parse((await runCliInProcess([
+      'task', 'attempt-status', 'T-001', '--json', '--target', fixture.root,
+    ], options)).stdout);
+    assert.equal(conserved.attempts.length, 1);
+    assert.equal(conserved.liveAttempt.attemptId, attemptId);
   });
 
   it('fails closed for trailing, multiple, and directory JSON public handoff inputs', async () => {
@@ -2301,11 +2349,13 @@ describe('return evidence, cancellation provenance, and current-repository verif
     assertOk(await call([
       'task', 'check-evidence-update', 'T-001', '--packet', packetPath, '--input', checksPath, '--output', checksPath,
       '--check', 'RC-1', '--outcome', 'passed', '--evidence', 'node passed',
-      '--execution-output', '.agenticloop/tmp/RC-1.execution.json', '--json', '--target', fixture.root,
+      '--execution-output', '.agenticloop/checks/T-001/RC-1.execution.json', '--json', '--target', fixture.root,
     ]));
     assert.equal(state.commandCalls, 1, 'only the public command execution step may run the required command');
 
-    const execution = JSON.parse(readFileSync(join(fixture.root, '.agenticloop', 'tmp', 'RC-1.execution.json'), 'utf8'));
+    const execution = JSON.parse(readFileSync(join(fixture.root, '.agenticloop', 'checks', 'T-001', 'RC-1.execution.json'), 'utf8'));
+    fixtureGit(fixture.root, ['add', '.agenticloop/checks/T-001/RC-1.execution.json']);
+    fixtureGit(fixture.root, ['commit', '-m', 'record required check evidence\n\nTask: T-001\nAgent: engineer']);
     const checks = JSON.parse(readFileSync(join(fixture.root, checksPath), 'utf8'));
     const repositoryChecks = checks.map(check => {
       const { executionEvidence, ...observation } = check;
@@ -2423,7 +2473,7 @@ describe('return evidence, cancellation provenance, and current-repository verif
     await assertPublicRefusal('review: missing committed replay state', reviewArgs, {
       ...options, hostAuthority: protectedHostBoundary(fixture.trust),
     }, /replay/i);
-    const executionPath = join(fixture.root, '.agenticloop', 'tmp', 'RC-1.execution.json');
+    const executionPath = join(fixture.root, '.agenticloop', 'checks', 'T-001', 'RC-1.execution.json');
     const executionBytes = readFileSync(executionPath, 'utf8');
     writeFileSync(executionPath, `${executionBytes}\nartifact content drift\n`, 'utf8');
     await assertPublicRefusal('review: execution artifact content and digest drift', reviewArgs, options, /execution evidence|digest|artifact/i);

@@ -49,13 +49,32 @@ function assertOk(result, label) {
 async function consumePacket(fixture, cli, sequence) {
   const root = fixture.root;
   const packetPath = `.agenticloop/tmp/packet-${sequence}.json`;
-  // Every packet is minted the way the field run minted its nine: through the
-  // real commands, including the decomposition regeneration each role start's
-  // own carrier mutation makes necessary for the next one.
-  const preflight = await cli(['task', 'handoff-preflight', 'T-001', '--host', 'opencode', '--json']);
-  if (preflight.status !== 0) {
-    const repair = JSON.parse(preflight.stdout).firstSafeRepair.replace(/^npx agenticloop /, '').split(' ');
-    assertOk(await cli([...repair, '--json']), `regenerate the decomposition for ${sequence}`);
+  // Every packet is minted through the real commands. For a successor, execute
+  // live preflight first: it must truthfully predict product work for the
+  // current attempt, not claim a fresh-dispatch repair is its next command.
+  // Automatic pre-work supersession then refreshes decomposition explicitly.
+  if (sequence > 1) {
+    const preflight = await cli(['task', 'handoff-preflight', 'T-001', '--host', 'opencode', '--json']);
+    const preflightResult = JSON.parse(preflight.stdout);
+    if (preflight.status === 1) {
+      assert.match(preflightResult.firstSafeRepair, /^npx agenticloop task prepare-decomposition /);
+      const repair = preflightResult.firstSafeRepair.replace(/^npx agenticloop /, '').split(' ');
+      assertOk(await cli([...repair, '--json']), `execute preflight repair for ${sequence}`);
+    } else {
+      assert.equal(preflight.status, 0, `preflight before successor ${sequence} must be decided`);
+      assert.equal(preflightResult.liveAttemptGate.nextStep, 'product_work');
+      const head = git(root, ['rev-parse', 'HEAD']);
+      const tree = git(root, ['rev-parse', 'HEAD^{tree}']);
+      assertOk(await cli([
+        'task', 'prepare-decomposition', 'T-001',
+        '--work-unit', 'fixture-work-unit',
+        '--source-ref', '.agenticloop/decompositions/T-001.json',
+        '--source-revision', `git-commit:${head}`,
+        '--base', tree,
+        '--dependencies', 'dependencies.json',
+        '--output', '.agenticloop/decompositions/T-001.json', '--json',
+      ]), `regenerate the decomposition for ${sequence}`);
+    }
     git(root, ['add', '.agenticloop/decompositions']);
     git(root, ['commit', '-m', `regenerate the decomposition\n\nTask: T-001\nAgent: maintainer`]);
   }
@@ -63,10 +82,7 @@ async function consumePacket(fixture, cli, sequence) {
     'task', 'prepare-dispatch', 'T-001', '--host', 'opencode', '--role', 'engineer',
     '--output', packetPath, '--json',
   ]), `mint packet ${sequence}`);
-  const started = await cli([
-    'task', 'status', 'T-001', 'in-progress', '--expect-digest', carrierDigest(root),
-    '--dispatch-packet', packetPath, '--note', `attempt ${sequence}`, '--json',
-  ]);
+  const started = await cli(['task', 'role-start', 'T-001', '--packet', packetPath, '--json']);
   if (started.status === 0) {
     git(root, ['add', '.agenticloop/tasks', '.agenticloop/handoffs']);
     git(root, ['commit', '-m', `start attempt ${sequence}\n\nTask: T-001\nAgent: engineer`]);
@@ -129,6 +145,15 @@ describe('consuming a packet retires the attempt it supersedes', () => {
     ]), 'explicit abandonment');
     const after = await attemptStatus(cli);
     assert.equal(after.attempts.at(-1).abandonment.disposition, 'abandoned');
+    git(fixture.root, ['add', '.agenticloop/handoffs/attempts']);
+    git(fixture.root, ['commit', '-m', 'record explicit abandonment\n\nTask: T-001\nAgent: maintainer']);
+
+    const preflight = await cli(['task', 'handoff-preflight', 'T-001', '--host', 'opencode', '--json']);
+    assert.equal(preflight.status, 1, 'retired attempt exposes the fresh-dispatch repair');
+    const result = JSON.parse(preflight.stdout);
+    assert.match(result.firstSafeRepair, /^npx agenticloop task prepare-decomposition /);
+    const repair = result.firstSafeRepair.replace(/^npx agenticloop /, '').split(' ');
+    assertOk(await cli([...repair, '--json']), 'execute preflight first-safe repair');
   });
 });
 

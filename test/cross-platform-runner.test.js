@@ -238,6 +238,30 @@ describe('cross-platform runner', () => {
       }
     });
 
+    it('fails closed when a wrapper reports an error beside a numeric success status', () => {
+      assert.throws(() => runRequiredCheckCommand({ command: 'node', args: ['--version'], cwd: process.cwd() }, {
+        spawn: () => ({
+          status: 0,
+          stdout: 'v99.0.0',
+          stderr: '',
+          error: Object.assign(new Error('wrapper execution could not be trusted'), { code: 'EWRAPPER' }),
+        }),
+      }), error => error.code === 'EWRAPPER' &&
+        error.logicalCommand === 'node' &&
+        /could not be trusted/.test(error.message));
+    });
+
+    it('fails closed when a wrapper reports an error beside a numeric child failure status', () => {
+      assert.throws(() => runRequiredCheckCommand({ command: 'node', args: ['-e', 'process.exit(23)'], cwd: process.cwd() }, {
+        spawn: () => ({
+          status: 23,
+          stdout: '',
+          stderr: 'child failed',
+          error: Object.assign(new Error('wrapper transport failed'), { code: 'EIO' }),
+        }),
+      }), error => error.code === 'EIO' && /transport failed/.test(error.message));
+    });
+
     it('executes npm on Windows through cmd.exe shim', t => {
       if (process.platform !== 'win32') {
         t.skip('Windows-only test');

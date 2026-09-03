@@ -167,7 +167,7 @@ describe('A4: role-start registry', () => {
     assert.equal(hasExpectDigest, false, 'role-start must not accept --expect-digest');
   });
 
-  it('requires --packet and --check-evidence-output', () => {
+  it('requires --packet and exposes an optional scratch aggregate override', () => {
     const spec = COMMAND_REGISTRY.task.subcommands['role-start'];
     const packetOpt = spec.options.find(opt => opt.name === 'packet');
     const checksOpt = spec.options.find(opt => opt.name === 'check-evidence-output');
@@ -227,9 +227,11 @@ describe('F6: handoff-sequence role-start', () => {
     const roleStart = seq.steps.find(s => /role-start/.test(s.command));
     assert.ok(roleStart, 'files backend sequence must use task role-start');
     assert.ok(roleStart.command.includes('--packet'), 'must include --packet');
-    assert.ok(roleStart.command.includes('--check-evidence-output'), 'must include --check-evidence-output');
+    assert.ok(!roleStart.command.includes('--check-evidence-output'), 'must use the deterministic scratch aggregate default');
     assert.ok(roleStart.writes.some(w => w.includes('tasks/')), 'must write task record');
     assert.ok(roleStart.writes.some(w => w.includes('dispatch/')), 'must write dispatch consumption');
+    assert.deepEqual(roleStart.scratchWrites, ['.agenticloop/tmp/T-001-checks.json']);
+    assert.ok(!roleStart.writes.some(w => w.includes('checks.json')), 'mutable aggregate must not be durable');
   });
 
   it('non-files backend uses task status', () => {

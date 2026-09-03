@@ -585,13 +585,17 @@ receipt. Capability registration alone is not evidence that a return occurred.
 The ordinary public handoff is CLI-artifact based: the orchestrator runs `npx
 agenticloop task prepare-dispatch <id> --host <host> --role engineer --output
 <packet-path> --json`; guarded role start consumes and revalidates it; the
-engineer runs `task check-evidence-init` and `task check-evidence-update`, then
-`task prepare-return`; and the receiver runs `task verify-return <id> --packet
+files role start creates the scratch check aggregate, the engineer runs the
+ordered `task evidence` commands and `task check-evidence-update`, then `task
+prepare-return`; and the receiver runs `task verify-return <id> --packet
 <packet-path> --return <return-path> --from-current-repository` before review.
 Use target-relative artifact paths. Do not inspect internals or hand-author the
 packet, evidence, return JSON, or digests. Host statuses, messages, opaque
 handles, and cancellation observations are not returns; cancellation/status alone
 does not establish cancellation.
+
+The GitHub backend has no files `role-start` aggregate producer, so its
+documented flow continues to run `task check-evidence-init` explicitly.
 
 For files-backed Engineer work, do not restore the pre-start task body. Commit
 the product artifact, then use `task evidence` for artifact, summary/check, and
@@ -694,7 +698,7 @@ Advisory/unavailable bindings become version 3 typed degraded reports in the
 dispatch packet and are validated with the canonical packet at authenticated
 role-return import.
 
-A blocked return normally resumes with its authenticated producer role. The
+A cancellation-blocked return normally resumes with its authenticated producer role. Ordinary workflow/tooling blockers are non-authoritative session status and do not enter this return-resumption path. The
 existing `task verify-return` command is also the blocked resume/recovery gate:
 `--resume-owner` needs an exact signed redelegation record when it differs from
 the producer, while `--recovery-request` needs an exact signed

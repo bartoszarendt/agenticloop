@@ -528,6 +528,11 @@ export function classifyCloseoutPath(relPath, options = {}) {
   for (const prefix of [
     '.agenticloop/activations/',
     '.agenticloop/handoffs/',
+    // Immutable required-check executions are durable workflow evidence. Their
+    // schema, digest, packet/task binding, and content are revalidated through
+    // the current verified return; classifying the tracked artifact as product
+    // drift would make the canonical check-evidence path uncloseable.
+    '.agenticloop/checks/',
     '.agenticloop/reviews/',
     '.agenticloop/returns/verifications/',
     '.agenticloop/closeout-waivers/',

@@ -32,6 +32,10 @@ function defaultGitRunner(args, options = {}) {
 
 function runGit(gitRunner, cwd, args) {
   const result = (gitRunner ?? defaultGitRunner)(args, { cwd, encoding: 'utf-8' });
+  // Git evidence crosses a trust boundary. An explicit spawn error always
+  // makes the probe unavailable, even when a non-standard wrapper also
+  // supplies a numeric status: the two signals conflict and cannot prove a
+  // genuine Git verdict.
   if (result?.error) {
     return { ok: false, error: result.error.message, status: null, stdout: '', stderr: '' };
   }

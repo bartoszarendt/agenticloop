@@ -1465,6 +1465,9 @@ export function dispatchDimensionDiagnosticCode(dimension) {
  *                     revalidation that runs immediately before role mutation.
  * - `live_readiness`  authoritative facts refetched now with no assignment bound
  *                     yet. Used by `task handoff-preflight`.
+ * - `live_continuation` current authority and task facts for an already
+ *                     consumed attempt. Used by live-attempt preflight without
+ *                     replaying role-start-only clean/readiness decisions.
  * - `sealed_packet`   the authenticated projections carried inside one exact
  *                     packet, plus externally resolved authority. Used by
  *                     prepared-packet validation and by role-start
@@ -1475,7 +1478,9 @@ export function dispatchDimensionDiagnosticCode(dimension) {
  * candidate carrying an unknown shape, an unknown field, or a missing field is
  * refused before any dimension is evaluated.
  */
-export const DISPATCH_FACT_SHAPES = Object.freeze(['live_dispatch', 'live_readiness', 'sealed_packet']);
+export const DISPATCH_FACT_SHAPES = Object.freeze([
+  'live_dispatch', 'live_readiness', 'live_continuation', 'sealed_packet',
+]);
 
 /**
  * The fact shape the pre-mutation revalidation boundary evaluates.
@@ -1497,6 +1502,10 @@ const CANDIDATE_FIELDS = Object.freeze({
     'factShape', 'snapshot', 'authorization', 'readinessObservation', 'dependencyObservation',
     'repository', 'decomposition', 'parallelScanInventory', 'hostRoleCapability', 'policy',
     'returnCapability', 'cleanStateObservation', 'inventoryRecheck', 'authority', 'now',
+  ]),
+  live_continuation: Object.freeze([
+    'factShape', 'snapshot', 'authorization', 'repository', 'hostRoleCapability',
+    'policy', 'returnCapability', 'consumption', 'now',
   ]),
   sealed_packet: Object.freeze([
     'factShape', 'packet', 'authority', 'now',
@@ -1709,6 +1718,33 @@ function decideTaskDimensions(snapshot, sink, ledger) {
     else ledger.record(dimension, 'refused', { evidenceState: group[0].evidenceState, code: group[0].code });
   }
   return contract;
+}
+
+/** Decide current activation and policy once for every live fact domain. */
+function decideCurrentAuthorization(authorization, policy, ledger, findings) {
+  const activationSink = dimensionFindings('activation');
+  if (!isObject(authorization)) {
+    activationSink.missing('no current activation authority was resolved for this task');
+  } else if (authorization.state !== 'present') {
+    const classified = authorizationDiagnostic(authorization.state);
+    const messages = Array.isArray(authorization.errors) && authorization.errors.length
+      ? authorization.errors
+      : [`task activation authorization is '${String(authorization.state)}'`];
+    activationSink.add(classified.evidenceState, messages.join('; '), { code: classified.code });
+  }
+  ledger.absorb('activation', activationSink, findings);
+
+  const assuranceSink = dimensionFindings('activation_assurance');
+  if (isObject(authorization) && authorization.state === 'present' &&
+      typeof policy?.minimumActivation === 'string' && typeof authorization.assurance === 'string' &&
+      !activationAssuranceMeets(authorization.assurance, policy.minimumActivation)) {
+    assuranceSink.negative(
+      `activation assurance '${authorization.assurance}' is below the effective minimum ` +
+      `'${policy.minimumActivation}' required by ${policy.mode} mode`,
+      { code: 'activation.assurance.insufficient', disposition: 'blocked' }
+    );
+  }
+  ledger.absorb('activation_assurance', assuranceSink, findings);
 }
 
 /**
@@ -1964,29 +2000,7 @@ function evaluateLiveReadiness(candidate) {
   findings.extend(taskSink.items);
 
   // 3. Current activation authorization and the assurance the policy requires.
-  const activationSink = dimensionFindings('activation');
-  if (!isObject(authorization)) {
-    activationSink.missing('no current activation authority was resolved for this task');
-  } else if (authorization.state !== 'present') {
-    const classified = authorizationDiagnostic(authorization.state);
-    const messages = Array.isArray(authorization.errors) && authorization.errors.length
-      ? authorization.errors
-      : [`task '${String(snapshot?.taskId)}' activation authorization is '${String(authorization.state)}'`];
-    activationSink.add(classified.evidenceState, messages.join('; '), { code: classified.code });
-  }
-  ledger.absorb('activation', activationSink, findings);
-
-  const assuranceSink = dimensionFindings('activation_assurance');
-  if (isObject(authorization) && authorization.state === 'present' &&
-      typeof policy?.minimumActivation === 'string' && typeof authorization.assurance === 'string' &&
-      !activationAssuranceMeets(authorization.assurance, policy.minimumActivation)) {
-    assuranceSink.negative(
-      `activation assurance '${authorization.assurance}' is below the effective minimum ` +
-      `'${policy.minimumActivation}' required by ${policy.mode} mode`,
-      { code: 'activation.assurance.insufficient', disposition: 'blocked' }
-    );
-  }
-  ledger.absorb('activation_assurance', assuranceSink, findings);
+  decideCurrentAuthorization(authorization, policy, ledger, findings);
 
   // 4. Readiness. The fact domains genuinely differ here and must: packet
   //    preparation validates a readiness *evidence artifact* the Maintainer
@@ -2134,6 +2148,121 @@ function evaluateLiveReadiness(candidate) {
       : null,
     // A read-only readiness decision can never mint a packet: no assignment
     // was bound, so no packet exists to authorize.
+    packetEligible: false,
+  });
+}
+
+/* ── live_continuation: current gates for one consumed attempt ──────────── */
+
+/**
+ * Decide the gates that can still invalidate an already-consumed attempt.
+ * Role-start-only facts (initial clean state, readiness, and decomposition)
+ * are represented explicitly as not applicable: replaying them after the
+ * required role-start commit would manufacture staleness. Current task,
+ * activation, policy, repository identity, host capability, and return
+ * capability remain live and are evaluated before preflight may say proceed.
+ */
+function evaluateLiveContinuation(candidate) {
+  const shape = 'live_continuation';
+  const ledger = new DecisionLedger();
+  const findings = new FindingSet('dispatch.packet.invalid');
+  const warnings = new FindingSet('dispatch.packet.invalid');
+  const {
+    snapshot, authorization, repository, hostRoleCapability, policy,
+    returnCapability, consumption,
+  } = candidate;
+
+  const lifecycleSink = dimensionFindings('lifecycle');
+  const status = taskStatusFromBody(snapshot?.body);
+  if (status !== 'in-progress') {
+    lifecycleSink.negative(
+      `a live consumed Engineer attempt requires task status 'in-progress', observed '${String(status ?? 'missing')}'`,
+      { code: DISPATCHABLE_LIFECYCLE_DIAGNOSTIC_CODE, disposition: 'blocked' },
+    );
+  }
+  ledger.absorb('lifecycle', lifecycleSink, findings);
+
+  const taskSink = dimensionFindings('task_contract');
+  const contract = decideTaskDimensions(snapshot, taskSink, ledger);
+  findings.extend(taskSink.items);
+
+  decideCurrentAuthorization(authorization, policy, ledger, findings);
+
+  for (const [dimension, note] of [
+    ['readiness', 'the recognized role-start consumption sealed the dispatch readiness decision'],
+    ['dependency_evidence', 'the recognized role-start consumption sealed dependency evidence'],
+    ['decomposition', 'the recognized role-start consumption sealed decomposition evidence'],
+    ['work_unit_membership', 'the recognized role-start consumption sealed work-unit membership'],
+    ['maintainer_attribution', 'the recognized role-start consumption sealed Maintainer attribution'],
+    ['task_eligibility', 'the recognized role-start consumption sealed task eligibility'],
+    ['base_identity', 'the live attempt may advance beyond its sealed dispatch base'],
+    ['clean_state', 'role-start and product work are expected to advance the initially clean checkout'],
+  ]) ledger.record(dimension, 'not_applicable', { note });
+
+  const repositorySink = dimensionFindings('repository_identity');
+  if (!isObject(repository)) {
+    repositorySink.missing('current repository state could not be observed');
+  } else {
+    if (typeof repository.worktree !== 'string' || !repository.worktree) {
+      repositorySink.malformed('current repository worktree identity is required');
+    }
+    if (!isGitObjectId(repository.head)) repositorySink.malformed('current repository HEAD must be a full Git identity');
+  }
+  if (!isObject(consumption)) {
+    repositorySink.missing('recognized live-attempt dispatch consumption is required');
+  } else {
+    if (consumption.backend !== snapshot?.backend || consumption.taskId !== snapshot?.taskId ||
+        consumption.taskContractDigest !== contract?.digest) {
+      repositorySink.changed('live dispatch consumption does not bind the current task and contract');
+    }
+    if (typeof repository?.worktree === 'string' &&
+        consumption.repositoryIdentity !== targetRepositoryIdentity(repository.worktree)) {
+      repositorySink.changed('live dispatch consumption does not bind the current repository identity');
+    }
+    if (consumption.workflowRole !== 'engineer') {
+      repositorySink.negative('live dispatch consumption is not assigned to the Engineer role');
+    }
+  }
+  ledger.absorb('repository_identity', repositorySink, findings);
+
+  const assignmentSink = dimensionFindings('assignment');
+  if (!isObject(consumption) || typeof consumption.packetId !== 'string' ||
+      typeof consumption.invocationId !== 'string') {
+    assignmentSink.missing('live attempt packet and invocation identity are unavailable');
+  }
+  ledger.absorb('assignment', assignmentSink, findings);
+
+  const capabilitySink = dimensionFindings('host_role_capability');
+  if (!isObject(hostRoleCapability)) {
+    capabilitySink.missing('current Engineer host-role capability could not be resolved');
+  } else if (Array.isArray(hostRoleCapability.errors) && hostRoleCapability.errors.length) {
+    capabilitySink.malformed(
+      `host-role capability declaration is invalid: ${hostRoleCapability.errors.join('; ')}`,
+      { code: 'capability.declaration.invalid' },
+    );
+  }
+  ledger.absorb('host_role_capability', capabilitySink, findings);
+
+  const returnSink = dimensionFindings('return_capability');
+  if (isObject(returnCapability)) {
+    for (const error of returnCapability.errors ?? []) {
+      returnSink.negative(error.message, { code: error.code ?? 'return.assurance.insufficient' });
+    }
+    for (const warning of returnCapability.warnings ?? []) {
+      warnings.add(warning.evidenceState ?? 'current', warning.message, { code: warning.code });
+    }
+  }
+  ledger.absorb('return_capability', returnSink, findings);
+
+  return freezeDecision({
+    ok: findings.length === 0,
+    factShape: shape,
+    findings,
+    warnings,
+    ledger,
+    bindings: findings.length === 0
+      ? { snapshot, contract, repository, policy, consumption }
+      : null,
     packetEligible: false,
   });
 }
@@ -2314,6 +2443,7 @@ function evaluateSealedPacket(candidate) {
 const SHAPE_EVALUATORS = Object.freeze({
   live_dispatch: evaluateLiveDispatch,
   live_readiness: evaluateLiveReadiness,
+  live_continuation: evaluateLiveContinuation,
   sealed_packet: evaluateSealedPacket,
 });
 
@@ -2407,6 +2537,24 @@ export function liveReadinessCandidate({
     cleanStateObservation: cleanStateObservation ?? null,
     inventoryRecheck: inventoryRecheck ?? null,
     authority: authority ?? {},
+    now: now ?? undefined,
+  };
+}
+
+/** Build the current-facts candidate for an already-consumed attempt. */
+export function liveContinuationCandidate({
+  snapshot, authorization, repository, hostRoleCapability, policy,
+  returnCapability, consumption, now,
+}) {
+  return {
+    factShape: 'live_continuation',
+    snapshot,
+    authorization: authorization ?? null,
+    repository: repository ?? null,
+    hostRoleCapability: hostRoleCapability ?? null,
+    policy: policy ?? null,
+    returnCapability: returnCapability ?? null,
+    consumption: consumption ?? null,
     now: now ?? undefined,
   };
 }

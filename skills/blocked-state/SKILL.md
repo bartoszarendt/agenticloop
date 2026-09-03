@@ -177,7 +177,40 @@ durable backend and Git state first. Session metadata is at most
 `session_reported`; store only compact coordination state, acknowledge a queued
 pause before continuing, and make the reconciliation a no-op when repeated.
 
-A normal resume retains the producing `roleId` from the exact blocked
+Follow the typed first-safe repair on the first refusal. Define its stable
+signature from the command, diagnostic code, evidence state, repair kind, and
+relevant expected/current binding identities. If that same signature recurs
+after repair, or preflight and the first downstream gate contradict each other
+on unchanged facts, stop: do not mint or consume another packet and do not spend
+another engineering attempt. Preserve the current attempt when safe, route one
+bounded validator/source diagnosis, and return to the operator if authority or
+a contract change is required. Precedent is a hypothesis, not authority.
+
+The public files `prepare-return --outcome implementation_blocked` producer is
+cancellation-only. Ordinary workflow and tooling blockers therefore return no
+raw role return. Report this closed non-authoritative session-status shape:
+
+```text
+kind: agenticloop.session-status
+schemaVersion: 1
+authoritative: false
+taskId: <task-id>
+attemptId: <attempt-id>
+packetId: <packet-id>
+taskContractDigest: <digest>
+carrierTerminalDigest: <digest>
+blockerCategory: <category>
+diagnosticCode: <code>
+resumptionCondition: <specific condition>
+rawReturn: null
+transitionAuthority: false
+```
+
+This host/session status is an observation only. It never becomes authenticated
+evidence and cannot satisfy successful return, review, acceptance, closeout, or
+an authenticated cancellation claim.
+
+A cancellation-return resume retains the producing `roleId` from the exact blocked
 `agenticloop.role-return`. Run the resume through `task verify-return` /
 `role_return_receive`; do not mutate or persist first. Changing owner requires a
 closed version 2 redelegation authority bound to the return ID/digest, consumed
@@ -190,7 +223,7 @@ caller-supplied producer strings, or who edits next.
 
 Before destructive, scope-changing, or host-state repair, require a fresh closed
 version 2 `agenticloop.human-disposition` record at that same import edge. It
-must bind the exact blocked return and requested recovery class, identity,
+must bind the exact cancellation-blocked return and requested recovery class, identity,
 scope/host state, human actor, durable authority reference, reason,
 issue/expiry times, resulting owner/transition, and invalidation conditions.
 The signature must verify against the fixed operator-pinned human authority.

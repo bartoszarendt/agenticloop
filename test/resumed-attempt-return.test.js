@@ -175,7 +175,7 @@ describe('a resumed attempt whose product work is already committed can return',
         'task', 'check-evidence-update', 'T-001', '--packet', secondPacket,
         '--input', checksPath, '--output', checksPath, '--check', check.id,
         '--outcome', 'passed', '--evidence', `${check.id} passed`,
-        '--execution-output', `.agenticloop/tmp/${check.id}.execution.json`, '--json',
+        '--execution-output', `.agenticloop/checks/T-001/${check.id}.execution.json`, '--json',
       ]), `check evidence update ${check.id}`);
     }
 

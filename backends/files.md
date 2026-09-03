@@ -73,9 +73,12 @@ dependency status, makes the scan stale and refuses dispatch.
 The ordinary files handoff starts with `task prepare-dispatch <id> --host <host>
 --role engineer --output <packet-path> --json`; guarded role start consumes and
 revalidates it through `task role-start <id> --packet <packet-path>
---check-evidence-output <checks-path>`. `task prepare-dispatch <id> --input <dispatch-input.json>` is an
+--json`. The mutable check aggregate defaults to
+`.agenticloop/tmp/<id>-checks.json` and is scratch. `task prepare-dispatch <id> --input <dispatch-input.json>` is an
 advanced compatibility route, while `task prepare-dispatch <id> --packet
-<packet.json> --role engineer` is the matching receive-side revalidator. An
+<packet.json> --role engineer` remains a pre-role-start read-only diagnostic.
+It is not rerun after consumption; `role-start` owns the authoritative final
+full revalidation before mutation. An
 optional `--host-trust-store` can assert, but cannot select, the target's
 pre-registered path under the fixed operator registry. They
 refetch task/Git facts, rerun readiness from its exact base/dependency sources,
@@ -135,8 +138,10 @@ re-observe dependency state, so the Maintainer stays responsible for those
 statuses being currently true.
 
 After product work and all Engineer-owned carrier evidence are committed, the
-Engineer reinitializes the final empty scaffold with `task check-evidence-init`,
-runs and records every check with `task check-evidence-update`, and performs no
+Engineer updates the role-start aggregate at
+`.agenticloop/tmp/<id>-checks.json`, runs and records every check with `task
+check-evidence-update`, commits only immutable artifacts under
+`.agenticloop/checks/<id>/`, and performs no
 mutating workflow command before `task prepare-return`. The receiver runs `task verify-return <id> --packet
 <packet-path> --return <return-path> --from-current-repository` before `task
 review-prepare <id>` or review. All these artifact paths are target-relative.
@@ -202,8 +207,10 @@ replacement, and names both legal exits. `task attempt-status <id>` reports the
 attempts and whether a new packet is permitted; `task abandon-attempt <id>`
 records an explicit discard under `.agenticloop/handoffs/attempts/` with a stated
 reason and a durable authority, preserving the abandoned attempt rather than
-deleting it. Re-validating an existing packet with `--packet` is never refused by
-this rule. Unreadable consumption, abandonment, or receipt evidence fails closed.
+deleting it. Pre-role-start packet revalidation with `--packet` is not refused
+by this conservation rule. It is not a post-start verifier: role start has
+already advanced the bound state. Unreadable consumption, abandonment, or
+receipt evidence fails closed.
 
 One generation has two carrier terminals, and they are not the same digest. The
 **execution terminal** is the consumption plus the Engineer's own receipts; that
@@ -570,6 +577,11 @@ through one mutation batch, and creates one
 `chore(<work-unit>): settle readiness` commit with exact `Work-Unit`, canonical
 `Tasks`, and `Agent` trailers. Every decomposition binds the same final scan;
 single-task planning is the specialization of this path.
+The set is indivisible: one member with a live consumed Engineer attempt refuses
+the whole apply before mutation and reports the blocking member plus the full
+set. Partial sibling apply is unsupported because it would invalidate that
+shared prospective inventory. Finish or retire the attempt, then regenerate
+the work-unit plan.
 
 GitHub apply is unsupported: no equivalent transactional carrier exists there, so
 `readiness-apply` returns the standard typed unsupported-backend result. The files

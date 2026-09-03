@@ -31,6 +31,7 @@
  */
 
 import {
+  EXECUTION_ATTEMPT_ABANDONMENT_DISPOSITIONS,
   groupExecutionAttempts,
   listExecutionAttemptAbandonments,
 } from './execution-attempt.js';
@@ -166,6 +167,22 @@ function isAncestor(runGit, ancestor, descendant) {
 }
 
 /**
+ * Whether one terminal attempt preserves product-lineage continuity.
+ *
+ * Carry compatibility is deliberately separate from engineering-budget
+ * accounting. Every closed-schema abandonment disposition is a durable
+ * explanation of why ownership ended; the disposition-specific mutation
+ * constraints were already validated when the record was loaded.
+ */
+export function isCarryCompatibleAttempt(attempt) {
+  return Boolean(
+    attempt?.abandonment &&
+    EXECUTION_ATTEMPT_ABANDONMENT_DISPOSITIONS.includes(attempt.state) &&
+    attempt.abandonment.disposition === attempt.state
+  );
+}
+
+/**
  * Derive the product head of a range: the newest commit that carries a
  * non-workflow path.
  *
@@ -276,13 +293,14 @@ export function resolveCarriedProductLineage(target, taskId, {
   }
   if (index <= 0) return { ok: true, lineage: null, errors: [] };
 
-  // Only an unbroken run of *explicitly abandoned* attempts is carried. A live
+  // Only an unbroken run of terminal, validated abandonment attempts is
+  // carried. A live
   // attempt in between means some other attempt still owns that work, and a gap
   // means the record does not explain what happened; both keep the ordinary
   // packet base rather than reaching further back on a guess.
   const carried = [];
   for (let position = index - 1; position >= 0; position--) {
-    if (attempts[position].state !== 'abandoned') break;
+    if (!isCarryCompatibleAttempt(attempts[position])) break;
     carried.unshift(attempts[position]);
   }
   if (carried.length === 0) return { ok: true, lineage: null, errors: [] };

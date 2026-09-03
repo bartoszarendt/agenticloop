@@ -430,6 +430,11 @@ task uses the compatible positional command. A bounded sibling set uses
 common dependency snapshot or a per-task snapshot map, then applies that plan
 atomically. Every prospective carrier is overlaid before the one canonical scan;
 all resulting decompositions bind the final inventory and one work-unit scan.
+The reviewed set is indivisible: if any member has a live consumed Engineer
+attempt, `readiness-apply --yes` refuses the entire work-unit plan before any
+mutation and names the blocking task and full task set. There is no partial
+sibling apply because it would invalidate the plan's shared prospective
+inventory; wait for return or retire the attempt, then regenerate the plan.
 The commit subject is `chore(<task-id>): settle readiness` for one task or
 `chore(<work-unit-id>): settle readiness` with exact canonical `Work-Unit`,
 `Tasks`, and `Agent` trailers for a set. Readiness never creates activation.
@@ -537,8 +542,10 @@ The ordinary public handoff uses CLI-authored artifacts, in this order:
    <host> --role engineer --output <packet-path> --json`.
 2. For the files backend, guarded role start atomically consumes and revalidates
    that packet, transitions the carrier to in-progress, and initializes
-   required-check evidence through `task role-start <id> --packet <packet-path>
-   --check-evidence-output <checks-path>`. For GitHub, the existing guarded
+   required-check evidence through `task role-start <id> --packet
+   <packet-path>`. The aggregate defaults to
+   `.agenticloop/tmp/<id>-checks.json`; it is
+   mutable scratch, not a commit output. For GitHub, the existing guarded
    `task-body transition` path is used.
 3. The Engineer completes product work, runs `task prepare-product-commit` to
    derive the exact task-owned path set and canonical message file, commits it,
@@ -547,9 +554,9 @@ The ordinary public handoff uses CLI-authored artifacts, in this order:
    Known Gaps/Verification Attempts/Revision Resolution, and non-authoritative
    outcome through guarded `task evidence` mutations. Revision Resolution is
    Engineer-authored; the Maintainer validates it during re-review.
-4. After the last carrier mutation, the Engineer runs `task check-evidence-init`
-   to establish the final empty scaffold, executes and records every required
-   check with `task check-evidence-update`, and performs no mutating workflow
+4. After the last carrier mutation, the Engineer updates the role-start
+   aggregate with `task check-evidence-update`, commits only each immutable
+   `.agenticloop/checks/<id>/<check-id>.execution.json` artifact, and performs no mutating workflow
    command before deriving the raw return with `task prepare-return`.
 5. The receiving boundary runs `task verify-return <id> --packet <packet-path>
    --return <return-path> --from-current-repository`; only verified evidence
@@ -578,8 +585,11 @@ execution evidence as applicable.
 Before retrying the same failed operation, record its bounded structured
 observation with `task record-tooling-failure`. The default identical-failure
 budget is two total failures: the first failure permits one retry; the second
-identical failure refuses another. A different exact attempt, task contract,
-operation, or normalized signature starts a different cohort.
+identical failure refuses another. The refusal preserves a safe live attempt,
+does not mint or consume another packet, and routes one bounded validator/source
+diagnosis before further mutation. Precedent is a hypothesis, not authority. A
+different exact attempt, task contract, operation, or normalized signature
+starts a different cohort.
 
 Closeout audit currency is exact identity equality: the candidate being closed,
 `certified_artifact`, and the latest certifying run candidate must be identical,
@@ -719,7 +729,7 @@ Claims are authoritative only under this exact evidence mapping:
 
 | Claim | Authoritative evidence | Producer / evidence authority / work owner | Exact binding and invalidation | Without current valid evidence |
 | --- | --- | --- | --- | --- |
-| `implementation_blocked` | `structured_blocked_return` | Producing workflow role / same role or explicitly redelegated owner | Consumed transition ID/digest plus current blocker; invalidated by transition, evidence, or precondition change | `needs_context` |
+| `implementation_blocked` | Protected cancellation evidence plus a cancellation-bound role return | Producing workflow role; cancellation authority remains external | Exact consumed packet/attempt, cancellation receipt, contract, and carrier terminal | `needs_context`; ordinary workflow/tooling blockers use non-authoritative session status only |
 | `implementation_ready_for_review` | `exact_head_review_entry_receipt` | Review-preparation gate / review-preparation gate / Engineer | Mandatory closed receipt for one final complete task/PR snapshot: full artifact identity, task and contract digests, checks/evidence, attribution, history, policy, and workspace; invalidated by any bound input change | `blocked` |
 | `review_changes_requested` | `durable_review_changes_result` | Maintainer / Maintainer | Exact reviewed artifact and finding set; invalidated by artifact or carrier change | `rejected` |
 | `review_accepted` | `durable_review_acceptance_result` | Maintainer / Maintainer | Exact current reviewed artifact; invalidated by artifact or acceptance-evidence change | `blocked` |
@@ -733,7 +743,7 @@ blocking, labels, comments, audit state, and closeout are not synonyms.
 | Fact | Canonical source and owner | Files / GitHub projection carrier | Freshness | Authority |
 | --- | --- | --- | --- | --- |
 | `contract_readiness` | Trusted task-contract baseline; Maintainer | Append-only task-contract history / verified immutable task-contract comment | Current material task digest | Authoritative |
-| `runtime_blocked_state` | Current structured blocked result; producing role | Role-return receipt referenced by task history / issue or review carrier | Current transition and unsatisfied preconditions | Authoritative for resumption only |
+| `runtime_blocked_state` | Non-authoritative structured session status; producing role | Host/session return only, never authenticated evidence | Current task, attempt, packet, contract, carrier terminal, blocker category/code, and resumption condition | Observation only; grants no transition, review, acceptance, or closeout authority |
 | `task_lifecycle_status` | Durable task-record lifecycle status; Maintainer producer, task-contract store persister | Task-file frontmatter / task-issue body frontmatter | Current record digest and trusted chain for material transitions | Authoritative |
 | `labels` | Backend label set; backend projection | No files carrier (`applicable: false`, `carrier: null`) / issue labels | Refetched after owner reconciliation | Authoritative only for label presence |
 | `comments` | Typed comment or history carrier; its producer | Append-only task history or enabled event log / issue comments and review bodies | Carrier identity, trust, and bound artifact when required | Authoritative only for the typed record it carries |
@@ -746,6 +756,15 @@ Each projection identifies itself with `projectionBackend`, retains
 `supportedBackends` as the definition inventory, and selects each fact's
 `carrierApplicability`. Files and GitHub preserve every other shared semantic
 section.
+
+Ordinary workflow/tooling blocking is reported only as the closed host session
+shape `agenticloop.session-status` version 1 with `authoritative: false`, exact
+task/attempt/packet/contract/carrier-terminal identities, blocker category,
+diagnostic code, resumption condition, `rawReturn: null`, and
+`transitionAuthority: false`. It is not persisted or authenticated as workflow
+evidence and cannot satisfy return, review, acceptance, closeout, or
+cancellation. The public `implementation_blocked` role-return path remains
+cancellation-only because that claim requires protected external authority.
 
 #### Projection reconciliation
 
@@ -1018,9 +1037,9 @@ formats.
 | Action | Sole authority | Required evidence | Refusal when absent |
 | --- | --- | --- | --- |
 | `request_and_activation_identity` | Operator plus parser-controlled adapter | Expected digest and normalized-input receipt | Report unsupported or mismatch; do not trust a model restatement. |
-| `blocked_result_resumption` | Producing role or explicitly redelegated owner | Current blocked result, resume transition, and preconditions | Block remains non-transferable. |
+| `blocked_result_resumption` | Producing role or explicitly redelegated owner | Current cancellation-blocked return, resume transition, and preconditions | Block remains non-transferable; session-status observations do not enter this path. |
 | `exceptional_verification` | Capability-derived disposition owner | Authenticated producer request bound to the consumed dispatch packet, failed/unavailable check, evidence, proposed disposition, and next transition | `exception_requested`; no implicit substitute or completion. |
-| `destructive_or_scope_changing_recovery` | Human authority | Typed human disposition bound to exact blocked result and recovery | Human authority required. |
+| `destructive_or_scope_changing_recovery` | Human authority | Typed human disposition bound to exact cancellation-blocked return and recovery | Human authority required. |
 | `terminal_closeout` | Maintainer using `task_terminal_closeout` / `closeout_owned_accepted_to_closed` | Current closeout packet and passed closeout gate | Closeout gate required. |
 
 The exceptional-verification disposition owner is **derived**, never claimed.
@@ -1282,10 +1301,10 @@ and human-disposition records from JSON requests using the same serializers as
 verification. It reads a private key from an operator-controlled path, writes a
 new output file only, and never includes private key bytes in records or output.
 
-Destructive, scope-changing, or host-state recovery from a blocked result
+Destructive, scope-changing, or host-state recovery from a cancellation-blocked return
 requires one closed, operator-pinned, Ed25519-signed
 `agenticloop.human-disposition` version 2 record at the same import edge. It
-binds the exact blocked return and requested recovery identity/class/scope/host
+binds the exact cancellation-blocked return and requested recovery identity/class/scope/host
 state, human actor and durable authority reference, reason, issue/expiry times,
 resulting owner/transition, and invalidation conditions. Missing, unsigned,
 self-minted, malformed, stale, future-dated, revoked, cross-return, or

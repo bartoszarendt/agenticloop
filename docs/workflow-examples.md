@@ -144,8 +144,9 @@ After approval, the orchestrator delegates to the engineer. The engineer:
    `[[debugging-before-fixes]]` if a check fails.
 3. Completes and commits product work, then publishes artifact, summary/check
    summary, and non-authoritative outcome with `task evidence`.
-4. Reinitializes the final scaffold with `task check-evidence-init`, runs and
-   records each check with `task check-evidence-update`, and performs no mutation
+4. Updates the role-start scratch aggregate with `task check-evidence-update`,
+   commits only immutable execution artifacts under
+   `.agenticloop/checks/<id>/`, and performs no mutation
    before `task prepare-return`.
 5. Has the receiver run `task verify-return <id> --packet <packet-path> --return
    <return-path> --from-current-repository`; only then starts review.

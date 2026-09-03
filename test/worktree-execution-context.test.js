@@ -195,7 +195,7 @@ describe('a return lane that has not re-applied the implementation cannot return
         'task', 'check-evidence-update', 'T-001', '--packet', packetPath,
         '--input', checksPath, '--output', checksPath, '--check', check.id,
         '--outcome', 'passed', '--evidence', `${check.id} passed`,
-        '--execution-output', `.agenticloop/tmp/${check.id}.execution.json`, '--json', '--target', root,
+        '--execution-output', `.agenticloop/checks/T-001/${check.id}.execution.json`, '--json', '--target', root,
       ], options), `check evidence update ${check.id}`);
     }
 
@@ -283,7 +283,7 @@ describe('a worktree lane that re-applies the implementation reaches a verified 
         'task', 'check-evidence-update', 'T-001', '--packet', packetPath,
         '--input', checksPath, '--output', checksPath, '--check', check.id,
         '--outcome', 'passed', '--evidence', `${check.id} passed`,
-        '--execution-output', `.agenticloop/tmp/${check.id}.execution.json`, '--json',
+        '--execution-output', `.agenticloop/checks/T-001/${check.id}.execution.json`, '--json',
       ]), `check evidence update ${check.id}`);
     }
 

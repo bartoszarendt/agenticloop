@@ -33,6 +33,7 @@ import {
   validateExecutionAttemptAbandonment,
 } from '../src/execution-attempt.js';
 import { repairPolicyFor } from '../src/repair-policy.js';
+import { isCarryCompatibleAttempt } from '../src/product-lineage.js';
 
 let temp;
 before(() => { temp = mkdtempSync(join(tmpdir(), 'al-conserve-')); });
@@ -245,7 +246,13 @@ describe('attempts are grouped from durable evidence', () => {
       assert.equal(attempts.records[0].engineeringBudgetConsumed, budget);
       assert.equal(attempts.records[0].workflowRecovery, recovery);
       assert.notEqual(budget && recovery, true);
+      assert.equal(
+        isCarryCompatibleAttempt(attempts.records[0]),
+        true,
+        `${disposition} must remain lineage-continuous independently of budget accounting`,
+      );
     }
+    assert.equal(isCarryCompatibleAttempt({ state: 'live', abandonment: null }), false);
   });
 });
 

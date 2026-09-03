@@ -277,7 +277,11 @@ export function groupExecutionAttempts({ consumptions = [], abandonments = [], r
       packetId: record?.packetId ?? record?.evidence?.packet?.packetId ?? null,
       packetDigest: record?.packetDigest ?? record?.evidence?.packet?.digest ?? null,
       invocationId: record?.invocationId ?? record?.evidence?.packet?.assignment?.invocationId ?? null,
-      productBaseHead: record?.productBaseHead ?? record?.evidence?.roleReturn?.productBaseHead ?? null,
+      // Attempt identity is the base of the packet that started this attempt.
+      // A resumed return may truthfully widen its product range to a carried
+      // base, so the return record's productBaseHead is not the attempt base.
+      productBaseHead: record?.evidence?.packet?.repository?.head ??
+        record?.productBaseHead ?? record?.evidence?.roleReturn?.productBaseHead ?? null,
       attemptId: record?.attemptId ?? null,
     };
     const candidates = [...attemptsById].filter(([attemptId, consumption]) =>

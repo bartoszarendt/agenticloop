@@ -594,7 +594,10 @@ describe('clean gate reads large ignored trees without a false Git failure', () 
     }
 
     // The default 1 MB buffer overflows and the gate reports the overflow.
-    const defaultRunner = args => spawnGit(root, args);
+    // Pin the historical Node default explicitly. Node/runtime wrappers may
+    // raise their ambient spawn buffer, which would make this overflow
+    // characterization depend on the surrounding full-suite process.
+    const defaultRunner = args => spawnGit(root, args, { maxBuffer: 1024 * 1024 });
     const overflowed = evaluateDispatchCleanState({ runGit: defaultRunner, scopePatterns: ['src/**'] });
     assert.equal(overflowed.ok, false, 'default buffer should overflow on this tree');
     assert.match(overflowed.findings[0].message, /exceeded the Git output buffer/);

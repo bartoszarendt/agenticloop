@@ -15,23 +15,18 @@ remain in `agenticloop/AGENTIC_LOOP.md`.
 
 ## Parallel Opportunity Scan
 
-**Trigger.** Every authorized multi-task work unit (phase, group, milestone,
-epic, task set, or other bounded multi-task unit) receives one current scan
-after decomposition, once per meaningful readiness snapshot. Source plans,
-roadmaps, architecture documents, issue groupings, and maintainer proposals are
-inputs only; none is a scan result or parallel authorization.
+**Trigger.** Every authorized multi-task work unit receives one current scan per
+meaningful readiness snapshot. Source plans are inputs only, never scan results
+or parallel authorization.
 
-Before selecting an execution order, the orchestrator records the scan in the
-canonical `## Concurrency Plan`, an authorized task-record surface, or a
-single-writer coordination output. Do not duplicate it into every task or create
-a shared mutable findings ledger. The maintainer supplies per-task code/collision
-and joinability classifications through `## Parallel Safety`; the orchestrator
-verifies required task, artifact, host, liveness, and join inputs, then records
-and routes the batch decision. The orchestrator does not originate or override a
-semantic/code classification.
+Before ordering work, Orchestrator records the scan in canonical `## Concurrency
+Plan`, an authorized task-record surface, or single-writer output, never every
+task or a shared mutable ledger. Maintainer supplies per-task code/collision and
+joinability classifications through `## Parallel Safety`; Orchestrator verifies
+task, artifact, host, liveness, and join inputs and routes the decision without
+originating or overriding semantic/code classification.
 
-**Decide inventory completeness before ready count.** A ready count over an
-inventory never proven complete is not an answer:
+**Decide inventory completeness before ready count:**
 
 1. incomplete inventory or decomposition -> `incomplete`; never an eligibility
    answer, however few tasks are visible. Repair the evidence and rescan.
@@ -39,8 +34,8 @@ inventory never proven complete is not an answer:
 3. complete inventory, one ready task or no valid candidate pair ->
    `not_currently_eligible`, recorded as `not currently eligible - <n> ready
    task(s)` plus a rescan trigger.
-4. only a complete, fresh, fully accounted inventory reaches
-   `parallel_candidates`; then perform the assessment below.
+4. only complete, fresh, fully accounted inventory -> `parallel_candidates`;
+   then assess below.
 
 Rescan when inventory membership or enumeration coverage, task carrier digests,
 base or dependency evidence, ready membership, task scope or ownership, shared
@@ -59,29 +54,29 @@ freshness rules come from the canonical transition fact definitions.
 
 For each ready task, the scan must cover:
 
-- **Dependency edges** – which other tasks must finish first.
-- **Scope and write ownership** – `Expected Files or Areas` and `allowed_paths`
+- **Dependency edges** - which other tasks must finish first.
+- **Scope and write ownership** - `Expected Files or Areas` and `allowed_paths`
   are the broad scope/deviation map; machine-readable `owned_paths` is the
   expected exclusive write projection, and `shared_mutations` names any exact
   shared file and predicted operation.
-- **Test and validation surfaces** – writable tests, fixtures, snapshots,
+- **Test and validation surfaces** - writable tests, fixtures, snapshots,
   generated expectations, and shared validation helpers.
-- **Backend objects owned** – task file(s), GitHub issue/PR, or other backend
+- **Backend objects owned** - task file(s), GitHub issue/PR, or other backend
   records the lane mutates.
-- **Shared/generated files** – bundlers, codegen output, fixtures, snapshots.
-- **Lockfiles** – dependency manifests and lockfiles.
-- **Schemas/APIs** – shared schema or API ordering dependencies.
-- **External state** – databases, services, deployment targets, shared fixtures.
-- **Labels/comments/event logs/group state** – shared coordination surfaces.
-- **Shared assumptions and invariants** – facts about behavior, formats,
+- **Shared/generated files** - bundlers, codegen output, fixtures, snapshots.
+- **Lockfiles** - dependency manifests and lockfiles.
+- **Schemas/APIs** - shared schema or API ordering dependencies.
+- **External state** - databases, services, deployment targets, shared fixtures.
+- **Labels/comments/event logs/group state** - shared coordination surfaces.
+- **Shared assumptions and invariants** - facts about behavior, formats,
   contracts, or verification interpretation that sibling tasks rely on.
-- **Discoveries that could affect other tasks** – likely findings whose
+- **Discoveries that could affect other tasks** - likely findings whose
   appearance in one lane would invalidate another lane's assumptions, plan,
   implementation, or verification interpretation.
-- **Knowledge coupling** – the maintainer-recorded classification
+- **Knowledge coupling** - the maintainer-recorded classification
   `independent | coupled | unknown` from `## Parallel Safety`; see Knowledge
   Eligibility below.
-- **Host parallel capability** – whether the host can stream, cancel, or
+- **Host parallel capability** - whether the host can stream, cancel, or
   surface subagent status, or enforce bounded leases, and whether it can inject
   a message into a running lane.
 
@@ -236,9 +231,8 @@ approved facts. See the Project Operating Facts section in
 
 ## Cross-Lane Findings
 
-Every parallel lane declares cross-lane findings at each configured lease
-checkpoint and at its final return. A lane with nothing relevant explicitly
-returns:
+Every lane declares cross-lane findings at each lease checkpoint and final
+return. With nothing relevant, return:
 
 ```text
 Cross-lane findings: none
@@ -247,21 +241,16 @@ Cross-lane findings: none
 Otherwise the lane returns one or more structured findings:
 
 - **Finding id** – stable within the batch (for example `B1-F2`).
-- **Fact or invariant** – the discovered fact, stated as a claim another lane
-  could apply or revalidate against.
-- **Evidence reference** – the durable pointer backing the claim (task-file
-  section, PR, commit, check output location).
-- **Affected lane ids, or `none`** – lanes whose assumptions, plan,
-  implementation, or verification interpretation the finding could change.
-- **Requested response** – `apply` (adopt the fact and continue) or
-  `revalidate` (recheck assumptions, plan, or evidence against the fact).
+- **Fact or invariant** - a claim another lane can apply or revalidate.
+- **Evidence reference** - its durable task section, PR, commit, or check output.
+- **Affected lane ids, or `none`** - whose work or interpretation could change.
+- **Requested response** - `apply` or `revalidate`.
 
 Orchestrator routing duties:
 
 1. Collect checkpoint and join findings from every lane return.
-2. Determine whether each finding is relevant to another lane. Route only
-   findings with declared cross-lane relevance; ordinary lane-local debugging
-   detail stays in that lane's status or task summary and is not routed.
+2. Route declared cross-lane relevance only; lane-local debugging stays in that
+   lane's status/task summary.
 3. Route each relevant finding through the recipient lane's next delegation or
    resume prompt (the `Routed findings:` field in [[role-delegation]]).
 4. Require the recipient to record exactly one disposition per routed finding:
@@ -278,19 +267,14 @@ safety, acceptance, or integrated evidence and classifies it as an accepted
 limitation or follow-up. Otherwise the finding blocks the join and routes to
 revision or [[blocked-state]].
 
-Do not create a findings ledger or a shared mutable findings file. Findings
-live in lane status returns and are recorded in the existing concurrency plan
-or coordination output, which remains the single-writer durable surface. The
-orchestrator must not edit a task file currently owned by an active write lane;
-record routing before resuming the lanes on an orchestrator-owned coordination
-surface, or serially after the relevant lanes have stopped and returned their
-artifacts.
+Do not create a findings ledger or a shared mutable findings file. Findings live
+in lane returns and the existing single-writer durable surface. Orchestrator
+never edits a task file owned by an active write lane; record routing on its own
+coordination surface before resume, or serially after lanes return.
 
-Host honesty: when the host cannot inject a message into a running agent, do
-not pretend otherwise. Route at the next checkpoint or at the join. When a
-finding must be consumed before implementation continues, use the two-wave
-pattern or serialize the affected work instead of relying on asynchronous
-delivery the host cannot perform.
+If the host cannot inject a message into a running agent, do not pretend
+otherwise. Route at checkpoint/join; findings required before more writes force
+two-wave or serial work.
 
 
 ## Lane Types
@@ -519,10 +503,9 @@ command, purpose, owner, target artifact revision or tree, relevant
 environment/toolchain assumptions, execution phase, reuse eligibility, and
 rerun trigger.
 
-Evidence identity is not command plus branch name. It is the exact clean
-artifact tree or immutable revision, the exact command, and the relevant
-dependency/toolchain/environment state. The same command on different branch
-heads is different evidence.
+Evidence identity is the exact clean artifact tree or immutable revision,
+command, and relevant dependency/toolchain/environment state, not command plus
+branch. The same command on different branch heads is different evidence.
 
 Baseline reuse is allowed only when all of the following hold:
 
@@ -533,11 +516,9 @@ Baseline reuse is allowed only when all of the following hold:
 - the reused result is used only to establish baseline state.
 
 Baseline reuse never satisfies a lane-final, integrated, review, acceptance, or
-post-merge final-state claim. One verified base run may establish baseline
-state for multiple lanes when the identity conditions hold; it still proves
-nothing about any lane head or combined tree. An accepted verification decision
-may change execution strategy (focused, split, background, CI) but must not
-silently convert stale evidence into fresh evidence.
+post-merge final-state claim. One verified base run may establish baseline state
+for multiple lanes under these identity conditions but proves no lane or
+combined tree. Strategy may change; stale evidence never becomes fresh silently.
 
 ## Integration Rehearsal
 
@@ -581,7 +562,7 @@ Definition and rules:
   publishes, or accepts anything by itself.
 
 Rehearsal liveness: the rehearsal lane gets a lease like any other delegation
--- an observable-step checkpoint cadence, a no-progress budget, and a stop
+- an observable-step checkpoint cadence, a no-progress budget, and a stop
 condition. Its expected artifact is the rehearsal result: the exact combined
 tree/commit, the composition order, the commands run, their verdicts, and any
 conflict/ordering outcome. A rehearsal lane that cannot produce that artifact

@@ -186,6 +186,7 @@ const MANIFEST = {
     'test/audit-e2e.test.js',
     'test/audit-github-runner.test.js',
     'test/bootstrap-labels.test.js',
+    'test/files-lifecycle-reliability.test.js',
     'test/real-order-lineage.test.js',
     'test/resumed-attempt-return.test.js',
     'test/attempt-supersession.test.js',

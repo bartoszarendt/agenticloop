@@ -71,6 +71,18 @@ describe('candidate resolution', () => {
     assert.equal(full.verified, false);
   });
 
+  it('fails closed when a Git wrapper reports an error beside numeric success', () => {
+    const runner = gitRunner([['--is-inside-work-tree', {
+      status: 0,
+      stdout: 'true\n',
+      stderr: '',
+      error: Object.assign(new Error('untrusted wrapper result'), { code: 'EWRAPPER' }),
+    }]]);
+    const result = resolveCandidateArtifact('/repo', 'commit:abc123', { gitRunner: runner });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /outside a git work tree/);
+  });
+
   it('passes non-commit immutable references through verbatim', () => {
     const result = resolveCandidateArtifact('/nowhere', 'artifact-bundle:2026-07-27T12:00Z');
     assert.equal(result.ok, true);

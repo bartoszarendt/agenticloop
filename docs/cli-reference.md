@@ -320,7 +320,12 @@ pre-delegation verdict. It reports the task carrier and protected contract as
 separate identities, lifecycle dispatchability, current activation
 authorization, readiness and decomposition evidence, host capability,
 return-adapter resolution, active worktree state, relevant sibling collisions,
-the disposition owner, and one safe repair command. Add
+the disposition owner, and one safe repair command. When a consumed Engineer
+attempt is live, it resolves the raw carrier lineage and reports the actual
+next evidence/check step instead of a fresh-dispatch sequence. `proceed` means
+the first reported command is executable against the identities shown; a
+carrier mismatch fails first as `task.evidence.lineage.stale` with the exact
+expected/current digests. Add
 `--repair-plan <target-relative-path>` to write a
 bounded plan for derived evidence only. Add `--host <host>` to evaluate a
 specific host adapter, `--return-adapter <id>` to select a return adapter, and
@@ -799,6 +804,13 @@ ordered `Tasks`, and `Agent: maintainer` trailers. A single-task commit is
 `chore(<task>): settle readiness`. Reordered, duplicate, missing, or unrelated
 task attribution fails closed.
 
+That reviewed work-unit plan is indivisible. If any member has a live consumed
+Engineer attempt, `--yes` refuses the entire set before mutation, reports the
+blocking task and all plan members, and states that partial sibling apply is
+unsupported. Applying only the apparently free siblings would change the
+shared prospective inventory the plan binds. Finish or explicitly retire the
+live attempt, then regenerate and review the work-unit plan.
+
 `--dry-run` and `--yes` are mutually exclusive and one is required: mutation is
 never implicit. A dry run performs every validation that does not require
 writing. The plan file is transient scratch and belongs under
@@ -1032,7 +1044,10 @@ So a consumed packet **reaches a canonical return or is explicitly abandoned**.
 | The previous attempt was explicitly abandoned | permitted, with the abandoned attempt still on record |
 
 Re-validating an existing packet with `task prepare-dispatch <id> --packet
-<path>` is never refused by this rule: that is how a live attempt proves itself.
+<path>` remains a pre-role-start diagnostic. Do not run it after consumption:
+role start deliberately advances the repository/carrier, so recomputing the
+unconsumed packet binding then is stale by construction. `task role-start`
+performs the authoritative full revalidation immediately before mutation.
 
 The attempt identity is derived from the consumption that started it — its
 packet, invocation, and product base — rather than minted alongside it, so it
@@ -1091,13 +1106,21 @@ Both are now derived facts rather than positions:
   current. `task lint` asks the same question of the same surface and refuses an
   `implementation_artifact` that carries no work on it, so the field can never
   point at a role-start receipt while the implementation sits earlier.
-- **The product base is carried, explicitly.** A return whose task has prior
-  explicitly abandoned attempts binds the earliest carried attempt's base and
+- **The product base is carried, explicitly.** Every valid terminal
+  abandonment disposition (`superseded_before_work`, `tooling_failed`,
+  `superseded_by_packet`, `superseded_by_maintainer_repair`, and `abandoned`)
+  is lineage-continuous. A return whose task has such prior attempts binds the
+  earliest carried attempt's base and
   states the claim in `productLineage`, naming each attempt it carries. The claim
   is derived from durable dispatch-consumption and abandonment records, and the
   verification boundary re-derives it from the same records and reproves the
   ancestry against Git before accepting the return. An ordinary attempt carries
   nothing and `productLineage` is `null`.
+
+Carry compatibility is independent of budget classification. In particular,
+workflow-recovery dispositions do not consume engineering budget;
+`tooling_failed` consumes it only when the closed abandonment record proves a
+product mutation. No disposition must be rewritten to plain `abandoned`.
 
 ### `agenticloop task commit-message`
 
@@ -1407,10 +1430,9 @@ degraded-report set is also classified as typed `dispatch.packet.stale` only
 after its original digest and complete projected-current semantics validate;
 regenerate it rather than accepting or rewriting it. A malformed v3 lookalike
 remains malformed.
-The
-Engineer revalidates it with `task prepare-dispatch T-001 --packet <packet.json>
---role engineer [--host-trust-store <expected-registered-path>]` before
-mutation. A scaffold made with `task new --scaffold` has no verified activation
+The files Engineer receives it through `task role-start T-001 --packet
+<packet.json>`, which performs full validation before its atomic mutation. A
+scaffold made with `task new --scaffold` has no verified activation
 identity and cannot dispatch in that state; activate the existing task with
 `npx agenticloop activate <task-id>` before dispatch.
 
@@ -1447,15 +1469,17 @@ For a files-backed Engineer return, construct closed check evidence and derive
 the raw return from current task/Git facts:
 
 ```text
-npx agenticloop task check-evidence-init T-001 --packet .agenticloop/tmp/dispatch.json --output .agenticloop/tmp/checks.json --json
-npx agenticloop task check-evidence-update T-001 --packet .agenticloop/tmp/dispatch.json --input .agenticloop/tmp/checks.json --output .agenticloop/tmp/checks.json --check RC-1 --outcome passed --evidence "npm test passed" --execution-output .agenticloop/tmp/rc-1.execution.json --json
-npx agenticloop task prepare-return T-001 --packet .agenticloop/tmp/dispatch.json --check-evidence .agenticloop/tmp/checks.json --outcome implementation_ready_for_review --output .agenticloop/tmp/return.json --json
+npx agenticloop task role-start T-001 --packet .agenticloop/tmp/dispatch.json --json
+npx agenticloop task check-evidence-update T-001 --packet .agenticloop/tmp/dispatch.json --check RC-1 --outcome passed --evidence "npm test passed" --json
+npx agenticloop task prepare-return T-001 --packet .agenticloop/tmp/dispatch.json --check-evidence .agenticloop/tmp/T-001-checks.json --outcome implementation_ready_for_review --output .agenticloop/tmp/return.json --json
 npx agenticloop task verify-return T-001 --packet .agenticloop/tmp/dispatch.json --return .agenticloop/tmp/return.json --from-current-repository --json
 ```
 
-Run the scaffold initialization shown above only after product work and all
-Engineer-owned `task evidence` mutations are committed. It supersedes prior
-same-attempt check evidence durably. No mutating workflow command is legal
+`role-start` creates the aggregate once at
+`.agenticloop/tmp/T-001-checks.json`. That aggregate is mutable scratch and is
+never committed. Each passing command check writes its immutable durable proof
+to `.agenticloop/checks/T-001/RC-N.execution.json` by default; commit that proof
+with canonical Engineer attribution. No mutating workflow command is legal
 between the last check update and `prepare-return`. Repeating the exact public
 `verify-return` reuses the first observation time and reports `already_current`;
 changed semantic evidence remains a conflict.
@@ -1465,6 +1489,7 @@ Usage refusals report `safeToRetry`, `mutationOccurred`, and canonical usage. A
 role lease permits one retry only when the first two values are `true` and
 `false`, respectively.
 
+`prepare-return --outcome implementation_blocked` is cancellation-only.
 Cancellation is evidence-bound and never inferred. No shipped public runtime
 currently has a protected, non-agent-callable Agentic Loop cancellation receipt
 producer, so `prepare-return` and `verify-return` refuse a positive
@@ -1483,6 +1508,14 @@ exists, record the outcome as unknown/needs-context and obtain the required host
 integration rather than claim cancellation. The future receipt must bind the
 exact logical invocation, request, packet, task, controller, observed result,
 strict UTC request/observation times, freshness, and replay policy.
+
+Ordinary workflow or tooling blockers are not cancellation and produce no raw
+role return. Report a non-authoritative `agenticloop.session-status` version 1
+with `authoritative: false`, exact task/attempt/packet/contract/carrier-terminal
+bindings, blocker category, diagnostic code, resumption condition,
+`rawReturn: null`, and `transitionAuthority: false`. This host/session status is
+observation only: it never satisfies successful return, review, acceptance,
+closeout, or authenticated cancellation.
 
 A verified return authorizes reuse for a fixed window. The version 1
 return-use freshness policy is exactly 86,400 seconds (24 hours). Omitting the
@@ -1667,7 +1700,7 @@ only when its complete canonical bytes authenticate. A successful result uses
 `disposition: proceed` plus a separate non-completion implementation outcome; it
 is never review-entry evidence or completion.
 
-For a blocked return, omitting `--resume-owner` retains the authenticated
+For a cancellation-blocked return, omitting `--resume-owner` retains the authenticated
 producer role. A different owner requires `--redelegation-authority`; the
 version 2 record must be signed by the exact pinned Orchestrator/human authority
 and bind the current return, packet, producer, target owner, issuer, issue and

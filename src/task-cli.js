@@ -104,7 +104,7 @@ import { gitTreeObjectId, isGitObjectId } from './git-oid.js';
 import { DISPATCH_LIVENESS_WINDOW_SECONDS } from './dispatch-eligibility.js';
 import { isLinkedWorktreeTarget } from './carrier-root.js';
 import { commitCarriesProductPaths, commitChangedPaths, createPathClassifier, deriveProductHead } from './product-lineage.js';
-import { renderHandoffSequence } from './handoff-sequence.js';
+import { nextLiveEngineerStep, renderHandoffSequence } from './handoff-sequence.js';
 import { GIT_MAX_BUFFER } from './git-runner.js';
 import { validateCommittedSourcePath, verifyCommittedAttributedSource } from './committed-source.js';
 import {
@@ -204,6 +204,7 @@ import { fileMatchesScopePattern } from './scope-matcher.js';
 import { CANCELLATION_PROVENANCE_KIND, validateAuthoritativeCancellationProvenance } from './cancellation-provenance.js';
 import { isAbsoluteOrDriveQualifiedPath, isPathWithin, pathIdentity, samePathAuthority } from './path-identity.js';
 import { runRequiredCheckCommand } from './cross-platform-runner.js';
+import { evaluateTaskCarrierMutationGuard } from './task-carrier-guard.js';
 
 function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -216,6 +217,14 @@ function implementationArtifactHead(content) {
   if (commit) return commit[1];
   const range = value.match(/^range:[0-9a-f]{40,64}\.\.([0-9a-f]{40}|[0-9a-f]{64})$/);
   return range?.[1] ?? null;
+}
+
+/** True only when artifact publication would preserve the exact field bytes. */
+export function isExactImplementationArtifactReaffirmation(content, productHead) {
+  const [frontmatter] = parseFrontmatter(content);
+  const canonical = `commit:${String(productHead ?? '')}`;
+  return frontmatterString(frontmatter?.implementation_artifact) === canonical &&
+    replaceFrontmatterField(content, 'implementation_artifact', canonical) === content;
 }
 
 /**
@@ -335,6 +344,64 @@ function defaultCheckExecutionOutput(taskId, checkId) {
   if (!taskId || !checkId) return null;
   const safe = value => String(value).replace(/[^A-Za-z0-9._-]/g, '_');
   return `${CHECK_EVIDENCE_DIRECTORY_RELATIVE_PATH}/${safe(taskId)}/${safe(checkId)}.execution.json`;
+}
+
+/** One mutable aggregate per task, always outside durable Git history. */
+function defaultCheckAggregateOutput(taskId) {
+  if (!taskId) return null;
+  const safe = String(taskId).replace(/[^A-Za-z0-9._-]/g, '_');
+  return `.agenticloop/tmp/${safe}-checks.json`;
+}
+
+export function gitTracksPath(target, relPath, runGit = targetGitRunner(target)) {
+  const result = runGit(['ls-files', '--error-unmatch', '--', relPath]);
+  if (result?.error || !Number.isInteger(result?.status) || ![0, 1].includes(result.status)) {
+    const detail = result?.error?.message ??
+      (String(result?.stderr ?? '').trim() || `Git returned status ${String(result?.status)}`);
+    throw new PublicCommandError(
+      `could not determine whether mutable check aggregate '${relPath}' is tracked: ${detail}`,
+      {
+        code: 'check.aggregate.git_probe_failed',
+        evidenceState: 'malformed',
+        disposition: 'blocked',
+        safeRepair:
+          'Restore a readable Git work tree and index, then rerun; do not proceed while aggregate tracking is unknown.',
+        requiredContext: ['a successful git ls-files tracking probe for the mutable check aggregate'],
+      },
+    );
+  }
+  return result.status === 0;
+}
+
+/**
+ * Mutable check state is a local aggregate, never return evidence. Keep it at
+ * one predictable scratch path so callers cannot accidentally commit a file
+ * that the return classifier must reject.
+ */
+function validateCheckAggregatePath(target, taskId, candidate, label) {
+  const expected = defaultCheckAggregateOutput(taskId);
+  if (!candidate.relPath.startsWith('.agenticloop/tmp/') || candidate.relPath === '.agenticloop/tmp/') {
+    throw new VerificationContextMalformedError(
+      `${label} must remain under .agenticloop/tmp/ (default '${expected}'); ` +
+      'immutable command execution evidence is written under .agenticloop/checks/<task-id>/'
+    );
+  }
+  if (gitTracksPath(target, candidate.relPath)) {
+    throw new VerificationContextMalformedError(
+      `mutable check aggregate '${candidate.relPath}' is tracked by Git; remove it from the index while preserving the scratch file, then rerun`
+    );
+  }
+  return candidate;
+}
+
+function validateCheckExecutionPath(taskId, checkId, candidate) {
+  const expected = defaultCheckExecutionOutput(taskId, checkId);
+  if (candidate.relPath !== expected) {
+    throw new VerificationContextMalformedError(
+      `execution output must be the canonical immutable artifact '${expected}'`
+    );
+  }
+  return candidate;
 }
 
 /** The create actions that retire an attempt's predecessors alongside it. */
@@ -491,7 +558,8 @@ function deriveRoleStartSequence({ taskId, packetPath, checksPath, postStartDige
   steps.push(Object.freeze({
     order: order += 1,
     command: `npx agenticloop task check-evidence-init ${id} --packet ${pkt} --output ${chk} --json`,
-    writes: Object.freeze([chk]),
+    writes: Object.freeze([]),
+    scratchWrites: Object.freeze([chk]),
     commitRequired: false,
     commitReason: null,
     commitClass: null,
@@ -510,10 +578,13 @@ function deriveRoleStartSequence({ taskId, packetPath, checksPath, postStartDige
     steps.push(Object.freeze({
       order: order += 1,
       command: command.join(' '),
-      writes: Object.freeze([chk, ...(executionPath ? [executionPath] : [])]),
-      commitRequired: false,
-      commitReason: null,
-      commitClass: null,
+      writes: Object.freeze(executionPath ? [executionPath] : []),
+      scratchWrites: Object.freeze([chk]),
+      commitRequired: executionPath !== null,
+      commitReason: executionPath === null
+        ? null
+        : 'commit the immutable CLI execution artifact; keep the mutable aggregate in scratch',
+      commitClass: executionPath === null ? null : 'required_check_evidence',
       gate: 'required_check_evidence.invalid',
     }));
   }
@@ -1107,12 +1178,18 @@ function validateConsumedCheckEvidencePacket(target, projectConfig, taskId, pack
   };
 }
 
-function checkEvidencePaths(target, packetPath, inputPath = null, outputPath = null, executionOutputPath = null) {
+function checkEvidencePaths(target, taskId, checkId, packetPath, inputPath = null, outputPath = null, executionOutputPath = null) {
   const packet = publicTargetRelativePath(target, packetPath, 'dispatch packet');
-  const input = inputPath === null ? null : publicTargetRelativePath(target, inputPath, 'check evidence input');
-  const output = outputPath === null ? null : validateCheckEvidenceWritePath(
-    target,
-    publicTargetRelativePath(target, outputPath, 'check evidence output'),
+  const input = inputPath === null ? null : validateCheckAggregatePath(
+    target, taskId, publicTargetRelativePath(target, inputPath, 'check evidence input'), 'check evidence input',
+  );
+  const output = outputPath === null ? null : validateCheckAggregatePath(
+    target, taskId,
+    validateCheckEvidenceWritePath(
+      target,
+      publicTargetRelativePath(target, outputPath, 'check evidence output'),
+      'check evidence output',
+    ),
     'check evidence output',
   );
   const execution = executionOutputPath === null ? null : validateCheckEvidenceWritePath(
@@ -1120,6 +1197,7 @@ function checkEvidencePaths(target, packetPath, inputPath = null, outputPath = n
     publicTargetRelativePath(target, executionOutputPath, 'execution output'),
     'execution output',
   );
+  if (execution !== null) validateCheckExecutionPath(taskId, checkId, execution);
   if ([input, output, execution].filter(Boolean).some(candidate => samePathAuthority(packet.path, candidate.path))) {
     throw new VerificationContextMalformedError('dispatch packet path must not alias a check-evidence or execution artifact path');
   }
@@ -3053,8 +3131,8 @@ export async function cmdTask(args, io = createIo()) {
     if (sub === 'role-start') {
       const taskId = positional[0];
       const asJson = Boolean(opts.json);
-      if (!taskId || !opts.packet || !opts.checkEvidenceOutput) {
-        const error = new CliUsageError('task role-start requires <id>, --packet <packet.json>, and --check-evidence-output <path>');
+      if (!taskId || !opts.packet) {
+        const error = new CliUsageError('task role-start requires <id> and --packet <packet.json>');
         return printGateResult('task role-start', commandFailure('task role-start', error, 'usage', {}, target), asJson, io, EXIT_USAGE);
       }
       const packetPathStr = String(opts.packet);
@@ -3080,7 +3158,24 @@ export async function cmdTask(args, io = createIo()) {
           `task record not found: ${carrier}`
         ), 'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);
       }
-      const checkEvidencePath = publicTargetRelativePath(target, opts.checkEvidenceOutput, 'check evidence output');
+      const requestedChecksPath = opts.checkEvidenceOutput ?? defaultCheckAggregateOutput(taskId);
+      let checkEvidencePath;
+      try {
+        checkEvidencePath = validateCheckAggregatePath(
+          target,
+          taskId,
+          validateCheckEvidenceWritePath(
+            target,
+            publicTargetRelativePath(target, requestedChecksPath, 'check evidence output'),
+            'check evidence output',
+          ),
+          'check evidence output',
+        );
+      } catch (error) {
+        return printGateResult('task role-start', commandFailure(
+          'task role-start', error, 'operational_error', { task_id: taskId, file: carrier }, target
+        ), asJson, io);
+      }
       const currentContent = readFileSync(filePath, 'utf-8');
       const currentDigest = taskRecordDigest(currentContent);
       const recordContract = taskContractDigest(currentContent);
@@ -3137,7 +3232,7 @@ export async function cmdTask(args, io = createIo()) {
             return printGateResult('task role-start', commandFailure('task role-start', new PublicCommandError(
               `dispatch packet ${dispatchPacket.packetId} was consumed but check evidence is missing at ${checkEvidencePath.relPath}`,
               { code: 'task.role_start.check_evidence_missing', evidenceState: 'missing', disposition: 'blocked', committedStateEvaluated: true,
-                safeRepair: `Rerun npx agenticloop task check-evidence-init ${taskId} --packet ${packetPathStr} --output ${opts.checkEvidenceOutput}` }
+                safeRepair: `Rerun npx agenticloop task check-evidence-init ${taskId} --packet ${packetPathStr}` }
             ), 'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);
           }
           const existingChecks = JSON.parse(readFileSync(existingChecksAbs, 'utf8'));
@@ -3646,9 +3741,11 @@ export async function cmdTask(args, io = createIo()) {
         try {
           const paths = checkEvidencePaths(
             target,
+            taskId,
+            opts.check ?? null,
             opts.packet,
-            sub === 'check-evidence-init' ? null : opts.input,
-            opts.output ?? null,
+            sub === 'check-evidence-init' ? null : (opts.input ?? defaultCheckAggregateOutput(taskId)),
+            opts.output ?? defaultCheckAggregateOutput(taskId),
             sub === 'check-evidence-update'
               ? opts.executionOutput ?? defaultCheckExecutionOutput(taskId, opts.check)
               : null,
@@ -3660,7 +3757,6 @@ export async function cmdTask(args, io = createIo()) {
           const supersessions = listCheckEvidenceSupersessions(target, taskId);
           if (!supersessions.ok) throw new VerificationContextMalformedError(`check-evidence supersession history is invalid: ${supersessions.errors.join('; ')}`);
           if (sub === 'check-evidence-init') {
-            if (!opts.output) throw new CliUsageError('task check-evidence-init requires --output <path>');
             const checks = createInitialCheckEvidence(packet);
             const outputAbsolute = resolve(target, paths.output.relPath);
             const previousBytes = existsSync(outputAbsolute) ? readFileSync(outputAbsolute) : null;
@@ -3733,7 +3829,6 @@ export async function cmdTask(args, io = createIo()) {
             return 0;
           }
           if (sub === 'check-evidence-show') {
-            if (!opts.input) throw new CliUsageError('task check-evidence-show requires --input <path>');
             const checks = readTargetJson(target, paths.input.relPath, 'check evidence');
             const checked = validateRequiredCheckEvidence(checks, {
               contractVersion: packet.task.requiredCheckEvidenceContract,
@@ -3756,8 +3851,8 @@ export async function cmdTask(args, io = createIo()) {
             io.out(JSON.stringify(checked.checks, null, 2));
             return 0;
           }
-        if (!opts.input || !opts.output || !opts.check || !opts.outcome || typeof opts.evidence !== 'string') {
-          throw new CliUsageError('task check-evidence-update requires --input, --output, --check, --outcome, and --evidence');
+        if (!opts.check || !opts.outcome || typeof opts.evidence !== 'string') {
+          throw new CliUsageError('task check-evidence-update requires --check, --outcome, and --evidence');
         }
           const inputBytes = readTargetText(target, paths.input.relPath, 'check evidence');
           let checks;
@@ -3903,6 +3998,10 @@ export async function cmdTask(args, io = createIo()) {
     if (sub === 'prepare-return') {
       const taskId = positional[0];
       const asJson = Boolean(opts.json);
+      // Keep this producer cancellation-only: accepting ordinary workflow or
+      // tooling blockers here would turn unauthenticated session observations
+      // into transition evidence. Those blockers intentionally return status
+      // without a raw role-return artifact.
       const cancellationClaim = opts.outcome === 'implementation_blocked';
       if (!taskId || !opts.packet || !opts.checkEvidence || !opts.output ||
           !['implementation_ready_for_review', 'implementation_blocked'].includes(opts.outcome) ||
@@ -3917,6 +4016,12 @@ export async function cmdTask(args, io = createIo()) {
       }
       try {
         const packet = readTargetJson(target, opts.packet, 'dispatch packet');
+        const checkEvidencePath = validateCheckAggregatePath(
+          target,
+          taskId,
+          publicTargetRelativePath(target, opts.checkEvidence, 'check evidence'),
+          'check evidence',
+        );
         const supersessions = listCheckEvidenceSupersessions(target, taskId);
         if (!supersessions.ok) throw new VerificationContextMalformedError(`check-evidence supersession history is invalid: ${supersessions.errors.join('; ')}`);
         // Full revalidation belongs at role start, where the packet's initial
@@ -3946,7 +4051,7 @@ export async function cmdTask(args, io = createIo()) {
         if (packet.backend !== 'files') {
           throw new VerificationContextMalformedError('prepare-return supports the files backend only');
         }
-        const checks = readTargetJson(target, opts.checkEvidence, 'check evidence');
+        const checks = readTargetJson(target, checkEvidencePath.relPath, 'check evidence');
         if (packet?.backend !== 'files' || packet?.task?.id !== taskId || !requiredCheckEvidenceMatchesInventory(
           checks,
           packet?.task?.requiredChecks,
@@ -3990,9 +4095,13 @@ export async function cmdTask(args, io = createIo()) {
           const laneRefusal = evaluateReturnLaneContainment(target, taskId, productHead);
           if (laneRefusal) throw laneRefusal;
         }
-        // A cancellation claim is only ever an Agentic Loop-controlled
-        // observation bound to the exact consumed invocation. Host idle,
-        // completion, termination, or stop-reason state is never consulted.
+        // Security boundary: the public blocked return remains cancellation-
+        // only because cancellation already has a protected external authority
+        // model. Ordinary workflow/tooling blockers are non-authoritative host
+        // session observations and intentionally produce no raw return; making
+        // them role-return-shaped here would create transition authority from
+        // untrusted status. Host idle, completion, termination, or stop-reason
+        // state is never consulted.
         let cancellation = null;
         if (cancellationClaim) {
           const provenance = readTargetJson(target, opts.cancellationEvidence, 'cancellation evidence');
@@ -4494,16 +4603,64 @@ export async function cmdTask(args, io = createIo()) {
       if (!contract.ok) {
         return printGateResult('task evidence', commandFailure('task evidence', new VerificationContextMalformedError(contract.error), 'operational_error', {}, target), asJson, io);
       }
-      const lineage = resolveCarrierLineage(target, taskId, {
+      const carrierGuard = evaluateTaskCarrierMutationGuard(target, taskId, {
+        backend: 'files',
+        taskContractDigest: contract.digest,
+        currentCarrierDigest: priorCarrierDigest,
+        mutationClass: mutationClass === 'structured_task_evidence'
+          ? `structured_${structuredEvidence.actorRole}_evidence`
+          : mutationClass,
+      });
+      if (!carrierGuard.ok) {
+        return printGateResult('task evidence', commandFailure('task evidence', new PublicCommandError(
+          carrierGuard.message, {
+            code: carrierGuard.code,
+            evidenceState: carrierGuard.evidenceState,
+            disposition: carrierGuard.disposition,
+            safeRepair: carrierGuard.safeRepair,
+          }
+        ), 'operational_error', {
+          task_id: taskId,
+          file: carrier,
+          attemptId: carrierGuard.liveAttempt.attemptId,
+          packetId: carrierGuard.liveAttempt.packetId,
+          expectedCarrierDigest: carrierGuard.expectedCarrierDigest,
+          currentCarrierDigest: carrierGuard.currentCarrierDigest,
+        }, target), asJson, io);
+      }
+      const lineage = carrierGuard.lineage ?? resolveCarrierLineage(target, taskId, {
         backend: 'files', taskContractDigest: contract.digest, currentCarrierDigest: priorCarrierDigest,
       });
       if (!lineage.ok) {
         return printGateResult('task evidence', commandFailure('task evidence', new PublicCommandError(
           `Engineer evidence mutation refused: ${lineage.errors.join('; ')}`, {
-            code: 'task.evidence.lineage', evidenceState: 'changed', disposition: 'blocked',
-            safeRepair: 'Restore the recognized carrier lineage or prepare a fresh dispatch; do not edit task evidence directly.',
+            code: 'task.evidence.lineage.stale', evidenceState: 'changed', disposition: 'blocked',
+            safeRepair: `Restore the carrier to the recognized lineage terminal ${lineage.currentCarrierDigest ?? '(unresolved)'}; do not edit, rebind, or remint task evidence.`,
           }
-        ), 'operational_error', { task_id: taskId, file: carrier }, target), asJson, io);
+        ), 'operational_error', {
+          task_id: taskId, file: carrier,
+          attemptId: lineage.dispatchConsumption ? executionAttemptIdentity(lineage.dispatchConsumption) : null,
+          packetId: lineage.dispatchConsumption?.packetId ?? null,
+          expectedCarrierDigest: lineage.currentCarrierDigest ?? null,
+          currentCarrierDigest: priorCarrierDigest,
+        }, target), asJson, io);
+      }
+      if (mutationClass !== 'structured_task_evidence') {
+        const expectedMutationClass = nextLiveEngineerStep(lineage.receipts);
+        const exactArtifactReaffirmation = mutationClass === 'implementation_artifact_evidence' &&
+          isExactImplementationArtifactReaffirmation(current, opts.productHead);
+        if (expectedMutationClass !== mutationClass && !exactArtifactReaffirmation) {
+          return printGateResult('task evidence', commandFailure('task evidence', new PublicCommandError(
+            `Engineer evidence mutation '${mutationClass}' is out of order; the durable carrier lineage requires '${expectedMutationClass}' next.`, {
+              code: 'task.evidence.lineage', evidenceState: 'negative', disposition: 'blocked',
+              safeRepair: `Run the required '${expectedMutationClass}' evidence command against carrier ${lineage.currentCarrierDigest}; do not skip or rewrite the evidence chain.`,
+            }
+          ), 'operational_error', {
+            task_id: taskId, file: carrier, nextStep: expectedMutationClass,
+            expectedCarrierDigest: lineage.currentCarrierDigest,
+            currentCarrierDigest: priorCarrierDigest,
+          }, target), asJson, io);
+        }
       }
       if (structuredEvidence) {
         const expectedAttemptId = executionAttemptIdentity(lineage.dispatchConsumption);
@@ -4932,12 +5089,17 @@ export async function cmdTask(args, io = createIo()) {
       }
       const result = targetGitRunner(target)(['status', '--porcelain=v1', '--untracked-files=all']);
       if (!result || result.status !== 0) throw new VerificationContextError('unable to derive current changed paths from Git');
-      const paths = String(result.stdout ?? '').split(/\r?\n/).filter(Boolean).map(line => {
+      const observedPaths = String(result.stdout ?? '').split(/\r?\n/).filter(Boolean).map(line => {
         if (line.length < 4 || line.slice(0, 2).includes('R') || line.slice(0, 2).includes('C')) {
           throw new VerificationContextMalformedError('product commit helper refuses ambiguous rename/copy status; stage an explicit bounded repair first');
         }
         return line.slice(3).replace(/\\/g, '/');
       });
+      // Packet, aggregate, and commit-message files are intentionally scratch.
+      // A target need not gitignore them for the product helper to ignore them;
+      // they are neither product work to stage nor workflow evidence to reject.
+      const paths = observedPaths.filter(path =>
+        path !== '.agenticloop/tmp' && !path.startsWith('.agenticloop/tmp/'));
       const classifier = createPathClassifier(target);
       const allowed = Array.isArray(packet.task.allowedPaths) ? packet.task.allowedPaths : [];
       const rejected = paths.filter(path => classifier.isWorkflowPath(path) || !allowed.some(pattern => fileMatchesScopePattern(path, pattern)));
@@ -5196,6 +5358,48 @@ export async function cmdTask(args, io = createIo()) {
           commandFailure('task readiness-apply', error, 'operational_error', { task_id: positional[0] ?? null }, target), asJson, io);
       }
       const taskId = positional[0] ?? plan.taskId ?? null;
+      if (!dryRun && selectedBackend.backend === 'files') {
+        const guardedTaskIds = plan.kind === WORK_UNIT_READINESS_PLAN_KIND
+          ? (plan.taskIds ?? [])
+          : [taskId];
+        for (const guardedTaskId of guardedTaskIds) {
+          const guardedPath = taskPathForId(target, projectConfig, guardedTaskId);
+          if (!existsSync(guardedPath)) continue;
+          const guardedBody = readFileSync(guardedPath, 'utf8');
+          const guardedContract = taskContractDigest(guardedBody);
+          const carrierGuard = evaluateTaskCarrierMutationGuard(target, guardedTaskId, {
+            backend: 'files',
+            taskContractDigest: guardedContract.ok ? guardedContract.digest : undefined,
+            currentCarrierDigest: taskRecordDigest(guardedBody),
+          });
+          if (!carrierGuard.ok) {
+            const workUnitAtomic = plan.kind === WORK_UNIT_READINESS_PLAN_KIND;
+            const guardedTaskIdsText = guardedTaskIds.join(', ');
+            const guardMessage = workUnitAtomic
+              ? `Work-unit readiness apply '${String(plan.workUnitId ?? '(unknown)')}' is atomic across ` +
+                `[${guardedTaskIdsText}]. Task ${guardedTaskId} has a live consumed attempt, so the ` +
+                `entire apply is refused before mutation; partial sibling apply is unsupported. ${carrierGuard.message}`
+              : carrierGuard.message;
+            const safeRepair = workUnitAtomic
+              ? `Do not split or partially apply this reviewed work-unit plan. ${carrierGuard.safeRepair}`
+              : carrierGuard.safeRepair;
+            return printGateResult('task readiness-apply', commandFailure(
+              'task readiness-apply', new PublicCommandError(guardMessage, {
+                code: carrierGuard.code, evidenceState: carrierGuard.evidenceState,
+                disposition: carrierGuard.disposition, safeRepair,
+              }), 'operational_error', {
+                task_id: guardedTaskId, attemptId: carrierGuard.liveAttempt.attemptId,
+                packetId: carrierGuard.liveAttempt.packetId,
+                expectedCarrierDigest: carrierGuard.expectedCarrierDigest,
+                currentCarrierDigest: carrierGuard.currentCarrierDigest,
+                workUnitId: workUnitAtomic ? plan.workUnitId : null,
+                workUnitTaskIds: workUnitAtomic ? guardedTaskIds : null,
+                atomicWorkUnitRefusal: workUnitAtomic,
+              }, target
+            ), asJson, io);
+          }
+        }
+      }
       const applied = plan.kind === WORK_UNIT_READINESS_PLAN_KIND
         ? applyWorkUnitReadinessPlan({
           target, plan, projectConfig, dryRun,
@@ -5559,6 +5763,22 @@ export async function cmdTask(args, io = createIo()) {
         io.err(contract.error);
         return 1;
       }
+      const carrierGuard = evaluateTaskCarrierMutationGuard(target, taskId, {
+        backend: 'files', taskContractDigest: contract.digest, currentCarrierDigest: taskRecordDigest(body),
+      });
+      if (!carrierGuard.ok) {
+        return printGateResult('task authorize-correction', commandFailure(
+          'task authorize-correction', new PublicCommandError(carrierGuard.message, {
+            code: carrierGuard.code, evidenceState: carrierGuard.evidenceState,
+            disposition: carrierGuard.disposition, safeRepair: carrierGuard.safeRepair,
+          }), 'operational_error', {
+            task_id: taskId, attemptId: carrierGuard.liveAttempt.attemptId,
+            packetId: carrierGuard.liveAttempt.packetId,
+            expectedCarrierDigest: carrierGuard.expectedCarrierDigest,
+            currentCarrierDigest: carrierGuard.currentCarrierDigest,
+          }, target
+        ), Boolean(opts.json), io);
+      }
       const history = loadFilesTaskContractRecords(target, taskId);
       if (history.errors.length) {
         for (const error of history.errors) io.err(error);
@@ -5701,6 +5921,37 @@ export async function cmdTask(args, io = createIo()) {
           rollbackAuthorized: false,
           ...domain,
         }, asJson, io);
+      }
+
+      // Once a prepared Engineer dispatch is consumed, the task carrier is its
+      // ordered evidence channel. Status notes, blocked transitions, and other
+      // Maintainer-owned edits wait until return or explicit abandonment. A
+      // requested role start remains the one bounded entry to its own packet
+      // recognition gate. That gate rejects raw starts and replay before any
+      // mutation; a fresh packet may additionally authorize atomic pre-work
+      // supersession.
+      if (nextStatus !== 'in-progress') {
+        const currentContract = taskContractDigest(currentContent);
+        const carrierGuard = evaluateTaskCarrierMutationGuard(target, taskId, {
+          backend: 'files',
+          taskContractDigest: currentContract.ok ? currentContract.digest : undefined,
+          currentCarrierDigest: currentDigest,
+        });
+        if (!carrierGuard.ok) {
+          return printGateResult('task status', commandFailure('task status', new PublicCommandError(
+            carrierGuard.message, {
+              code: carrierGuard.code, evidenceState: carrierGuard.evidenceState,
+              disposition: carrierGuard.disposition, safeRepair: carrierGuard.safeRepair,
+            }
+          ), 'operational_error', {
+            ...domain,
+            attemptId: carrierGuard.liveAttempt.attemptId,
+            packetId: carrierGuard.liveAttempt.packetId,
+            expectedCarrierDigest: carrierGuard.expectedCarrierDigest,
+            currentCarrierDigest: carrierGuard.currentCarrierDigest,
+            safeWhen: carrierGuard.safeWhen,
+          }, target), asJson, io);
+        }
       }
 
       if (currentStatus === 'needs_revision' && nextStatus === 'in-progress') {

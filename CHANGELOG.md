@@ -8,14 +8,36 @@
   downstream toolkit escalation proposals.
 - Added explicit failed-coordinator reconciliation, non-streaming delegation
   cadence/diagnostic budgets, and Windows native-command exit guidance.
+- Added release-blocking public-CLI files lifecycle and recovery scenarios,
+  predictive live-attempt preflight, a shared armed-carrier mutation guard, and
+  a repeated-refusal validator-diagnosis stop rule.
 
 ### Fixed
+- **Breaking:** mutable check aggregate paths are now confined to
+  `.agenticloop/tmp/<id>-checks.json`; callers that supplied a path outside the
+  task's scratch directory must remove any tracked aggregate and use the
+  canonical scratch path. Immutable execution evidence under
+  `.agenticloop/checks/<id>/` remains durable and tracked.
 - Authoring warnings remain visible and non-blocking across lint, readiness plan,
   and readiness apply; empty candidate failures now receive a stable primary
   diagnostic before bundle validation.
 - Parallel scans bind dependency evidence per inventory task, independent of the
   initiating task, and handoff refresh writes report `written_pending_commit`
   rather than `proceed`.
+- Files role start is the final full packet verifier; generated guidance no
+  longer asks Engineers to recompute an unconsumed packet after role start.
+- Mutable check aggregates default to `.agenticloop/tmp/<id>-checks.json` and
+  are never commit outputs. Immutable command execution artifacts remain
+  durable under `.agenticloop/checks/<id>/`, and tracked aggregates are refused
+  before return with an actionable diagnostic.
+- Every validated terminal abandonment disposition is carry-compatible while
+  engineering-budget accounting remains independent, so automatic packet and
+  Maintainer-repair supersession preserve prior product lineage without record
+  rewriting.
+- Public `implementation_blocked` return production is explicitly
+  cancellation-only. Ordinary workflow/tooling blockers use a closed,
+  non-authoritative session-status observation that grants no transition,
+  review, acceptance, closeout, or cancellation authority.
 
 ## 0.4.7 - 2026-09-02
 

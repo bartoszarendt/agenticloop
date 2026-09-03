@@ -158,24 +158,23 @@ task-record obligation.
    of blindly following stale steps.
 - Before the first mutation, receive the CLI-authored packet only after guarded
   role start has consumed and revalidated it. For the files backend, use the
-  canonical single command `task role-start <id> --packet <packet-path>
-  --check-evidence-output <checks-path>`, which atomically combines the in-progress
+  canonical single command `task role-start <id> --packet <packet-path>`, which atomically combines the in-progress
   carrier transition, dispatch consumption, attempt supersession, and required-check
-  evidence initialization. Then invoke the read-only `task prepare-dispatch <id>
-  --packet <packet-path> --role engineer` verifier. It refetches the task and
-  current Git branch/head/base facts, reruns readiness from the bound dependency
-  source, rereads the committed Maintainer decomposition source, and checks every
-  packet and invocation binding, including the selected host's exact canonical
-  Engineer capability declaration. It must allow implementation mutation.
+  evidence initialization at `.agenticloop/tmp/<id>-checks.json`. `role-start`
+  performs the authoritative full packet revalidation immediately before its
+  atomic mutation. Do not rerun `prepare-dispatch --packet` after role start:
+  that pre-start diagnostic recomputes the sealed repository binding, while a
+  successful role start has necessarily advanced it.
   A stale or malformed packet is a status return, not permission to edit.
   Shipped and public in-process adapters cannot establish this authority.
   Without an externally authenticated packet, return blocked; never substitute
   callbacks, repository keys, environment values, or model-authored capture.
 - Use target-relative artifacts only. When `task role-start` was used, the
-  required-check evidence scaffolding is already initialized at the path specified
-  by `--check-evidence-output`. For each passed command check, use `task
-  check-evidence-update` with `--execution-output <path>` so the CLI executes
-   the exact inert argv and produces schema-v3 execution evidence; schema-v2
+  required-check aggregate is already initialized at
+  `.agenticloop/tmp/<id>-checks.json`. It is mutable scratch and must not be
+  committed. For each passed command check, use `task check-evidence-update`;
+  the CLI executes
+   the exact inert argv and produces schema-v4 execution evidence; older
    evidence is typed incompatible and must be regenerated, never relabeled; do not claim a
   pass with prose or `--exit-code 0`. After final checks, derive the raw return
   only with `task prepare-return <id> --packet <packet-path> --check-evidence
@@ -323,7 +322,17 @@ task-record obligation.
   role, invocation ID, contract digest, and attempt ID. Check-evidence and
   raw-return artifacts do not authorize a carrier edit; each carrier mutation
   requires the current digest and extends the dispatch-consumption lineage.
-- A blocked return remains Engineer-owned unless `role_return_receive` verifies
+- During a live consumed attempt, the task carrier is frozen to that lineage.
+  Maintainer comments, status notes, corrections, readiness changes, and other
+  unrelated carrier edits wait until verified return or explicit abandonment.
+  Durable tooling/recovery observations use the existing append-only handoff
+  records outside the carrier.
+- `prepare-return --outcome implementation_blocked` is cancellation-only and
+  requires protected cancellation evidence. For ordinary workflow or tooling
+  blockers, return a non-authoritative structured session status through
+  [[blocked-state]]; its absence of a raw role return is expected and it never
+  satisfies return, review, acceptance, or closeout.
+- A cancellation-blocked raw return remains Engineer-owned unless `role_return_receive` verifies
   a fresh version 2 redelegation signed by the exact operator-pinned authority
   for that return, packet, producer, and new owner. Comments, labels, commit
   trailers, caller-supplied keys, semantic digests, and the identity of a later

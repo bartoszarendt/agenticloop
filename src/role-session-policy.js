@@ -162,7 +162,10 @@ export function evaluateToolingFailureRetry(input = {}) {
     reason:
       `operation '${current.operation}' produced the identical tooling-failure signature ${repeated} time(s) ` +
       `for ${current.taskId} at ${current.taskContractDigest}; another unchanged retry would make no progress`,
-    repair: 'Stop retrying. Change the execution strategy or record a typed blocked result with the failure signature.',
+    repair:
+      'Stop retrying and preserve the current attempt when safe. Route one bounded validator/source diagnosis for the ' +
+      'typed refusal signature; if it requires authority or a contract change, return a non-authoritative structured ' +
+      'session status to the operator. Do not mint or consume another packet automatically.',
   });
 }
 

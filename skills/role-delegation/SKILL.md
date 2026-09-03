@@ -10,37 +10,25 @@ metadata:
 
 # Role delegation
 
-The orchestrator coordinates; it doesn't implement, plan task records, or perform final review.
-Delegation completes only when the designated role executes the work, not when the
-orchestrator describes it.
+Orchestrator coordinates but does not implement, plan task records, or perform
+final review. Delegation exists only when the designated role executes.
 
 ## Advance Authorization
 
 Delegation is state-changing under the Advance Authorization Boundary in
-`agenticloop/AGENTIC_LOOP.md`. Delegate only when explicit instruction or standing
-authorization to advance is present and the source can be named.
-
-Authorization attaches to a work unit, not each step. Routine lifecycle steps
-inside it – implementation, review, and revision delegations – are covered
-without per-transition approval.
-
-Do not delegate merely because a bounded request reveals a next step. Status
-checks, inventories, explanations, diagnostics, and direct questions end once
-answered; report the next step and stop unless the human authorized advancing.
+`agenticloop/AGENTIC_LOOP.md`; require named explicit instruction or standing
+authorization. Work-unit authorization covers its routine implementation,
+review, and revision delegations without per-transition approval. A status,
+inventory, explanation, diagnostic, or direct question does not authorize its
+revealed next step; answer, report that step, and stop.
 
 ## When to Use
 
-Apply this skill when the orchestrator:
-
-- starts or resumes a task loop (identifying the current task, optional grouping context, or next step),
-- routes first-run project-map setup or confirmation through [[setup-agenticloop]] when setup is still unconfirmed,
-- hands off task-record creation or refinement to maintainer,
-- hands off implementation or revision work to engineer,
-- routes an implementation artifact back to maintainer for review,
-- routes a revision to engineer based on review feedback,
-- hands off work-unit certification to auditor once the covered tasks are
-  accepted and integrated,
-- runs closeout or records a human checkpoint decision.
+Apply when Orchestrator starts/resumes a task loop; routes unconfirmed first-run
+setup through [[setup-agenticloop]]; delegates task-record creation/refinement to
+Maintainer or implementation/revision to Engineer; routes artifacts for
+Maintainer review and revisions back to Engineer; delegates accepted, integrated
+work-unit certification to Auditor; or runs closeout/human checkpoints.
 
 ## Delegation Rules
 
@@ -64,23 +52,19 @@ Apply this skill when the orchestrator:
 | Disposition audit findings into remediation tasks | maintainer |
 | Closeout and retrospective | maintainer |
 
-The orchestrator does not create task records, implement, review, or accept.
-
 A gate failure names an owner; it does not transfer that owner's edit authority
-to Orchestrator. Orchestrator re-delegates to the diagnostic owner, escalates to
-the human when named authority is required, or stops at the hard checkpoint. It
-must not repair Engineer-owned PR bodies or commits, or Maintainer-owned task
-records, while a legal delegation path exists.
+to Orchestrator. Re-delegate to that owner, escalate when human authority is
+named, or stop at the checkpoint. Never repair Engineer PRs/commits or
+Maintainer task records while legal delegation exists.
 
 Use immutable `roleId` for dispatch, return, attribution, filenames, config, and
-authority; resolve display labels from the canonical registry. Each dispatch
-binds the selected host's closed role-capability declaration. A non-native
-restriction is `advisory` or `unavailable`, not enforced, and names its next
-authoritative detection boundary, limitation, and recovery route. `enforced`
-requires every shipped write-capable route constrained. OpenCode's `bash`,
-Copilot's `execute`, and Codex instructions are advisory. Bind one version 3
-report per degraded action, emit `capability.enforcement.degraded`, and check it
-against authenticated actor/evidence on return import.
+authority; registry labels are display-only. Dispatch binds the host's closed
+capability declaration. A non-native restriction is `advisory`/`unavailable`,
+names its detection boundary, limitation, and recovery, and is never
+`enforced` unless every shipped write route is constrained. OpenCode `bash`,
+Copilot `execute`, and Codex instructions are advisory. Bind one version 3
+report per degraded action, emit `capability.enforcement.degraded`, and verify
+it against authenticated actor/evidence on import.
 
 ### Handoff preflight
 
@@ -101,16 +85,18 @@ registry authorizes activation.
 Files-backend role start uses target-relative artifacts:
 
 ```text
-npx agenticloop task role-start <id> --packet <packet-path> --check-evidence-output <checks-path> --json
+npx agenticloop task role-start <id> --packet <packet-path> --json
 npx agenticloop task prepare-product-commit <id> --packet <packet-path> --subject <subject> --message-output .agenticloop/tmp/<id>-product-commit.txt --json
 ```
 
-Role start atomically records status, dispatch consumption, attempt disposition,
-and the check scaffold. It derives the digest from the packet. Partial or changed
-retries fail closed; an exact retry is `already_current`.
-Missing, stale, consumed, already-current, or noted starts fail closed without a
-fresh packet.
-An unkeyed dispatch digest provides integrity only; it does not authenticate
+Role start derives the digest from the packet and atomically records status,
+consumption, disposition, and `.agenticloop/tmp/<id>-checks.json`. This aggregate
+is uncommitted scratch; command execution artifacts under
+`.agenticloop/checks/<id>/` are durable. Changed or partial retries fail closed;
+an exact retry is `already_current`. Missing, stale, consumed, already-current, or noted starts fail closed without
+a fresh packet. Never run `task prepare-dispatch --packet`
+afterward: it is pre-start diagnostics, while `role-start` performs authoritative
+final revalidation. An unkeyed dispatch digest provides integrity only; it does not authenticate
 validator identity.
 
 For GitHub, the existing guarded task-body path is used instead:
@@ -124,13 +110,12 @@ Files lifecycle:
 
 ```text
 npx agenticloop task prepare-dispatch <id> --host <host> --role engineer --output <packet-path> --json
-npx agenticloop task role-start <id> --packet <packet-path> --check-evidence-output <checks-path> --json
+npx agenticloop task role-start <id> --packet <packet-path> --json
 npx agenticloop task evidence <id> --class implementation_artifact_evidence --expect-digest <digest> --product-head <commit> --json
 npx agenticloop task evidence <id> --class implementation_summary_evidence --expect-digest <refetched-digest> --summary <text> --check-evidence <text> --json
 npx agenticloop task evidence <id> --class implementation_outcome_evidence --expect-digest <refetched-digest> --outcome implementation_ready_for_review --json
-npx agenticloop task check-evidence-init <id> --packet <packet-path> --output <checks-path> --json
-npx agenticloop task check-evidence-update <id> --packet <packet-path> --input <checks-path> --output <checks-path> --check <check-id> --outcome passed --evidence <text> --execution-output <execution-path> --json
-npx agenticloop task prepare-return <id> --packet <packet-path> --check-evidence <checks-path> --outcome implementation_ready_for_review --output <return-path> --json
+npx agenticloop task check-evidence-update <id> --packet <packet-path> --check <check-id> --outcome passed --evidence <text> --json
+npx agenticloop task prepare-return <id> --packet <packet-path> --check-evidence .agenticloop/tmp/<id>-checks.json --outcome implementation_ready_for_review --output <return-path> --json
 ```
 
 Engineer ends at `prepare-return`; Maintainer starts with:
@@ -139,39 +124,40 @@ Engineer ends at `prepare-return`; Maintainer starts with:
 npx agenticloop task verify-return <id> --packet <packet-path> --return <return-path> --from-current-repository --json
 ```
 
-For non-passing/manual checks, use the observed outcome and omit
-`--execution-output` where required. Invalid starts need a fresh packet.
+Follow the typed first-safe repair once. If the same stable refusal signature
+recurs, or preflight and its first downstream command contradict each other on
+unchanged facts, stop mutations. Preserve the live attempt when safe, do not
+mint or consume another packet, and route one bounded validator/source
+diagnosis. Precedent is a hypothesis, not authority.
 
-Only retry an in-lease usage refusal with `safeToRetry: true` and
-`mutationOccurred: false`, using its corrected command.
-Before an identical tooling retry, run `task record-tooling-failure <id>
---attempt <attempt-id> --input <failure.json> --json`. Two total observations
-allow one retry; persist bounded provenance only.
-Authority, lifecycle, binding, ambiguity, evidence, and partial-mutation failures
-stop immediately and cannot consume this exception.
+For non-passing/manual checks, record the observed outcome and omit required
+`--execution-output`. Retry an in-lease usage refusal only when `safeToRetry:
+true` and `mutationOccurred: false`, using its corrected command. Before one
+identical tooling retry, run `task record-tooling-failure`; two total observations
+allow one retry and only bounded provenance persists. Authority, lifecycle,
+binding, ambiguity, evidence, and partial-mutation failures stop immediately.
 Public boundaries revalidate and reject caller-authored receipts. The raw return
-binds the packet and a non-authoritative outcome; Orchestrator never reconstructs
+binds the packet and non-authoritative outcome; Orchestrator never reconstructs
 it. Standard mode permits revalidated `session_reported`; hardened mode requires
-host provenance for every bound identity. Replay, self-attestation, or producer
-mismatch fails closed.
+host provenance for every identity. Replay, self-attestation, and producer
+mismatch fail closed.
 
 Do not hand-author JSON/digests or substitute host status, messages, handles, or
-cancellation observations for a return; host status proves no cancellation.
+cancellation observations for a return.
 
-Files retain the `in-progress` carrier. Use `task evidence` with current
-digest for artifact, summary, and outcome evidence. Receipts preserve
-`taskContractDigest` and link `dispatchCarrierDigest` to `currentCarrierDigest`;
-return product/workflow heads and lineage. Then use
-`task review-prepare <id>`.
+Files retain the `in-progress` carrier. `task evidence` records artifact,
+summary, and outcome against the current digest; receipts preserve
+`taskContractDigest`, link `dispatchCarrierDigest` to `currentCarrierDigest`,
+and return product/workflow heads and lineage. Then use `task review-prepare`.
 
 `task verify-return` / `role_return_receive` gates blocked resume and recovery.
 Owner transfer or destructive recovery needs the exact pinned signed authority;
 digests, labels, trailers, keys, and self-minted records cannot substitute.
 
-Work-unit certification is auditor-owned and a fresh, separate invocation each
-time; see [[work-unit-audit]]. Auditors never implement, accept tasks, or accept
-limitations or risks. A non-certifying report uses ordinary maintainer/engineer
-remediation, not another auditor pass.
+Work-unit certification is a fresh separate Auditor invocation each time; see
+[[work-unit-audit]]. Auditors never implement, accept tasks, limitations, or
+risks. Non-certification routes ordinary Maintainer/Engineer remediation, not
+another audit.
 
 Engineer owns scoped implementation and ordinary revision. The sole exception is
 one fully understood Maintainer Review Fixup during an active eligible review
@@ -183,13 +169,12 @@ independent-review finding returns to Engineer. Delegation mode and final
 
 ## Slice sizing
 
-Default to one smallest useful, independently verifiable task. An authorized
-larger run still uses bounded, reversible, independently verifiable slices;
-broad authorization does not permit one oversized record.
+Default to the smallest useful independently verifiable task. Larger authorized
+runs remain bounded, reversible slices, never one oversized record.
 
 ## Host Delegation Mechanism
 
-Real delegation starts a separate maintainer, engineer, or auditor role, task,
+Real delegation starts a separate Maintainer, Engineer, or Auditor role/task,
 named-agent, or subagent execution; narration is not delegation.
 
 Auditor has no fallback. `single_agent_fallback` never satisfies a work-unit
@@ -199,9 +184,9 @@ auditing inline.
 
 ## Delegation Capability Check
 
-Before fallback, check for a host task, subagent, role, agent, type, mode, or
-`subagent_type` mechanism. Use one if available; otherwise record how absence was
-verified or the attempted mechanism and failure reason.
+Before fallback, check host task, subagent, role, agent, type, mode, and
+`subagent_type` mechanisms. Use one if available; otherwise record verified
+absence or the attempted mechanism and failure.
 
 ## Concurrency Policy
 
@@ -227,24 +212,24 @@ when planning, reviewing, or joining lanes.
 
 ## Event Logging
 
-Event logging is off by default. When enabled, follow [[event-logging]] and emit
+Event logging is off by default. When enabled, [[event-logging]] emits
 `role.invoked` only when real maintainer/engineer execution or bounded fallback
-begins, never for hypothetical routing. Orchestrator emits it with top-level
-`role: orchestrator`; a maintainer/engineer cannot self-invoke. Record
-`target_role`, `delegation_mode` (`host_subagent`, `explicit_agent_invocation`, or
-`single_agent_fallback`), `fallback`, `adapter`, known `model`, and applicable
-`reason`. Fallback records `fallback: true`, a structured `fallback_cause`
-(`mechanism_absent` or `invocation_failed`), and non-empty reason; other modes
-record `fallback: false` and no cause. The strict producer rejects violations.
+begins, never for hypothetical routing or self-invocation. Orchestrator records
+top-level `role: orchestrator`, `target_role`, `delegation_mode`
+(`host_subagent`, `explicit_agent_invocation`, or `single_agent_fallback`),
+`fallback`, `adapter`, known `model`, and applicable `reason`. Fallback requires
+`fallback: true`, `fallback_cause: mechanism_absent | invocation_failed`, and a
+non-empty reason; other modes require `fallback: false` and no cause. The strict
+producer rejects violations.
 
 ## Two Meanings of single_agent_fallback
 
-Keep modes distinct: `delegation_mode: single_agent_fallback` on `role.invoked`
-means delegation was unavailable or concretely failed and requires structured
-`fallback_cause` plus reason. `review_mode: single_agent_fallback` means an
-acting-session, non-independent review; it is legal after real delegation (such
-as a `host_subagent` Maintainer Review Fixup). Review mode alone proves neither a
-delegation failure nor a fixup; durable fixup data and maintainer attribution do.
+Keep modes distinct. `delegation_mode: single_agent_fallback` means delegation
+was absent or failed and requires cause plus reason. `review_mode:
+single_agent_fallback` means acting-session, non-independent review and may
+follow real delegation (for example, a `host_subagent` Maintainer Review Fixup).
+Review mode alone proves neither delegation failure nor fixup; durable fixup data
+and Maintainer attribution do.
 
 ## Single-Agent Fallback
 
@@ -264,9 +249,9 @@ If neither host delegation nor role assumption is allowed, use [[blocked-state]]
 
 ## Re-Review and Continuation
 
-Each orchestrator-routed implementation/review step and re-review round gets a
-fresh delegation decision. Use available host delegation rather than continue the
-prior maintainer session; a new round is not `single_agent_fallback` cause.
+Each routed implementation/review step and re-review round gets a fresh
+delegation decision. Prefer available host delegation over continuing the prior
+Maintainer session; a new round is not a `single_agent_fallback` cause.
 
 A human may directly continue an active maintainer session for ordinary tasks,
 but it:
@@ -457,31 +442,26 @@ operations. [[parallel-delegation]] owns the complete authorization and stop law
 
 ## Context Read Discipline
 
-`Source docs` are the closed normative set. Also permit the task record, project
-map for backend/document selection, matching backend projection, and files named
-by the human/task record. Engineer reads stepped `## Implementation Notes` first;
-Orchestrator points to rather than copies it.
-
-Follow the canonical Context Read Discipline in
+`Source docs` are the closed normative set, plus the task record, project map
+needed for backend/document selection, matching backend projection, and files
+named by the human or record. Engineer reads stepped `## Implementation Notes`
+first; Orchestrator points to it instead of copying it. Follow the canonical Context Read Discipline in
 `agenticloop/AGENTIC_LOOP.md`. Bounded task-scoped implementation discovery is
-permitted; ambient logs and vague related-file scans are not. Expansion beyond
-that bound, or a material scope change, returns `needs_context` (or `blocked`).
+permitted, not ambient logs or vague related-file scans; expansion or material
+scope change returns `needs_context` (or `blocked`).
 
-If an Operating fact is wrong, record the gap in the task record, review, or status return and continue from the canonical document. Do not silently re-probe the same fact in a loop.
+If an Operating fact is wrong or stale, record the gap in the task record,
+review, or status return; continue from canonical docs and do not repeatedly
+probe it. List only relevant current `VF-...` ids, task-attempt and linked
+decision references, or `none`; distinguish binding accepted decisions from
+non-binding proposals, never make an observation strategy authority, and route
+promotion candidates to Maintainer.
 
-In Operating facts, list only relevant verification observations: current
-`VF-...` ids, task-attempt references, and linked decision references, or
-`none`. Distinguish accepted decisions (binding) from proposed decisions
-(non-binding), but never present an observation as strategy approval. If stale,
-record the gap; do not re-probe. Surface any promotion candidate to maintainer.
-
-Long-running or parallel work requires a lease. Without host cancellation, use a
-return-after-N-observable-steps checkpoint. Return status when the lease expires,
-no-progress budget is exhausted, branch/worktree is wrong, a collision appears,
-or the stop condition is reached. For parallel-specific liveness, host
-streaming/cancel limits, and join-based batch rules, load [[parallel-delegation]].
-Status returns include `STATUS`, task id, branch/worktree, files touched,
-evidence, next step, and stop reason.
+Long-running or parallel work requires a lease. Without host cancellation, use
+a return-after-N-observable-steps checkpoint. Return status on expiry, exhausted
+no-progress budget, wrong branch/worktree, collision, or stop condition, with
+`STATUS`, task id, branch/worktree, files touched, evidence, next step, and stop
+reason. [[parallel-delegation]] owns parallel liveness and join-based batches.
 
 Select exactly one checkpoint cadence in the prompt: `return after every
 record`, or `return after each batch of N records`. N is explicit; do not also

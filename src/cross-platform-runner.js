@@ -194,6 +194,10 @@ export function runRequiredCheckCommand({ command, args, cwd }, {
 }
 
 function finalizeResult(result, identity) {
+  // `error` is the spawn boundary's explicit failure signal. A wrapper that
+  // supplies both an error and a numeric status has not proved which field is
+  // authoritative, so required-check execution fails closed instead of
+  // accepting the status as authenticated child completion.
   if (result.error) {
     const wrapped = new Error(result.error.message);
     wrapped.code = result.error.code;

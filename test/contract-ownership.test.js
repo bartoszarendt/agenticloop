@@ -327,6 +327,56 @@ describe('contract ownership', () => {
     }
   });
 
+  it('keeps files role start and blocked-return authority unambiguous', () => {
+    for (const rel of [
+      'AGENTIC_LOOP.md',
+      'agents/engineer.md',
+      'backends/files.md',
+      'skills/role-delegation/SKILL.md',
+      'docs/cli-reference.md',
+    ]) {
+      const body = read(rel);
+      assert.doesNotMatch(
+        body,
+        /role start[\s\S]{0,700}task prepare-dispatch <id>\s+--packet <packet-path>\s+--role engineer/i,
+        `${rel} must not prescribe post-role-start packet recomputation`,
+      );
+    }
+    assert.match(read('docs/cli-reference.md'), /implementation_blocked.*cancellation-only/is);
+    assert.match(read('skills/blocked-state/SKILL.md'), /rawReturn: null/);
+    assert.match(read('skills/blocked-state/SKILL.md'), /transitionAuthority: false/);
+    assert.match(read('skills/blocked-state/SKILL.md'), /never becomes authenticated\s+evidence/i);
+  });
+
+  it('keeps atomic readiness and files aggregate guidance explicit', () => {
+    for (const rel of ['AGENTIC_LOOP.md', 'backends/files.md', 'docs/cli-reference.md']) {
+      const body = read(rel);
+      assert.match(body, /live consumed\s+Engineer\s+attempt/i, rel);
+      assert.match(body, /entire|whole/i, rel);
+      assert.match(body, /partial\s+sibling\s+apply\s+is\s+unsupported|no\s+partial\s+sibling\s+apply/i, rel);
+    }
+    for (const rel of ['docs/getting-started.md', 'docs/host-adapters.md']) {
+      const body = read(rel);
+      assert.match(body, /(?:for files, the|files)\s+role start creates the\s+scratch (?:check )?aggregate/i, rel);
+      assert.match(body, /GitHub[\s\S]{0,220}task check-evidence-init/i, rel);
+      assert.match(body, /GitHub[\s\S]{0,220}explicit/i, rel);
+      assert.doesNotMatch(body, /guarded role start[^.]{0,160}check-evidence-init/i, rel);
+    }
+  });
+
+  it('retains the canonical delegation safeguards unrelated to lifecycle repair', () => {
+    const role = read('skills/role-delegation/SKILL.md');
+    for (const pattern of [
+      /pseudo-worktree/,
+      /numbered alternatives/,
+      /"not code"/,
+      /merged twice/,
+      /issue-comment review/,
+      /review_budget` \(default 5\)/,
+    ]) assert.match(role, pattern);
+    assert.match(read('skills/parallel-delegation/SKILL.md'), /not orchestrator-inline implementation work/);
+  });
+
   it('the work-unit-audit skill owns the audit budget and closeout gate; roles reference it', () => {
     // Distinctive budget wording lives only in the canonical skill; role files
     // and methodology point at it rather than copying it.

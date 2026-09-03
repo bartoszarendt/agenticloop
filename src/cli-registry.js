@@ -619,7 +619,7 @@ export const COMMAND_REGISTRY = {
         ],
       },
       'readiness-apply': {
-        summary: 'Settle one reviewed task or work-unit readiness plan as a single transaction and at most one Maintainer-attributed commit. Never activates.',
+        summary: 'Settle one reviewed task or an indivisible work-unit readiness plan as a single transaction and at most one Maintainer-attributed commit. One armed member refuses the whole work unit; partial apply is unsupported. Never activates.',
         usage: 'agenticloop task readiness-apply [<compatible-id>] --plan <path> (--dry-run | --yes) [--json] [--target <dir>]',
         receiptRevalidation: 'read-only-before-explicit-apply',
         positionals: [{ name: 'id', required: false }],
@@ -769,7 +769,7 @@ export const COMMAND_REGISTRY = {
       },
       'role-start': {
         summary: 'Atomically combine files-backend role start (in-progress transition), dispatch consumption, and required-check evidence initialization into one guarded transaction.',
-        usage: 'agenticloop task role-start <id> --packet <packet.json> --check-evidence-output <path> [--json] [--target <dir>]',
+        usage: 'agenticloop task role-start <id> --packet <packet.json> [--check-evidence-output .agenticloop/tmp/<id>-checks.json] [--json] [--target <dir>]',
         positionals: [{ name: 'id', required: true }],
         details: [
           'Files-backend only. The canonical single-command entry point for Engineer delegation:',
@@ -794,7 +794,7 @@ export const COMMAND_REGISTRY = {
         options: [
           targetOption(),
           opt('packet', 'string', 'Canonical dispatch packet produced by task prepare-dispatch. Required. Path is target-relative and confined.'),
-          opt('check-evidence-output', 'string', 'Required-check evidence scaffolding output path. Required. Path is target-relative and confined.'),
+          opt('check-evidence-output', 'string', 'Optional mutable aggregate path under .agenticloop/tmp/. Defaults to .agenticloop/tmp/<id>-checks.json; destinations outside scratch are refused.'),
           hostTrustStoreOption,
           jsonOption,
         ],
@@ -856,22 +856,22 @@ export const COMMAND_REGISTRY = {
       },
       'check-evidence-init': {
         summary: 'Create canonical not-run evidence scaffolding from a dispatch packet.',
-        usage: 'agenticloop task check-evidence-init <id> --packet <packet.json> --output <path> [--expect-existing-digest <sha256>] [--supersession-authority <kind:ref>] [--json] [--target <dir>]',
+        usage: 'agenticloop task check-evidence-init <id> --packet <packet.json> [--output .agenticloop/tmp/<id>-checks.json] [--expect-existing-digest <sha256>] [--supersession-authority <kind:ref>] [--json] [--target <dir>]',
         positionals: [{ name: 'id', required: true }],
-        options: [targetOption(), opt('packet', 'string', 'Dispatch packet path, target-relative and confined to the selected target.'), opt('output', 'string', 'Required-check evidence output path, target-relative and confined to the selected target.'), opt('expect-existing-digest', 'string', 'Exact sha256 digest required to replace a different existing scaffold.'), opt('supersession-authority', 'string', 'Typed Maintainer authority <kind:reference> required with replacement.'), jsonOption],
+        options: [targetOption(), opt('packet', 'string', 'Dispatch packet path, target-relative and confined to the selected target.'), opt('output', 'string', 'Optional mutable aggregate path under .agenticloop/tmp/. Defaults to .agenticloop/tmp/<id>-checks.json and is never committed.'), opt('expect-existing-digest', 'string', 'Exact sha256 digest required to replace a different existing scaffold.'), opt('supersession-authority', 'string', 'Typed Maintainer authority <kind:reference> required with replacement.'), jsonOption],
       },
       'check-evidence-show': {
         summary: 'Validate and print canonical required-check evidence for a dispatch packet.',
-        usage: 'agenticloop task check-evidence-show <id> --packet <packet.json> --input <path> [--json] [--target <dir>]',
+        usage: 'agenticloop task check-evidence-show <id> --packet <packet.json> [--input .agenticloop/tmp/<id>-checks.json] [--json] [--target <dir>]',
         receiptRevalidation: 'read-only',
         positionals: [{ name: 'id', required: true }],
-        options: [targetOption(), opt('packet', 'string', 'Dispatch packet path, target-relative and confined to the selected target.'), opt('input', 'string', 'Required-check evidence path, target-relative and confined to the selected target.'), jsonOption],
+        options: [targetOption(), opt('packet', 'string', 'Dispatch packet path, target-relative and confined to the selected target.'), opt('input', 'string', 'Optional mutable aggregate under .agenticloop/tmp/. Defaults to .agenticloop/tmp/<id>-checks.json; tracked aggregates are refused.'), jsonOption],
       },
       'check-evidence-update': {
         summary: 'Atomically update one packet-required check observation.',
-        usage: 'agenticloop task check-evidence-update <id> --packet <packet.json> --input <path> --output <path> --check RC-N --outcome <passed|failed|blocked|not_run> --evidence <text> [--exit-code <n>] [--execution-output <path>] [--json] [--target <dir>]',
+        usage: 'agenticloop task check-evidence-update <id> --packet <packet.json> [--input .agenticloop/tmp/<id>-checks.json] [--output .agenticloop/tmp/<id>-checks.json] --check RC-N --outcome <passed|failed|blocked|not_run> --evidence <text> [--exit-code <n>] [--execution-output .agenticloop/checks/<id>/<check>.execution.json] [--json] [--target <dir>]',
         positionals: [{ name: 'id', required: true }],
-        options: [targetOption(), opt('packet', 'string', 'Dispatch packet path, target-relative and confined to the selected target.'), opt('input', 'string', 'Existing required-check evidence path, target-relative and confined to the selected target.'), opt('output', 'string', 'Updated required-check evidence path, target-relative and confined to the selected target.'), opt('check', 'string', 'Packet required-check id to update. Required.'), opt('outcome', 'string', 'Observed check outcome. Required.', { enum: ['passed', 'failed', 'blocked', 'not_run'] }), opt('evidence', 'string', 'Bounded observation evidence. Required.'), opt('exit-code', 'string', 'Command check exit code; required for non-passing command observations.'), opt('execution-output', 'string', 'Target-confined path where the CLI writes its own execution-evidence JSON for a passed command check. The exact packet command is parsed as inert argv and run at the target root with a five-minute timeout.'), jsonOption],
+        options: [targetOption(), opt('packet', 'string', 'Dispatch packet path, target-relative and confined to the selected target.'), opt('input', 'string', 'Optional existing mutable aggregate under .agenticloop/tmp/. Defaults to .agenticloop/tmp/<id>-checks.json.'), opt('output', 'string', 'Optional updated mutable aggregate under .agenticloop/tmp/. Defaults to .agenticloop/tmp/<id>-checks.json and is never committed.'), opt('check', 'string', 'Packet required-check id to update. Required.'), opt('outcome', 'string', 'Observed check outcome. Required.', { enum: ['passed', 'failed', 'blocked', 'not_run'] }), opt('evidence', 'string', 'Bounded observation evidence. Required.'), opt('exit-code', 'string', 'Command check exit code; required for non-passing command observations.'), opt('execution-output', 'string', 'Optional exact immutable artifact path .agenticloop/checks/<task-id>/<check-id>.execution.json. It defaults there; the CLI executes the packet command as inert argv at the target root with a five-minute timeout.'), jsonOption],
       },
       evidence: {
         summary: 'Record one bounded role-owned task-evidence mutation through the carrier lineage.',

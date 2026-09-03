@@ -15,6 +15,11 @@ import {
 } from './task-evidence-contract.js';
 import { validateAuditRecord } from './audit-record.js';
 import { validateExecutionEvidence } from './execution-evidence.js';
+import {
+  executionAttemptAbandonmentRelativePath,
+  listExecutionAttemptAbandonments,
+  validateExecutionAttemptAbandonment,
+} from './execution-attempt.js';
 import { parseFrontmatterStrict } from './frontmatter.js';
 import { validateManifest } from './generated-artifacts.js';
 import { validateHandoffRefreshReceipt } from './handoff-evidence-refresh.js';
@@ -25,6 +30,7 @@ import {
 } from './product-lineage.js';
 import { pathIdentity } from './path-identity.js';
 import { fileMatchesScopePattern } from './scope-matcher.js';
+import { canonicalJson } from './canonical-json.js';
 
 const SCRATCH_PREFIX = '.agenticloop/tmp/';
 
@@ -72,6 +78,20 @@ function exactWorkflowPaths(target, packet, signedEvidence, runGit, workflowHead
   for (const receipt of lineage.receipts) {
     records.set(carrierMutationRelativePath(receipt), { kind: 'mutation', record: receipt });
   }
+  const abandonments = listExecutionAttemptAbandonments(target, packet?.task?.id);
+  if (!abandonments.ok) {
+    throw new VerificationContextMalformedError(
+      `execution attempt abandonment history is invalid: ${abandonments.errors.join('; ')}`
+    );
+  }
+  // Consuming a successor packet can atomically retire a mutation-free prior
+  // attempt. That record lands after the packet base, so it is part of this
+  // attempt's workflow range and must be validated as the exact automatic
+  // supersession authorized by this packet, not accepted by directory alone.
+  for (const record of abandonments.records.filter(item =>
+    item.disposition === 'superseded_by_packet' && item.authority === packet?.packetId)) {
+    records.set(executionAttemptAbandonmentRelativePath(record), { kind: 'abandonment', record });
+  }
   return { lineage, records };
 }
 
@@ -94,8 +114,13 @@ function workflowRecordAtHead(runGit, workflowHead, path, expected) {
         taskId: expected.record.taskId,
         filename: path.split('/').at(-1),
       })
-    : validateCarrierMutationReceipt(record);
-  if (!checked.ok || record.digest !== expected.record.digest) {
+    : expected.kind === 'abandonment'
+      ? validateExecutionAttemptAbandonment(record, { taskId: expected.record.taskId })
+      : validateCarrierMutationReceipt(record);
+  const exactRecord = expected.kind === 'abandonment'
+    ? canonicalJson(record) === canonicalJson(expected.record)
+    : record.digest === expected.record.digest;
+  if (!checked.ok || !exactRecord) {
     throw new VerificationContextMalformedError(
       `workflow evidence '${path}' is not the exact validated active ${expected.kind} record`
     );

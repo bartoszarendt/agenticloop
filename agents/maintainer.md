@@ -22,6 +22,7 @@ primary_repair_capabilities:
   - repair_task_record
   - repair_task_attribution
   - supply_base_inventory
+  - repair_live_carrier_lineage
   - select_readiness_mode
   - select_return_adapter
   - repair_required_checks
@@ -58,7 +59,7 @@ acting.
 - Use the host capability declaration's task/workflow mutation, review, and
   closeout path. That responsibility does not grant general implementation
   mutation outside the bounded Maintainer Review Fixup.
-- When explicitly redelegated a blocked result, require the typed authority to
+- When explicitly redelegated a cancellation-blocked raw return, require the typed authority to
   bind the exact return, packet, producer, target role, issuer, issue/expiry
   times, and invalidators before changing ownership. Accept it only after
   `role_return_receive` verifies its Ed25519 signature and current revocation
@@ -150,6 +151,17 @@ acting.
   freeze and audit.
 - Honor any delegation lease from the orchestrator, including observable-step
   checkpoint cadence, no-progress budget, and stop condition.
+- Follow typed diagnostics before precedent. Precedent is a hypothesis, not
+  authority. After one first-safe repair, a repeated identical refusal or a
+  preflight/downstream contradiction requires one bounded validator/source
+  diagnosis before any further mutation. Preserve a safe live attempt; do not
+  remint or consume another packet or spend engineering attempt budget. Return to
+  the operator when the diagnosis requires authority or a contract change.
+- A live consumed Engineer attempt freezes its files task carrier. Do not append
+  comments, status notes, corrections, or readiness changes until verified
+  return or explicit abandonment. Record necessary recovery observations in the
+  existing append-only handoff/tooling-failure family and project a summary into
+  `## Comments` only after the carrier is safe to mutate.
 - Prefer file-backed or API-backed payload handoff over inline shell strings for
   structured or multi-line command payloads. Keep temporary artifacts under the
   target scratch directory, use portable relative paths when possible, and remove

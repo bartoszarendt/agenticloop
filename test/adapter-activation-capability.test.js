@@ -203,7 +203,8 @@ describe('production planner activation surfaces', () => {
       const init = await runCliInProcess(['init', '--adapter', adapter, '--target', target]);
       assert.equal(init.status, 0, `${adapter}: ${init.stderr}`);
       const delegation = readFileSync(join(target, 'agenticloop', 'skills', 'role-delegation', 'SKILL.md'), 'utf8');
-      assert.match(delegation, /task role-start <id> --packet <packet-path> --check-evidence-output <checks-path>/, adapter);
+      assert.match(delegation, /task role-start <id> --packet <packet-path> --json/, adapter);
+      assert.doesNotMatch(delegation, /role-start <id>[^\n]*--check-evidence-output/, adapter);
       assert.match(delegation, /task verify-return/, adapter);
       assert.match(delegation, /missing, stale, consumed, already-current, or noted starts fail closed without\s+a\s+fresh packet/i, adapter);
       for (const relPath of relPaths) {
@@ -218,6 +219,28 @@ describe('production planner activation surfaces', () => {
         assert.match(text, /advisory/i, relPath);
         assert.doesNotMatch(text, /\$ARGUMENTS|\$1|\$2/, relPath);
         assert.deepEqual(validateFilledAdapterSlots(text, relPath), [], relPath);
+      }
+      const engineerPaths = {
+        opencode: '.opencode/agents/engineer.md',
+        'claude-code': '.claude/agents/engineer.md',
+        codex: '.codex/agents/engineer.toml',
+        copilot: '.github/agents/engineer.agent.md',
+        cursor: '.cursor/agents/engineer.md',
+      };
+      const generatedEngineer = readFileSync(join(target, ...engineerPaths[adapter].split('/')), 'utf8');
+      assert.doesNotMatch(
+        generatedEngineer,
+        /task prepare-dispatch <id>\s+--packet <packet-path>\s+--role engineer/,
+        `${adapter} generated Engineer prompt must not instruct post-role-start packet recomputation`,
+      );
+      for (const role of ['orchestrator', 'maintainer']) {
+        const generatedRolePath = engineerPaths[adapter].replace(/engineer/g, role);
+        const generatedRole = readFileSync(join(target, ...generatedRolePath.split('/')), 'utf8')
+          .replace(/\\n/g, '\n');
+        assert.match(generatedRole, /Precedent is a hypothesis, not\s+authority\./,
+          `${adapter} generated ${role} prompt must carry the repeated-refusal stop rule`);
+        assert.match(generatedRole, /do not\s+(?:remint|mint)[\s\S]{0,80}packet/i,
+          `${adapter} generated ${role} prompt must conserve packets after repeated refusal`);
       }
     }
   });

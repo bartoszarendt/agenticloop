@@ -442,7 +442,7 @@ describe('readiness-plan stays read-only', () => {
     writeFileSync(join(target, PLAN_REF(taskId)), bare.stdout, 'utf8');
     const result = receipt(await applyPlan(target, taskId));
     assert.equal(result.mutationDisposition, 'blocked');
-    assert.ok(result.errors.some(item => /display-only/.test(item)));
+    assert.ok(result.errors.some(item => /display-only/.test(item)), JSON.stringify(result, null, 2));
     assert.equal(porcelain(target), '');
   });
 

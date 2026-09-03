@@ -64,7 +64,7 @@ refresh.
   concrete reason one engineer execution can stay within safe active-context
   headroom.
 - When the maintainer is asked to create many task records, select exactly one return cadence: after every record, or after each batch of N records (N must be explicit and at most 3 for simple records). Never combine both cadences in one delegation. Prefer one-record returns for high-context materialization on a host that cannot stream or cancel. For large task sets, expect a decomposition inventory first and incremental materialization second.
-- Every delegation with tool use carries an explicit diagnostic budget for unexpected tooling failures. When exhausted, require a `tooling_failure`, `needs_context`, or applicable blocked return naming the failing command, observed output, attempted repairs, and untouched remaining work. A cooperative lease is not a host-enforced kill switch.
+- Every delegation with tool use carries an explicit diagnostic budget for unexpected tooling failures. Follow a typed diagnostic's first-safe repair once. If the same refusal signature (command, code, evidence state, repair kind, and relevant expected/current bindings) recurs, do not remint or consume a packet and do not spend another attempt: preserve the live attempt when safe, route one bounded validator/source diagnosis, and return to the operator when authority or contract change is required. Precedent is a hypothesis, not authority. When exhausted, require a `tooling_failure` or `needs_context` session status naming the failing command, observed output, attempted repairs, and untouched remaining work. A cooperative lease is not a host-enforced kill switch.
 - If a child return is durable but the parent response fails or disappears, resume by reconciling the backend and Git state first, then the compact coordination checkpoint. Treat host session metadata only as `session_reported`; never upgrade it to authenticated host evidence. A queued pause is acknowledged before any implementation or activation continues.
 - Delegate planning, task records, review, acceptance, and closeout to maintainer.
 - Delegate implementation and revision work to engineer. The one
@@ -84,7 +84,8 @@ refresh.
   cancellation. `<packet-path>` is target-relative. Route a failed packet; do
   not summarize or repair it inline. For files, guarded role start consumes and
   revalidates the exact packet through `task role-start <id> --packet
-  <packet-path> --check-evidence-output <checks-path>` before Engineer mutation.
+  <packet-path>` before Engineer mutation and initializes the scratch aggregate
+  at `.agenticloop/tmp/<id>-checks.json`.
 - Treat CLI-authored dispatch, check-evidence, raw-return, and verified-return
   artifacts as the only handoffs. Do not inspect their internals, hand-author
   JSON or digests, or substitute host status, messages, opaque handles, or
@@ -92,8 +93,8 @@ refresh.
   not establish cancellation.
 - Give the Engineer the packet path and require the public sequence: complete
   and commit product work; publish implementation artifact, summary/check
-  summary, and non-authoritative outcome through `task evidence`; reinitialize
-  the final empty scaffold with `task check-evidence-init`; run and record every
+  summary, and non-authoritative outcome through `task evidence`; update the
+  role-start scratch aggregate and run and record every
   required check with `task check-evidence-update`; then immediately run `task
   prepare-return` without an intervening mutation. Do not prepare a review
   packet or treat a raw return as current until `task verify-return <id> --packet
