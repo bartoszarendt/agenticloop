@@ -657,12 +657,17 @@ Roles live in `agenticloop/agents/`. They define who does what:
 - `engineer` implements one scoped task record at a time
 - `auditor` certifies a finished work unit against its exact integrated baseline
 
-### Standalone engineer and auditor
+### Standalone maintainer, engineer, and auditor
 
-The engineer and the auditor are dual-mode. Besides their Agentic Loop roles,
-the main agent can delegate to either one directly as an ordinary bounded
-subagent. That standalone delegation does not activate Agentic Loop and creates
-no workflow state.
+The maintainer, engineer, and auditor are dual-mode. Besides their Agentic Loop
+roles, the main agent can delegate to any of them directly as an ordinary
+bounded subagent. That standalone delegation does not activate Agentic Loop and
+creates no workflow state.
+
+- A standalone maintainer performs bounded planning, decomposition, or review.
+  It needs no task ID, task record, review packet, or other workflow metadata,
+  and returns advisory recommendations rather than formal Agentic Loop
+  acceptance or closeout. It does not implement.
 
 - A standalone engineer implements a bounded engineering subtask. It needs no
   task ID or task record.
@@ -672,15 +677,16 @@ no workflow state.
   non-certifying findings: no `auditor_report_v1`, no Agentic Loop verdict, and
   no contribution to the formal work-unit audit gate.
 
-Full Agentic Loop mode is selected only by explicit activation, by naming a
-durable task record as the engineer's contract, or by asking to certify or
-re-audit a tracked work unit against an Agentic Loop audit record or packet. A
-bare task ID, audit ID, or commit SHA mentioned for context selects neither. When
-formal certification is requested but its packet is missing or ambiguous, the
-auditor stays in Agentic Loop mode and returns `needs_human_decision` rather than
-quietly downgrading. Work-unit certification always requires a fresh,
-packet-bound Auditor invocation; a standalone assessment never substitutes for
-it.
+Full Agentic Loop mode is selected only by explicit activation, by explicitly
+designating a durable Agentic Loop lifecycle artifact as the maintainer's
+planning, review, acceptance, or closeout contract, by naming a durable task
+record as the engineer's implementation contract, or by asking the auditor to
+certify or re-audit a tracked work unit against an Agentic Loop audit record or
+packet. A bare task ID, work-unit name, pull request, audit ID, or commit SHA
+mentioned for context selects neither. When explicit Agentic Loop intent has
+selected full mode, missing metadata does not silently downgrade the role.
+Work-unit certification always requires a fresh, packet-bound Auditor
+invocation; a standalone assessment never substitutes for it.
 
 Host adapters bind their native agent, mode, command, or prompt mechanism to
 these role files. Generated role labels come from the canonical registry while

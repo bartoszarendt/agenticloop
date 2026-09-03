@@ -537,9 +537,14 @@ Guarantees:
   rules path changes while a block is owned elsewhere, `guidance check` reports
   the drift and automatic refresh does not create a second block.
 
-The block also states that the main agent may invoke the generated **engineer**
-or **auditor** as ordinary bounded subagents. Standalone delegation of either
-role does not activate Agentic Loop and creates no workflow state:
+The block also states that the main agent may invoke the generated
+**maintainer**, **engineer**, or **auditor** as ordinary bounded subagents.
+Standalone delegation of any of these roles does not activate Agentic Loop and
+creates no workflow state:
+
+- **Standalone maintainer** performs bounded planning, decomposition, or review,
+  needs no task ID or task record, and returns advisory recommendations rather
+  than formal Agentic Loop acceptance or closeout. It does not implement.
 
 - **Standalone engineer** needs no task ID or task record. Full Agentic Loop
   engineer mode is selected only by explicit activation or a named durable task
@@ -553,8 +558,10 @@ role does not activate Agentic Loop and creates no workflow state:
   and work-unit certification always requires a fresh, packet-bound Auditor
   invocation.
 
-See [`AGENTIC_LOOP.md`](AGENTIC_LOOP.md), [`agents/engineer.md`](agents/engineer.md),
-and [`agents/auditor.md`](agents/auditor.md).
+See [`AGENTIC_LOOP.md`](AGENTIC_LOOP.md),
+[`agents/maintainer.md`](agents/maintainer.md),
+[`agents/engineer.md`](agents/engineer.md), and
+[`agents/auditor.md`](agents/auditor.md).
 
 ## Repository layout
 

@@ -18,7 +18,7 @@ const TARGET_ROOT_FILES = new Set([
 function markdownFiles(directory) {
   const result = [];
   for (const name of readdirSync(directory)) {
-    if (EXCLUDED.has(name) || (name.startsWith('.') && name !== '.dev')) continue;
+    if (EXCLUDED.has(name) || name.startsWith('.')) continue;
     const path = join(directory, name);
     if (statSync(path).isDirectory()) result.push(...markdownFiles(path));
     else if (name.endsWith('.md')) result.push(path);

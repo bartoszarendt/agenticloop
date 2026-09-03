@@ -32,28 +32,31 @@ import { WORKFLOW_ROLE_IDS } from '../workflow-roles.js';
 export const AGENTIC_LOOP_OPERATION_DESCRIPTION =
   'Use only when the user explicitly asks to activate Agentic Loop: create or refine the durable task record, route maintainer, engineer, and auditor roles, verify evidence, certify the finished work unit, and close out according to the project backend.';
 
-// Dual-mode engineer preamble prepended by host adapters that customize the
-// engineer developer instructions (Codex, Copilot, Cursor). Kept compact for
-// payload budgets. The canonical role body carries the full contract.
+// Dual-mode role preambles prepended by host adapters that customize canonical
+// role instructions. Kept compact for payload budgets; canonical role bodies
+// carry the full contracts.
 export const STANDALONE_ENGINEER_PREAMBLE_LINES = Object.freeze([
   'Engineer mode selection: use full Agentic Loop mode only when the delegation explicitly activates Agentic Loop or names a durable Agentic Loop task record as the contract; otherwise operate as a standalone engineer.',
   'A bare task ID does not force Agentic Loop mode. Standalone engineer work requires no task ID or task record and creates no Agentic Loop task records, events, worktrees, pull requests, review, or closeout state.',
   'Do not perform final maintainer acceptance in either mode. Stay within engineer boundaries: implement the delegated scope, run checks, and return fresh evidence.',
 ]);
 
-// Dual-mode auditor preamble prepended by host adapters that customize the
-// auditor instructions (Codex, Copilot, Cursor, OpenCode). Kept compact for
-// payload budgets. The canonical role body carries the full contract.
 export const STANDALONE_AUDITOR_PREAMBLE_LINES = Object.freeze([
   'Auditor mode selection: use full Agentic Loop mode only when the delegation explicitly activates Agentic Loop or explicitly asks to certify or re-audit a tracked Agentic Loop work unit against a designated Agentic Loop audit record or audit packet; otherwise operate as a standalone auditor.',
   'A bare task ID, audit ID, work-unit name, or commit SHA does not force Agentic Loop mode. Standalone assessment requires no audit packet or audit record, creates no Agentic Loop workflow state, and missing packet metadata is not a blocker. If formal certification intent is explicit but its packet is missing or ambiguous, stay in Agentic Loop mode and return `needs_human_decision` rather than downgrading to standalone.',
   'Certification firewall: a standalone assessment is non-certifying. Report scope, findings and evidence, checks run and limitations, and state that it certifies nothing and that formal certification requires a fresh packet-bound Agentic Loop Auditor invocation. Do not return `auditor_report_v1` or an Agentic Loop verdict as the standalone result. You are read-only in both modes: implement no remediation, and edit no implementation, tests, configuration, documentation, task records, audit records, or workflow state.',
 ]);
 
+export const STANDALONE_MAINTAINER_PREAMBLE_LINES = Object.freeze([
+  'Maintainer mode selection: use full Agentic Loop mode only when the delegation explicitly activates Agentic Loop or explicitly designates a durable Agentic Loop lifecycle artifact as the Maintainer contract; otherwise operate as a standalone Maintainer.',
+  'Standalone Maintainer work requires no task ID or task record and creates no Agentic Loop workflow state.',
+  'Standalone output is advisory and cannot perform formal Agentic Loop acceptance or closeout. Do not implement code changes; the canonical Agentic-Loop-only Maintainer Review Fixup remains the sole bounded exception.',
+]);
+
 // Roles whose generated prompt must select a mode before any Agentic Loop
 // workflow-state instruction, so a standalone delegation is never ordered to
 // adopt the methodology by prompt ordering alone.
-const DUAL_MODE_ROLE_IDS = Object.freeze(['engineer', 'auditor']);
+const DUAL_MODE_ROLE_IDS = Object.freeze(['maintainer', 'engineer', 'auditor']);
 
 /** @param {string} roleName */
 export function isDualModeRole(roleName) {
@@ -69,6 +72,7 @@ export function isDualModeRole(roleName) {
  * @returns {string[]}
  */
 export function dualModePreambleLines(roleName) {
+  if (roleName === 'maintainer') return [...STANDALONE_MAINTAINER_PREAMBLE_LINES];
   if (roleName === 'engineer') return [...STANDALONE_ENGINEER_PREAMBLE_LINES];
   if (roleName === 'auditor') return [...STANDALONE_AUDITOR_PREAMBLE_LINES];
   return [];

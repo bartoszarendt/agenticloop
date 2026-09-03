@@ -388,9 +388,10 @@ function buildCopilotAgentBody(
     lines.push('When event logging is enabled, emit `role.invoked` after a real role invocation or explicit fallback role assumption.');
     lines.push('Keep this Copilot session as the coordinator/orchestrator and do not directly edit implementation files unless the human explicitly asks.');
   } else if (roleName === 'maintainer') {
-    lines.push('Stay within maintainer boundaries: own setup confirmation, task records, review, acceptance, follow-up triage, and closeout.');
-    lines.push('Honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, collision, or no-progress budget requires it.');
-    lines.push('Do not implement code changes. Stop and hand control back after producing maintainer-owned output for the orchestrator or human.');
+    lines.push('In Agentic Loop mode: Stay within maintainer boundaries and own setup confirmation, task records, review, acceptance, follow-up triage, and closeout.');
+    lines.push('In Agentic Loop mode, honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, collision, or no-progress budget requires it.');
+    lines.push('In standalone mode, perform bounded planning or review and return advisory output without Agentic Loop workflow state or authority.');
+    lines.push('Do not implement code changes. The canonical Maintainer Review Fixup is available only in Agentic Loop mode under its bounded contract. Stop and hand control back after producing maintainer output for the orchestrator, parent, or human.');
   } else if (roleName === 'engineer') {
     lines.push('In Agentic Loop mode, honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, wrong branch/worktree, collision, or no-progress budget requires it. Stop and hand control back once implementation evidence is ready for maintainer review.');
   } else if (roleName === 'auditor') {

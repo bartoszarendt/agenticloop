@@ -1,20 +1,11 @@
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { basename, dirname, extname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const EXCLUDED_DIRECTORIES = new Set([
-  '.agenticloop',
-  '.codegraph',
-  '.dev',
-  '.git',
-  'node_modules',
-  // Host runtime output (browser session snapshots), not repository source.
-  '.playwright-mcp',
-  'tmp',
-]);
 const TEXT_EXTENSIONS = new Set([
   '.js',
   '.json',
@@ -29,21 +20,14 @@ const PHASE_NUMBER_IN_FILENAME = /(?:phase[ _-]?\d+|p\d{2}-(?:d)?\d+)/i;
 const INTERNAL_PHASE_REFERENCE = /\b(?:phase[ _-]?\d{2}|p\d{2}-d\d+)\b/i;
 const TEST_NAME_INTERNAL_REFERENCE = /\b(?:p\d{2}-\d+|[rs]\d+:)\b/i;
 
-function repositoryFiles(directory = REPO_ROOT) {
-  const files = [];
-
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (entry.isSymbolicLink()) continue;
-    if (entry.isDirectory()) {
-      if (!EXCLUDED_DIRECTORIES.has(entry.name)) {
-        files.push(...repositoryFiles(join(directory, entry.name)));
-      }
-      continue;
-    }
-    if (entry.isFile()) files.push(join(directory, entry.name));
-  }
-
-  return files;
+function repositoryFiles() {
+  return execFileSync('git', ['ls-files', '-z'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+  })
+    .split('\0')
+    .filter(Boolean)
+    .map(file => join(REPO_ROOT, file));
 }
 
 function repoRelative(file) {
@@ -51,7 +35,7 @@ function repoRelative(file) {
 }
 
 describe('internal planning boundary', () => {
-  it('keeps numbered development-phase identifiers inside .dev', () => {
+  it('keeps numbered development-phase identifiers out of tracked files', () => {
     const violations = [];
 
     for (const file of repositoryFiles()) {
@@ -79,7 +63,7 @@ describe('internal planning boundary', () => {
     assert.deepEqual(
       violations,
       [],
-      `internal development identifiers must stay under .dev:\n${violations.join('\n')}`
+      `internal development identifiers must not appear in tracked files:\n${violations.join('\n')}`
     );
   });
 });

@@ -1089,7 +1089,7 @@ describe('OpenCode activation transport corruption regression', () => {
    * This fixture reproduces the *detection*, not the OpenCode transport itself.
    * The host version was never captured and no live OpenCode run is in scope
    * here, so the transport root cause remains unreproduced. See
-   * `.dev/P35-04-OPENCODE-TRANSPORT.md`.
+   * the private transport evidence record.
    */
   const AUTHORIZED = 'hello("Ada") returns exactly Hello, Ada!';
   const RECEIVED = 'hello("Ada") returns exactly Hello, Adatest\\hello.test.js using node:test';

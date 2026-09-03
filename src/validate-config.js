@@ -271,6 +271,17 @@ const AUDITOR_DUAL_MODE_REQUIRED_SNIPPETS = Object.freeze([
   'read-only with respect to implementation',
   'Do not implement remediation',
 ]);
+// Stable semantic anchors for generated Maintainer wrappers. The canonical
+// role body carries the detailed standalone and Agentic Loop contracts; these
+// short phrases ensure adapter customization cannot erase mode selection,
+// metadata independence, the no-state/authority boundary, or no-implementation.
+const MAINTAINER_DUAL_MODE_REQUIRED_SNIPPETS = Object.freeze([
+  'otherwise operate as a standalone Maintainer',
+  'Standalone Maintainer work requires no task ID or task record',
+  'creates no Agentic Loop workflow state',
+  'advisory and cannot perform formal Agentic Loop acceptance or closeout',
+  'Do not implement code changes',
+]);
 const CODEX_DANGLING_BACKEND_PATTERN = /(?<!references\/)backends\/(files|github)\.md/;
 const CODEX_FORBIDDEN_EVENT_LOGGING_PATTERNS = [
   {
@@ -2413,7 +2424,7 @@ function validateCodexAgentToml(config, roleName, agentName, tomlPath, errors, a
     requiredSnippets.push('role.invoked');
   } else if (roleName === 'maintainer') {
     requiredSnippets.push('Stay within maintainer boundaries');
-    requiredSnippets.push('Do not implement code changes');
+    requiredSnippets.push(...MAINTAINER_DUAL_MODE_REQUIRED_SNIPPETS);
   } else if (roleName === 'engineer') {
     requiredSnippets.push('otherwise operate as a standalone engineer');
     requiredSnippets.push('requires no task ID or task record');
@@ -3023,7 +3034,7 @@ function validateCopilotAgent(config, repoRoot, roleName, agentName, mdPath, err
       errors.push(`${mdPath.replace(/\\/g, '/')}: maintainer must set disable-model-invocation: false so the orchestrator can invoke it as a subagent`);
     }
     requiredSnippets.push('Stay within maintainer boundaries');
-    requiredSnippets.push('Do not implement code changes');
+    requiredSnippets.push(...MAINTAINER_DUAL_MODE_REQUIRED_SNIPPETS);
   } else if (roleName === 'engineer') {
     if (agents !== null) {
       errors.push(`${mdPath.replace(/\\/g, '/')}: worker agents must not declare an agents allow-list`);
@@ -3287,7 +3298,7 @@ function validateCursorAgent(config, repoRoot, roleName, agentName, mdPath, erro
     requiredSnippets.push('keep any coordinator-side edits bounded');
   } else if (roleName === 'maintainer') {
     requiredSnippets.push('Stay within maintainer boundaries');
-    requiredSnippets.push('Do not implement code changes');
+    requiredSnippets.push(...MAINTAINER_DUAL_MODE_REQUIRED_SNIPPETS);
   } else if (roleName === 'engineer') {
     requiredSnippets.push('otherwise operate as a standalone engineer');
     requiredSnippets.push('requires no task ID or task record');

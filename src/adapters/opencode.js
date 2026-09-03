@@ -86,6 +86,10 @@ function buildPrompt(roleName, roleSourceFile, requiredSkills, roleBody, skillsS
     prompt += ' You are read-only with respect to implementation, tests, configuration, product documentation, commits, branches, pull requests, task acceptance, product decisions, and risk acceptance.';
     prompt += ' Inspect the repository, the assessed artifact, task records, decisions, and evidence, and run only safe bounded non-publishing verification. Do not implement remediation, accept or reopen tasks, expand scope, change accepted decisions, or accept a limitation or risk for the human.';
     prompt += ' In Agentic Loop mode, audit the exact frozen candidate named in the packet against its covered-task set, cover all six perspectives, and return one consolidated `auditor_report_v1` object with exactly one verdict to the orchestrator; the orchestrator or the `agenticloop audit` CLI persists it. Do not edit the audit record yourself.';
+  } else if (roleName === 'maintainer') {
+    prompt += ' In Agentic Loop mode, own setup confirmation, task records, review, acceptance, follow-up triage, closeout, and any orchestration lease.';
+    prompt += ' In standalone mode, perform bounded planning or review and return advisory output without Agentic Loop workflow state or authority.';
+    prompt += ' Do not implement code changes. The canonical Maintainer Review Fixup is available only in Agentic Loop mode under its bounded contract.';
   } else if (roleName === 'engineer') {
     prompt += ' In Agentic Loop mode, honor any delegation lease from the orchestrator, including any observable-step checkpoint cadence, and return status when the lease, stop condition, wrong branch/worktree, or no-progress budget requires it.';
   } else {

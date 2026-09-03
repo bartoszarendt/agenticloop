@@ -271,7 +271,8 @@ describe('canonical guidance content changes', () => {
     const body = agents(dir);
     assert.ok(body.startsWith(PROTECTED), 'target-owned content must stay byte-for-byte');
     assert.ok(!body.includes('An older owned guidance revision.'));
-    assert.match(body, /generated engineer or auditor as normal bounded subagents/);
+    assert.match(body, /generated Maintainer, Engineer, or Auditor as normal bounded subagents/);
+    assert.match(body, /Standalone Maintainer planning and review requires no task ID or task record/i);
     assert.equal(body.split(GUIDANCE_MARKER).length - 1, 1, 'refresh must not duplicate the block');
 
     r = run(['guidance', 'check', '--target', dir]);
@@ -318,13 +319,34 @@ describe('activation semantics content guards', () => {
     const text = readFileSync(join(REPO_ROOT, 'AGENTIC_LOOP.md'), 'utf8');
     assert.match(text, /## Activation Boundary/);
     assert.match(text, /Discovering the\s+installed toolkit or reading this document does not activate/);
-    assert.match(text, /Standalone engineer and auditor delegation is not activation/i);
+    assert.match(text, /Standalone maintainer, engineer, and auditor delegation is not activation/i);
     assert.match(text, /mentioning a task ID without operational intent/i);
     // Formal work-unit certification is an activating operation; standalone
     // auditor delegation is not, and cannot substitute for it.
     assert.match(text.replace(/\s+/g, ' '), /audit, certify, or re-audit a\s*tracked Agentic Loop work unit/i);
     assert.match(text, /\*\*Standalone auditor\*\*/);
     assert.match(text.replace(/\s+/g, ' '), /standalone auditor assessment certifies nothing/i);
+  });
+
+  it('canonical maintainer role documents both modes and defaults to standalone', () => {
+    const raw = readFileSync(join(REPO_ROOT, 'agents', 'maintainer.md'), 'utf8');
+    const text = raw.replace(/\s+/g, ' ');
+    assert.match(raw, /## Mode Selection/);
+    assert.match(raw, /## Standalone Mode/);
+    assert.match(raw, /## Agentic Loop Mode/);
+    assert.match(text, /\*\*Standalone mode\*\* \(default\)/);
+    assert.match(text, /Otherwise operate as a \*\*standalone Maintainer\*\*/i);
+    assert.match(text, /Use \*\*Agentic Loop mode\*\* only when the delegation \*\*explicitly activates Agentic Loop\*\* or \*\*explicitly designates a durable Agentic Loop task record or another appropriate durable Agentic Loop lifecycle artifact/i);
+    assert.match(text, /bare task ID, work-unit name, pull request, commit SHA, or contextual reference does not force Agentic Loop mode/i);
+    assert.match(text, /Absent Agentic Loop metadata selects standalone mode/i);
+    assert.match(text, /must never block ordinary standalone Maintainer work/i);
+    assert.match(text, /Do not create or modify `\.agenticloop` workflow state/i);
+    assert.match(text, /Do not formally accept, reject, supersede, or close an Agentic Loop task/i);
+    assert.match(text, /carries no formal Agentic Loop acceptance or closeout authority/i);
+    assert.match(text, /Do not implement code changes/i);
+    assert.match(text, /Maintainer Review Fixup is available only in Agentic Loop mode/i);
+    assert.match(text, /Do not use the Maintainer Review Fixup; it is an Agentic Loop review procedure/i);
+    assert.match(text, /never silently downgrade to standalone mode/i);
   });
 
   it('canonical engineer role documents both modes and forbids standalone bookkeeping', () => {
@@ -372,17 +394,18 @@ describe('activation semantics content guards', () => {
   });
 });
 
-describe('generated engineer surfaces are dual-mode across adapters', () => {
+describe('generated dual-mode role surfaces across adapters', () => {
   const HOSTS = [
-    { name: 'opencode', generate: generateOpencodeArtifacts, path: '.opencode/agents/engineer.md', auditorPath: '.opencode/agents/auditor.md' },
-    { name: 'codex', generate: generateCodexArtifacts, path: '.codex/agents/engineer.toml', auditorPath: '.codex/agents/auditor.toml' },
-    { name: 'claude-code', generate: generateClaudeCodeArtifacts, path: '.claude/agents/engineer.md', auditorPath: '.claude/agents/auditor.md' },
-    { name: 'copilot', generate: generateCopilotArtifacts, path: '.github/agents/engineer.agent.md', auditorPath: '.github/agents/auditor.agent.md' },
-    { name: 'cursor', generate: generateCursorArtifacts, path: '.cursor/agents/engineer.md', auditorPath: '.cursor/agents/auditor.md' },
+    { name: 'opencode', generate: generateOpencodeArtifacts, path: '.opencode/agents/engineer.md', maintainerPath: '.opencode/agents/maintainer.md', auditorPath: '.opencode/agents/auditor.md' },
+    { name: 'codex', generate: generateCodexArtifacts, path: '.codex/agents/engineer.toml', maintainerPath: '.codex/agents/maintainer.toml', auditorPath: '.codex/agents/auditor.toml' },
+    { name: 'claude-code', generate: generateClaudeCodeArtifacts, path: '.claude/agents/engineer.md', maintainerPath: '.claude/agents/maintainer.md', auditorPath: '.claude/agents/auditor.md' },
+    { name: 'copilot', generate: generateCopilotArtifacts, path: '.github/agents/engineer.agent.md', maintainerPath: '.github/agents/maintainer.agent.md', auditorPath: '.github/agents/auditor.agent.md' },
+    { name: 'cursor', generate: generateCursorArtifacts, path: '.cursor/agents/engineer.md', maintainerPath: '.cursor/agents/maintainer.md', auditorPath: '.cursor/agents/auditor.md' },
   ];
 
   let fx;
   const surfaces = new Map();
+  const maintainerSurfaces = new Map();
   const auditorSurfaces = new Map();
   before(() => {
     fx = mkdtempSync(join(tmpDir, 'fx-'));
@@ -400,6 +423,9 @@ describe('generated engineer surfaces are dual-mode across adapters', () => {
       // canonical sentences.
       const auditor = readFileSync(join(out, host.auditorPath), 'utf8')
         .replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\s+/g, ' ');
+      const maintainer = readFileSync(join(out, host.maintainerPath), 'utf8')
+        .replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\s+/g, ' ');
+      maintainerSurfaces.set(host.name, maintainer);
       auditorSurfaces.set(host.name, auditor);
     }
   });
@@ -417,6 +443,22 @@ describe('generated engineer surfaces are dual-mode across adapters', () => {
       assert.match(text, /final maintainer (acceptance|review)/i);
       assert.ok(!text.includes('implement only the scoped task-record work'),
         `${host.name} still carries old scoped-only engineer wording`);
+    });
+
+    it(`${host.name} maintainer defaults to bounded standalone advisory work`, () => {
+      const text = maintainerSurfaces.get(host.name);
+      assert.match(text, /otherwise operate as a (?:\*\*)?standalone Maintainer|\*\*Standalone mode\*\* \(default\)/i,
+        `${host.name} missing standalone Maintainer default`);
+      assert.match(text, /explicitly activates Agentic Loop/i,
+        `${host.name} missing explicit-activation selection`);
+      assert.match(text, /requires no task ID or task record|Require no task ID, task record/i,
+        `${host.name} missing no-task-metadata rule`);
+      assert.match(text, /creates no Agentic Loop workflow state|Do not create or modify `\.agenticloop` workflow state/i,
+        `${host.name} standalone Maintainer must create no Agentic Loop state`);
+      assert.match(text, /advisory.{0,100}(?:cannot perform|rather than) formal Agentic Loop acceptance or closeout|carries no formal Agentic Loop acceptance or closeout authority/i,
+        `${host.name} standalone Maintainer must remain advisory`);
+      assert.match(text, /Do not implement code changes/i,
+        `${host.name} missing the no-implementation boundary`);
     });
 
     it(`${host.name} auditor defaults to a standalone non-certifying assessment`, () => {

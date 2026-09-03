@@ -176,7 +176,7 @@ const BASELINE_RATIONALE = Object.freeze([
       'The compact parser-controlled activation identity and exact single-role dispatch/return ' +
       'boundary inherited from canonical command, role, and delegation source. It replaces a ' +
       'lossy aggregate argument rather than adding adapter-local workflow payload.',
-    evidence: '.dev/PLAN_PHASE_35.md, P35-04',
+    evidence: 'internal planning evidence, P35-04',
   },
   {
     pass: 'P35-04 corrective',
@@ -193,7 +193,7 @@ const BASELINE_RATIONALE = Object.freeze([
       'backend docs it previously missed. Measured values for required fail-closed content and ' +
       'recovered references; rebasing from a true current measurement restored real 5% headroom ' +
       'instead of leaving three budgets a handful of words from failing.',
-    evidence: '.dev/PLAN_PHASE_35.md, P35-04 corrective pass',
+    evidence: 'internal planning evidence, P35-04 corrective pass',
   },
   {
     pass: 'P35-08 corrective (2026-08-08)',
@@ -207,7 +207,7 @@ const BASELINE_RATIONALE = Object.freeze([
       'a report digest - required content, since a host-computed digest over an unnormalized ' +
       'report was the defect being fixed. Re-measuring restored real 5% headroom; a deliberate ' +
       're-baseline, not a raised ceiling.',
-    evidence: '.dev/PLAN_PHASE_35.md, P35-E43',
+    evidence: 'internal planning evidence, P35-E43',
   },
   {
     pass: 'universal activation (2026-08-09)',
@@ -360,14 +360,50 @@ const BASELINE_RATIONALE = Object.freeze([
       'for scratch checks, carried lineage, predictive preflight, and blocked-return authority.',
     evidence: 'skills/, backends/files.md, AGENTIC_LOOP.md, test/files-lifecycle-reliability.test.js',
   },
+  {
+    pass: 'dual-mode Maintainer (2026-09-03)',
+    adapters: ['opencode', 'codex', 'claude-code', 'copilot', 'cursor'],
+    categories: ['generatedPayload', 'agentDefinitions', 'activationSurface', 'referenceLibrary'],
+    previous: null, measured: null, delta: null, valuesRecorded: true,
+    changes: [
+      { adapter: 'opencode', category: 'generatedPayload', previous: 14970, measured: 16156, delta: 1186 },
+      { adapter: 'opencode', category: 'agentDefinitions', previous: 13993, measured: 15179, delta: 1186 },
+      { adapter: 'opencode', category: 'activationSurface', previous: 977, measured: 977, delta: 0 },
+      { adapter: 'codex', category: 'generatedPayload', previous: 76593, measured: 76885, delta: 292 },
+      { adapter: 'codex', category: 'agentDefinitions', previous: 14303, measured: 15482, delta: 1179 },
+      { adapter: 'codex', category: 'activationSurface', previous: 1260, measured: 1260, delta: 0 },
+      { adapter: 'codex', category: 'referenceLibrary', previous: 60541, measured: 60143, delta: -398 },
+      { adapter: 'claude-code', category: 'generatedPayload', previous: 54913, measured: 57503, delta: 2590 },
+      { adapter: 'claude-code', category: 'agentDefinitions', previous: 13390, measured: 13964, delta: 574 },
+      { adapter: 'claude-code', category: 'activationSurface', previous: 2157, measured: 2157, delta: 0 },
+      { adapter: 'claude-code', category: 'referenceLibrary', previous: 40662, measured: 41382, delta: 720 },
+      { adapter: 'copilot', category: 'generatedPayload', previous: 73136, measured: 74914, delta: 1778 },
+      { adapter: 'copilot', category: 'agentDefinitions', previous: 14006, measured: 15210, delta: 1204 },
+      { adapter: 'copilot', category: 'activationSurface', previous: 1314, measured: 1314, delta: 0 },
+      { adapter: 'copilot', category: 'referenceLibrary', previous: 58788, measured: 58390, delta: -398 },
+      { adapter: 'cursor', category: 'generatedPayload', previous: 72884, measured: 74666, delta: 1782 },
+      { adapter: 'cursor', category: 'agentDefinitions', previous: 14000, measured: 15208, delta: 1208 },
+      { adapter: 'cursor', category: 'activationSurface', previous: 1068, measured: 1068, delta: 0 },
+      { adapter: 'cursor', category: 'referenceLibrary', previous: 58788, measured: 58390, delta: -398 },
+    ],
+    reason:
+      'The Maintainer gained one canonical dual-mode contract in agents/maintainer.md, and the ' +
+      'wrapping adapters inherit one shared compact STANDALONE_MAINTAINER_PREAMBLE_LINES block ' +
+      'before workflow-state instructions. Claude Code continues to package the canonical role ' +
+      'body directly without adapter-local prose. Methodology and public activation guidance ' +
+      'carry the matching standalone boundary once in their existing canonical surfaces. The ' +
+      'measurements record every declared category, including unchanged activation surfaces and ' +
+      'pre-existing downward reference-library drift, rather than merely raising ceilings.',
+    evidence: 'agents/maintainer.md, src/adapters/shared.js STANDALONE_MAINTAINER_PREAMBLE_LINES, src/adapters/, src/guidance.js, AGENTIC_LOOP.md',
+  },
 ]);
 
 const ADAPTERS = [
-  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 14970, agentDefinitions: 13993, activationSurface: 977 } },
-  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 76593, agentDefinitions: 14303, activationSurface: 1260, referenceLibrary: 60541 } },
-  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 54913, agentDefinitions: 13390, activationSurface: 2157, referenceLibrary: 40662 } },
-  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 73136, agentDefinitions: 14006, activationSurface: 1314, referenceLibrary: 58788 } },
-  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 72884, agentDefinitions: 14000, activationSurface: 1068, referenceLibrary: 58788 } },
+  { name: 'opencode', generate: generateOpencodeArtifacts, dirs: ['.opencode'], baseline: { generatedPayload: 16156, agentDefinitions: 15179, activationSurface: 977 } },
+  { name: 'codex', generate: generateCodexArtifacts, dirs: ['.codex', '.agents'], baseline: { generatedPayload: 76885, agentDefinitions: 15482, activationSurface: 1260, referenceLibrary: 60143 } },
+  { name: 'claude-code', generate: generateClaudeCodeArtifacts, dirs: ['.claude'], baseline: { generatedPayload: 57503, agentDefinitions: 13964, activationSurface: 2157, referenceLibrary: 41382 } },
+  { name: 'copilot', generate: generateCopilotArtifacts, dirs: ['.github'], baseline: { generatedPayload: 74914, agentDefinitions: 15210, activationSurface: 1314, referenceLibrary: 58390 } },
+  { name: 'cursor', generate: generateCursorArtifacts, dirs: ['.cursor'], baseline: { generatedPayload: 74666, agentDefinitions: 15208, activationSurface: 1068, referenceLibrary: 58390 } },
 ];
 
 let tmpDir;

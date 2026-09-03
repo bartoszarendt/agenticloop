@@ -1365,15 +1365,17 @@ follow the target repository's rules document directly. Reading this document to
 answer a question about the methodology is expected and allowed; adopting it as
 the current process is not.
 
-**Standalone engineer and auditor delegation is not activation.** The main agent
-may invoke the generated engineer as an ordinary bounded subagent for a normal
-engineering subtask, and the generated auditor as an ordinary bounded read-only
-subagent for a normal assessment. Standalone use of either role requires no
-activation, task ID, task record, audit ID, audit record, or audit packet, and
-creates no Agentic Loop workflow state. A standalone auditor assessment certifies
-nothing: it cannot satisfy work-unit auditing, certification, or closeout, which
-require a fresh, packet-bound Agentic Loop Auditor invocation. See the Glossary
-entries for **Activation**, **Standalone engineer**, and **Standalone auditor**.
+**Standalone maintainer, engineer, and auditor delegation is not activation.**
+The main agent may invoke the generated maintainer for ordinary bounded planning,
+decomposition, review, and recommendations; the generated engineer for a normal
+engineering subtask; and the generated auditor for a normal bounded read-only
+assessment. Standalone use requires no activation or Agentic Loop task metadata
+and creates no Agentic Loop workflow state. Standalone Maintainer output is
+advisory and has no formal Agentic Loop acceptance or closeout authority. A
+standalone Auditor assessment certifies nothing: it cannot satisfy work-unit
+auditing, certification, or closeout, which require a fresh, packet-bound
+Agentic Loop Auditor invocation. See the Glossary entries for **Activation**,
+**Standalone maintainer**, **Standalone engineer**, and **Standalone auditor**.
 
 ## Deactivation Boundary
 
@@ -1426,6 +1428,14 @@ target projects do not need toolkit-root `docs/` files at runtime.
 - **Deactivation**: current-conversation termination of Agentic Loop requested
   with the exact `stop` argument. It checkpoints unfinished work safely without
   changing task status solely because the user stopped. Reactivation is explicit.
+- **Standalone maintainer**: the generated maintainer invoked as an ordinary
+  bounded planning or review subagent without activating Agentic Loop. It takes
+  scope from the parent request and repository rules, requires no task ID, task
+  record, review packet, or other Agentic Loop metadata, and creates no Agentic
+  Loop workflow state or bookkeeping. Its plans, reviews, readiness assessments,
+  and recommendations are advisory: it cannot formally accept, reject,
+  supersede, or close Agentic Loop work. See
+  `agenticloop/agents/maintainer.md` for the two maintainer modes.
 - **Standalone engineer**: the generated engineer invoked as an ordinary bounded
   subagent without activating Agentic Loop. Standalone delegation takes its scope
   from the parent request and repository rules, requires no task ID or task
@@ -1456,8 +1466,10 @@ target projects do not need toolkit-root `docs/` files at runtime.
 - **Phase**: one possible grouping profile.
 - **Orchestrator**: the coordination role that drives the task lifecycle and
   delegates work.
-- **Maintainer**: the planning and review role that writes task records,
-  reviews implementation artifacts, triages follow-ups, and owns closeout.
+- **Maintainer**: the planning and review role. As a standalone maintainer it
+  performs ordinary bounded planning and review with advisory output; in
+  Agentic Loop mode it owns formal task-record planning, review, acceptance,
+  follow-up triage, and closeout. It does not perform ordinary implementation.
 - **Engineer**: the scoped implementation role that changes files, runs checks,
   and publishes evidence.
 - **Auditor**: the read-only assurance role. In Agentic Loop certification mode

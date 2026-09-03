@@ -143,7 +143,7 @@
     },
     "maintainer": {
       "sourceFile": "agenticloop/agents/maintainer.md",
-      "description": "Writes task records, reviews diffs, owns acceptance, triages follow-ups, and runs closeout when the project uses grouping.",
+      "description": "Performs bounded planning and review as a standalone Maintainer by default, or uses the full Agentic Loop lifecycle only after explicit activation or designation of a durable Agentic Loop contract. Does not implement code changes.",
       "requiredSkills": [
         "task-record-contract",
         "review-and-accept",

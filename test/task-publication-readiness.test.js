@@ -1571,7 +1571,7 @@ describe('audit budget provenance and migration', () => {
     assert.match(unbounded.errors.join('\n'), /bounded reference/);
 
     const planned = appendAuditReport(record, {
-      ...common, consumptionCause: 'other_plan_required', consumptionPlan: '.dev/PLAN.md#audit-remediation',
+      ...common, consumptionCause: 'other_plan_required', consumptionPlan: 'planning-record#audit-remediation',
     });
     assert.equal(planned.ok, true, planned.errors.join('\n'));
   });

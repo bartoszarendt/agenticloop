@@ -1572,6 +1572,48 @@ describe('Adapter-aware validation', () => {
     );
   });
 
+  it('rejects generated Maintainer wrappers that lose a dual-mode semantic anchor', () => {
+    const hosts = [
+      {
+        name: 'codex',
+        generate: writeCodexAdapterOutput,
+        path: join('.codex', 'agents', 'maintainer.toml'),
+      },
+      {
+        name: 'copilot',
+        generate: writeCopilotAdapterOutput,
+        path: join('.github', 'agents', 'maintainer.agent.md'),
+      },
+      {
+        name: 'cursor',
+        generate: writeCursorAdapterOutput,
+        path: join('.cursor', 'agents', 'maintainer.md'),
+      },
+    ];
+
+    for (const host of hosts) {
+      const d = makeTarget(`adapter-aware-${host.name}-maintainer-dual-mode`);
+      host.generate(d);
+      const agentPath = join(d, host.path);
+      const current = readFileSync(agentPath, 'utf-8');
+      const corrupted = current.replace(
+        'Standalone Maintainer work requires no task ID or task record',
+        'Standalone Maintainer work uses ordinary repository context'
+      );
+      assert.notEqual(corrupted, current, `${host.name} fixture must contain the required anchor`);
+      writeFileSync(agentPath, corrupted, 'utf-8');
+
+      const { errors } = validateConfig(d, { adapters: [host.name] });
+      assert.ok(
+        errors.some(error =>
+          error.includes(host.path.replace(/\\/g, '/')) &&
+          error.includes('Standalone Maintainer work requires no task ID or task record')
+        ),
+        `expected ${host.name} Maintainer dual-mode contract error, got: ${JSON.stringify(errors)}`
+      );
+    }
+  });
+
   it('errors when Codex TOML uses unsupported model_reasoning_effort', () => {
     const d = makeTarget('adapter-aware-codex-auto-effort');
     writeCodexAdapterOutput(d);
