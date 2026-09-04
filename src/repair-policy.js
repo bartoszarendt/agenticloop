@@ -82,9 +82,14 @@ export const REPAIR_POLICY = Object.freeze({
   // so a green preflight cannot be refused later over the same unchanged facts.
   'task.lifecycle.not_dispatchable': policy('task_contract', 'repair_task_record', 'contract_reconciliation', 'The task lifecycle status cannot begin an execution attempt.'),
   'task.mutation.unresolved': policy('task_contract', 'repair_task_record', 'record_recovery', 'A task mutation may have committed and its exact final state could not be proven.'),
+  'task.evidence.product_head': policy('evidence', 'repair_evidence', 'none', 'Implementation artifact evidence does not name the exact current product head.'),
   'worktree.clean_gate.failed': policy('workspace', 'repair_review_workspace', 'none', 'The clean-worktree gate failed.'),
   'state.host_local': policy('workspace', 'repair_review_workspace', 'none', 'Host-local or preexisting state requires classification.'),
   'role_result.schema.invalid': policy('evidence', 'repair_evidence', 'none', 'The role result does not satisfy its required schema.'),
+  'execution_evidence.malformed_input': policy('evidence', 'repair_evidence', 'none', 'Execution evidence has malformed structural input.'),
+  'execution_evidence.stale_version': policy('evidence', 'repair_evidence', 'none', 'Execution evidence uses a retired schema version and must be recomputed.'),
+  'execution_evidence.binding_mismatch': policy('evidence', 'repair_evidence', 'none', 'Execution evidence does not bind the expected task or check identity.'),
+  'execution_evidence.lineage_mismatch': policy('evidence', 'repair_live_carrier_lineage', 'none', 'Execution evidence does not bind the current carrier or repository lineage.'),
   'activation.capture.missing': policy('activation', 'repair_evidence', 'none', 'Parser-owned activation capture is required before task authoring.'),
   'activation.capture.malformed': policy('activation', 'repair_evidence', 'none', 'Activation capture is malformed or contradicts its adapter capability.'),
   'activation.capture.mismatch': policy('activation', 'repair_evidence', 'none', 'The operator and parser-normalized activation digests do not match.'),
@@ -117,9 +122,11 @@ export const REPAIR_POLICY = Object.freeze({
   // being replaced by a silently provisioned new identity.
   'activation.identity.migration_required': policy('activation', 'repair_evidence', 'human_authority_review', 'Operator activation material exists under a superseded repository identity and must be migrated before new activation authority is created.'),
   'activation.identity.conflict': policy('activation', 'repair_evidence', 'human_authority_review', 'Several operator activation keys claim this repository; the operator must choose which identity survives.'),
+  'activation.policy.invalid': policy('activation', 'repair_evidence', 'none', 'The effective activation policy is unavailable or invalid.'),
   'return.assurance.insufficient': policy('role_return', 'repair_evidence', 'human_authority_review', 'Return assurance is below the effective minimum required by the current mode.'),
   'return.assurance.ambiguous': policy('role_return', 'select_return_adapter', 'none', 'Multiple return adapters are available; select one with --return-adapter.'),
   'return.assurance.session_reported': policy('role_return', 'repair_evidence', 'none', 'The role return is session-reported: its producing role identity is not host-authenticated.'),
+  'return.lane.implementation_absent': policy('role_return', 'repair_evidence', 'none', 'The return lane does not contain the task implementation artifact.'),
   'dispatch.packet.invalid': policy('dispatch', 'repair_evidence', 'none', 'Dispatch packet evidence is malformed or incomplete.'),
   'dispatch.packet.stale': policy('dispatch', 'repair_evidence', 'none', 'Dispatch packet evidence is stale or changed.'),
   // Conservation is a human-authority boundary, not an evidence repair: the
@@ -131,6 +138,8 @@ export const REPAIR_POLICY = Object.freeze({
   // authorize the rewrite. The field run discovered a reset after the fact, by
   // checking for surviving `git replace` refs during recovery.
   'dispatch.attempt.history_rewritten': policy('dispatch', 'repair_task_attribution', 'human_authority_review', 'Durable history in a recorded execution attempt range was rewritten or replaced.'),
+  'task.role_start.check_evidence_missing': policy('dispatch', 'repair_evidence', 'none', 'The role-start check-evidence scaffold is missing.'),
+  'task.role_start.check_evidence_mismatch': policy('dispatch', 'repair_evidence', 'none', 'The role-start check-evidence scaffold does not match the dispatch packet.'),
   'capability.declaration.invalid': policy('role_capability', 'repair_evidence', 'none', 'The host-role capability declaration is missing, malformed, contradictory, or incomplete.'),
   'capability.enforcement.degraded': policy('role_capability', 'repair_evidence', 'none', 'The host cannot enforce this role action natively; the declared authoritative detection boundary must evaluate it.'),
   'capability.action.denied': policy('role_capability', 'repair_evidence', 'none', 'The assigned role is not authorized for the requested workflow action.'),
@@ -139,6 +148,10 @@ export const REPAIR_POLICY = Object.freeze({
   'role_return.stale': policy('role_return', 'repair_evidence', 'none', 'Role-return evidence no longer matches current repository facts.'),
   'role_return.receipt_stale': policy('role_return', 'repair_evidence', 'none', 'The authenticated host receipt uses a retired schema and must be reissued.'),
   'role_return.producer_mismatch': policy('role_return', 'repair_evidence', 'none', 'Authenticated producer evidence does not match the dispatched workflow role.'),
+  'attempt_return_unbound': policy('role_return', 'repair_evidence', 'none', 'Return verification does not bind a recorded execution attempt.'),
+  'attempt_return_ambiguous': policy('role_return', 'repair_evidence', 'none', 'Return verification binds more than one execution attempt.'),
+  'attempt_return_conflict': policy('role_return', 'repair_evidence', 'none', 'An execution attempt has more than one return verification.'),
+  'attempt_terminal_conflict': policy('role_return', 'repair_evidence', 'none', 'An execution attempt has conflicting terminal evidence.'),
   'blocked_result.owner_mismatch': policy('role_return', 'repair_evidence', 'none', 'A blocked result remains owned by its producing workflow role.'),
   'blocked_result.redelegation_required': policy('role_return', 'repair_evidence', 'none', 'Changing a blocked result owner requires a current typed redelegation authority.'),
   'blocked_result.redelegation_stale': policy('role_return', 'repair_evidence', 'none', 'The blocked-result redelegation authority is stale.'),
@@ -186,6 +199,7 @@ export const REPAIR_POLICY = Object.freeze({
   'ready.cross_gate_identity': policy('cross_gate_identity', 'reconcile_cross_gate_identity', 'none', 'Cross-gate task identity is inconsistent.'),
   'review_audit.task_contract': policy('task_contract', 'repair_task_record', 'contract_reconciliation', 'Task record is malformed for review audit.'),
   'review_audit.failure': policy('review_audit', 'repair_review_audit', 'none', 'Review audit failed.'),
+  'audit.already_exists': policy('audit', 'repair_review_audit', 'none', 'An audit record already exists for this work unit.'),
   // Projection reconciliation and parallel-scan provenance reuse the existing
   // repair and escalation kinds. Both report evidence facts; neither introduces
   // a new repair capability that role declarations would have to own.
@@ -208,17 +222,25 @@ export const REPAIR_POLICY = Object.freeze({
   // escalation kinds: the operator- or role-facing repair is always to produce
   // the canonical artifact - a fresh `task prepare-dispatch` packet or a
   // persisted `task verify-return` result - never to relax the boundary.
+  'compatibility.waiver_scope_retired': policy('compatibility', 'repair_evidence', 'none', 'A retired compatibility-waiver scope is ignored.'),
   'handoff.transition.unsupported': policy('handoff', 'repair_evidence', 'none', 'The requested transition is not a protected lifecycle transition this seam recognizes.'),
   'handoff.expectation.malformed': policy('handoff', 'repair_evidence', 'none', 'The supplied handoff expectation is malformed or does not bind a task and role.'),
   'handoff.evidence.missing': policy('handoff', 'repair_evidence', 'none', 'The canonical prepared dispatch or verified return required by this transition was not supplied.'),
   'handoff.evidence.malformed': policy('handoff', 'repair_evidence', 'none', 'Supplied handoff evidence is malformed or is not the canonical record kind.'),
-  'handoff.evidence.stale': policy('handoff', 'repair_evidence', 'none', 'Supplied handoff evidence is outside its freshness policy or no longer matches current state.'),
+  'handoff.evidence.freshness_expired': policy('handoff', 'repair_evidence', 'none', 'Supplied handoff evidence is outside its declared freshness policy.'),
+  'handoff.evidence.schema_retired': policy('handoff', 'repair_evidence', 'none', 'Prepared dispatch uses a retired schema and must be regenerated.'),
+  'handoff.evidence.revalidation_failed': policy('handoff', 'repair_evidence', 'none', 'Verified return evidence no longer passes current external revalidation.'),
+  'handoff.evidence.ambiguous_return': policy('handoff', 'repair_evidence', 'none', 'Stored return verification selection did not yield one current record.'),
   'handoff.evidence.replayed': policy('handoff', 'repair_evidence', 'none', 'The prepared dispatch was already consumed; an authoritative role start requires a fresh packet.'),
   'handoff.evidence.mismatched': policy('handoff', 'repair_evidence', 'none', 'Supplied handoff evidence binds a different task, role, packet, artifact, or worktree.'),
   'handoff.evidence.unsupported': policy('handoff', 'repair_evidence', 'none', 'Supplied handoff evidence declares a schema or assurance grade this boundary cannot evaluate.'),
   'handoff.evidence.unauthenticated': policy('handoff', 'repair_evidence', 'human_authority_review', 'Handoff evidence is session-reported or below the required assurance minimum and cannot authorize a protected transition.'),
   'handoff.refresh.plan.malformed': policy('handoff', 'repair_evidence', 'none', 'Handoff evidence refresh plan is malformed or does not match the expected task binding.'),
   'handoff.refresh.plan.unsupported': policy('handoff', 'repair_evidence', 'none', 'Derived-evidence refresh plans apply only to the files backend; the selected backend has no local derived-evidence surface to refresh.'),
+  'tooling_failure_input_invalid': policy('tooling_failure', 'repair_evidence', 'none', 'Tooling-failure observation input is invalid.'),
+  'tooling_failure_evidence_conflict': policy('tooling_failure', 'repair_evidence', 'none', 'Tooling-failure observation evidence conflicts with current history.'),
+  'tooling_failure_write_failed': policy('tooling_failure', 'repair_evidence', 'record_recovery', 'Tooling-failure observation could not be recorded atomically.'),
+  'tooling_failure_admission_conflict': policy('tooling_failure', 'repair_evidence', 'none', 'Tooling-failure retry admission changed concurrently.'),
 });
 
 function policy(category, repairKind, escalationKind, description) {

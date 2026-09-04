@@ -117,7 +117,10 @@ export const HANDOFF_RECOGNITION_CODES = Object.freeze([
   'handoff.expectation.malformed',
   'handoff.evidence.missing',
   'handoff.evidence.malformed',
-  'handoff.evidence.stale',
+  'handoff.evidence.freshness_expired',
+  'handoff.evidence.schema_retired',
+  'handoff.evidence.revalidation_failed',
+  'handoff.evidence.ambiguous_return',
   'handoff.evidence.replayed',
   'handoff.evidence.mismatched',
   'handoff.evidence.unsupported',
@@ -496,7 +499,7 @@ function evaluateFreshness({ observedAt, maxAgeSeconds, now, label, diagnostics 
   }
   if (now - observed > maxAgeSeconds * 1000) {
     diagnostics.push(diagnostic(
-      'handoff.evidence.stale', 'stale',
+      'handoff.evidence.freshness_expired', 'stale',
       `${label} was observed at ${observedAt}, outside its ${maxAgeSeconds}s freshness policy`,
       { field: 'observedAt', observed: observedAt, maxAgeSeconds }
     ));
@@ -540,7 +543,7 @@ function recognizePreparedDispatch({
     const legacyDigest = legacyDispatchPreparationDigest(packet, packet?.schemaVersion);
     if (legacyDigest !== null && legacyDigest === packet.digest) {
       diagnostics.push(diagnostic(
-        'handoff.evidence.stale', 'stale',
+        'handoff.evidence.schema_retired', 'stale',
         `prepared dispatch uses retired schemaVersion ${packet.schemaVersion}; regenerate it as schemaVersion ${DISPATCH_PREPARATION_SCHEMA_VERSION}`,
         { field: 'schemaVersion', observed: String(packet.schemaVersion) }
       ));
@@ -811,7 +814,7 @@ function recognizeVerifiedReturn({
     }
     if (!checked?.ok) {
       const state = checked?.evidenceState === 'malformed' ? 'malformed' : 'stale';
-      const code = state === 'malformed' ? 'handoff.evidence.malformed' : 'handoff.evidence.stale';
+      const code = state === 'malformed' ? 'handoff.evidence.malformed' : 'handoff.evidence.revalidation_failed';
       for (const error of checked?.errors ?? ['verified return failed canonical revalidation']) {
         diagnostics.push(diagnostic(code, state, String(error), { field: 'verification' }));
       }
@@ -1073,7 +1076,7 @@ export function recognizeStoredReturnHandoff({
     if (!selected.ok) {
       for (const error of selected.errors ?? []) {
         priorDiagnostics.push(diagnostic(
-          'handoff.evidence.stale', 'stale',
+          'handoff.evidence.ambiguous_return', 'stale',
           `no single current return verification could be selected: ${error}`, { field: 'verification' }
         ));
       }

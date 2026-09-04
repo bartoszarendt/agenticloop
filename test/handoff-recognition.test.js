@@ -395,7 +395,7 @@ describe('role start recognition', () => {
       validatePreparedDispatch: validator(),
       now: Date.parse(packet.decomposition.observedAt) + (maxAge + 1) * 1000,
     });
-    assert.deepEqual(codes(verdict), ['handoff.evidence.stale']);
+    assert.deepEqual(codes(verdict), ['handoff.evidence.freshness_expired']);
     assert.equal(verdict.disposition, 'superseded');
   });
 
@@ -756,7 +756,7 @@ describe('verified return recognition', () => {
       validatePreparedDispatch: validator(),
       validateVerifiedReturn: () => ({ ok: false, errors: ['repository evidence changed since verification'] }),
     });
-    assert.deepEqual(codes(verdict), ['handoff.evidence.stale']);
+    assert.deepEqual(codes(verdict), ['handoff.evidence.revalidation_failed']);
     assert.equal(verdict.disposition, 'superseded');
   });
 
@@ -768,7 +768,7 @@ describe('verified return recognition', () => {
       maxEvidenceAgeSeconds: 3600,
       now: Date.parse('2026-08-02T00:00:00.000Z'),
     });
-    assert.deepEqual(codes(verdict), ['handoff.evidence.stale']);
+    assert.deepEqual(codes(verdict), ['handoff.evidence.freshness_expired']);
   });
 });
 
