@@ -59,6 +59,7 @@ export const REPAIR_POLICY = Object.freeze({
   'evidence.malformed': policy('evidence', 'repair_evidence', 'none', 'Supplied evidence is malformed.'),
   'evidence.stale': policy('evidence', 'repair_evidence', 'none', 'Supplied evidence is stale.'),
   'evidence.negative': policy('evidence', 'repair_evidence', 'none', 'Supplied evidence shows the required condition is false.'),
+  'required_check.explain_forbidden': policy('checks', 'repair_required_checks', 'contract_reconciliation', 'A required check attempts to consume read-only task explain diagnostic output.'),
   'evidence.changed': policy('evidence', 'repair_evidence', 'none', 'Evidence changed after preparation or verification.'),
   'check.aggregate.git_probe_failed': policy('workspace', 'repair_command_environment', 'none', 'Git could not determine whether mutable aggregate state is tracked.'),
   'task.evidence.not_in_progress': policy('evidence', 'repair_evidence', 'none', 'The task is not in a lifecycle state that permits this role-owned evidence mutation.'),

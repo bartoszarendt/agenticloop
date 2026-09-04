@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 
 import {
   parseRequiredCheckInventory,
+  REQUIRED_CHECK_EXPLAIN_REFUSAL_CODE,
   requiredCheckEvidenceMatchesInventory,
+  validateRequiredCheckInventory,
   validateRequiredCheckEvidence,
 } from '../src/required-checks.js';
 import { receiveRoleReturn } from '../src/dispatch-envelope.js';
@@ -45,6 +47,46 @@ describe('canonical required-check model', () => {
       '- [RC-1] command: npm test',
     ];
     for (const value of cases) assert.equal(parseRequiredCheckInventory(value).ok, false, value);
+  });
+
+  it('refuses task explain as a required check with its typed diagnostic', () => {
+    for (const command of [
+      'npx agenticloop@latest task explain T-001 --json',
+      'pnpm dlx agenticloop task explain T-001 --json',
+      'npm exec agenticloop -- task explain T-001 --json',
+    ]) {
+      const parsed = parseRequiredCheckInventory(`- [RC-1] command: \`${command}\``);
+      assert.equal(parsed.ok, false, command);
+      assert.match(parsed.errors.join('\n'), /must not invoke task explain/);
+      assert.deepEqual(parsed.diagnostics.map(item => item.code), [REQUIRED_CHECK_EXPLAIN_REFUSAL_CODE]);
+    }
+  });
+
+  it('refuses task explain in authorized legacy command bullets with its typed diagnostic', () => {
+    const parsed = parseRequiredCheckInventory(
+      '- [RC-1] agenticloop task explain T-001',
+      { allowLegacy: true },
+    );
+    assert.equal(parsed.ok, false);
+    assert.match(parsed.errors.join('\n'), /command required check 'RC-1' must not invoke task explain/);
+    assert.deepEqual(parsed.diagnostics.map(item => item.code), [REQUIRED_CHECK_EXPLAIN_REFUSAL_CODE]);
+    assert.match(parsed.diagnostics[0].message, /command required check 'RC-1'/);
+  });
+
+  it('refuses task explain in persisted inventories with its typed diagnostic and check id', () => {
+    for (const command of [
+      'npx agenticloop@latest task explain T-001 --json',
+      'pnpm dlx agenticloop task explain T-001 --json',
+      'npm exec agenticloop -- task explain T-001 --json',
+    ]) {
+      const validated = validateRequiredCheckInventory([
+        { id: 'RC-7', kind: 'command', command },
+      ]);
+      assert.equal(validated.ok, false, command);
+      assert.match(validated.errors.join('\n'), /command required check 'RC-7' must not invoke task explain/);
+      assert.deepEqual(validated.diagnostics.map(item => item.code), [REQUIRED_CHECK_EXPLAIN_REFUSAL_CODE]);
+      assert.match(validated.diagnostics[0].message, /command required check 'RC-7'/);
+    }
   });
 
   it('allows blank lines but rejects unexpected prose instead of dropping it', () => {

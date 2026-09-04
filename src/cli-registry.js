@@ -539,7 +539,7 @@ export const COMMAND_REGISTRY = {
   },
   task: {
     summary: 'Manage files-backed task records and canonical handoff preparation.',
-    usage: 'agenticloop task <list|show|lint|new|materialize|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|role-start|handoff-preflight|refresh-handoff-receipt|refresh-handoff-evidence|commit-message|attempt-status|abandon-attempt|adopt-historical|readiness-plan|readiness-apply|measure|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|evidence|review-prepare|status> [options]',
+    usage: 'agenticloop task <list|show|lint|new|materialize|establish-baseline|authorize-correction|prepare-decomposition|prepare-dispatch|role-start|handoff-preflight|refresh-handoff-receipt|refresh-handoff-evidence|commit-message|attempt-status|abandon-attempt|adopt-historical|readiness-plan|readiness-apply|measure|explain|prepare-return|verify-return|check-evidence-init|check-evidence-show|check-evidence-update|evidence|review-prepare|status> [options]',
     subcommands: {
       list: {
         summary: 'List task records.',
@@ -637,6 +637,17 @@ export const COMMAND_REGISTRY = {
         receiptRevalidation: 'read-only',
         positionals: [{ name: 'id', required: true }],
         options: [targetOption(), jsonOption],
+      },
+      explain: {
+        summary: 'Explain bounded current task facts and action verdicts. Read-only; grants no authority and writes nothing.',
+        usage: 'agenticloop task explain <id> [--action <action-id>] [--json] [--target <dir>]',
+        receiptRevalidation: 'read-only',
+        positionals: [{ name: 'id', required: true }],
+        options: [
+          targetOption(),
+          opt('action', 'string', 'Limit the explanation to one stable action id.'),
+          jsonOption,
+        ],
       },
       'adopt-historical': {
         summary: 'Record a truthful reduced-assurance terminal adoption for work that predates the canonical lifecycle.',

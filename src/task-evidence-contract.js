@@ -909,24 +909,45 @@ function parseRestrictedCommand(command) {
   return tokens;
 }
 
-function agenticloopArgv(tokens) {
+export function agenticloopArgv(tokens) {
   const isBinary = token => /(?:^|\/)(?:agenticloop|agenticloop\.cmd)$/i.test(token) || /^agenticloop(?:\.cmd)?$/i.test(token);
-  if (isBinary(tokens[0])) return tokens.slice(1);
-  if (/^node(?:\.exe)?$/i.test(tokens[0]) && /(?:^|\/)bin\/agenticloop\.js$/i.test(tokens[1] ?? '')) return tokens.slice(2);
-  if (/^npx(?:\.cmd)?$/i.test(tokens[0])) {
-    let index = 1;
-    while (tokens[index]?.startsWith('-')) {
+  const isPackage = token => /^agenticloop(?:\.cmd)?(?:@[^/@\s]+)?$/i.test(token);
+  const launcherArgv = index => {
+    while (tokens[index]?.startsWith('-') && tokens[index] !== '--') {
       const option = tokens[index++];
       if (['--package', '-p'].includes(option)) index += 1;
     }
-    if (isBinary(tokens[index])) return tokens.slice(index + 1);
+    if (tokens[index] === '--') index += 1;
+    if (!isBinary(tokens[index]) && !isPackage(tokens[index])) return null;
+    index += 1;
+    if (tokens[index] === '--') index += 1;
+    return tokens.slice(index);
+  };
+  if (isBinary(tokens[0])) return tokens.slice(1);
+  if (/^node(?:\.exe)?$/i.test(tokens[0]) && /(?:^|\/)bin\/agenticloop\.js$/i.test(tokens[1] ?? '')) return tokens.slice(2);
+  if (/^npx(?:\.cmd)?$/i.test(tokens[0])) {
+    const argv = launcherArgv(1);
+    if (argv) return argv;
   }
-  if (/^pnpm(?:\.cmd)?$/i.test(tokens[0]) && tokens[1] === 'exec') {
-    let index = 2;
-    while (tokens[index]?.startsWith('-')) index += 1;
-    if (isBinary(tokens[index])) return tokens.slice(index + 1);
+  if (/^pnpm(?:\.cmd)?$/i.test(tokens[0]) && ['dlx', 'exec'].includes(tokens[1])) {
+    const argv = launcherArgv(2);
+    if (argv) return argv;
+  }
+  if (/^npm(?:\.cmd)?$/i.test(tokens[0]) && tokens[1] === 'exec') {
+    const argv = launcherArgv(2);
+    if (argv) return argv;
   }
   fail(`receipt revalidateCommand does not use a supported inert Agentic Loop launcher: '${tokens.join(' ')}'`);
+}
+
+/** Whether a supported launcher resolves to the diagnostic-only task explain verb. */
+export function isAgenticloopExplainArgv(tokens) {
+  try {
+    const argv = agenticloopArgv(tokens);
+    return argv[0] === 'task' && argv[1] === 'explain';
+  } catch {
+    return false;
+  }
 }
 
 function assertReadOnlyRevalidation(command) {
@@ -934,7 +955,14 @@ function assertReadOnlyRevalidation(command) {
   if (PLACEHOLDER_PATTERN.test(command)) {
     fail(`receipt revalidateCommand must be executable verbatim; it still contains a placeholder: ${command}`);
   }
-  const argv = agenticloopArgv(parseRestrictedCommand(command));
+  const tokens = parseRestrictedCommand(command);
+  const argv = agenticloopArgv(tokens);
+  // Explain is deliberately read-only, but it is a diagnostic projection rather
+  // than a proof of a mutation. Registry read-only status alone is therefore not
+  // sufficient for receipt evidence eligibility.
+  if (isAgenticloopExplainArgv(tokens)) {
+    fail('receipt revalidateCommand must not use task explain: read-only diagnostic output cannot serve as mutation evidence');
+  }
   if (!isReceiptRevalidationArgv(argv)) {
     fail(`receipt revalidateCommand must be read-only; '${command}' is not an explicitly allowed revalidation command`);
   }

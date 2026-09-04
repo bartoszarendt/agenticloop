@@ -74,6 +74,9 @@ import { resolveTrustedTaskContractActors } from './trusted-actors.js';
 import { createDiagnostic, preflightDiagnosticCode, repairPolicyFor } from './repair-policy.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
 import { PublicCommandError } from './public-error.js';
+import { parseRequiredCheckCommand } from './execution-evidence.js';
+import { isAgenticloopExplainArgv } from './task-evidence-contract.js';
+import { REQUIRED_CHECK_EXPLAIN_REFUSAL_CODE } from './required-checks.js';
 
 export class PreflightError extends PublicCommandError {
   constructor(message) {
@@ -86,6 +89,15 @@ const VALID_VERDICTS = new Set(['passed', 'failed', 'blocked', 'not run']);
 const PR_EVIDENCE_ENTRY_SHAPE =
   '- Required check: <exact required check text>\n  Verdict: <passed|failed|blocked|not run>\n  Evidence: <excerpt>';
 const RESOLUTION_EXPECTED_SHAPE = RESOLUTION_ENTRY_SHAPE.replace(/^"|"$/g, '');
+
+function isExplainCommand(command) {
+  try {
+    const parsed = parseRequiredCheckCommand(command);
+    return isAgenticloopExplainArgv([parsed.command, ...parsed.args]);
+  } catch {
+    return false;
+  }
+}
 
 const PR_FIELDS = [
   'number',
@@ -289,16 +301,17 @@ export function parseRequiredChecks(issueBody) {
  * Validate task-owned required-check declarations before any evidence or
  * status-check satisfaction path runs.
  *
- * @returns {{ index: number, check: string, reason: string, category: 'task_policy' }[]}
+ * @returns {{ index: number, check: string, reason: string, category: 'task_policy', code?: string }[]}
  */
 export function validateRequiredCheckContracts(requiredChecks) {
   const checks = Array.isArray(requiredChecks) ? requiredChecks : [];
   const failures = [];
-  const add = (index, reason) => failures.push({
+  const add = (index, reason, code = undefined) => failures.push({
     index,
     check: checks[index]?.text ?? '<unknown required check>',
     reason,
     category: 'task_policy',
+    ...(code ? { code } : {}),
   });
 
   for (const [index, check] of checks.entries()) {
@@ -317,6 +330,9 @@ export function validateRequiredCheckContracts(requiredChecks) {
 
     if (kind === 'command' && !check.command) {
       add(index, "command check must declare its exact command in a backtick code span");
+    }
+    if (kind === 'command' && check.command && isExplainCommand(check.command)) {
+      add(index, 'command required check must not invoke task explain: read-only diagnostic output cannot serve as required-check evidence', REQUIRED_CHECK_EXPLAIN_REFUSAL_CODE);
     }
     if (sources.includes('status_check') && kind !== 'command') {
       add(index, "status_check satisfaction is allowed only for proof kind 'command'");
@@ -1368,6 +1384,7 @@ export function evaluatePreflight({
       errors.push({
         message,
         category: item.category,
+        ...(item.code ? { code: item.code } : {}),
       });
     } else {
       errors.push(item.reason.startsWith('unrecognized verdict ')

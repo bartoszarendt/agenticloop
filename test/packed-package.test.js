@@ -374,6 +374,17 @@ describe('packed package boundary', { concurrency: PACKED_CONCURRENCY }, () => {
     assert.ok(projection.diagnostics.some(item => item.includes('files--T-999.json is unreadable or invalid JSON')));
   });
 
+  it('keeps the installed task explanation projection identical to source', async () => {
+    const fixture = await populatedStatusTarget();
+    const args = ['task', 'explain', 'T-001', '--action', 'prepare_dispatch', '--json', '--target', fixture.target];
+    const source = await runProcess(process.execPath, [join(REPO_ROOT, 'bin', 'agenticloop.js'), ...args], { env: fixture.env });
+    const packed = await runPacked(args, { env: fixture.env });
+    assert.equal(source.status, 0, source.stderr);
+    assert.equal(packed.status, 0, packed.stderr);
+    assert.deepEqual(JSON.parse(packed.stdout), JSON.parse(source.stdout));
+    assert.equal(JSON.parse(source.stdout).command, 'task explain');
+  });
+
   it('runs installed host-trust status JSON without a signing boundary', async () => {
     const target = mkdtempSync(join(tmpBase, 'packed-host-trust-status-'));
     const status = await runPacked(['host-trust', 'status', '--json', '--target', target]);

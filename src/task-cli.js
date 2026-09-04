@@ -75,7 +75,7 @@ import {
   renderCommitMessage,
 } from './commit-attribution.js';
 import { evaluateTaskRecordRoot } from './task-record-root.js';
-import { createValidationResult, validationResultDigest, VALIDATION_RESULT_KIND } from './result-envelope.js';
+import { createValidationResult, serializeValidationResult, validationResultDigest, VALIDATION_RESULT_KIND } from './result-envelope.js';
 import { createDiagnostic } from './repair-policy.js';
 import { COMMAND_REGISTRY, parseCommandArgs, suggestName } from './cli-registry.js';
 import { evaluateTaskReadiness } from './task-readiness.js';
@@ -163,6 +163,7 @@ import {
   resolveCarrierLineage,
 } from './handoff-consumption.js';
 import { measureTaskWorkflow } from './workflow-measurement.js';
+import { explainTask, renderTaskExplanation } from './task-explain.js';
 import {
   WORK_UNIT_READINESS_PLAN_KIND,
   buildReadinessPlan,
@@ -210,7 +211,7 @@ function frontmatterString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function implementationArtifactHead(content) {
+export function implementationArtifactHead(content) {
   const [frontmatter] = parseFrontmatter(content);
   const value = frontmatterString(frontmatter?.implementation_artifact);
   const commit = value.match(/^commit:([0-9a-f]{40}|[0-9a-f]{64})$/);
@@ -250,7 +251,7 @@ export function isExactImplementationArtifactReaffirmation(content, productHead)
  * commit poisoned the binding permanently. The task already declares the only
  * surface either question is entitled to ask about.
  */
-function evaluateProductHeadEvidence(runGit, productHead, allowedPaths) {
+export function evaluateProductHeadEvidence(runGit, productHead, allowedPaths) {
   const patterns = (Array.isArray(allowedPaths) ? allowedPaths : [])
     .filter(pattern => typeof pattern === 'string' && pattern);
   const inTaskSurface = path => patterns.some(pattern => fileMatchesScopePattern(path, pattern));
@@ -753,6 +754,7 @@ const TASK_SUBCOMMAND_BACKENDS = Object.freeze({
   'prepare-product-commit': Object.freeze(['files']),
   'adopt-historical': Object.freeze(['files']),
   measure: Object.freeze(['files']),
+  explain: Object.freeze(['files']),
   'readiness-plan': Object.freeze(['files']),
   // Readiness apply is a single-transaction Maintainer mutation. It is declared
   // files-only because no equivalent transactional carrier exists on GitHub;
@@ -1370,7 +1372,7 @@ function enforceReturnedCommandCheckEvidence(target, wireReturn, packet, verifie
  * surrounding check JSON is editable, so its exit-code and prose are never
  * accepted as a substitute for the closed execution record.
  */
-function validatePreparedCommandCheckExecutions(target, checks, inventory, expectedBinding) {
+export function validatePreparedCommandCheckExecutions(target, checks, inventory, expectedBinding) {
   const targetAuthority = pathIdentity(target).authorityPath;
   const scratchAuthority = pathIdentity(join(target, '.agenticloop', 'tmp')).authorityPath;
   for (const required of inventory) {
@@ -1391,7 +1393,11 @@ function validatePreparedCommandCheckExecutions(target, checks, inventory, expec
     const runGit = targetGitRunner(target);
     const classifier = createPathClassifier(target);
     const checked = validateExecutionEvidence(execution, {
-      expectedBinding: {
+      // Explain can reuse this reader for structural artifact validation while
+      // deliberately withholding its unobservable authenticated binding. Every
+      // protected caller supplies that binding and therefore retains the exact
+      // packet/carrier/product comparison below.
+      expectedBinding: expectedBinding === null ? null : {
         ...expectedBinding,
         checkId: required.id,
         command: expectedArgv.command,
@@ -1660,7 +1666,7 @@ function readActivationCaptureInput(target, relPath, capabilities, intendedTaskI
 }
 
 /** Run one Git command inside the target and return a plain spawn result. */
-function targetGitRunner(target) {
+export function targetGitRunner(target) {
   return args => spawnSync('git', args, { cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
 }
 
@@ -2331,7 +2337,7 @@ export async function cmdTask(args, io = createIo()) {
     const suggestion = sub ? suggestName(sub, Object.keys(TASK_SUBCOMMANDS)) : null;
     throw new CliUsageError(suggestion
       ? `task: unknown subcommand '${sub}'. Did you mean '${suggestion}'?`
-      : 'task requires a subcommand: list, show, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, role-start, handoff-preflight, refresh-handoff-receipt, refresh-handoff-evidence, attempt-status, abandon-attempt, record-tooling-failure, prepare-product-commit, adopt-historical, readiness-plan, readiness-apply, measure, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, review-prepare, status.');
+      : 'task requires a subcommand: list, show, lint, new, establish-baseline, authorize-correction, prepare-decomposition, prepare-dispatch, role-start, handoff-preflight, refresh-handoff-receipt, refresh-handoff-evidence, attempt-status, abandon-attempt, record-tooling-failure, prepare-product-commit, adopt-historical, readiness-plan, readiness-apply, measure, explain, prepare-return, verify-return, check-evidence-init, check-evidence-show, check-evidence-update, evidence, review-prepare, status.');
   }
   const { opts, positional } = parseCommandArgs(`task ${sub}`, TASK_SUBCOMMANDS[sub], args.slice(1));
   const target = resolveCliTarget(io, opts.target);
@@ -5463,6 +5469,29 @@ export async function cmdTask(args, io = createIo()) {
         for (const item of measurement.unreadableEvidence) io.err(`unreadable evidence class: ${item}`);
       }
       return measurement.complete ? 0 : 1;
+    }
+
+    if (sub === 'explain') {
+      const taskId = positional[0];
+      if (!taskId) {
+        io.err('task explain requires <id>');
+        return EXIT_USAGE;
+      }
+      let explanation;
+      try {
+        explanation = explainTask(target, taskId, { action: opts.action ?? null, io });
+      } catch (error) {
+        io.err(error instanceof Error ? error.message : String(error));
+        return opts.action ? EXIT_USAGE : 1;
+      }
+      if (opts.json) {
+        // A successful explanation only means its current facts were read. Its
+        // action verdicts carry no transition authority.
+        io.out(serializeValidationResult(createValidationResult({
+          command: 'task explain', ok: true, ...explanation,
+        })));
+      } else io.out(renderTaskExplanation(explanation));
+      return 0;
     }
 
     if (sub === 'adopt-historical') {

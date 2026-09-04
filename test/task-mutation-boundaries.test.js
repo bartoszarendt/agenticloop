@@ -284,6 +284,7 @@ describe('closed evidence contracts and inert revalidation commands', () => {
       'agenticloop commit-attribution repair-record-render --record repair.json --output repair.md',
       'agenticloop pr-body scaffold --pr 1 --output pr.md',
       'agenticloop event-logging task.created --task T-901 --summary created',
+      'agenticloop task explain T-901 --json',
     ]) {
       assert.throws(() => receipt({ revalidateCommand: command }), /read-only|mutation/i, command);
     }

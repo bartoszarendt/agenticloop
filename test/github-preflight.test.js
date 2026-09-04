@@ -30,6 +30,7 @@ import {
   evaluatePreflight,
   parseAttemptBudget,
   parseReviewBudget,
+  validateRequiredCheckContracts,
   PREFLIGHT_DIAGNOSTIC_CATEGORIES,
   runPreflight,
   PreflightError,
@@ -275,6 +276,35 @@ describe('parseRequiredChecks', () => {
       '`npm test` [Owner: release] [Kind: command]',
     ]));
     assert.equal(check.matchKey, 'npm test [owner: release]');
+  });
+});
+
+describe('required-check declaration policy', () => {
+  it('rejects task explain declarations before matching status-check evidence', () => {
+    const [requiredCheck] = parseRequiredChecks(issueBody([
+      '[RC-1] [kind: command] [sources: status_check] `npx agenticloop task explain T-001 --json`',
+    ]));
+    const failures = validateRequiredCheckContracts([requiredCheck]);
+    assert.deepEqual(failures, [{
+      index: 0,
+      check: requiredCheck.text,
+      reason: 'command required check must not invoke task explain: read-only diagnostic output cannot serve as required-check evidence',
+      category: 'task_policy',
+      code: 'required_check.explain_forbidden',
+    }]);
+
+    const result = evaluatePreflight({
+      prData: {
+        number: 42,
+        headRefOid: HEAD,
+        body: prBody(),
+        statusCheckRollup: [{ name: 'npx agenticloop task explain T-001 --json', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      },
+      issueData: { number: 7, body: issueBody([requiredCheck.text]), comments: [] },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.evidenceMatches.length, 0);
+    assert.ok(result.diagnostics.some(item => item.code === 'required_check.explain_forbidden'));
   });
 });
 

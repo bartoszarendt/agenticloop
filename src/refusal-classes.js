@@ -46,6 +46,7 @@ const PRODUCER_INVENTORY_ROWS = [
     'task.evidence.final_validation', 'task.role_start.check_evidence_missing', 'task.role_start.check_evidence_mismatch',
     'handoff.refresh.plan.malformed', 'handoff.refresh.plan.unsupported', 'return.lane.implementation_absent',
   ]],
+  ['src/required-checks.js', ['required_check.explain_forbidden']],
   ['src/task-readiness.js', [
     'scope.declaration.missing', 'scope.declaration.duplicate', 'scope.declaration.invalid', 'scope.intended_creation.missing',
     'scope.intended_creation.uncovered', 'scope.intent.invalid', 'generated.path.invalid', 'scope.glob.unmatched',
@@ -408,6 +409,7 @@ const F2 = [
   classified('evidence.malformed', 'F2', 'single_action_mechanical_repair', 'evidence_record', 'evidence-malformed', 'repair evidence'),
   classified('evidence.stale', 'F2', 'migration_recompute', 'evidence_record', 'derived-freshness', 'recompute evidence'),
   classified('evidence.negative', 'F2', 'retained_hard_refusal', 'required_check', 'checks-failed', 'repair failed condition'),
+  classified('required_check.explain_forbidden', 'F2', 'single_action_mechanical_repair', 'required_check', 'diagnostic-output-not-evidence', 'replace explain with a real required check'),
   classified('evidence.changed', 'F2', 'migration_recompute', 'evidence_record', 'derived-record-changed', 'recompute evidence'),
   classified('task.evidence.not_in_progress', 'F2', 'retained_hard_refusal', 'attempt_state', 'lifecycle-state-invalid', 'use current lifecycle state'),
   classified('task.evidence.lineage', 'F2', 'retained_hard_refusal', 'attempt_lineage', 'lineage-ambiguous', 'resolve lineage'),

@@ -104,6 +104,7 @@ const MANIFEST = {
     'test/required-checks.test.js',
     'test/return-verification.test.js',
     'test/stop-contract.test.js',
+    'test/task-explain.test.js',
     'test/task-contract-hardening.test.js',
     'test/task-contract-trust-regressions.test.js',
     'test/task-evidence-integrity.test.js',
