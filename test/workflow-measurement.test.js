@@ -17,6 +17,7 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -62,6 +63,16 @@ function writeConsumption(fixture, consumption) {
   mkdirSync(join(path, '..'), { recursive: true });
   writeFileSync(path, `${JSON.stringify(consumption, null, 2)}\n`, 'utf8');
   return consumption;
+}
+
+function commitWithDate(root, args, date) {
+  const result = spawnSync('git', args, {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date, GIT_TERMINAL_PROMPT: '0' },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
 }
 
 /**
@@ -190,12 +201,164 @@ describe('the ordinary shape and its deviations', () => {
     assert.ok(shapes.includes('distinctProductBases'));
   });
 
-  it('reports zero attempts for a task that never started', async () => {
+  it('counts M1 from the authorization anchor while excluding the established task-contract commit', async () => {
+    const fixture = await createDispatchFixture(temp, 'measure-authorization-range');
+    const history = fixtureGit(fixture.root, ['rev-list', '--reverse', 'HEAD']).split(/\r?\n/).filter(Boolean);
+    const consumption = consume(fixture);
+    fixtureGit(fixture.root, ['add', '.agenticloop/handoffs']);
+    fixtureGit(fixture.root, ['commit', '-m', 'record dispatch consumption']);
+    writeFileSync(join(fixture.root, 'src', 'measured.js'), 'export const measured = true;\n', 'utf8');
+    fixtureGit(fixture.root, ['add', 'src/measured.js']);
+    fixtureGit(fixture.root, ['commit', '-m', 'product change']);
+
+    const measurement = measureTaskWorkflow(fixture.root, 'T-001', {
+      commitRange: 'authorization',
+      authorizationHead: history[1],
+      taskContractCommit: history[2],
+    });
+    assert.equal(measurement.firstAttemptId, executionAttemptIdentity(consumption));
+    assert.deepEqual(
+      {
+        workflow: measurement.counters.workflowCommits,
+        product: measurement.counters.productCommits,
+        total: measurement.counters.totalCommits,
+      },
+      { workflow: 2, product: 2, total: 5 }
+    );
+  });
+
+  it('uses Git ranges rather than rev-list position for old-dated merged side branches', async () => {
+    const fixture = await createDispatchFixture(temp, 'measure-nonlinear-range');
+    const history = fixtureGit(fixture.root, ['rev-list', '--reverse', 'HEAD']).split(/\r?\n/).filter(Boolean);
+    const authorizationHead = history[1];
+    const productBaseHead = fixtureGit(fixture.root, ['rev-parse', 'HEAD']);
+    consume(fixture);
+
+    fixtureGit(fixture.root, ['checkout', '-b', 'old-dated-side', history[0]]);
+    mkdirSync(join(fixture.root, 'src'), { recursive: true });
+    writeFileSync(join(fixture.root, 'src', 'old-dated-side.js'), 'export const oldDatedSide = true;\n', 'utf8');
+    commitWithDate(fixture.root, ['add', 'src/old-dated-side.js'], '2000-01-01T00:00:00Z');
+    commitWithDate(fixture.root, ['commit', '-m', 'old-dated side product change'], '2000-01-01T00:00:00Z');
+    const sideCommit = fixtureGit(fixture.root, ['rev-parse', 'HEAD']);
+
+    fixtureGit(fixture.root, ['checkout', 'task/T-001']);
+    writeFileSync(join(fixture.root, 'src', 'mainline.js'), 'export const mainline = true;\n', 'utf8');
+    fixtureGit(fixture.root, ['add', 'src/mainline.js']);
+    fixtureGit(fixture.root, ['commit', '-m', 'mainline product change']);
+    fixtureGit(fixture.root, ['merge', '--no-ff', 'old-dated-side', '-m', 'merge old-dated side branch']);
+
+    const authorizationRange = fixtureGit(fixture.root, ['rev-list', `${authorizationHead}..HEAD`]).split(/\r?\n/).filter(Boolean);
+    const productBaseRange = fixtureGit(fixture.root, ['rev-list', `${productBaseHead}..HEAD`]).split(/\r?\n/).filter(Boolean);
+    assert.ok(authorizationRange.includes(sideCommit), 'the Git range includes the merged old-dated side commit');
+    assert.ok(productBaseRange.includes(sideCommit), 'the product-base Git range includes the merged old-dated side commit');
+
+    const authorizationMeasurement = measureTaskWorkflow(fixture.root, 'T-001', {
+      commitRange: 'authorization', authorizationHead, taskContractCommit: history[2],
+    });
+    assert.deepEqual(
+      [
+        authorizationMeasurement.counters.workflowCommits,
+        authorizationMeasurement.counters.productCommits,
+        authorizationMeasurement.counters.totalCommits,
+      ],
+      [1, 4, authorizationRange.length],
+      'classification and total retain every commit in the authorization Git range'
+    );
+
+    const productBaseMeasurement = measureTaskWorkflow(fixture.root, 'T-001');
+    assert.deepEqual(
+      [
+        productBaseMeasurement.counters.workflowCommits,
+        productBaseMeasurement.counters.productCommits,
+        productBaseMeasurement.counters.totalCommits,
+      ],
+      [0, 3, productBaseRange.length],
+      'classification and total retain every commit in the product-base Git range'
+    );
+  });
+
+  it('reports durable supersession records separately from ordinary abandonments for M3', async () => {
+    const fixture = await createDispatchFixture(temp, 'measure-supersessions');
+    const consumption = consume(fixture);
+    const attemptId = executionAttemptIdentity(consumption);
+    const record = {
+      kind: 'agenticloop.execution-attempt-abandonment',
+      schemaVersion: 2,
+      backend: 'files',
+      taskId: 'T-001',
+      attemptId,
+      packetId: consumption.packetId,
+      reason: 'A successor packet replaced this untouched synthetic attempt.',
+      disposition: 'superseded_by_packet',
+      authority: 'dispatch:successor-packet',
+      productMutationOccurred: false,
+      carrierMutationOccurred: false,
+      abandonedAt: consumption.consumedAt,
+    };
+    const path = join(fixture.root, executionAttemptAbandonmentRelativePath(record));
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+
+    const measurement = measureTaskWorkflow(fixture.root, 'T-001');
+    assert.equal(measurement.counters.abandonedAttempts, 0);
+    assert.equal(measurement.counters.supersessions, 1);
+    assert.equal(measurement.counters.workflowRecoveries, 1);
+  });
+
+  it('reports zero attempts and unavailable default-range counters for a task that never started', async () => {
     const fixture = await createDispatchFixture(temp, 'measure-none');
     const measurement = measureTaskWorkflow(fixture.root, 'T-001');
     assert.equal(measurement.counters.executionAttempts, 0);
+    assert.deepEqual(
+      [
+        measurement.counters.workflowCommits,
+        measurement.counters.productCommits,
+        measurement.counters.totalCommits,
+      ],
+      ['unavailable', 'unavailable', 'unavailable']
+    );
+    assert.deepEqual(measurement.unavailableEvidence, []);
     assert.equal(measurement.liveAttemptId, null);
     assert.equal(measurement.complete, true);
+
+    const result = await runCliInProcess(['task', 'measure', 'T-001', '--json', '--target', fixture.root]);
+    assert.equal(result.status, 0, result.stderr);
+    const publicMeasurement = JSON.parse(result.stdout);
+    assert.deepEqual(
+      [
+        publicMeasurement.counters.workflowCommits,
+        publicMeasurement.counters.productCommits,
+        publicMeasurement.counters.totalCommits,
+      ],
+      ['unavailable', 'unavailable', 'unavailable']
+    );
+  });
+
+  it('reports an explicit non-ancestor authorization range as unavailable without a whole-history fallback', async () => {
+    const fixture = await createDispatchFixture(temp, 'measure-nonancestor-anchor');
+    const calls = [];
+    const measurement = measureTaskWorkflow(fixture.root, 'T-001', {
+      commitRange: 'authorization',
+      authorizationHead: 'anchor',
+      runGit: args => {
+        calls.push(args);
+        if (args.join(' ') === 'rev-parse --verify HEAD') return { status: 0, stdout: 'head\n' };
+        if (args.join(' ') === 'rev-parse --verify anchor^{commit}') return { status: 0, stdout: 'anchor\n' };
+        if (args.join(' ') === 'merge-base --is-ancestor anchor head') return { status: 1, stdout: '' };
+        throw new Error(`unexpected Git invocation: ${args.join(' ')}`);
+      },
+    });
+
+    assert.deepEqual(
+      [
+        measurement.counters.workflowCommits,
+        measurement.counters.productCommits,
+        measurement.counters.totalCommits,
+      ],
+      ['unavailable', 'unavailable', 'unavailable']
+    );
+    assert.deepEqual(measurement.unavailableEvidence, ['commit_range_anchor']);
+    assert.equal(calls.some(args => args[0] === 'rev-list'), false);
   });
 
   it('names unreadable evidence rather than counting it as zero', async () => {

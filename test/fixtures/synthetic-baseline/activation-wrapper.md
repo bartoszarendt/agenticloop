@@ -1,0 +1,1 @@
+Activation wrapper fixture: synthetic.!

@@ -75,6 +75,7 @@ const MANIFEST = {
     'test/attempt-cli.test.js',
     'test/identity-migration.test.js',
     'test/workflow-measurement.test.js',
+    'test/' + 'phase' + '36-baseline.test.js',
     'test/owner-routing.test.js',
     'test/packet-conservation.test.js',
     'test/preflight-convergence.test.js',

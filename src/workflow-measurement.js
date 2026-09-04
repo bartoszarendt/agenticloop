@@ -73,7 +73,7 @@ function durationSeconds(fromIso, toIso) {
  *
  * @param {string} target
  * @param {string} taskId
- * @param {{ backend?: string, now?: string }} [options]
+ * @param {{ backend?: string, now?: string, commitRange?: 'product_base'|'authorization', authorizationHead?: string, taskContractCommit?: string }} [options]
  */
 export function measureTaskWorkflow(target, taskId, options = {}) {
   const backend = options.backend ?? 'files';
@@ -119,18 +119,37 @@ export function measureTaskWorkflow(target, taskId, options = {}) {
   // mean work was rebuilt on a base the earlier packet did not describe.
   const distinctProductBases = new Set(attempts.map(attempt => attempt.productBaseHead)).size;
   let commitCounters = { workflowCommits: 'unavailable', productCommits: 'unavailable', totalCommits: 'unavailable' };
-  if (firstAttempt?.productBaseHead) {
-    const runGit = options.runGit ?? (args => spawnSync('git', args, {
-      cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER,
-    }));
+  const commitRange = options.commitRange ?? 'product_base';
+  const commitRangeStart = commitRange === 'authorization' ? options.authorizationHead : firstAttempt?.productBaseHead;
+  const runGit = options.runGit ?? (args => spawnSync('git', args, {
+    cwd: target, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER,
+  }));
+  let currentHead = '';
+  if (commitRangeStart) {
     const head = runGit(['rev-parse', '--verify', 'HEAD']);
-    const currentHead = head?.status === 0 ? String(head.stdout ?? '').trim() : '';
-    const ancestry = currentHead
-      ? runGit(['merge-base', '--is-ancestor', firstAttempt.productBaseHead, currentHead])
-      : null;
-    const listed = ancestry?.status === 0
-      ? runGit(['rev-list', '--reverse', `${firstAttempt.productBaseHead}..${currentHead}`])
-      : null;
+    currentHead = head?.status === 0 ? String(head.stdout ?? '').trim() : '';
+  }
+  if (currentHead && commitRangeStart) {
+    // A list position in `rev-list --reverse HEAD` is not an ancestry boundary:
+    // a merged side branch can have an older timestamp and be listed before the
+    // anchor even though it is reachable from HEAD. Use Git's range semantics
+    // directly so every reachable, non-anchor-reachable commit is measured.
+    let listed = null;
+    const anchor = runGit(['rev-parse', '--verify', `${commitRangeStart}^{commit}`]);
+    const anchorOid = anchor?.status === 0 ? String(anchor.stdout ?? '').trim() : '';
+    const ancestry = anchorOid ? runGit(['merge-base', '--is-ancestor', anchorOid, currentHead]) : null;
+    if (ancestry?.status === 0) {
+      listed = commitRange === 'authorization'
+        ? runGit(['rev-list', currentHead, '--not', anchorOid])
+        : runGit(['rev-list', `${anchorOid}..${currentHead}`]);
+    } else {
+      // An explicit authorization range names its unavailable anchor. The
+      // legacy product-base projection leaves counters unavailable without
+      // adding a new public limitation when its attempt base is unusable.
+      if (commitRange === 'authorization') {
+        unavailable.push('commit_range_anchor');
+      }
+    }
     if (listed?.status === 0) {
       const commits = String(listed.stdout ?? '').split(/\r?\n/).map(value => value.trim()).filter(Boolean);
       const classifier = createPathClassifier(target);
@@ -138,6 +157,7 @@ export function measureTaskWorkflow(target, taskId, options = {}) {
       let productCommits = 0;
       let readable = true;
       for (const commit of commits) {
+        if (commit === options.taskContractCommit) continue;
         const changed = commitChangedPaths(runGit, commit);
         if (!changed.ok) { readable = false; break; }
         if (changed.paths.every(path => isWorkflowPath(path, classifier))) workflowCommits += 1;
@@ -145,11 +165,18 @@ export function measureTaskWorkflow(target, taskId, options = {}) {
       }
       if (readable) commitCounters = { workflowCommits, productCommits, totalCommits: commits.length };
     }
+  } else if (commitRange === 'authorization') {
+    unavailable.push('authorization_commit_range');
   }
 
   const counters = {
     executionAttempts: attempts.length,
     abandonedAttempts: attempts.filter(attempt => attempt.state === 'abandoned').length,
+    // Supersessions are authored abandonment records with a closed disposition.
+    // They are not inferred from packet count, so a reissued packet cannot
+    // silently make M3 look worse (or better) than durable evidence says.
+    supersessions: (abandoned.records ?? []).filter(record =>
+      String(record?.disposition ?? '').startsWith('superseded_')).length,
     liveAttempts: attempts.filter(attempt => attempt.state === 'live').length,
     distinctProductBases,
     // Reminting is attempts beyond the first; it is a count, not a judgement.
